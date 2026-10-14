@@ -256,8 +256,10 @@ class TerminalContext(unittest.TestCase):
         self.assertIn('waitUntil(childBound.doubleValue', source)
         self.assertIn('waitUntil(30, ^BOOL{ return opened; })', source)
         self.assertEqual(source.count('NSProcessInfo.processInfo.systemUptime + 30'), 1)
-        self.assertIn('waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime, ^BOOL{ return application.terminated; })', source)
-        self.assertIn('NSProcessInfo.processInfo.systemUptime > quitDeadline', source)
+        self.assertIn('operations.wait(quitDeadline - operations.now(), operations.terminated)', source)
+        self.assertIn('operations.now() > quitDeadline', source)
+        self.assertIn('.wait = ^BOOL(NSTimeInterval seconds, BOOL (^finished)(void)) { return waitUntil(seconds, finished); }', source)
+        self.assertIn('.terminated = ^BOOL{ return application.terminated; }', source)
         self.assertNotIn('atof(', source)
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         self.assertIn('timeout-minutes: 325', workflow)
@@ -436,15 +438,42 @@ class TerminalContext(unittest.TestCase):
         self.assertIn('@"commandShellsObserved"] = @YES', source)
         self.assertIn('@"commandShellsRetired"] = @YES', source)
         self.assertLess(source.index('@"scriptChildReaped"] = @YES'), source.index('command-shell.json'))
-        self.assertLess(source.index('@"commandShellsRetired"] = @YES'), source.index('[application terminate]'))
+        self.assertLess(source.index('@"commandShellsRetired"] = @YES'), source.index('!operations.requestQuit()'))
         self.assertIn('NSProcessInfo.processInfo.systemUptime + 30', source)
-        self.assertIn('waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime', source)
+        self.assertIn('operations.wait(quitDeadline - operations.now()', source)
         self.assertIn('shellRetirement(shellIdentity, uid)', source)
         self.assertIn('shellObservation < 0', source)  # Permission/unknown is fatal, never absence.
         for flag in ('commandShellsObserved', 'commandShellsRetired'):
             self.assertIn(flag, t.APPLICATION_FLAGS)
         for check in ('SHELL_REGISTRATION', 'SHELL_OBSERVATION', 'SHELL_RETIREMENT'):
             self.assertIn(check, t.CHECKS)
+
+    def test_post_authority_failure_reaches_one_shared_finalizer_without_inheriting_success(self):
+        source = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
+        main = source[source.index('int main(int argc, const char **argv)'):]
+        operation, cleanup = main.split('        } while (NO);', 1)
+        self.assertIn('result[@"failureCheck"] = @"CHILD_SOURCE"', operation)
+        self.assertIn('!child || child.count != 2', operation)
+        self.assertIn('childCode = code;', operation)
+        self.assertNotIn('finalizeApplication(', operation)
+        self.assertEqual(cleanup.count('finalizeApplication('), 1)
+        self.assertIn('if ([result[@"applicationCreated"] boolValue])', cleanup)
+        self.assertIn('NSProcessInfo.processInfo.systemUptime + 30', cleanup)
+        self.assertIn('uid, childCode, quitDeadline, operations)', cleanup)
+        self.assertLess(cleanup.index('finalizeApplication('), cleanup.index('save(resultURL, result)'))
+        finalizer = source[source.index('static int finalizeApplication('):source.index('int main(int argc, const char **argv)')]
+        self.assertIn('NSString *firstFailure = childCode ? nil : result[@"failureCheck"]', finalizer)
+        self.assertIn('if (firstFailure) result[@"failureCheck"] = firstFailure;', finalizer)
+        self.assertIn('int outcome = finalized && childCode ? childCode.intValue : 125;', finalizer)
+        self.assertIn('result[@"exitCode"] = @(outcome);', finalizer)
+        self.assertIn('![result[@"applicationCreated"] boolValue] || ![result[@"scriptChildReaped"] boolValue]', finalizer)
+        self.assertLess(finalizer.index('!operations.originalIdentity()'), finalizer.index('!operations.requestQuit()'))
+        self.assertIn('operations.now() >= quitDeadline || !operations.requestQuit()', finalizer)
+        # Even fully cleaned-up CHILD_SOURCE failures remain incomplete proofs.
+        value = {**proof(), 'failureCheck': 'CHILD_SOURCE', 'exitCode': 125}
+        self.assertEqual(t.validate_proof(value, value['source'], complete=False), value)
+        with self.assertRaises(RuntimeError):
+            t.validate_proof(value, value['source'])
 
     def test_application_lease_requires_console_fresh_instance_reaped_child_and_original_identity_before_quit(self):
         source = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()

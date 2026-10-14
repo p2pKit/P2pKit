@@ -93,6 +93,93 @@ static int shellRetirement(NSDictionary *shell, uid_t uid) {
     return shellRetirementObservation(shell, uid, &value, count, errno);
 }
 
+/* These are the actual finalizer operations. The controller binds them to
+ * read-only native observations and its retained application; fixtures bind
+ * deterministic observations without opening an application or signaling. */
+typedef struct {
+    NSTimeInterval (^now)(void);
+    BOOL (^wait)(NSTimeInterval, BOOL (^)(void));
+    int (^retirement)(NSDictionary *);
+    BOOL (^originalIdentity)(void);
+    BOOL (^requestQuit)(void);
+    BOOL (^terminated)(void);
+} RpcTerminalFinalization;
+
+static BOOL validSource(NSDictionary *source) {
+    if (![source isKindOfClass:NSDictionary.class] || source.count != 2) return NO;
+    NSCharacterSet *invalid = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"].invertedSet;
+    for (NSString *key in @[@"commit", @"tree"]) {
+        NSString *value = source[key];
+        if (![value isKindOfClass:NSString.class] || value.length != 40 ||
+            [value rangeOfCharacterFromSet:invalid].location != NSNotFound) return NO;
+    }
+    return YES;
+}
+
+static int finalizeApplication(NSMutableDictionary *result, NSDictionary *registration, NSDictionary *source,
+                              NSDictionary *terminalIdentity, uid_t uid, NSNumber *childCode,
+                              NSTimeInterval quitDeadline, RpcTerminalFinalization operations) {
+    NSString *firstFailure = childCode ? nil : result[@"failureCheck"];
+    BOOL finalized = NO;
+    do {
+        /* A result file alone never authorizes Quit. Conversely, missing or
+         * malformed child completion cannot inherit success from cleanup. */
+        if (![result[@"applicationCreated"] boolValue] || ![result[@"scriptChildReaped"] boolValue]) break;
+        result[@"stage"] = @"SHELL";
+        result[@"failureCheck"] = @"SHELL_REGISTRATION";
+        if (![registration isKindOfClass:NSDictionary.class] || !validSource(source)) break;
+        NSArray *shellIdentities = registration[@"shells"];
+        if (registration.count != 4 || !integer(registration[@"schema"], 1, 1) ||
+            ![registration[@"source"] isEqual:source] || ![registration[@"terminal"] isEqual:terminalIdentity] ||
+            ![shellIdentities isKindOfClass:NSArray.class] || shellIdentities.count < 1 || shellIdentities.count > 30) break;
+        NSMutableSet *shellPids = [NSMutableSet set];
+        BOOL valid = YES;
+        for (NSDictionary *shellIdentity in shellIdentities) {
+            if (!validShell(shellIdentity, uid) || [shellIdentity[@"pid"] isEqual:terminalIdentity[@"pid"]] ||
+                [shellPids containsObject:shellIdentity[@"pid"]]) { valid = NO; break; }
+            [shellPids addObject:shellIdentity[@"pid"]];
+        }
+        if (!valid) break;
+        result[@"commandShellsObserved"] = @YES;
+        result[@"failureCheck"] = @"SHELL_RETIREMENT";
+        __block int shellObservation = 0;
+        BOOL observed = operations.wait(quitDeadline - operations.now(), ^BOOL{
+            shellObservation = 1;
+            for (NSDictionary *shellIdentity in shellIdentities) {
+                int observed = operations.retirement(shellIdentity);
+                if (observed < 0) { shellObservation = -1; break; }
+                if (observed == 0) shellObservation = 0;
+            }
+            return shellObservation != 0;
+        });
+        if (shellObservation < 0) { result[@"failureCheck"] = @"SHELL_OBSERVATION"; break; }
+        if (!observed || shellObservation != 1 || operations.now() >= quitDeadline) break;
+        result[@"commandShellsRetired"] = @YES;
+        result[@"failureCheck"] = @"APPLICATION_IDENTITY_CHANGED";
+        if (!operations.originalIdentity()) break;
+        result[@"originalApplicationIdentity"] = @YES;
+        result[@"stage"] = @"QUIT";
+        result[@"failureCheck"] = @"QUIT_REQUEST";
+        /* Native identity observation can itself consume the remaining bound. */
+        if (operations.now() >= quitDeadline || !operations.requestQuit()) break;
+        result[@"applicationQuitRequested"] = @YES;
+        result[@"failureCheck"] = @"QUIT_COMPLETION";
+        if (operations.now() >= quitDeadline ||
+            !operations.wait(quitDeadline - operations.now(), operations.terminated) ||
+            operations.now() > quitDeadline) break;
+        result[@"applicationTerminated"] = @YES;
+        result[@"stage"] = @"FINALIZED";
+        result[@"failureCheck"] = @"NONE";
+        finalized = YES;
+    } while (NO);
+    /* Cleanup completion is not product success. A child-source failure (or
+     * any earlier failure) remains the first diagnostic even if Quit succeeds. */
+    if (firstFailure) result[@"failureCheck"] = firstFailure;
+    int outcome = finalized && childCode ? childCode.intValue : 125;
+    result[@"exitCode"] = @(outcome);
+    return outcome;
+}
+
 int main(int argc, const char **argv) {
     @autoreleasepool {
         if (argc != 3 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 125;
@@ -122,6 +209,10 @@ int main(int argc, const char **argv) {
         NSURL *terminalURL = [NSURL fileURLWithPath:@"/System/Applications/Utilities/Terminal.app" isDirectory:YES];
         NSString *bundle = @"com.apple.Terminal";
         int outcome = 125;
+        __block NSRunningApplication *application = nil;
+        struct proc_bsdinfo before = {0};
+        NSNumber *childCode = nil;
+        NSDictionary *config = readPrivate([directory URLByAppendingPathComponent:@"config.json"], uid);
         do {
             if (stat("/dev/console", &console) || console.st_uid != uid) break;
             result[@"consoleUser"] = @YES;
@@ -140,7 +231,6 @@ int main(int argc, const char **argv) {
             configuration.addsToRecentItems = NO;
             configuration.promptsUserIfNeeded = NO;
             configuration.environment = @{@"PATH":@"/usr/bin:/bin:/usr/sbin:/sbin"};
-            __block NSRunningApplication *application = nil;
             __block BOOL opened = NO, openError = NO;
             result[@"stage"] = @"OPEN";
             result[@"failureCheck"] = @"APPLICATION_OPEN";
@@ -162,7 +252,6 @@ int main(int argc, const char **argv) {
             if (![application.bundleIdentifier isEqualToString:bundle] ||
                 ![[application.bundleURL URLByResolvingSymlinksInPath].path isEqualToString:terminalURL.path] ||
                 !application.launchDate || [application.launchDate timeIntervalSinceDate:requested] < -2) break;
-            struct proc_bsdinfo before = {0};
             if (!identity(application.processIdentifier, uid, &before)) break;
             result[@"applicationCreated"] = @YES;
             result[@"failureCheck"] = @"ADMISSION_WRITE";
@@ -184,72 +273,40 @@ int main(int argc, const char **argv) {
             result[@"scriptChildReaped"] = @YES; /* Shell waited for its exact child, not only a pre-exit JSON write. */
             result[@"failureCheck"] = @"CHILD_SOURCE";
             NSDictionary *child = readPrivate(childURL, uid);
-            NSDictionary *config = readPrivate([directory URLByAppendingPathComponent:@"config.json"], uid);
             NSNumber *code = @(shell.intValue);
             if (code.intValue != 125) {
                 if (!child || child.count != 2 || ![child[@"source"] isEqual:config[@"source"]] ||
                     ![child[@"exitCode"] isEqual:code]) break;
                 result[@"nativeChildFinished"] = @YES;
             }
-            result[@"exitCode"] = code;
-            /* native.command writes shell-result.txt before its own exit. A
-             * Quit at that point may ask to close a running shell. Do not click
-             * that prompt, force termination or extend the existing bound. */
+            childCode = code;
+        } while (NO);
+        /* Every failure after exact application authority reaches this same
+         * finalizer. Missing child/shell authority remains a refusal, not a
+         * guessed cleanup capability; the first failure is retained. */
+        if ([result[@"applicationCreated"] boolValue]) {
             NSTimeInterval quitDeadline = NSProcessInfo.processInfo.systemUptime + 30;
-            result[@"stage"] = @"SHELL";
-            result[@"failureCheck"] = @"SHELL_REGISTRATION";
             NSDictionary *registration = readPrivate([directory URLByAppendingPathComponent:@"command-shell.json"], uid);
-            NSArray *shellIdentities = registration[@"shells"];
             NSDictionary *terminalIdentity = @{@"pid":@(before.pbi_pid), @"uid":@(uid),
                 @"startSeconds":@(before.pbi_start_tvsec), @"startMicroseconds":@(before.pbi_start_tvusec)};
-            if (registration.count != 4 || !integer(registration[@"schema"], 1, 1) ||
-                ![registration[@"source"] isEqual:config[@"source"]] ||
-                ![registration[@"terminal"] isEqual:terminalIdentity] ||
-                ![shellIdentities isKindOfClass:NSArray.class] || shellIdentities.count < 1 || shellIdentities.count > 30) break;
-            NSMutableSet *shellPids = [NSMutableSet set];
-            BOOL valid = YES;
-            for (NSDictionary *shellIdentity in shellIdentities) {
-                if (!validShell(shellIdentity, uid) || [shellIdentity[@"pid"] intValue] == application.processIdentifier ||
-                    [shellPids containsObject:shellIdentity[@"pid"]]) { valid = NO; break; }
-                [shellPids addObject:shellIdentity[@"pid"]];
-            }
-            if (!valid) break;
-            result[@"commandShellsObserved"] = @YES;
-            result[@"failureCheck"] = @"SHELL_RETIREMENT";
-            __block int shellObservation = 0;
-            BOOL observed = waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime, ^BOOL{
-                shellObservation = 1;
-                for (NSDictionary *shellIdentity in shellIdentities) {
-                    int observed = shellRetirement(shellIdentity, uid);
-                    if (observed < 0) { shellObservation = -1; break; }
-                    if (observed == 0) shellObservation = 0;
-                }
-                return shellObservation != 0;
-            });
-            if (shellObservation < 0) { result[@"failureCheck"] = @"SHELL_OBSERVATION"; break; }
-            if (!observed || shellObservation != 1 || NSProcessInfo.processInfo.systemUptime >= quitDeadline) break;
-            result[@"commandShellsRetired"] = @YES;
-            /* Identity is a safety check, never a signal capability. The Quit
-             * request uses the retained application instance, not a reconstructed PID. */
-            struct proc_bsdinfo after = {0};
-            result[@"failureCheck"] = @"APPLICATION_IDENTITY_CHANGED";
-            if (!identity(application.processIdentifier, uid, &after) || application.terminated ||
-                before.pbi_pid != after.pbi_pid || before.pbi_start_tvsec != after.pbi_start_tvsec ||
-                before.pbi_start_tvusec != after.pbi_start_tvusec) break;
-            result[@"originalApplicationIdentity"] = @YES;
-            result[@"stage"] = @"QUIT";
-            result[@"failureCheck"] = @"QUIT_REQUEST";
-            if (![application terminate]) break;
-            result[@"applicationQuitRequested"] = @YES;
-            result[@"failureCheck"] = @"QUIT_COMPLETION";
-            if (NSProcessInfo.processInfo.systemUptime >= quitDeadline ||
-                !waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime, ^BOOL{ return application.terminated; }) ||
-                NSProcessInfo.processInfo.systemUptime > quitDeadline) break;
-            result[@"applicationTerminated"] = @YES;
-            result[@"stage"] = @"FINALIZED";
-            result[@"failureCheck"] = @"NONE";
-            outcome = code.intValue;
-        } while (NO);
+            RpcTerminalFinalization operations = {
+                .now = ^NSTimeInterval{ return NSProcessInfo.processInfo.systemUptime; },
+                .wait = ^BOOL(NSTimeInterval seconds, BOOL (^finished)(void)) { return waitUntil(seconds, finished); },
+                .retirement = ^int(NSDictionary *shellIdentity) { return shellRetirement(shellIdentity, uid); },
+                .originalIdentity = ^BOOL{
+                    struct proc_bsdinfo after = {0};
+                    if (!identity(application.processIdentifier, uid, &after) || application.terminated ||
+                        before.pbi_pid != after.pbi_pid || before.pbi_start_tvsec != after.pbi_start_tvsec ||
+                        before.pbi_start_tvusec != after.pbi_start_tvusec) return NO;
+                    return YES;
+                },
+                /* The retained application object, never a reconstructed PID. */
+                .requestQuit = ^BOOL{ return [application terminate]; },
+                .terminated = ^BOOL{ return application.terminated; }
+            };
+            outcome = finalizeApplication(result, registration, config[@"source"], terminalIdentity,
+                uid, childCode, quitDeadline, operations);
+        }
         if (!save(resultURL, result)) return 125;
         return outcome;
     }

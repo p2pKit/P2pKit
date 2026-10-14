@@ -46,6 +46,119 @@ static int decisions(void) {
     return 0;
 }
 
+/* Actual shared finalizer with deterministic read/clock/action dependencies.
+ * This is refusal/control evidence, not a Terminal launch or cancellation run. */
+static int finalizationDecisions(void) {
+    uid_t uid = getuid();
+    NSDictionary *source = @{@"commit":@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                             @"tree":@"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"};
+    NSDictionary *terminal = @{@"pid":@10, @"uid":@(uid), @"startSeconds":@100, @"startMicroseconds":@50};
+    NSDictionary *shell = @{@"pid":@17, @"uid":@(uid), @"uniqueId":@101, @"startSeconds":@123, @"startMicroseconds":@45};
+    NSArray *cases = @[
+        @{@"case":@"success", @"code":@0, @"failure":@"NONE", @"quit":@YES, @"terminated":@YES},
+        @{@"case":@"product-failure", @"code":@1, @"failure":@"NONE", @"quit":@YES, @"terminated":@YES},
+        @{@"case":@"child-125", @"code":@125, @"failure":@"NONE", @"quit":@YES, @"terminated":@YES},
+        @{@"case":@"child-source", @"code":@125, @"failure":@"CHILD_SOURCE", @"quit":@YES, @"terminated":@YES},
+        @{@"case":@"child-source-unknown", @"code":@125, @"failure":@"CHILD_SOURCE"},
+        @{@"case":@"no-app", @"code":@125, @"failure":@"APPLICATION_IDENTITY"},
+        @{@"case":@"no-reap", @"code":@125, @"failure":@"CHILD_REAP"},
+        @{@"case":@"no-registration", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"bad-source", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"source-mismatch", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"app-mismatch", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"extra-key", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"bad-schema", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"empty-shells", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"too-many-shells", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"duplicate-shell", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"app-as-shell", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"root-shell", @"code":@125, @"failure":@"SHELL_REGISTRATION"},
+        @{@"case":@"unknown-retirement", @"code":@125, @"failure":@"SHELL_OBSERVATION"},
+        @{@"case":@"live-shell", @"code":@125, @"failure":@"SHELL_RETIREMENT"},
+        @{@"case":@"mixed-shells", @"code":@125, @"failure":@"SHELL_RETIREMENT"},
+        @{@"case":@"retirement-deadline", @"code":@125, @"failure":@"SHELL_RETIREMENT"},
+        @{@"case":@"identity-changed", @"code":@125, @"failure":@"APPLICATION_IDENTITY_CHANGED"},
+        @{@"case":@"identity-deadline", @"code":@125, @"failure":@"QUIT_REQUEST"},
+        @{@"case":@"quit-refused", @"code":@125, @"failure":@"QUIT_REQUEST", @"quit":@YES},
+        @{@"case":@"quit-incomplete", @"code":@125, @"failure":@"QUIT_COMPLETION", @"quit":@YES},
+        @{@"case":@"shared-deadline", @"code":@125, @"failure":@"QUIT_COMPLETION", @"quit":@YES},
+        @{@"case":@"within-deadline", @"code":@0, @"failure":@"NONE", @"quit":@YES, @"terminated":@YES}
+    ];
+    for (NSDictionary *scenario in cases) {
+        NSString *name = scenario[@"case"];
+        BOOL (^is)(NSString *) = ^BOOL(NSString *value) { return [name isEqualToString:value]; };
+        NSMutableDictionary *result = [@{@"applicationCreated":@(!is(@"no-app")),
+            @"scriptChildReaped":@(!is(@"no-reap")), @"exitCode":@125,
+            @"failureCheck":is(@"no-app") ? @"APPLICATION_IDENTITY" : is(@"no-reap") ? @"CHILD_REAP" : @"CHILD_SOURCE"} mutableCopy];
+        NSNumber *childCode = is(@"product-failure") ? @1 : is(@"child-125") ? @125 : @0;
+        if (is(@"child-source") || is(@"child-source-unknown") || is(@"no-app") || is(@"no-reap")) childCode = nil;
+        NSDictionary *expectedSource = is(@"bad-source") ? @{} : source;
+        NSMutableDictionary *registration = [@{@"schema":@1, @"source":source, @"terminal":terminal, @"shells":@[shell]} mutableCopy];
+        if (is(@"no-registration")) registration = nil;
+        if (is(@"source-mismatch")) registration[@"source"] = @{};
+        if (is(@"app-mismatch")) registration[@"terminal"] = @{};
+        if (is(@"extra-key")) registration[@"extra"] = @1;
+        if (is(@"bad-schema")) registration[@"schema"] = @YES;
+        if (is(@"empty-shells")) registration[@"shells"] = @[];
+        if (is(@"too-many-shells")) {
+            NSMutableArray *tooMany = [NSMutableArray array];
+            for (int i = 0; i < 31; i++) [tooMany addObject:shell];
+            registration[@"shells"] = tooMany;
+        }
+        if (is(@"duplicate-shell")) registration[@"shells"] = @[shell, shell];
+        if (is(@"app-as-shell") || is(@"root-shell") || is(@"mixed-shells")) {
+            NSMutableDictionary *changed = [shell mutableCopy];
+            changed[is(@"root-shell") ? @"uid" : @"pid"] = is(@"root-shell") ? @0 : is(@"mixed-shells") ? @18 : @10;
+            registration[@"shells"] = is(@"mixed-shells") ? @[shell, changed] : @[changed];
+        }
+        __block NSTimeInterval now = 100;
+        __block int waits = 0, observations = 0, identities = 0, quits = 0;
+        __block BOOL orderValid = YES, budgetValid = YES;
+        RpcTerminalFinalization operations = {
+            .now = ^NSTimeInterval{ return now; },
+            .wait = ^BOOL(NSTimeInterval seconds, BOOL (^finished)(void)) {
+                waits++;
+                if (seconds != 130 - now) budgetValid = NO;
+                BOOL done = finished();
+                if (!done || (waits == 1 && is(@"retirement-deadline"))) now += seconds;
+                else if (is(@"shared-deadline") || is(@"within-deadline"))
+                    now += waits == 1 ? 22 : is(@"shared-deadline") ? 9 : 7;
+                return done;
+            },
+            .retirement = ^int(NSDictionary *value) {
+                observations++;
+                if (identities || quits) orderValid = NO;
+                return is(@"unknown-retirement") || is(@"child-source-unknown") ? -1 :
+                    is(@"live-shell") || (is(@"mixed-shells") && [value[@"pid"] intValue] == 18) ? 0 : 1;
+            },
+            .originalIdentity = ^BOOL{
+                identities++;
+                if (![result[@"commandShellsRetired"] boolValue] || quits) orderValid = NO;
+                if (is(@"identity-deadline")) now = 130;
+                return !is(@"identity-changed");
+            },
+            .requestQuit = ^BOOL{
+                quits++;
+                if (identities != 1 || ![result[@"originalApplicationIdentity"] boolValue] || now >= 130) orderValid = NO;
+                return !is(@"quit-refused");
+            },
+            .terminated = ^BOOL{ return !is(@"quit-incomplete"); }
+        };
+        int outcome = finalizeApplication(result, registration, expectedSource, terminal, uid, childCode, 130, operations);
+        BOOL noAuthority = is(@"no-app") || is(@"no-reap") || [scenario[@"failure"] isEqual:@"SHELL_REGISTRATION"];
+        if (outcome != [scenario[@"code"] intValue] || ![result[@"exitCode"] isEqual:scenario[@"code"]] ||
+            ![result[@"failureCheck"] isEqual:scenario[@"failure"]] ||
+            quits != [scenario[@"quit"] boolValue] ||
+            [result[@"applicationQuitRequested"] boolValue] != ([scenario[@"quit"] boolValue] && !is(@"quit-refused")) ||
+            [result[@"applicationTerminated"] boolValue] != [scenario[@"terminated"] boolValue] ||
+            !orderValid || !budgetValid || (noAuthority && (waits || observations || identities || quits))) {
+            fprintf(stderr, "Finalization decision failed: %s\n", name.UTF8String);
+            return 30;
+        }
+    }
+    return 0;
+}
+
 static int realLifetime(void) {
     int ready[2], release[2];
     if (pipe(ready)) return 20;
@@ -96,6 +209,7 @@ int main(void) {
     @autoreleasepool {
         if (!getuid() || getuid() != geteuid() || getgid() != getegid()) return 125;
         int result = decisions();
+        if (!result) result = finalizationDecisions();
         if (!result) result = realLifetime();
         if (result) { fprintf(stderr, "Native shell retirement control failed: %d\n", result); return 1; }
         puts("PASS: native shell result-before-exit, positive retirement and fail-closed observation controls");
