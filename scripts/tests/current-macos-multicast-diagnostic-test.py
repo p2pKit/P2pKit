@@ -143,14 +143,14 @@ class FinalResultTest(unittest.TestCase):
         multicast = Mock(side_effect=AssertionError("Separate component scope cannot execute multicast"))
         instance.qualification = SimpleNamespace(Qualification=SimpleNamespace(
             native_controls=controls, multicast_admission=multicast))
-        instance.invoke = Mock(side_effect=[{"count": count} for count in (49, 22, 28)])
+        instance.invoke = Mock(side_effect=[{"count": count, "productExitCode": 0} for count in (49, 25, 28)])
         instance.output = lambda proof, **kwargs: f'Ran {proof["count"]} tests in 0.01s\nOK\n'.encode()
         instance.execute()
         controls.assert_called_once_with(instance)
         multicast.assert_not_called()
         self.assertEqual(instance.result["result"], "PASS_COMPONENT_CONTROLS_ONLY")
         self.assertEqual(instance.result["fixture"], "NOT_RUN")
-        self.assertEqual(instance.result["counts"], {"ci-source-admission": 49, "ci-metadata": 22,
+        self.assertEqual(instance.result["counts"], {"ci-source-admission": 49, "ci-metadata": 25,
                                                    "terminal-refusal": 28})
         self.assertTrue(all(call.args[2] == 90 for call in instance.invoke.call_args_list))
 
@@ -159,11 +159,33 @@ class FinalResultTest(unittest.TestCase):
         instance.profile = "terminal-components"
         instance.result = {"counts": {}, "result": "FAIL"}
         instance.qualification = SimpleNamespace(Qualification=SimpleNamespace(native_controls=lambda _: None))
-        instance.invoke = lambda *args: {}
+        instance.invoke = lambda *args, **kwargs: {"productExitCode": 0}
         instance.output = lambda *args, **kwargs: b"Ran 1 tests in 0.01s\nOK\n"
         with self.assertRaises(ValueError):
             instance.execute()
         self.assertEqual(instance.result["result"], "FAIL")
+
+    def test_component_failure_projection_exposes_only_reviewed_test_names(self):
+        raw = (b'FAIL: test_known (__main__.Tests)\nprivate machine path\n'
+               b'ERROR: test_PRIVATE_PAYLOAD (__main__.Tests)\n')
+        projected = module.component_failure_projection(raw, 'def test_known():\n    pass\n')
+        self.assertEqual(projected["failedTests"], ["test_known"])
+        self.assertEqual(projected["unknownFailureCount"], 1)
+        self.assertNotIn("PRIVATE_PAYLOAD", json.dumps(projected))
+        self.assertNotIn("private machine", json.dumps(projected))
+
+    def test_component_failure_is_retained_before_refusing_nonzero_product(self):
+        instance = module.Diagnostic.__new__(module.Diagnostic)
+        instance.profile = "terminal-components"
+        instance.result = {"counts": {}, "result": "FAIL"}
+        instance.qualification = SimpleNamespace(Qualification=SimpleNamespace(native_controls=lambda _: None))
+        instance.invoke = lambda *args, **kwargs: {"productExitCode": 1}
+        instance.output = lambda *args, **kwargs: b"FAIL: test_exact_pr_synthetic_merge_admitted (__main__.Tests)\n"
+        with self.assertRaises(ValueError):
+            instance.execute()
+        self.assertEqual(instance.result["result"], "FAIL")
+        self.assertEqual(instance.result["componentDiagnostics"]["ci-source-admission"]["failedTests"],
+                         ["test_exact_pr_synthetic_merge_admitted"])
 
     def test_no_repeated_command(self):
         instance = module.Diagnostic.__new__(module.Diagnostic)

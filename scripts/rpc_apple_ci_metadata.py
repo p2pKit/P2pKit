@@ -21,6 +21,7 @@ from rpc_apple_ci_admission import (
 
 API = "https://api.github.com"
 MAX_RESPONSE = 2 * 1024 * 1024
+MAX_NESTING = 64
 PROFILES = {"platform-checks": "platform-full", "artifact-checks": "consumers-complete"}
 
 
@@ -41,7 +42,36 @@ def finite_decimal(value):
 def decode_metadata(raw: bytes) -> dict:
     require(type(raw) is bytes and 0 < len(raw) <= MAX_RESPONSE, "Unbounded or empty metadata")
     try:
-        value = json.loads(raw, object_pairs_hook=unique_object, parse_float=finite_decimal,
+        text = raw.decode("utf-8")
+    except UnicodeError:
+        raise ValueError("Invalid metadata encoding") from None
+    # Decode explicitly so json.loads cannot autodetect UTF-16/32 and disagree
+    # with the byte-level quote/escape scan below. Literal NUL is not JSON text.
+    require("\0" not in text, "Invalid metadata encoding")
+    # CPython versions do not share a JSON recursion threshold. Check a fixed
+    # structural depth BEFORE parsing instead of depending on RecursionError.
+    # Structural ASCII inside quoted/escaped strings is data, not nesting.
+    depth = 0
+    quoted = escaped = False
+    for byte in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif byte == 92:
+                escaped = True
+            elif byte == 34:
+                quoted = False
+        elif byte == 34:
+            quoted = True
+        elif byte in (91, 123):
+            depth += 1
+            require(depth <= MAX_NESTING, "Invalid metadata encoding")
+        elif byte in (93, 125):
+            depth -= 1
+            require(depth >= 0, "Invalid metadata encoding")
+    require(depth == 0 and not quoted, "Invalid metadata encoding")
+    try:
+        value = json.loads(text, object_pairs_hook=unique_object, parse_float=finite_decimal,
                            parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Nonfinite metadata")))
     except (UnicodeError, json.JSONDecodeError, RecursionError):
         raise ValueError("Invalid metadata encoding") from None

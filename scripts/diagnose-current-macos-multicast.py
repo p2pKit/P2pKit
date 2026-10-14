@@ -10,6 +10,7 @@ for the Java fixture's captured interface. Native Python/JDK probes are matched.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -57,6 +58,18 @@ def primitive_projection(raw):
     require(len(candidates) <= 32, "Excessive primitive observations")
     admitted = [line for line in candidates if any(pattern.fullmatch(line) for pattern in PRIMITIVE_PATTERNS)]
     return {"markers": admitted, "unclassifiedPrimitiveLineCount": len(candidates) - len(admitted),
+            "logSha256": hashlib.sha256(raw).hexdigest(), "logBytes": len(raw)}
+
+
+def component_failure_projection(raw, test_source):
+    """Export only failing names present in the reviewed public test source."""
+    require(type(raw) is bytes and len(raw) <= 16 * 1024 * 1024, "Bounded component transcript required")
+    names = {node.name for node in ast.walk(ast.parse(test_source))
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")}
+    failures = {match.group(1) for match in re.finditer(r"(?m)^(?:FAIL|ERROR): (test_[A-Za-z0-9_]+) \(",
+                                                       raw.decode(errors="replace"))}
+    require(len(failures) <= 128, "Excessive component failure observations")
+    return {"failedTests": sorted(failures & names), "unknownFailureCount": len(failures - names),
             "logSha256": hashlib.sha256(raw).hexdigest(), "logBytes": len(raw)}
 
 
@@ -196,12 +209,15 @@ class Diagnostic:
             # inventory includes the real shell lifetime and new finalizer cases.
             for purpose, filename, count in (
                     ("ci-source-admission", "rpc-apple-ci-admission-test.py", 49),
-                    ("ci-metadata", "rpc-apple-ci-metadata-test.py", 22),
+                    ("ci-metadata", "rpc-apple-ci-metadata-test.py", 25),
                     ("terminal-refusal", "with-darwin-terminal-context-test.py", 28)):
                 proof = self.invoke(purpose, [str(Path(sys.executable)), "-I", "-B", "-S",
-                    str(ROOT / "scripts/tests" / filename)], 90)
+                    str(ROOT / "scripts/tests" / filename)], 90, allow_failure=True)
                 transcript = self.output(proof) + self.output(proof, stream="stderr")
-                require(re.search(rb"(?m)^Ran " + str(count).encode() + rb" tests in [0-9.]+s$", transcript)
+                self.result.setdefault("componentDiagnostics", {})[purpose] = component_failure_projection(
+                    transcript, (ROOT / "scripts/tests" / filename).read_text())
+                require(proof["productExitCode"] == 0 and
+                        re.search(rb"(?m)^Ran " + str(count).encode() + rb" tests in [0-9.]+s$", transcript)
                         and re.search(rb"(?m)^OK$", transcript), "Incomplete component controls")
                 self.result["counts"][purpose] = count
             self.result["result"] = "PASS_COMPONENT_CONTROLS_ONLY"

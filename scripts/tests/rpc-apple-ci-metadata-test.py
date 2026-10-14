@@ -184,6 +184,30 @@ class MetadataControls(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^Invalid metadata encoding$"):
             m.decode_metadata(raw)
 
+    def test_exact_depth_bound_is_portable_not_a_python_recursion_threshold(self):
+        def nested(count):
+            return b'{"a":' * count + b'0' + b'}' * count
+        self.assertIsInstance(m.decode_metadata(nested(m.MAX_NESTING)), dict)
+        for count in (m.MAX_NESTING + 1, 2000):
+            with self.subTest(count=count), self.assertRaisesRegex(ValueError, "^Invalid metadata encoding$"):
+                m.decode_metadata(nested(count))
+
+    def test_quoted_escaped_brackets_are_data_and_malformed_structures_fail(self):
+        data = {"value": '[{]}\\"' * 100}
+        self.assertEqual(m.decode_metadata(json.dumps(data).encode()), data)
+        for raw in (b'{"value":"unterminated}', b']{"a":1}', b'{"a":[1}}', b'{"a":1'):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                m.decode_metadata(raw)
+
+    def test_alternate_encoding_cannot_hide_nesting_from_the_quote_scanner(self):
+        nested = "[" * (m.MAX_NESTING + 1) + "0" + "]" * (m.MAX_NESTING + 1)
+        document = '{"a":"\\\"","b":' + nested + ',"c":"\\\""}'
+        # In UTF-16/32, NUL bytes after backslashes used to consume the byte
+        # scanner's escape state while json.loads(bytes) decoded real quotes.
+        for encoding in ("utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be"):
+            with self.subTest(encoding=encoding), self.assertRaisesRegex(ValueError, "^Invalid metadata encoding$"):
+                m.decode_metadata(document.encode(encoding))
+
     def test_only_pinned_readonly_metadata_endpoints_can_be_requested(self):
         for path in ("https://other.invalid", "/repos/other/repo/actions/runs/1/attempts/1",
                      "/repos/p2pKit/P2pKit/actions/runs/1/cancel",
