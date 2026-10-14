@@ -8,6 +8,8 @@ Passing these controls is not native process/custody/retirement qualification.
 from __future__ import annotations
 
 from collections import Counter
+import ast
+import hashlib
 from contextlib import ExitStack
 import ctypes
 import os
@@ -43,6 +45,183 @@ class OfflineCase(unittest.TestCase):
 
     def patch(self, target, name, value):
         return self.patches.enter_context(patch.object(target, name, value))
+
+
+class PosixReturncodeControls(OfflineCase):
+    """Actual wrapper classes, modeled backing process; no native qualification."""
+    BEFORE = b'        self.stderr = process.stderr\n\n    def poll(self) -> int | None:\n'
+    AFTER = b'        self.stderr = process.stderr\n\n    @property\n    def returncode(self) -> int | None:\n        """Return the cached exit status without polling a retired process."""\n        return self.process.returncode\n\n    def poll(self) -> int | None:\n'
+    ORIGINAL_SHA256 = 'd955dbae89ca701a585f573efcf7f1ef1618b2ea029e58f3025d2f97aff6ec80'
+
+    @classmethod
+    def preimage(cls, raw):
+        if type(raw) is not bytes or raw.count(cls.AFTER) != 1 or cls.BEFORE in raw:
+            raise AssertionError("POSIX_CACHED_RETURN_EXACT_CONTEXT")
+        original = raw.replace(cls.AFTER, cls.BEFORE, 1)
+        if hashlib.sha256(original).hexdigest() != cls.ORIGINAL_SHA256:
+            raise AssertionError("POSIX_CACHED_RETURN_WHOLE_7C9E_PREIMAGE")
+        return original
+
+    def backing(self, code=None):
+        return SimpleNamespace(pid=4242, stdout=None, stderr=None, returncode=code,
+            poll=Mock(side_effect=AssertionError("UNEXPECTED_POLL")),
+            wait=Mock(side_effect=AssertionError("UNEXPECTED_WAIT")))
+
+    def test_cached_none_zero_nonzero_and_missing_field_never_poll(self):
+        for code in (None, 0, 1, 125, -15):
+            with self.subTest(code=code):
+                backing = self.backing(code)
+                child = processes.PosixProcess(backing)
+                self.assertIs(type(child), processes.PosixProcess)
+                self.assertIs(child.process, backing)
+                self.assertIs(child.returncode, code)
+                self.assertIs(child.returncode, code)
+                backing.poll.assert_not_called()
+                backing.wait.assert_not_called()
+        del backing.returncode
+        with self.assertRaises(AttributeError):
+            _ = child.returncode
+        backing.poll.assert_not_called()
+
+    def test_cached_property_is_readonly_and_cannot_be_shadowed(self):
+        backing = self.backing(125)
+        child = processes.PosixProcess(backing)
+        with self.assertRaises(AttributeError):
+            child.returncode = 0
+        with self.assertRaises(AttributeError):
+            del child.returncode
+        child.__dict__["returncode"] = 0
+        self.assertEqual(child.returncode, 125)
+        self.assertIs(child.process, backing)
+        self.assertEqual(backing.returncode, 125)
+        backing.poll.assert_not_called()
+        descriptor = processes.PosixProcess.__dict__["returncode"]
+        self.assertIs(type(descriptor), property)
+        self.assertIsNone(descriptor.fset)
+        self.assertIsNone(descriptor.fdel)
+
+    def test_original_poll_wait_and_close_cache_transitions_remain_observed(self):
+        backing = self.backing()
+        child = processes.PosixProcess(backing)
+        def poll():
+            backing.returncode = 0
+            return 0
+        def wait(timeout=None):
+            self.assertEqual(timeout, .25)
+            backing.returncode = 125
+            return 125
+        backing.poll = Mock(side_effect=poll)
+        backing.wait = Mock(side_effect=wait)
+        self.assertIsNone(child.returncode)
+        self.assertEqual(child.poll(), 0)
+        self.assertEqual(child.returncode, 0)
+        backing.poll.assert_called_once_with()
+        self.assertEqual(child.wait(timeout=.25), 125)
+        self.assertEqual(child.returncode, 125)
+        backing.wait.assert_called_once_with(timeout=.25)
+        child.close()
+        self.assertEqual(backing.poll.call_count, 2)  # Existing close polls once.
+        self.assertEqual(child.returncode, 0)
+        self.assertEqual(backing.poll.call_count, 2)  # Passive post-close read does not.
+        self.assertIs(child.process, backing)
+        failure = RuntimeError("MODEL_ORIGINAL_POLL_FAILURE")
+        backing.poll.side_effect = failure
+        with self.assertRaises(RuntimeError) as raised:
+            child.poll()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(child.returncode, 0)
+        self.assertEqual(backing.poll.call_count, 3)
+
+    def test_scope_spawn_and_close_keep_actual_wrapper_and_windows_cached_interface(self):
+        scope = processes.PosixScope.__new__(processes.PosixScope)
+        scope._closed, scope._retirement_error = False, None
+        scope.handles, scope.leaders, scope.launches = {}, [], []
+        scope.discover = Mock(return_value=[])
+        backing = self.backing(0)
+        backing.poll = Mock(return_value=0)
+        self.patch(processes.subprocess, "Popen", Mock(return_value=backing))
+        self.patch(processes, "resolve_executable", Mock(return_value=["/model/child"]))
+        child = scope.spawn(["model-child"], "/model", {"MODEL": "ONLY"})
+        self.assertIs(type(child), processes.PosixProcess)
+        self.assertIs(child.process, backing)
+        self.assertEqual(scope.leaders, [child])
+        scope.close()
+        self.assertTrue(scope._closed)
+        self.assertEqual(scope.leaders, [])
+        backing.poll.assert_called_once_with()
+        self.assertEqual(child.returncode, 0)
+        backing.poll.assert_called_once_with()
+        api = SimpleNamespace(close=Mock(),
+            WaitForSingleObject=Mock(side_effect=AssertionError("CLOSED_NATIVE_HANDLE")),
+            GetExitCodeProcess=Mock(side_effect=AssertionError("CLOSED_NATIVE_HANDLE")))
+        windows = processes.WindowsProcess(api, 17, 4242, None, None)
+        windows.returncode = 0
+        windows.close()
+        api.close.assert_called_once_with(17)
+        self.assertIsNone(windows.handle)
+        self.assertEqual(windows.returncode, 0)
+        api.WaitForSingleObject.assert_not_called()
+        api.GetExitCodeProcess.assert_not_called()
+
+    def test_unchanged_native_resource_predicate_uses_cached_original_wrapper(self):
+        path = Path(__file__).resolve().parents[1] / "run-hosted-initial-recipient-tail.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        checked = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and
+            node.name == "_checked_native")
+        calls = [node for node in ast.walk(checked) if isinstance(node, ast.Call) and
+            isinstance(node.func, ast.Name) and node.func.id == "require" and len(node.args) == 2 and
+            isinstance(node.args[1], ast.Constant) and node.args[1].value == "NATIVE_ACTUAL_RESOURCE_RETURN"]
+        self.assertEqual(len(calls), 1)
+        expected = ast.parse('tuple((row, label, resource) for row, label, resource, _a, _c in owner_anchor.rows) == resources and child_process is not None and child_process.returncode == 0', mode="eval")
+        self.assertEqual(ast.dump(calls[0].args[0]), ast.dump(expected.body))
+        expression = compile(ast.Expression(calls[0].args[0]), str(path), "eval")
+        row, resource = {}, object()
+        resources = ((row, "native-scope", resource),)
+        anchor = SimpleNamespace(rows=((row, "native-scope", resource, True, True),))
+        for code in (None, 0, 1, 125, -15):
+            backing = self.backing(code)
+            child = processes.PosixProcess(backing)
+            values = {"owner_anchor": anchor, "resources": resources, "child_process": child}
+            self.assertIs(eval(expression, values), code == 0)
+            values["resources"] = ((row, "native-scope", object()),)
+            self.assertIs(eval(expression, values), False)
+            backing.poll.assert_not_called()
+            backing.wait.assert_not_called()
+        values["resources"], values["child_process"] = resources, None
+        self.assertIs(eval(expression, values), False)
+        # Preserve the original registration gate and wrapper tuple use. Do not
+        # manufacture a valid native owner/result from this predicate model.
+        self.assertEqual(ast.unparse(checked.body[0]), "saved = _NATIVE.get(id(result))")
+        self.assertIn("saved[0] is result", ast.unparse(checked.body[1]))
+        self.assertIn("child_process, graph = saved[2:]", ast.unparse(checked.body[2]))
+        native = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_native_tail")
+        assignments = [node for node in ast.walk(native) if isinstance(node, ast.Assign) and
+            any(isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and
+                target.value.id == "_NATIVE" for target in node.targets)]
+        self.assertEqual(len(assignments), 1)
+        self.assertEqual(ast.unparse(assignments[0].value.elts[-2]), "child")
+
+    def test_exact_property_inverse_preserves_entire_module_and_rejects_drift(self):
+        raw = Path(processes.__file__).read_bytes()
+        original = self.preimage(raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(), self.ORIGINAL_SHA256)
+        for changed in (raw.replace(self.AFTER, self.BEFORE, 1),
+                raw.replace(self.AFTER, self.AFTER * 2, 1),
+                raw.replace(self.AFTER, self.BEFORE, 1) + self.AFTER,
+                raw.replace(self.AFTER, self.AFTER + b" ", 1), raw + b"# unrelated\n"):
+            self.assertNotEqual(changed, raw)
+            with self.assertRaises(AssertionError):
+                self.preimage(changed)
+        for malformed in (None, "text", b""):
+            with self.assertRaises(AssertionError):
+                self.preimage(malformed)
+        actual, previous = ast.parse(raw), ast.parse(original)
+        cls = next(node for node in actual.body if isinstance(node, ast.ClassDef) and node.name == "PosixProcess")
+        methods = [node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "returncode"]
+        self.assertEqual(len(methods), 1)
+        self.assertEqual(ast.unparse(methods[0].decorator_list[0]), "property")
+        cls.body.remove(methods[0])
+        self.assertEqual(ast.dump(actual), ast.dump(previous))
 
 
 class PosixOwnedStdinControls(OfflineCase):

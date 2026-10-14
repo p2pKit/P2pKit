@@ -109,6 +109,15 @@ _LINUX_RECONCILIATION_INVERSES = ((b'class LinuxScope(PosixScope):\n    name = "
 def canonical_process_preimage(raw):
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")
+    # POSIX_CACHED_RETURN_INVERSE_BEGIN
+    cached_before = b'        self.stderr = process.stderr\n\n    def poll(self) -> int | None:\n'
+    cached_after = b'        self.stderr = process.stderr\n\n    @property\n    def returncode(self) -> int | None:\n        """Return the cached exit status without polling a retired process."""\n        return self.process.returncode\n\n    def poll(self) -> int | None:\n'
+    if raw.count(cached_after) != 1 or cached_before in raw:
+        raise AssertionError("POSIX_CACHED_RETURN_EXACT_CONTEXT")
+    raw = raw.replace(cached_after, cached_before, 1)
+    if hashlib.sha256(raw).hexdigest() != 'd955dbae89ca701a585f573efcf7f1ef1618b2ea029e58f3025d2f97aff6ec80':
+        raise AssertionError("POSIX_CACHED_RETURN_WHOLE_7C9E_PREIMAGE")
+    # POSIX_CACHED_RETURN_INVERSE_END
     original = raw
     for before, after in reversed(_LINUX_RECONCILIATION_INVERSES):
         if original.count(after) != 1:
@@ -144,6 +153,13 @@ _LINUX_SHARED_TEST_INVERSES = ((b'                self.assertEqual(hashlib.sha25
 def linux_shared_test_preimage(raw):
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("LINUX_SHARED_TEST_BOUNDED_BYTES")
+    cached_inverse = ((b'        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")\n    original = raw\n', b'        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")\n    # POSIX_CACHED_RETURN_INVERSE_BEGIN\n    cached_before = b\'        self.stderr = process.stderr\\n\\n    def poll(self) -> int | None:\\n\'\n    cached_after = b\'        self.stderr = process.stderr\\n\\n    @property\\n    def returncode(self) -> int | None:\\n        """Return the cached exit status without polling a retired process."""\\n        return self.process.returncode\\n\\n    def poll(self) -> int | None:\\n\'\n    if raw.count(cached_after) != 1 or cached_before in raw:\n        raise AssertionError("POSIX_CACHED_RETURN_EXACT_CONTEXT")\n    raw = raw.replace(cached_after, cached_before, 1)\n    if hashlib.sha256(raw).hexdigest() != \'d955dbae89ca701a585f573efcf7f1ef1618b2ea029e58f3025d2f97aff6ec80\':\n        raise AssertionError("POSIX_CACHED_RETURN_WHOLE_7C9E_PREIMAGE")\n    # POSIX_CACHED_RETURN_INVERSE_END\n    original = raw\n'), (b'        restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])\n', b'        restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])\n        cached_inverse = \'    # POSIX_CACHED_RETURN_INVERSE_BEGIN\\n    cached_before = b\\\'        self.stderr = process.stderr\\\\n\\\\n    def poll(self) -> int | None:\\\\n\\\'\\n    cached_after = b\\\'        self.stderr = process.stderr\\\\n\\\\n    @property\\\\n    def returncode(self) -> int | None:\\\\n        """Return the cached exit status without polling a retired process."""\\\\n        return self.process.returncode\\\\n\\\\n    def poll(self) -> int | None:\\\\n\\\'\\n    if raw.count(cached_after) != 1 or cached_before in raw:\\n        raise AssertionError("POSIX_CACHED_RETURN_EXACT_CONTEXT")\\n    raw = raw.replace(cached_after, cached_before, 1)\\n    if hashlib.sha256(raw).hexdigest() != \\\'d955dbae89ca701a585f573efcf7f1ef1618b2ea029e58f3025d2f97aff6ec80\\\':\\n        raise AssertionError("POSIX_CACHED_RETURN_WHOLE_7C9E_PREIMAGE")\\n    # POSIX_CACHED_RETURN_INVERSE_END\\n\'\n        self.assertEqual(restored.count(cached_inverse), 1)\n        restored = restored.replace(cached_inverse, "", 1)\n'))
+    for before, after in reversed(cached_inverse):
+        if raw.count(after) != 1:
+            raise AssertionError("POSIX_CACHED_RETURN_SHARED_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != '97b72709dd39e1201027ad16c74e48888be3488c1282ace7f18b8c12aa222278':
+        raise AssertionError("POSIX_CACHED_RETURN_SHARED_WHOLE_7C9E_PREIMAGE")
     begin = b'        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_BEGIN\n'
     end = b'        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_END\n'
     if raw.count(begin) != 1 or raw.count(end) != 1:
@@ -609,9 +625,11 @@ class CaseAndSourceControls(unittest.TestCase):
                 shared[:start] + b"        # moved context\n" + shared[start:]):
             with self.assertRaises(AssertionError):
                 linux_shared_test_preimage(changed)
-        for changed in (shared.replace(_LINUX_SHARED_TEST_HELPER, b"", 1),
-                shared.replace(_LINUX_SHARED_TEST_HELPER, _LINUX_SHARED_TEST_HELPER * 2, 1),
-                shared.replace(_LINUX_SHARED_TEST_HELPER, b"", 1) + _LINUX_SHARED_TEST_HELPER,
+        current_helper = _LINUX_SHARED_TEST_HELPER.replace(b'        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")\n    original = raw\n', b'        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")\n    # POSIX_CACHED_RETURN_INVERSE_BEGIN\n    cached_before = b\'        self.stderr = process.stderr\\n\\n    def poll(self) -> int | None:\\n\'\n    cached_after = b\'        self.stderr = process.stderr\\n\\n    @property\\n    def returncode(self) -> int | None:\\n        """Return the cached exit status without polling a retired process."""\\n        return self.process.returncode\\n\\n    def poll(self) -> int | None:\\n\'\n    if raw.count(cached_after) != 1 or cached_before in raw:\n        raise AssertionError("POSIX_CACHED_RETURN_EXACT_CONTEXT")\n    raw = raw.replace(cached_after, cached_before, 1)\n    if hashlib.sha256(raw).hexdigest() != \'d955dbae89ca701a585f573efcf7f1ef1618b2ea029e58f3025d2f97aff6ec80\':\n        raise AssertionError("POSIX_CACHED_RETURN_WHOLE_7C9E_PREIMAGE")\n    # POSIX_CACHED_RETURN_INVERSE_END\n    original = raw\n', 1)
+        self.assertEqual(shared.count(current_helper), 1)
+        for changed in (shared.replace(current_helper, b"", 1),
+                shared.replace(current_helper, current_helper * 2, 1),
+                shared.replace(current_helper, b"", 1) + current_helper,
                 shared + b"# unrelated\n"):
             with self.assertRaises(AssertionError):
                 linux_shared_test_preimage(changed)

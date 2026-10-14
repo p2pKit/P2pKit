@@ -358,6 +358,11 @@ class PosixProcess:
         self.stdout = process.stdout
         self.stderr = process.stderr
 
+    @property
+    def returncode(self) -> int | None:
+        """Return the cached exit status without polling a retired process."""
+        return self.process.returncode
+
     def poll(self) -> int | None:
         return self.process.poll()
 
