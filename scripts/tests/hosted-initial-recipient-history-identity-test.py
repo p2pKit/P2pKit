@@ -311,6 +311,11 @@ _BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
 
 
 def currency_input_preimage(raw):
+    # Exact guard-scheduling inverse; keep all historical supplier pins.
+    guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+    if type(raw) is not bytes or raw.count(guard_after) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_GUARD_SCHEDULING_EXACT_CONTEXT")
+    raw = raw.replace(guard_after, guard_before, 1)
     # Normalize only the reviewed original-job gate allocation, not live functions.
     old_schedule, new_schedule = b'    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', b'    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
     if type(raw) is not bytes or raw.count(new_schedule) != 1:
@@ -781,6 +786,15 @@ class HistoryIdentityControls(unittest.TestCase):
 
     def test_first_catch_supplier_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
         raw = SOURCES.raw[CUSTODY_NAME]
+        # Missing, duplicate, moved, pre-coalescing, partial and outside edits must still refuse.
+        guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+        removed_guard = raw.replace(guard_after, b"", 1)
+        for index, changed in enumerate((removed_guard, raw.replace(guard_after, guard_after * 2, 1),
+                removed_guard + guard_after, raw.replace(guard_after, guard_before, 1),
+                raw.replace(guard_after, guard_after.replace(b"anchor.last", b"anchor.frontier"), 1), raw + b"\n")):
+            with self.subTest(guardSchedulingCase=index), self.assertRaises(AssertionError) as caught:
+                before_child_custody_preimage(changed)
+            self.assertTrue(str(caught.exception).startswith("BEFORE_CHILD_CUSTODY_"))
         restored_555 = before_clock_diagnostic_custody_preimage(raw)
         self.assertEqual(hashlib.sha256(restored_555).hexdigest(),
             "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25")
