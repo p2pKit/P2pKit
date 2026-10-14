@@ -8,6 +8,8 @@ import java.util.Locale
 internal object WindowsProfilePeImage {
     const val ABI = 13
     const val MAXIMUM_BYTES = 32 * 1024 * 1024
+    private const val MAXIMUM_RELOCATION_BLOCKS = 32_768
+    private const val MAXIMUM_RELOCATION_SLOTS = 65_536
     val expectedExports: Set<String> get() = setOf(
         "abi", "capabilities", "openRoot", "child", "identity", "read", "lockExisting", "createProfileLock", "close",
         "fileIdentity", "exists", "names", "stageRecord", "discardStage", "requestExpectedFileDeletion",
@@ -33,6 +35,7 @@ internal object WindowsProfilePeImage {
             val mappedSize: Long, val executable: Boolean)
         private val sections = mutableListOf<Section>()
         private val directories = mutableListOf<Pair<Long, Long>>()
+        private val immutableMetadata = mutableListOf<LongRange>()
         private fun check(value: Boolean) = require(value) { "Unsupported or malformed Windows profile PE image" }
         private fun span(at: Long, count: Long): Int {
             check(at >= 0 && count >= 0 && at <= bytes.size.toLong() && count <= bytes.size.toLong() - at)
@@ -63,11 +66,20 @@ internal object WindowsProfilePeImage {
             span(offset, size)
             return offset
         }
+        private fun metadata(rva: Long, size: Long): Long {
+            val offset = mapped(rva, size)
+            immutableMetadata += rva until rva + size
+            return offset
+        }
         private fun text(rva: Long, maximum: Int): String {
             val output = StringBuilder()
             for (i in 0..maximum) {
                 val value = bytes[mapped(rva + i, 1).toInt()].toInt() and 255
-                if (value == 0) { check(output.isNotEmpty()); return output.toString() }
+                if (value == 0) {
+                    check(output.isNotEmpty())
+                    immutableMetadata += rva..rva + i
+                    return output.toString()
+                }
                 check(value in 33..126 && i < maximum)
                 output.append(value.toChar())
             }
@@ -140,6 +152,7 @@ internal object WindowsProfilePeImage {
             val certificate = certificateTable(raw.last().raw + raw.last().rawSize)
             val namedImports = imports()
             val exports = exports()
+            relocations(imageSize)
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
             return Observation(hash, Collections.unmodifiableSet(namedImports.mapTo(linkedSetOf()) { it.library }),
                 Collections.unmodifiableList(namedImports), Collections.unmodifiableSet(exports), certificate)
@@ -167,6 +180,7 @@ internal object WindowsProfilePeImage {
         private fun imports(): List<NamedImport> {
             val (rva, size) = directories[1]
             check(rva != 0L && size in 40..(33L * 20) && size % 20 == 0L)
+            metadata(rva, size)
             val libraries = linkedSetOf<String>()
             val result = mutableListOf<NamedImport>()
             val tables = mutableListOf<LongRange>()
@@ -174,6 +188,7 @@ internal object WindowsProfilePeImage {
             var totalFunctions = 0
             val (iat, iatSize) = directories[12]
             check(iat != 0L && iat % 8 == 0L && iatSize > 0 && iatSize % 8 == 0L)
+            metadata(iat, iatSize)
             for (i in 0 until (size / 20).toInt()) {
                 val at = mapped(rva + i * 20L, 20)
                 if (zero(at, 20)) {
@@ -193,11 +208,11 @@ internal object WindowsProfilePeImage {
                 var thunkTerminated = false
                 for (j in 0..512) {
                     check((j + 1) * 8L <= iatSize - (address - iat))
-                    val value = u64(mapped(lookup + j * 8L, 8))
+                    val value = u64(metadata(lookup + j * 8L, 8))
                     check(value == u64(mapped(address + j * 8L, 8)))
                     if (value == 0L) { thunkTerminated = true; break }
                     check(j < 512 && ++totalFunctions <= 4096 && value in 1..0xffffffffL)
-                    mapped(value, 2)
+                    metadata(value, 2)
                     val name = text(value + 2, 128)
                     check(name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && functionNames.add(name))
                     result += NamedImport(library, name, lookup + j * 8L, address + j * 8L)
@@ -219,13 +234,14 @@ internal object WindowsProfilePeImage {
         private fun exports(): Set<String> {
             val (rva, size) = directories[0]
             check(rva != 0L && size in 40..65536)
+            metadata(rva, size)
             val at = mapped(rva, 40)
             check(u32(at) == 0L && text(u32(at + 12), 64) == "p2pkit-windows-profile.dll" && u32(at + 16) == 1L)
             val count = expectedExports.size
             check(u32(at + 20) == count.toLong() && u32(at + 24) == count.toLong())
-            val functions = mapped(u32(at + 28), count * 4L)
-            val names = mapped(u32(at + 32), count * 4L)
-            val ordinals = mapped(u32(at + 36), count * 2L)
+            val functions = metadata(u32(at + 28), count * 4L)
+            val names = metadata(u32(at + 32), count * 4L)
+            val ordinals = metadata(u32(at + 36), count * 2L)
             val output = linkedSetOf<String>()
             val seenOrdinals = mutableSetOf<Int>()
             var previous = ""
@@ -239,6 +255,62 @@ internal object WindowsProfilePeImage {
             }
             check(output == expectedExports)
             return output
+        }
+
+        private fun relocations(imageSize: Long) {
+            val (rva, size) = directories[5]
+            check(rva % 4 == 0L && size >= 8 && size % 4 == 0L)
+            metadata(rva, size)
+            // Protect every referenced byte, including out-of-directory tables, hints and terminators.
+            // Merge before lookup so adversarial inputs cannot multiply slot count by metadata count.
+            val protectedRanges = mutableListOf<LongRange>()
+            for (range in immutableMetadata.sortedBy { it.first }) {
+                val last = protectedRanges.lastOrNull()
+                if (last != null && range.first <= last.last + 1) {
+                    protectedRanges[protectedRanges.lastIndex] = last.first..maxOf(last.last, range.last)
+                } else protectedRanges += range
+            }
+            fun overlapsMetadata(target: Long): Boolean {
+                var low = 0
+                var high = protectedRanges.size
+                while (low < high) {
+                    val middle = (low + high) ushr 1
+                    if (protectedRanges[middle].first <= target + 7) low = middle + 1 else high = middle
+                }
+                return low > 0 && protectedRanges[low - 1].last >= target
+            }
+            val writes = mutableListOf<Long>()
+            var cursor = 0L
+            var blocks = 0
+            var slots = 0
+            while (cursor < size) {
+                check(size - cursor >= 8 && ++blocks <= MAXIMUM_RELOCATION_BLOCKS)
+                val at = mapped(rva + cursor, 8)
+                val page = u32(at)
+                val blockSize = u32(at + 4)
+                check(page % 4096 == 0L && page < imageSize &&
+                    blockSize >= 8 && blockSize % 4 == 0L && blockSize <= size - cursor)
+                val count = (blockSize - 8) / 2
+                check(count <= MAXIMUM_RELOCATION_SLOTS - slots)
+                slots += count.toInt()
+                repeat(count.toInt()) { index ->
+                    val entry = u16(at + 8 + index * 2L)
+                    when (entry ushr 12) {
+                        0 -> Unit // IMAGE_REL_BASED_ABSOLUTE has no write; its offset is ignored by Windows.
+                        10 -> { // IMAGE_REL_BASED_DIR64 is the supported AMD64 pointer fixup.
+                            val target = page + (entry and 0xfff)
+                            mapped(target, 8) // Excludes headers, unmapped gaps, zero-fill and partial spans.
+                            check(!overlapsMetadata(target))
+                            writes += target
+                        }
+                        else -> check(false)
+                    }
+                }
+                cursor += blockSize
+            }
+            check(cursor == size)
+            writes.sort()
+            for (index in 1 until writes.size) check(writes[index - 1] + 8 <= writes[index])
         }
     }
 }

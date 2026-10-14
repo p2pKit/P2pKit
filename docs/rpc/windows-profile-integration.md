@@ -597,3 +597,23 @@ Access rights, sharing, original lease grants, custody ABI13/`0x43`, JNI exports
 `profile_creation_result_test.c` exercises the actual shared classifier, ownership ledger and existing
 controllers with inert raw observations. It does not execute `NtCreateFile`, prove NTFS crash behavior or
 supply installed-loader/full-provider qualification.
+
+## Bounded AMD64 base-relocation inspection
+
+`WindowsProfilePeImage` now inspects the complete base-relocation directory before returning its byte
+observation. Blocks require aligned page RVAs, bounded four-byte-aligned framing and complete consumption.
+Only AMD64 `DIR64` writes and `ABSOLUTE` no-op entries are supported. Each eight-byte write must have
+unambiguous original section bytes; headers, gaps, zero-fill tails, duplicate writes and partially overlapping
+writes are refused. Parsing admits at most 32,768 blocks and 65,536 total slots, including padding slots.
+
+Relocations cannot overwrite the relocation program, import/export directories, the complete IAT, lookup
+slots, export arrays, DLL/function names, import hints or their terminators. Referenced metadata remains
+protected even outside its declared directory span. Sorted, merged metadata ranges and bounded write sorting
+avoid an input-controlled product of relocation and metadata counts. Ordinary data fixups and ignored
+`ABSOLUTE` offsets remain supported, following Microsoft's [PE relocation format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-reloc-section-image-only).
+
+The synthetic fixture now contains a framed `DIR64` block. Regression controls exercise malformed blocks,
+write bounds/overlaps, metadata outside directory spans, and both parser limits. These are byte-parser tests,
+not Windows loader execution, module/import-provider verification, JNI continuity or native qualification.
+Actual compiler-produced DLL compatibility still needs source-bound byte inspection. The custody ABI13/`0x43`,
+full-provider gates, preview module and canonical packaging pipeline are unchanged.

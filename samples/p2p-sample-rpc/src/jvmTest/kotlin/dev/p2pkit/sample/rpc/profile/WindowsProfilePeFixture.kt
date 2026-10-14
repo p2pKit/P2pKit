@@ -26,7 +26,7 @@ internal object WindowsProfilePeFixture {
         put32(OPTIONAL + 32, 0x1000); put32(OPTIONAL + 36, 0x200)
         put32(OPTIONAL + 56, 0x4000); put32(OPTIONAL + 60, 0x400)
         put16(OPTIONAL + 68, 3); put16(OPTIONAL + 70, 0x160); put32(OPTIONAL + 108, 16)
-        directory(0, 0x2000, 0x800); directory(1, 0x2800, 40); directory(5, 0x3000, 8)
+        directory(0, 0x2000, 0x800); directory(1, 0x2800, 40); directory(5, 0x3000, 12)
         directory(12, 0x2880, 16)
         fun section(index: Int, name: String, va: Long, offset: Long, length: Long, flags: Long) {
             val at = SECTIONS + index * 40
@@ -52,6 +52,9 @@ internal object WindowsProfilePeFixture {
         put32(0xe00, 0x2860); put32(0xe0c, 0x2840); put32(0xe10, 0x2880)
         ascii(0xe40, "KERNEL32.dll"); put64(0xe60, 0x28a0); put64(0xe80, 0x28a0)
         ascii(0xea2, "CloseHandle")
+        // One AMD64 DIR64 fixup in ordinary data, followed by an ABSOLUTE padding entry.
+        put64(0xf00, 0x180001000)
+        put32(0x1000, 0x2000); put32(0x1004, 12); put16(0x1008, 0xa900)
     }
 
     private const val OPTIONAL = 0x98
