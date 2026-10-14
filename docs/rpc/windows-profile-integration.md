@@ -297,6 +297,24 @@ records historical source-bound MSVC build evidence, but remains **NOT_EXECUTED*
 fresh Windows build evidence. Execution requires a separately authorized disposable standard-user environment
 and bounded external process owner. It does not complete the provider, authorize execution or qualify an MSI.
 
+## Original JNI export-address comparison
+
+The PE reader retains each export's exact name, public ordinal and function RVA, plus `SizeOfImage`,
+from the same private byte snapshot used for its digest. The component byte authorization and held-file
+readback preserve these immutable observations without changing the serialized component manifest.
+The name-table position is not an ordinal: a valid producer may reorder ordinal bindings or fold multiple
+functions to the same machine-code address. These cases remain supported.
+
+`WindowsProfileExportAddresses` compares a complete bounded set of resolved names/addresses against
+`observed module base + pinned function RVA`, with exact image-size, range/overflow and inventory checks.
+An arbitrary address inside the image, another copy of the DLL, missing/duplicate names or a different
+function cannot satisfy that comparison. It performs no native lookup or memory access and does not
+create a trusted module owner or authorize JNI registration. Synthetic addresses only prove its comparison
+logic. The productive loader must still establish initial authority, original module identity, memory
+protections, import providers and continuous ownership, then obtain the real resolutions under that owner.
+Matching function addresses alone does not verify the loaded code bytes or establish any of those facts.
+The production loader/provider gates remain closed; this is an independent loader-integration component.
+
 ## Terminal application-exit prerequisite
 
 `WindowsProfileTerminalClose` implements the final Windows application-exit boundary, not ordinary Stop/Back

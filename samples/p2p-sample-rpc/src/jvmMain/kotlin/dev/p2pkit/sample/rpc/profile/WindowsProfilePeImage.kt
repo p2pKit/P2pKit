@@ -20,8 +20,11 @@ internal object WindowsProfilePeImage {
     /** Original image RVAs, not resolved addresses or authority over the eventual Windows import providers. */
     data class NamedImport(val library: String, val function: String, val lookupRva: Long, val addressRva: Long)
 
+    /** Original function-table binding. The public PE ordinal is one-based, unlike its name-table index. */
+    data class NamedExport(val name: String, val ordinal: Int, val functionRva: Long)
+
     data class Observation(val sha256: String, val imports: Set<String>, val namedImports: List<NamedImport>,
-        val exports: Set<String>,
+        val exports: Set<String>, val namedExports: List<NamedExport>, val imageBytes: Long,
         val hasCertificateTable: Boolean)
 
     fun verify(image: ByteArray): Observation {
@@ -151,12 +154,14 @@ internal object WindowsProfilePeImage {
             if (entryPoint != 0L) check(section(entryPoint, 1).executable)
             val certificate = certificateTable(raw.last().raw + raw.last().rawSize)
             val namedImports = imports()
-            val exports = exports()
+            val namedExports = exports()
             isolateImportAddressTable()
             relocations(imageSize)
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
             return Observation(hash, Collections.unmodifiableSet(namedImports.mapTo(linkedSetOf()) { it.library }),
-                Collections.unmodifiableList(namedImports), Collections.unmodifiableSet(exports), certificate)
+                Collections.unmodifiableList(namedImports),
+                Collections.unmodifiableSet(namedExports.mapTo(linkedSetOf()) { it.name }),
+                Collections.unmodifiableList(namedExports), imageSize, certificate)
         }
         private fun certificateTable(rawEnd: Long): Boolean {
             val (offset, size) = directories[4]
@@ -233,7 +238,7 @@ internal object WindowsProfilePeImage {
             check(terminated && result.isNotEmpty())
             return result
         }
-        private fun exports(): Set<String> {
+        private fun exports(): List<NamedExport> {
             val (rva, size) = directories[0]
             check(rva != 0L && size in 40..65536)
             metadata(rva, size)
@@ -245,6 +250,7 @@ internal object WindowsProfilePeImage {
             val names = metadata(u32(at + 32), count * 4L)
             val ordinals = metadata(u32(at + 36), count * 2L)
             val output = linkedSetOf<String>()
+            val bindings = mutableListOf<NamedExport>()
             val seenOrdinals = mutableSetOf<Int>()
             var previous = ""
             repeat(count) { i ->
@@ -254,9 +260,10 @@ internal object WindowsProfilePeImage {
                 previous = name
                 val function = u32(functions + ordinal * 4L)
                 check(function !in rva until rva + size && section(function, 1).executable)
+                bindings += NamedExport(name, ordinal + 1, function)
             }
             check(output == expectedExports)
-            return output
+            return bindings
         }
 
         private fun isolateImportAddressTable() {

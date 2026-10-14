@@ -39,6 +39,9 @@ internal object WindowsProfileByteManifest {
         val hasCertificateTable: Boolean,
         /** Immutable byte-table observations for later import-resolution checks, not loaded-module identities. */
         val namedImports: List<WindowsProfilePeImage.NamedImport>,
+        /** Exact original export bindings and SizeOfImage; neither is observed native mapping authority. */
+        val namedExports: List<WindowsProfilePeImage.NamedExport>,
+        val imageBytes: Long,
     ) {
         val scope: Scope get() = Scope.BYTE_MANIFEST_ONLY
     }
@@ -95,7 +98,7 @@ internal object WindowsProfileByteManifest {
         val image = WindowsProfilePeImage.verify(library)
         require(image.sha256 == values[10]) { "Native DLL differs from the pinned component digest" }
         return ByteAuthorization(digest, authority.source, authority.tree, FILE, image.sha256, size,
-            image.hasCertificateTable, image.namedImports)
+            image.hasCertificateTable, image.namedImports, image.namedExports, image.imageBytes)
     }
 
     private fun hash(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes)
