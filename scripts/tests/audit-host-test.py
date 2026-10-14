@@ -69,6 +69,10 @@ def owned_native_report(role="macos-arm64"):
     report = windows_report({task})
     report["host"] = {"os": "Mac OS X", "arch": arch}
     report["tests"][task]["passed"] = len(HOST.OWNED_NATIVE_METHODS)
+    # Unlike the generic Windows fixture, these Mac tasks stay enabled but
+    # unrequested until their separate native/bundle fixture invocation.
+    for auxiliary in (":p2p-transport-lan:macInstalledBundleTest", ":p2p-transport-lan:macTcpNativeTest"):
+        report["tests"][auxiliary]["enabled"] = True
     return report
 
 

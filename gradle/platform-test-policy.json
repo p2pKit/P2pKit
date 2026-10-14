@@ -1,5 +1,9 @@
 {
   "schema": 1,
+  "separateQualificationTasks": [
+    ":p2p-transport-lan:macInstalledBundleTest",
+    ":p2p-transport-lan:macTcpNativeTest"
+  ],
   "model": {
     ":": {
       "targets": {},
@@ -119,6 +123,8 @@
         ":p2p-transport-lan:iosSimulatorArm64Test",
         ":p2p-transport-lan:iosX64Test",
         ":p2p-transport-lan:jvmTest",
+        ":p2p-transport-lan:macInstalledBundleTest",
+        ":p2p-transport-lan:macTcpNativeTest",
         ":p2p-transport-lan:testAndroidHostTest"
       ]
     },

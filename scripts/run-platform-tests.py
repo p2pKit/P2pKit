@@ -28,6 +28,16 @@ PROFILES = {
     "ios-lan-arm64": [":p2p-transport-lan:iosSimulatorArm64Test"],
     "ios-lan-x64": [":p2p-transport-lan:iosX64Test"],
 }
+# These existing tasks require independently produced native/bundle fixtures.
+# They have never been dependencies of portable `check`. Keep them in the exact
+# configured inventory, but never infer their qualification from this driver.
+# This closed list is not a policy-controlled opt-out for mandatory test tasks.
+SEPARATE_QUALIFICATION_TASKS = {
+    ":p2p-transport-lan:macInstalledBundleTest":
+        "Separate opt-in signed development-bundle fixture qualification",
+    ":p2p-transport-lan:macTcpNativeTest":
+        "Separate opt-in real JNI/native-stage qualification",
+}
 FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks",
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
 TERMINATION_GRACE_SECONDS = 15
@@ -65,6 +75,10 @@ def architecture(value):
 def validate_policy(policy):
     require(isinstance(policy, dict) and type(policy.get("schema")) is int and policy["schema"] == 1,
             "Wrong committed platform-test policy schema")
+    require(set(policy) == {"schema", "model", "separateQualificationTasks"},
+            "Unknown or missing platform-test policy classification")
+    require(policy["separateQualificationTasks"] == sorted(SEPARATE_QUALIFICATION_TASKS),
+            "Only the two reviewed opt-in tasks may require separate qualification")
     model = policy.get("model")
     require(isinstance(model, dict) and model, "Missing committed platform-test model")
     for project, entry in model.items():
@@ -77,6 +91,9 @@ def validate_policy(policy):
         require(isinstance(tests, list) and all(isinstance(task, str) and task.startswith(project + ":")
                                              for task in tests) and len(tests) == len(set(tests)),
                 "Invalid or duplicate task model")
+    tasks = {task for project in model.values() for task in project["tests"]}
+    require(set(SEPARATE_QUALIFICATION_TASKS) <= tasks,
+            "Separate-qualification tasks must remain in the complete configured inventory")
 
 
 def required_tasks(policy, profile, arch):
@@ -94,7 +111,8 @@ def required_tasks(policy, profile, arch):
         return required
     require(profile == "full" and arch in ("arm64", "x64"), "Unsupported platform-test profile/host")
     unavailable = "iosX64Test" if arch == "arm64" else "iosSimulatorArm64Test"
-    return {task for task in tasks if not task.endswith(":" + unavailable)}
+    return {task for task in tasks if not task.endswith(":" + unavailable)
+            and task not in SEPARATE_QUALIFICATION_TASKS}
 
 
 def assess(report, policy, profile, arch, token):
@@ -124,6 +142,11 @@ def assess(report, policy, profile, arch, token):
             value = result.get(count)
             require(type(value) is int and value >= 0, f"Invalid {count} count: {name}")
         require(result["failed"] == 0 and result["outcome"] != "FAILED", f"Failed test task: {name}")
+        if name in SEPARATE_QUALIFICATION_TASKS:
+            require(result["outcome"] == "NOT_REQUESTED" and result["enabled"] is True and
+                    result["inGraph"] is False and
+                    all(result[count] == 0 for count in ("passed", "failed", "skipped")),
+                    f"Separate-qualification task has unexpected execution or counts: {name}")
         if name in required:
             require(result.get("outcome") == "EXECUTED" and result.get("enabled") is True and
                     result.get("inGraph") is True and result["passed"] > 0 and result["failed"] == 0,
@@ -165,6 +188,15 @@ def target_rows(report):
                 rows.append({"target": f"{project}/{target}", "task": name, "status": status,
                              "passed": result["passed"], "failed": result["failed"],
                              "skipped": result["skipped"], "reason": reason})
+    for name, reason in SEPARATE_QUALIFICATION_TASKS.items():
+        result = report.get("tests", {}).get(name, {})
+        outcome = result.get("outcome", "MISSING")
+        rows.append({"target": name, "task": name, "status": "SEPARATE_QUALIFICATION",
+                     "outcome": outcome, "qualificationCredit": False,
+                     "passed": result.get("passed", 0), "failed": result.get("failed", 0),
+                     "skipped": result.get("skipped", 0),
+                     "reason": f"{reason}; outcome={outcome}; "
+                               "no native/JNI or installed-application qualification credit"})
     rows.append({"target": ":iosApp/Swift", "status": "OUTSIDE_THIS_INVOCATION",
                  "reason": "Swift unit/UI tests use a separate xcodebuild test command in CI"})
     return rows
