@@ -35,6 +35,7 @@ jobs:
       - name: Verify diagnostic refusal controls
         run: |
           python3 -I -B -S scripts/tests/current-macos-multicast-diagnostic-test.py
+          python3 -I -B -S scripts/tests/rpc-apple-ci-environment-test.py
           python3 -I -B -S scripts/tests/with-darwin-audit-session-test.py
       - name: Run maintained native controls and new component controls
         run: |
