@@ -39,8 +39,9 @@ FINGERPRINT = re.compile(r"(?:[A-F0-9]{40}|[A-F0-9]{64})")
 VERSION = re.compile(r"(?:0|[1-9][0-9]?)\.(?:0|[1-9][0-9]?)\.(?:0|[1-9][0-9]?)(?:-(?:alpha|beta|rc)[1-9][0-9]?)?")
 CHECKSUMS = {"md5": 32, "sha1": 40, "sha256": 64, "sha512": 128}
 # Independent transcription of check-publish-artifacts.sh's complete macOS
-# roster. The 9 portable and 6 native coordinates contain 84 signed members.
-COORDINATES = {
+# roster. Historical four-library releases have 15 coordinates/84 originals.
+# The 0.8 RPC release adds 3 portable (5 each) and 3 native (6 each): 117.
+HISTORICAL_COORDINATES = {
     "p2p-core": ".jar", "p2p-core-jvm": ".jar", "p2p-core-android": ".aar",
     "p2p-transport-lan": ".jar", "p2p-transport-lan-jvm": ".jar", "p2p-transport-lan-android": ".aar",
     "p2p-network-provisioning-android": ".jar", "p2p-network-provisioning-android-android": ".aar",
@@ -49,6 +50,11 @@ COORDINATES = {
     "p2p-transport-lan-iosarm64": ".klib", "p2p-transport-lan-iossimulatorarm64": ".klib",
     "p2p-transport-lan-iosx64": ".klib",
 }
+COORDINATES = {
+    **HISTORICAL_COORDINATES,
+    "p2p-rpc": ".jar", "p2p-rpc-jvm": ".jar", "p2p-rpc-android": ".aar",
+    "p2p-rpc-iosarm64": ".klib", "p2p-rpc-iossimulatorarm64": ".klib", "p2p-rpc-iosx64": ".klib",
+}
 
 
 def need(condition, message):
@@ -56,17 +62,26 @@ def need(condition, message):
         raise ValueError(message)
 
 
-def roster(version):
+def coordinates(version):
     need(type(version) is str and VERSION.fullmatch(version), "Noncanonical or snapshot release version")
+    # RPC first ships in 0.8, including its prereleases. This is not a caller
+    # toggle: inspect also binds this version to the original source/tag summary.
+    release = tuple(int(part) for part in version.split("-", 1)[0].split("."))
+    return COORDINATES if release >= (0, 8, 0) else HISTORICAL_COORDINATES
+
+
+def roster(version):
+    selected = coordinates(version)
     result = set()
-    for coordinate, extension in COORDINATES.items():
+    for coordinate, extension in selected.items():
         suffixes = [extension, "-sources.jar", "-javadoc.jar", ".pom", ".module"]
         if extension == ".klib":
             suffixes.append("-metadata.jar")
             if coordinate.startswith("p2p-transport-lan-"):
                 suffixes.append("-cinterop-p2pkit_nw.klib")
         result.update(f"{GROUP_PATH}/{coordinate}/{version}/{coordinate}-{version}{suffix}" for suffix in suffixes)
-    need(len(COORDINATES) == 15 and len(result) == 84, "Maintained complete publication roster changed")
+    need((len(selected), len(result)) == ((21, 117) if selected is COORDINATES else (15, 84)),
+         "Maintained complete publication roster changed")
     return result
 
 
@@ -216,7 +231,7 @@ def verify_public_signatures(public_key, pairs, expected_fingerprint):
     status, owner approval, or native/build qualification.
     """
     need(public_key_fingerprint(public_key) == expected_fingerprint, "Original public primary fingerprint differs")
-    need(type(pairs) is list and 0 < len(pairs) <= 84, "Invalid detached-signature roster")
+    need(type(pairs) is list and 0 < len(pairs) <= 117, "Invalid detached-signature roster")
     executable = shutil.which("gpg")
     need(executable is not None, "Public GPG verifier is unavailable")
     with tempfile.TemporaryDirectory(prefix="p2pkit-central-public-") as temporary:
@@ -334,7 +349,7 @@ def inspect(bundle, manifest, summary, public_key, source_sha, source_tree, vers
          "Original manifest/public-certificate hash differs")
     fingerprint = public_key_fingerprint(public_raw)
     need(document["signingKeyFingerprint"] == fingerprint, "Original signing primary fingerprint differs")
-    need(type(document["signedFiles"]) is int and document["signedFiles"] == 84 and
+    need(type(document["signedFiles"]) is int and document["signedFiles"] == len(base) and
          type(document["bundleSizeBytes"]) is int and 0 < document["bundleSizeBytes"] < MAX_BUNDLE and
          type(document["bundleSha256"]) is str and HEX64.fullmatch(document["bundleSha256"]), "Incomplete original bundle identity")
     try:
@@ -346,7 +361,7 @@ def inspect(bundle, manifest, summary, public_key, source_sha, source_tree, vers
         match = re.fullmatch(r"([0-9a-f]{64})  ([^\r\n]+)\n", line)
         need(match is not None and match[2] in expected and match[2] not in hashes, "Malformed, duplicate or undeclared manifest row")
         hashes[match[2]] = match[1]
-    need(set(hashes) == expected and list(hashes) == sorted(expected), "Manifest must name the complete sorted 504-member set")
+    need(set(hashes) == expected and list(hashes) == sorted(expected), "Manifest must name the complete sorted version-bound member set")
     records, signers = [], []
     with regular_input(bundle, MAX_BUNDLE - 1) as (stream, size), tempfile.TemporaryDirectory(prefix="p2pkit-central-inspect-") as temporary:
         need(size == document["bundleSizeBytes"] and size >= 22, "Bundle size differs")
@@ -354,7 +369,7 @@ def inspect(bundle, manifest, summary, public_key, source_sha, source_tree, vers
         while block := stream.read(1024 ** 2):
             digest.update(block)
         need(digest.hexdigest() == document["bundleSha256"], "Original bundle hash differs")
-        # A <1GiB, 504-file bundle needs neither ZIP64 nor concatenated/multidisk
+        # A <1GiB, at most 702-file bundle needs neither ZIP64 nor concatenated/multidisk
         # archives. Bound its directory before allowing zipfile to parse it.
         stream.seek(-22, os.SEEK_END)
         end = struct.unpack("<4s4H2IH", stream.read(22))
@@ -399,7 +414,7 @@ def inspect(bundle, manifest, summary, public_key, source_sha, source_tree, vers
             "group": GROUP, "version": version, "bundleFile": bundle.name, "bundleSha256": document["bundleSha256"],
             "bundleSizeBytes": document["bundleSizeBytes"], "manifestSha256": sha256(manifest_raw), "summarySha256": sha256(summary_raw),
             "publicKeyFile": public_key.name, "publicKeySha256": sha256(public_raw), "signingKeyFingerprint": fingerprint,
-            "signerFingerprints": signers, "coordinates": 15, "signedFiles": 84, "memberCount": len(records), "members": records}
+            "signerFingerprints": signers, "coordinates": len(coordinates(version)), "signedFiles": len(base), "memberCount": len(records), "members": records}
 
 
 def main():
@@ -412,7 +427,7 @@ def main():
     receipt = inspect(options.bundle, options.manifest, options.summary, options.public_key,
                       options.source_sha, options.source_tree, options.version)
     # CLI has no unverified mode. Emit only compact public identity metadata;
-    # API callers also receive the complete 504-member receipt.
+    # API callers also receive the complete version-bound member receipt.
     print(json.dumps({key: value for key, value in receipt.items() if key != "members"}, sort_keys=True))
 
 

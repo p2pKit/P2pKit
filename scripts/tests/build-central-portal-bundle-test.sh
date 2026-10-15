@@ -177,7 +177,7 @@ jq -e \
     --arg manifest "$(openssl dgst -sha256 "${OUTPUT%.zip}.manifest.sha256" | awk '{print $NF}')" \
     --arg public "$(openssl dgst -sha256 "${OUTPUT%.zip}.public.asc" | awk '{print $NF}')" \
     '.schemaVersion == 2 and .group == $group and .version == $version and
-     .signingKeyFingerprint == $fingerprint and .signedFiles == 84 and
+     .signingKeyFingerprint == $fingerprint and .signedFiles == 117 and
      .sourceSha == $source and .sourceTree == $tree and
      .manifestSha256 == $manifest and .publicKeySha256 == $public' \
     "${OUTPUT%.zip}.summary.json" >/dev/null

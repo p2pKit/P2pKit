@@ -190,7 +190,7 @@ done < <(
         -print0
 )
 
-[[ $checked -eq 84 ]] || fail "complete Central publication requires exactly 84 signed files across 15 coordinates"
+[[ $checked -eq 117 ]] || fail "complete Central publication requires exactly 117 signed files across 21 coordinates"
 [[ $unsigned -eq 0 ]] || fail "$unsigned of $checked publication files lack PGP signatures"
 [[ $invalid_signature -eq 0 ]] ||
     fail "$invalid_signature of $checked publication files have invalid or unexpected signatures"

@@ -344,7 +344,7 @@ def signature_receipt(value, expected):
     signers = compact.get("signerFingerprints")
     P.need(bundle_identity(compact) == expected and compact.get("scope") == "VERIFIED_PUBLIC_SIGNATURES" and
            compact.get("signaturesVerified") is True and type(signers) is list and
-           1 <= len(signers) <= 84 and signers == sorted(set(signers)) and
+           1 <= len(signers) <= 117 and signers == sorted(set(signers)) and
            all(type(x) is str and re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64})", x) for x in signers),
            "Full original public-signature verification is missing or differently bound")
     return compact

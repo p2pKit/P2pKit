@@ -139,7 +139,7 @@ class RecoveryTests(unittest.TestCase):
         manifest = "".join(hashlib.sha256(raw).hexdigest() + "  " + name + "\n" for name, raw in sorted(files.items())).encode()
         summary = {"schemaVersion": 2, "group": "io.github.apdelrahman1911", "version": VERSION,
                    "signingKeyFingerprint": B.FINGERPRINT, "bundleFile": stem + ".zip", "bundleSha256": hashlib.sha256(binary).hexdigest(),
-                   "bundleSizeBytes": len(binary), "signedFiles": 84, "sourceSha": SOURCE, "sourceTree": TREE,
+                   "bundleSizeBytes": len(binary), "signedFiles": 117, "sourceSha": SOURCE, "sourceTree": TREE,
                    "manifestSha256": hashlib.sha256(manifest).hexdigest(), "publicKeyFile": stem + ".public.asc",
                    "publicKeySha256": hashlib.sha256(B.PUBLIC).hexdigest()}
         return {stem + ".zip": binary, stem + ".manifest.sha256": manifest, stem + ".summary.json": P.encoded(summary),
@@ -251,7 +251,8 @@ class RecoveryTests(unittest.TestCase):
     def test_original_failed_attempt_is_never_relabelled_success(self):
         value = self.original()
         self.assertEqual("failure", value["originalConclusion"])
-        self.assertEqual(8, len(value["qualification"]["artifacts"]) + len(value["qualification"]["evidence"]))
+        self.assertEqual(4, len(value["qualification"]["artifacts"]))
+        self.assertEqual(12, len(value["qualification"]["evidence"]))
         self.assertEqual(self.frozen_plan["frozenApplicationSet"], value["frozenApplicationSet"])
         self.assertEqual("failure", self.api.data["/actions/runs/900"]["conclusion"])
         with self.assertRaises(ValueError):
@@ -394,7 +395,7 @@ class RecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.base) as temporary, mock.patch.object(R.subprocess, "run", side_effect=fake_gpg), \
                 mock.patch.object(B.E.shutil, "which", return_value="/synthetic-not-gpg"):
             deployment, inspection, bundle = R.inspect_originals(self.api, original, Path(temporary), signatures=True)
-            self.assertEqual(84, sum("--verify" in row for row in calls))
+            self.assertEqual(117, sum("--verify" in row for row in calls))
             self.assertTrue(bundle.is_file())
             self.assertEqual("PUBLISHED", deployment["deployment"]["state"])
             self.assertTrue(R.signature_receipt(inspection, R.bundle_identity(inspection))["signaturesVerified"])

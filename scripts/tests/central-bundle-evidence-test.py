@@ -35,10 +35,11 @@ PORTABLE = {
     "p2p-transport-lan": ".jar", "p2p-transport-lan-jvm": ".jar", "p2p-transport-lan-android": ".aar",
     "p2p-network-provisioning-android": ".jar", "p2p-network-provisioning-android-android": ".aar",
     "p2p-network-provisioning-desktop": ".jar",
+    "p2p-rpc": ".jar", "p2p-rpc-jvm": ".jar", "p2p-rpc-android": ".aar",
 }
 BASES = set()
 for coordinate, extension in [*PORTABLE.items(), *[(module + "-" + target, ".klib")
-                          for module in ("p2p-core", "p2p-transport-lan") for target in ("iosarm64", "iossimulatorarm64", "iosx64")]]:
+                          for module in ("p2p-core", "p2p-transport-lan", "p2p-rpc") for target in ("iosarm64", "iossimulatorarm64", "iosx64")]]:
     suffixes = [extension, "-sources.jar", "-javadoc.jar", ".pom", ".module"]
     if extension == ".klib":
         suffixes += ["-metadata.jar"]
@@ -113,7 +114,7 @@ class EvidenceTests(unittest.TestCase):
         self.manifest.write_text("".join(hashlib.sha256(data).hexdigest() + "  " + name + "\n" for name, data in sorted(files.items())))
         document = {"schemaVersion": 2, "group": "io.github.apdelrahman1911", "version": VERSION,
                     "signingKeyFingerprint": FINGERPRINT, "bundleFile": self.bundle.name,
-                    "bundleSha256": hashlib.sha256(binary).hexdigest(), "bundleSizeBytes": len(binary), "signedFiles": 84,
+                    "bundleSha256": hashlib.sha256(binary).hexdigest(), "bundleSizeBytes": len(binary), "signedFiles": 117,
                     "sourceSha": SOURCE, "sourceTree": TREE, "manifestSha256": hashlib.sha256(self.manifest.read_bytes()).hexdigest(),
                     "publicKeyFile": self.public.name, "publicKeySha256": hashlib.sha256(public).hexdigest()}
         self.summary.write_text(json.dumps(document))
@@ -148,13 +149,57 @@ class EvidenceTests(unittest.TestCase):
         return subprocess.CompletedProcess(arguments, 0, status(SUBKEY))
 
     def test_complete_roster_matches_independent_inherited_mac_gate(self):
-        self.assertEqual(84, len(BASES))
+        self.assertEqual(117, len(BASES))
         self.assertEqual(BASES, E.roster(VERSION))
         script = (ROOT / "scripts/check-publish-artifacts.sh").read_text()
         self.assertEqual(PORTABLE, dict(re.findall(r"^check +(p2p-\S+) +(\.jar|\.aar)$", script, re.MULTILINE)))
         self.assertIn('for target in iosarm64 iossimulatorarm64 iosx64;', script)
         self.assertIn('required_artifacts+=("$artifact-$VERSION-metadata.jar")', script)
         self.assertIn('required_artifacts+=("$artifact-$VERSION-cinterop-p2pkit_nw.klib")', script)
+        collision = (ROOT / "scripts/check-maven-central-version.sh").read_text()
+        block = collision.split("ARTIFACTS=(", 1)[1].split(")", 1)[0]
+        self.assertEqual(set(re.findall(r"p2p-[a-z0-9-]+", block)),
+                         {path.split("/")[3] for path in BASES})
+
+    def test_historical_four_library_originals_remain_exact_and_cannot_gain_rpc(self):
+        historical_version = "0.7.0-rc3"
+        historical = {name.replace(VERSION, historical_version): data for name, data in self.files.items()
+                      if "/p2p-rpc" not in name}
+        original_count = sum(not name.endswith((".asc", ".md5", ".sha1", ".sha256", ".sha512"))
+                             for name in historical)
+        self.assertEqual((84, 504), (original_count, len(historical)))
+        for version in ("0.7.0-rc1", "0.7.0-rc3", "0.7.99"):
+            self.assertEqual(84, len(E.roster(version)))
+        for version in ("0.8.0-alpha1", "0.8.0-rc1", "0.8.0", "1.0.0"):
+            self.assertEqual(117, len(E.roster(version)))
+        self.write(historical)
+        self.replace_summary(version=historical_version, signedFiles=84)
+        receipt = E.inspect(self.bundle, self.manifest, self.summary, self.public, SOURCE, TREE,
+                            historical_version, verify_signatures=False)
+        self.assertEqual((15, 84, 504), (receipt["coordinates"], receipt["signedFiles"], receipt["memberCount"]))
+        with self.assertRaises(ValueError):
+            self.inspect(verify_signatures=False)  # Changing only the requested version is not rebinding originals.
+        rpc = {name.replace(VERSION, historical_version): data for name, data in self.files.items()
+               if "/p2p-rpc" in name}
+        self.write({**historical, **rpc})
+        self.replace_summary(version=historical_version, signedFiles=84)
+        with self.assertRaises(ValueError):
+            E.inspect(self.bundle, self.manifest, self.summary, self.public, SOURCE, TREE,
+                      historical_version, verify_signatures=False)
+
+    def test_current_bundle_cannot_omit_any_rpc_coordinate_or_downgrade_to_84(self):
+        rpc_coordinates = ("p2p-rpc", "p2p-rpc-jvm", "p2p-rpc-android", "p2p-rpc-iosarm64",
+                           "p2p-rpc-iossimulatorarm64", "p2p-rpc-iosx64")
+        for coordinate in rpc_coordinates:
+            files = {name: data for name, data in self.files.items() if name.split("/")[3] != coordinate}
+            self.assertLess(len(files), len(self.files))
+            self.write(files)
+            with self.subTest(coordinate=coordinate), self.assertRaises(ValueError):
+                self.inspect(verify_signatures=False)
+        self.write({name: data for name, data in self.files.items() if "/p2p-rpc" not in name})
+        self.replace_summary(signedFiles=84)
+        with self.assertRaises(ValueError):
+            self.inspect(verify_signatures=False)
 
     def test_structure_only_receipt_cannot_claim_signatures_or_publication(self):
         with mock.patch.object(E.subprocess, "run", side_effect=AssertionError("Unexpected GPG")):
@@ -162,18 +207,18 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual("UNVERIFIED_SYNTHETIC_STRUCTURE", receipt["scope"])
         self.assertIs(False, receipt["signaturesVerified"])
         self.assertEqual([], receipt["signerFingerprints"])
-        self.assertEqual((15, 84, 504), (receipt["coordinates"], receipt["signedFiles"], receipt["memberCount"]))
+        self.assertEqual((21, 117, 702), (receipt["coordinates"], receipt["signedFiles"], receipt["memberCount"]))
         self.assertEqual(set(self.files), {x["path"] for x in receipt["members"]})
         self.assertEqual(SOURCE, receipt["sourceSha"])
         self.assertEqual(TREE, receipt["sourceTree"])
         self.assertNotIn("PUBLISHED", json.dumps(receipt))
 
-    def test_full_fake_backend_requires_all_84_exact_detached_signatures(self):
+    def test_full_fake_backend_requires_all_117_exact_detached_signatures(self):
         self.gpg_calls = []
         with mock.patch.object(E.shutil, "which", return_value="/synthetic-only/gpg"), \
                 mock.patch.object(E.subprocess, "run", side_effect=self.fake_gpg):
             receipt = self.inspect()
-        self.assertEqual(86, len(self.gpg_calls))
+        self.assertEqual(119, len(self.gpg_calls))
         self.assertEqual("VERIFIED_PUBLIC_SIGNATURES", receipt["scope"])
         self.assertIs(True, receipt["signaturesVerified"])
         self.assertEqual([SUBKEY], receipt["signerFingerprints"])
@@ -301,7 +346,7 @@ class EvidenceTests(unittest.TestCase):
         directory = zipfile.ZipInfo("io/github/apdelrahman1911/")
         directory.external_attr = (stat.S_IFDIR | 0o700) << 16
         self.write(entries=[(directory, b"")] + sorted(self.files.items()))
-        self.assertEqual(504, self.inspect(verify_signatures=False)["memberCount"])
+        self.assertEqual(702, self.inspect(verify_signatures=False)["memberCount"])
         self.write(entries=[(directory, b"hidden bytes")] + sorted(self.files.items()))
         with self.assertRaises(ValueError):
             self.inspect(verify_signatures=False)
@@ -403,7 +448,7 @@ class BuilderSourceTests(unittest.TestCase):
         self.assertIn('|| signature_status=$?', source)
         self.assertIn('"$signature_status" -ne 0 || "$signature_fingerprint" != "$expected_fingerprint"', source)
         self.assertNotIn('} || true)', source)
-        self.assertIn('[[ $checked -eq 84 ]]', source)
+        self.assertIn('[[ $checked -eq 117 ]]', source)
         self.assertIn('"$ROOT/scripts/check-publish-artifacts.sh" "$REPOSITORY"', source)
         self.assertIn('git -C "$ROOT" status --porcelain --untracked-files=all', source)
         self.assertIn('source changed while producing signed original evidence', source)
