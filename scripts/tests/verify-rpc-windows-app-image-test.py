@@ -43,6 +43,13 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsX64Frame$AcquisitionFailure.class",
     ADAPTER_PREFIX + "WindowsX64Frame$CloseFailure.class", ADAPTER_PREFIX + "WindowsX64Frame$CleanupObservation.class",
     ADAPTER_PREFIX + "WindowsX64Frame$1.class",
+    ADAPTER_PREFIX + "WindowsJniRegistrationOwner.class",
+    ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Failure.class",
+    ADAPTER_PREFIX + "WindowsJniRegistrationOwner$FailureKind.class",
+    ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Invocation.class",
+    ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Report.class",
+    ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Retention.class",
+    ADAPTER_PREFIX + "WindowsJniRegistrationOwner$State.class",
 )
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
@@ -298,7 +305,9 @@ class ImageInspectionTest(unittest.TestCase):
 
     def test_adapter_jar_rejects_tests_versioned_shadows_and_other_entries(self):
         self.add_adapter()
-        for extra in (ADAPTER_PREFIX + "WindowsLoaderTest.class", "META-INF/versions/21/" + ADAPTER_ENTRIES[1],
+        for extra in (ADAPTER_PREFIX + "WindowsLoaderTest.class", ADAPTER_PREFIX + "RegistrationOwnerTests.class",
+                      ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Unexpected.class",
+                      "META-INF/versions/21/" + ADAPTER_ENTRIES[1],
                       "META-INF/services/unexpected", "unexpected.dll"):
             self.adapter_content[extra] = b"inert"
             self.write_adapter()

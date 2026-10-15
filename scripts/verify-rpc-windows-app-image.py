@@ -119,6 +119,9 @@ ADAPTER_SCOPE = "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY"
 ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".class" for name in (
     "Probe", "WindowsLoader", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
     "WindowsX64Frame$CloseFailure", "WindowsX64Frame$CleanupObservation", "WindowsX64Frame$1",
+    "WindowsJniRegistrationOwner", "WindowsJniRegistrationOwner$Failure", "WindowsJniRegistrationOwner$FailureKind",
+    "WindowsJniRegistrationOwner$Invocation", "WindowsJniRegistrationOwner$Report",
+    "WindowsJniRegistrationOwner$Retention", "WindowsJniRegistrationOwner$State",
 ))))
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
