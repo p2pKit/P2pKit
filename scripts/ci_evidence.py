@@ -60,6 +60,8 @@ PENDING_FAILURE_LABELS = frozenset((*PENDING_FAILURES.values(),
                                   *PENDING_OPERATIONS.values(), "OTHER"))
 
 TASK_NAMES = frozenset({
+    'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
+    'intel-advertising-prepare', 'intel-advertising-restore',
     "release-tag-controls", "release-identity-controls", "maven-environment-controls",
     "maven-namespace-controls", "maven-coordinate-controls", "maven-upload-controls",
     "wrapper", "layout", "links", "release-metadata", "workflow-contract", "workflow-controls", "workflow-syntax",

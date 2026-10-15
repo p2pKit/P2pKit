@@ -19,6 +19,17 @@ class ModularPolicyTests < Minitest::Test
   def test_actual_contract
     assert ModularCI.check(ROOT)
   end
+  def test_bundle_diagnostic_requires_explicit_choice
+    altered('.github/workflows/ci.yml', ', bundle-diagnostic]', ']')
+  end
+  def test_bundle_diagnostic_cannot_aggregate
+    altered('.github/workflows/ci.yml', "inputs.component != 'bundle-diagnostic' && needs.plan.result",
+            'needs.plan.result')
+  end
+  def test_bundle_diagnostic_cannot_complete_gate
+    altered('.github/workflows/ci.yml', "inputs.component != 'bundle-diagnostic' && (github.event_name",
+            '(github.event_name')
+  end
   def test_component_failure_not_masked
     altered('.github/workflows/ci-component.yml', 'id: execution', "id: execution\n        continue-on-error: true")
   end

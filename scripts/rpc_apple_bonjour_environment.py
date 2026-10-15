@@ -249,6 +249,10 @@ def validate(value, source, complete=True, *, expected_lane=None):
 class AdvertisingPreparation:
     def __init__(self, parent, source):
         lane = admit(os.environ, parent, source)
+        self._initialize(parent, source, lane)
+
+    def _initialize(self, parent, source, lane):
+        """Initialize only after the calling adapter has admitted its exact context."""
         self.source = source
         self.directory = parent / 'bonjour-advertising'
         self.directory.mkdir(mode=0o700)
@@ -319,6 +323,9 @@ class AdvertisingPreparation:
             self.proof['failure'] = error.category if isinstance(error, PreparationFailure) else 'PREREQUISITE'
             raise
 
+    def should_restore_reload(self):
+        return self.proof['reloadSucceeded']
+
     def finish(self):
         try:
             if self.proof['operation'] == 'ARM_ABSENT_DOMAIN_NO_CHANGE':
@@ -336,7 +343,7 @@ class AdvertisingPreparation:
                 restored, policy, _ = read_preference()
                 self.proof['observations']['restored'] = summarize(restored)
                 self.proof['restored'] = equal_preferences(restored, self.before) and policy == self.policy and not drift
-                if self.proof['reloadSucceeded']:
+                if self.should_restore_reload():
                     self.proof['stage'] = 'RESTORE_RELOAD'
                     self.command('restore-reload')
                     self.proof['restoreReloadSucceeded'] = True

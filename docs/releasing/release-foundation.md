@@ -52,6 +52,9 @@ Dispatch independently against a branch whose HEAD is the reviewed source:
 gh workflow run ci.yml --ref YOUR_BRANCH -f component=desktop-windows
 ```
 
+Run `gh workflow run ci.yml --ref YOUR_BRANCH -f component=bundle-diagnostic` for the existing disposable-key signed-bundle test alone.
+This optional diagnostic retains encrypted evidence but cannot aggregate/complete qualification or publish; the full compatibility component remains required.
+
 Use `component=all` for a full qualification. Main pushes and PRs run the full
 matrix. Each component has its own job, reports and artifacts. A failure does
 not cancel other jobs. GitHub's **Re-run failed jobs** is supported; no repository-
