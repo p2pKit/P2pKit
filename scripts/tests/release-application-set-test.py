@@ -51,14 +51,14 @@ class FrozenApplicationTests(unittest.TestCase):
         self.api.files[9001] = binary
         self.api.data["/actions/artifacts/9001"].update(size_in_bytes=len(binary), digest="sha256:" + hashlib.sha256(binary).hexdigest())
 
-    def test_load_binds_original_tag_run_and_all_sixteen_main_originals(self):
+    def test_load_binds_original_tag_run_and_all_seventeen_main_originals(self):
         document, binding = self.load(artifact_id=9001, expected_hash=self.binding["sha256"])
         self.assertEqual(self.document, document)
         self.assertEqual(self.binding["artifact"], binding["artifact"])
         self.assertEqual(SUPPORT.SOURCE, document["qualification"]["source"]["commit"])
         self.assertEqual(SUPPORT.TREE, document["qualification"]["source"]["tree"])
         self.assertEqual(SUPPORT.VERSION, document["qualification"]["versionBinding"]["canonicalVersion"])
-        self.assertEqual(16, len(document["qualification"]["artifacts"] + document["qualification"]["evidence"]))
+        self.assertEqual(4 + 13, len(document["qualification"]["artifacts"] + document["qualification"]["evidence"]))
         self.assertEqual(["android", "linux", "windows", "macos"], [x["platform"] for x in document["packages"]])
         self.assertFalse(self.api.mutations)
 
