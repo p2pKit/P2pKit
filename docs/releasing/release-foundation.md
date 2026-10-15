@@ -85,6 +85,12 @@ matrix. Each component has its own job, reports and artifacts. A failure does
 not cancel other jobs. GitHub's **Re-run failed jobs** is supported; no repository-
 wide exclusive queue is required. The standalone source, Desktop and Intel
 wrappers are focused developer checks; final aggregation selects `ci.yml` results.
+On a same-run retry, collection automatically preserves each untouched successful
+component's original attempt and pairs its application with that same attempt.
+It selects the latest execution, not the latest success: a newer failed, skipped
+or incomplete component cannot fall back to an older pass. A qualifier-only retry
+can reuse all unchanged originals. Collection uses the current run attempt;
+already frozen selections are revalidated without being silently reselected.
 
 The plan reports reasonable external wall limits (30–180 minutes per component,
 plus 10 minutes for evidence/upload). No special CPU20, initializer120 or
@@ -141,9 +147,9 @@ There is **no fixed job-step count**. Failed overall matrix runs may still suppl
 individually successful jobs, with their original attempt IDs. PR merge-source
 results remain premerge evidence, not main release evidence.
 
-To aggregate prior same-source successes without rerunning them, supply the
+To aggregate successes from separate same-source runs without rerunning them, supply the
 `qualification_selection` dispatch input. It is the machine-readable selection
-from the previous attempt (or `ci_qualification.py collect`), with only the failed
+from a previous qualification (or `ci_qualification.py collect`), with only the failed
 component's run/attempt/artifact/digest and its app artifact, if any, replaced.
 Each selector is revalidated; it is not an approval or an arbitrary success flag.
 Missing, failed, expired, stale-source and wrong-platform selections fail closed.

@@ -336,20 +336,49 @@ def load_qualification(api, source, binding=None):
 
 
 def collect(api, source, run_id, attempt):
-    """Collect only this explicit attempt's artifact names; aggregate validates it."""
+    """Freeze each component's latest original execution in this current run.
+
+    GitHub reruns failed jobs without rebuilding successful sibling components.
+    Never search for an older success after a later failed/skipped execution.
+    Already frozen explicit selections retain their separate revalidation path.
+    """
     integer(run_id); integer(attempt)
     need(SHA.fullmatch(source), "Invalid selection source")
+    api = MetadataSnapshot(api)
+    current = api.json(f"/actions/runs/{run_id}")
+    need(type(current.get("run_attempt")) is int and current["run_attempt"] == attempt,
+         "Collection must use the current run attempt")
+    jobs = api.pages(f"/actions/runs/{run_id}/jobs?filter=all", "jobs")
+    attempts = {}
+    for component in COMPONENTS:
+        name = component + " / Execute component"
+        candidates = [job for job in jobs if job.get("name") == name]
+        need(candidates, "Missing component execution history")
+        need(all(job.get("run_id") == run_id and type(job.get("run_attempt")) is int and
+                 1 <= job["run_attempt"] <= attempt for job in candidates),
+             "Component history has another run or future/invalid attempt")
+        original_attempt = max(job["run_attempt"] for job in candidates)
+        latest = [job for job in candidates if job["run_attempt"] == original_attempt]
+        need(len(latest) == 1, "Ambiguous latest component execution")
+        need(latest[0].get("status") == "completed" and latest[0].get("conclusion") == "success",
+             "Latest component execution failed, skipped or is incomplete")
+        _, original = selected_job(api, source, run_id, original_attempt, name)
+        need(all(latest[0].get(key) == value for key, value in original.items()),
+             "Latest component history differs from its original job")
+        attempts[component] = original_attempt
     artifacts = api.pages(f"/actions/runs/{run_id}/artifacts", "artifacts")
-    def item(name):
+    def item(name, original_attempt):
         found = [row for row in artifacts if row.get("name") == name]
         need(len(found) == 1, "Missing/ambiguous exact-attempt artifact")
-        return {"runId": run_id, "runAttempt": attempt, "artifactId": integer(found[0].get("id")),
+        return {"runId": run_id, "runAttempt": original_attempt, "artifactId": integer(found[0].get("id")),
                 "digest": found[0].get("digest")}
     return {"schema": 1, "source": source,
-            "components": [{"component": component, **item(f"ci-evidence-{component}-{run_id}-{attempt}")}
+            "components": [{"component": component,
+                            **item(f"ci-evidence-{component}-{run_id}-{attempts[component]}", attempts[component])}
                            for component in COMPONENTS],
-            "applications": [{"platform": platform, **item(f"{prefix}-{run_id}-{attempt}")}
-                             for platform, (_, _, prefix) in APPLICATIONS.items()]}
+            "applications": [{"platform": platform,
+                              **item(f"{prefix}-{run_id}-{attempts[component]}", attempts[component])}
+                             for platform, (component, _, prefix) in APPLICATIONS.items()]}
 
 
 def main():

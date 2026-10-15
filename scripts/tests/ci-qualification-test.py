@@ -61,6 +61,7 @@ class Fixture:
         self.jobs.append({**self.jobs[0], "id": 10100, "name": Q.QUALIFY_JOB,
                           "started_at": "2026-09-15T10:21:00Z", "completed_at": "2026-09-15T10:30:00Z"})
         a.collections["/actions/runs/300/attempts/1/jobs"] = self.jobs
+        a.collections["/actions/runs/300/jobs?filter=all"] = list(self.jobs)
         self.artifacts = a.collections["/actions/runs/300/artifacts"] = []
         self.manifests = {}
         for i, (component, (platform, arch)) in enumerate(Q.COMPONENTS.items()):
@@ -257,7 +258,7 @@ class QualificationTests(unittest.TestCase):
         self.api.data["/actions/runs/300"] = {**self.f.run, "run_attempt": 2, "conclusion": "failure"}
         result, _ = Q.load_qualification(self.api, SOURCE)
         self.assertEqual(1, result["components"][0]["run"]["attempt"])
-        selection = self.f.selection(); selection["components"][0]["runAttempt"] = 2
+        selection = copy.deepcopy(result["selection"]); selection["components"][0]["runAttempt"] = 2
         self.api.data["/actions/runs/300/attempts/2"] = self.api.data["/actions/runs/300"]
         self.api.collections["/actions/runs/300/attempts/2/jobs"] = self.f.jobs
         with self.assertRaises(Q.AdmissionError):
@@ -320,6 +321,119 @@ class QualificationTests(unittest.TestCase):
             Q.parsed(b'{"schema":1,"schema":1}')
         with self.assertRaises(Q.AdmissionError):
             Q.integer(True)
+
+    def retry(self, component=None):
+        """A synthetic partial rerun retains original job/artifact attempt IDs."""
+        run = {**self.f.run, "run_attempt": 2, "status": "in_progress", "conclusion": None}
+        self.api.data["/actions/runs/300"] = run
+        self.api.data["/actions/runs/300/attempts/2"] = run
+        name = Q.QUALIFY_JOB if component is None else component + " / Execute component"
+        original = next(job for job in self.f.jobs if job["name"] == name)
+        job = {**original, "id": original["id"] + 1000, "run_attempt": 2}
+        self.api.collections["/actions/runs/300/attempts/2/jobs"] = [job]
+        self.api.collections["/actions/runs/300/jobs?filter=all"].append(job)
+        if component is not None:
+            manifest = copy.deepcopy(self.f.manifests[component])
+            manifest["github"]["runAttempt"] = "2"
+            cipher = b"SYNTHETIC RETRY CIPHERTEXT NOT PRIVATE EVIDENCE"
+            manifest["ciphertext"].update(bytes=len(cipher), sha256=hashlib.sha256(cipher).hexdigest())
+            self.f.artifact(9000, f"ci-evidence-{component}-300-2",
+                            zip_bytes({"manifest.json": Q.encoded(manifest), "evidence.tar.gz.gpg": cipher}))
+            for _, (owner, _, prefix) in Q.APPLICATIONS.items():
+                if owner == component:
+                    self.f.artifact(9001, prefix + "-300-2", b"synthetic retried application bundle")
+        return job
+
+    def test_failed_job_retry_reuses_untouched_originals_and_pairs_rebuilt_application(self):
+        self.retry("desktop-windows")
+        selection = Q.collect(self.api, SOURCE, 300, 2)
+        self.assertEqual({row["component"]: row["runAttempt"] for row in selection["components"]},
+                         {component: 2 if component == "desktop-windows" else 1 for component in Q.COMPONENTS})
+        self.assertEqual({row["platform"]: row["runAttempt"] for row in selection["applications"]},
+                         {"android": 1, "linux": 1, "windows": 2, "macos": 1})
+        document = Q.aggregate(self.api, selection)
+        self.assertEqual(13, len(document["components"]))
+        self.assertEqual(4, len(document["applications"]))
+        windows = next(row for row in document["applications"] if row["platform"] == "windows")
+        self.assertEqual(9001, windows["id"])
+        self.assertEqual(2, windows["producer"]["attempt"])
+
+    def test_qualifier_only_retry_reuses_all_unchanged_component_attempts(self):
+        original = self.f.selection()
+        self.retry()
+        selected = Q.collect(self.api, SOURCE, 300, 2)
+        self.assertEqual(original, selected)
+        self.assertEqual(13, len(Q.aggregate(self.api, selected)["components"]))
+
+    def test_latest_failed_skipped_cancelled_or_incomplete_execution_never_falls_back(self):
+        job = self.retry("desktop-windows")
+        for status, conclusion in (("completed", "failure"), ("completed", "skipped"),
+                                   ("completed", "cancelled"), ("completed", "timed_out"),
+                                   ("queued", None), ("in_progress", None)):
+            job.update(status=status, conclusion=conclusion)
+            with self.subTest(status=status, conclusion=conclusion), self.assertRaisesRegex(
+                    Q.AdmissionError, "Latest component execution failed, skipped or is incomplete"):
+                Q.collect(self.api, SOURCE, 300, 2)
+
+    def test_retry_missing_or_duplicate_job_and_missing_paired_artifact_refuse(self):
+        job = self.retry("desktop-windows")
+        all_jobs = self.api.collections["/actions/runs/300/jobs?filter=all"]
+        all_jobs.append({**job, "id": job["id"] + 1000})
+        with self.assertRaisesRegex(Q.AdmissionError, "Ambiguous latest component execution"):
+            Q.collect(self.api, SOURCE, 300, 2)
+        all_jobs.pop()
+        source_job = all_jobs.pop(0)
+        with self.assertRaisesRegex(Q.AdmissionError, "Missing component execution history"):
+            Q.collect(self.api, SOURCE, 300, 2)
+        all_jobs.insert(0, source_job)
+        for identifier in (9000, 9001):
+            original = list(self.f.artifacts)
+            self.f.artifacts[:] = [row for row in original if row["id"] != identifier]
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(
+                    Q.AdmissionError, "Missing/ambiguous exact-attempt artifact"):
+                Q.collect(self.api, SOURCE, 300, 2)
+            self.f.artifacts[:] = original
+
+    def test_collection_refuses_stale_future_invalid_and_inconsistent_job_attempts(self):
+        job = self.retry("desktop-windows")
+        for requested in (1, 3):
+            with self.subTest(requested=requested), self.assertRaisesRegex(
+                    Q.AdmissionError, "Collection must use the current run attempt"):
+                Q.collect(self.api, SOURCE, 300, requested)
+        for attempt in (0, 3, True, "2"):
+            job["run_attempt"] = attempt
+            with self.subTest(attempt=attempt), self.assertRaisesRegex(Q.AdmissionError, "future/invalid attempt"):
+                Q.collect(self.api, SOURCE, 300, 2)
+        job["run_attempt"] = 2
+        job["run_id"] = 999
+        with self.assertRaisesRegex(Q.AdmissionError, "another run"):
+            Q.collect(self.api, SOURCE, 300, 2)
+        job["run_id"] = 300
+        self.api.collections["/actions/runs/300/jobs?filter=all"][-1] = {**job, "id": job["id"] + 1}
+        with self.assertRaisesRegex(Q.AdmissionError, "history differs from its original job"):
+            Q.collect(self.api, SOURCE, 300, 2)
+
+    def test_partial_retry_preserves_exact_pr_synthetic_merge_not_service_head(self):
+        head, base = "a" * 40, "b" * 40
+        self.f.run.update(event="pull_request", head_sha=head, head_branch="topic",
+            repository={"full_name": Q.REPOSITORY, "id": 42}, head_repository={"full_name": Q.REPOSITORY, "id": 42},
+            pull_requests=[{"number": 2, "head": {"sha": head, "repo": {"id": 42}},
+                            "base": {"sha": base, "ref": "main", "repo": {"id": 42}}}])
+        self.api.data["/git/commits/" + SOURCE]["parents"] = [{"sha": base}, {"sha": head}]
+        self.api.data["/git/commits/" + head] = {"sha": head, "tree": {"sha": TREE}, "parents": [{"sha": base}]}
+        for job in self.f.jobs:
+            job["head_sha"] = head
+        self.retry("desktop-windows")
+        for artifact in self.f.artifacts:
+            artifact["workflow_run"].update(head_sha=head, head_branch="topic")
+        selection = Q.collect(self.api, SOURCE, 300, 2)
+        result = Q.aggregate(self.api, selection)
+        self.assertEqual(SOURCE, result["source"]["commit"])
+        self.assertTrue(all(row["producer"]["serviceHead"] == head for row in result["applications"]))
+        with self.assertRaises(Q.AdmissionError):
+            Q.collect(self.api, head, 300, 2)
+        with self.assertRaises(Q.AdmissionError):
+            Q.aggregate(self.api, selection, require_main=True)
 
     def test_cli_prints_only_source_owned_admission_reason_not_arbitrary_exception(self):
         argv = ["ci_qualification.py", "aggregate", "--source", SOURCE, "--output", "unused.json"]
