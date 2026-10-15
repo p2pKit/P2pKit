@@ -9,7 +9,10 @@ import kotlin.concurrent.withLock
  * One active operation, no queue; close seals admission and joins the actual native return before retiring handles.
  * Native OS hangs still require the separately reviewed terminal watchdog, not an invented coroutine deadline.
  */
-internal class WindowsProfileFiles private constructor(private val native: WindowsProfileNativeApi) :
+internal class WindowsProfileFiles private constructor(
+    private val native: WindowsProfileNativeApi,
+    private val beforeHandleRetirement: (() -> Unit)?,
+) :
     ProtectedProfileSession {
     /**
      * Failed admission with uncertain native retirement. Retain this sealed session for the terminal owner;
@@ -29,6 +32,19 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         }
     }
 
+    /** A failed cleanup controller retains this sealed session and its unretired ledger, without retry. */
+    class RetirementFailure internal constructor(val retainedSession: WindowsProfileFiles) :
+        IOException("Windows profile retirement orchestration failed with ownership retained") {
+        var priorFailure: Throwable? = null
+            private set
+
+        internal fun attach(cause: Throwable, prior: Throwable?): RetirementFailure {
+            initCause(cause)
+            priorFailure = prior
+            return this
+        }
+    }
+
     private enum class State { Opening, Open, Closing, Closed, Failed }
     private class Handle(val value: Long) { var failure: Throwable? = null; var released = false }
     private val monitor = ReentrantLock()
@@ -38,12 +54,16 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
     private var operationFailed = false
     private var closeFailure: Throwable? = null
     private var nativeCleanupFailure: Throwable? = null
-    private val handles = linkedMapOf<Long, Handle>()
+    // Allocate the bounded ledger and failure carrier before storage admission. Retirement must not
+    // allocate a snapshot/iterator after sealing admission, especially on a native reporting-Error path.
+    private val handles = arrayOfNulls<Handle>(32)
+    private var handleCount = 0
+    private val retirementFailure = RetirementFailure(this)
     internal val retirementStarted: Boolean get() = monitor.withLock {
         state in setOf(State.Closing, State.Closed, State.Failed)
     }
     // Published handles only. Zero does not settle cleanup of unpublished native resources.
-    internal val retainedHandleCount: Int get() = monitor.withLock { handles.values.count { !it.released } }
+    internal val retainedHandleCount: Int get() = monitor.withLock { handleCount }
     private lateinit var openedRoot: Directory
     override val root: ProtectedProfileDirectory get() = monitor.withLock {
         check(state == State.Open)
@@ -91,12 +111,13 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
     }
 
     private fun own(raw: Long): Handle = monitor.withLock {
-        check(raw > 0 && raw !in handles) { "Invalid or reused profile handle" }
-        Handle(raw).also { handles[raw] = it }
+        check(raw > 0 && handles.none { it?.value == raw }) { "Invalid or reused profile handle" }
+        check(handleCount < handles.size) { "Profile native-handle bound reached" }
+        Handle(raw).also { handles[handleCount++] = it }
     }
 
     private fun allocate(open: () -> Long): Handle {
-        monitor.withLock { check(handles.size < 32) { "Profile native-handle bound reached" } }
+        monitor.withLock { check(handleCount < handles.size) { "Profile native-handle bound reached" } }
         return own(open()) // Allocation errors must not return an unowned native resource through the ABI.
     }
 
@@ -144,7 +165,10 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         try {
             native.close(handle.value)
             monitor.withLock {
-                check(handles.remove(handle.value) === handle)
+                val index = handles.indexOfFirst { it === handle }
+                check(index in 0 until handleCount)
+                for (next in index + 1 until handleCount) handles[next - 1] = handles[next]
+                handles[--handleCount] = null
                 handle.released = true
             }
         }
@@ -160,6 +184,9 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
 
     override fun close() {
         var interrupted: InterruptedException? = null
+        var ownsRetirement = false
+        var retirementPublished = false
+        var failure: Throwable? = null
         fun rememberInterrupt(caught: InterruptedException) {
             // Native ownership can outlive repeated interruptions; retain only one interruption diagnostic.
             if (interrupted == null) interrupted = caught
@@ -187,10 +214,11 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                     return
                 }
                 state = State.Closing
+                ownsRetirement = true
                 while (busy) waitForOwner()
                 observeInterrupt()
             }
-            var failure: Throwable? = monitor.withLock { nativeCleanupFailure }
+            failure = monitor.withLock { nativeCleanupFailure }
             fun retain(caught: Throwable?) {
                 if (caught == null) return
                 if (failure == null) failure = caught
@@ -201,12 +229,19 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
             }
             retain(interrupted)
             // Late native allocations registered before busy cleared; never free a handle while its owner runs.
-            for (handle in monitor.withLock { handles.values.toList().asReversed() }) {
+            // Admission is sealed and busy has joined the actual native return. Descending indices
+            // remain valid as successful retirement compacts only entries at/above the removed index.
+            var index = monitor.withLock { handleCount } - 1
+            while (index >= 0) {
+                // Inert validation fault only; no production factory or native authority is introduced.
+                beforeHandleRetirement?.invoke()
+                val handle = monitor.withLock { checkNotNull(handles[index]) }
                 try { closeHandle(handle) } catch (caught: Throwable) {
                     if (caught is InterruptedException) rememberInterrupt(caught)
                     retain(caught)
                 }
                 finally { observeInterrupt(); retain(interrupted) }
+                index--
             }
             monitor.withLock {
                 // Terminal outcome linearizes at this final observation, not at a future interrupt after return.
@@ -215,8 +250,21 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                 closeFailure = failure
                 state = if (failure == null) State.Closed else State.Failed
                 changed.signalAll()
+                retirementPublished = true
             }
             failure?.let { throw it }
+        } catch (caught: Throwable) {
+            if (!ownsRetirement || retirementPublished) throw caught
+            // Controller/reporting failure is not native retirement. Keep the original owner/cause
+            // and prior diagnostic without suppression allocation; never strand waiters in Closing.
+            // This handles reported errors, not a promise of recovery from arbitrary JVM exhaustion.
+            val retained = retirementFailure.attach(caught, failure)
+            monitor.withLock {
+                closeFailure = retained
+                state = State.Failed
+                changed.signalAll()
+            }
+            throw retained
         } finally {
             interrupted?.let { Thread.currentThread().interrupt() }
         }
@@ -315,8 +363,11 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         private val recordName = Regex("[0-9a-f]{64}\\.aesgcm")
 
         /** Test/qualification seam only. No property, UI or platform path can instantiate a production backend. */
-        fun openForValidation(native: WindowsProfileNativeApi): WindowsProfileFiles {
-            val session = WindowsProfileFiles(native)
+        fun openForValidation(
+            native: WindowsProfileNativeApi,
+            beforeHandleRetirement: (() -> Unit)? = null,
+        ): WindowsProfileFiles {
+            val session = WindowsProfileFiles(native, beforeHandleRetirement)
             // Allocate the owner carrier before native effects, not while reporting a possible native/JNI OOM.
             // This preserves ownership after a reported Error; it does not promise recovery from VM exhaustion.
             val retained = AcquisitionFailure(session)
@@ -335,7 +386,7 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                 try { session.close() } catch (cleanup: Throwable) {
                     // No iterator/count allocation on a reporting-Error path before transferring its owner.
                     val ownsUncertainResources = session.monitor.withLock {
-                        session.nativeCleanupFailure != null || session.handles.isNotEmpty()
+                        session.nativeCleanupFailure != null || session.handleCount != 0
                     }
                     if (ownsUncertainResources) {
                         retained.attach(failure, cleanup)
