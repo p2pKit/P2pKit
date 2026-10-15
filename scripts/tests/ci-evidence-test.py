@@ -777,6 +777,39 @@ class EvidenceTests(unittest.TestCase):
         (phase / "result.json").write_text(json.dumps(row))
         self.assertEqual(E.failure_diagnostics(self.root, command)["simulatorPhases"], [])
 
+    def test_bundle_fatal_diagnostics_only_admit_exact_existing_source_literals(self):
+        command = self.root / "bundle-fatal-command"
+        command.mkdir()
+        log = command / "stderr.log"
+        maintained = ((SCRIPTS / "build-central-portal-bundle.sh").read_text() +
+                      (SCRIPTS / "tests/build-central-portal-bundle-test.sh").read_text())
+        self.assertEqual(len(E.BUNDLE_FATAL_MESSAGES), 19)
+        for message, category in E.BUNDLE_FATAL_MESSAGES.items():
+            self.assertIn(message, maintained)
+            for ending in ("\n", "\r\n", ""):
+                with self.subTest(message=message, ending=repr(ending)):
+                    log.write_bytes(("FATAL: " + message + ending).encode())
+                    result = E.failure_diagnostics(self.root, command, include_reports=False)
+                    self.assertEqual(result["categories"], [category])
+                    self.assertNotIn(message, json.dumps(result))
+
+    def test_bundle_fatal_diagnostics_reject_private_or_variable_extensions(self):
+        command = self.root / "bundle-fatal-negative"
+        command.mkdir()
+        log = command / "stderr.log"
+        for message in E.BUNDLE_FATAL_MESSAGES:
+            for changed in (message + " PRIVATE_SECRET", "PRIVATE_SECRET " + message,
+                            message + " ", message.lower() if message.lower() != message else message.upper()):
+                log.write_text("FATAL: " + changed + "\n")
+                result = E.failure_diagnostics(self.root, command, include_reports=False)
+                self.assertEqual(result["categories"], [])
+                self.assertNotIn("PRIVATE_SECRET", json.dumps(result))
+        for message in ("refusing to overwrite existing output: /private/PRIVATE_SECRET",
+                        "expected published group directory is missing: /private/PRIVATE_SECRET",
+                        "1 of 117 publication files lack PGP signatures", "x" * 5000):
+            log.write_text("FATAL: " + message + "\n")
+            self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)["categories"], [])
+
     def test_bundle_diagnostic_phases_are_closed_labels_not_private_messages(self):
         command = self.root / "bundle-command"
         command.mkdir()
