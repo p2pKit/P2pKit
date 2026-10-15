@@ -1008,9 +1008,26 @@ def main(argv=None):
                         updated = output / "failure-update.json"
                         write_private(updated, encoded(failure))
                         os.replace(updated, output / "failure.json")
-                    except BaseException:
+                    except BaseException as diagnostic_error:
                         for name in ("evidence.tar.gz.gpg", "failure-update.json"):
                             (output / name).unlink(missing_ok=True)
+                        failure.pop("closedCaptureArchive", None)
+                        # Reuse the encryptor's source-owned finite diagnostic;
+                        # never render an exception or change the original failure.
+                        failure["closedCaptureFailure"] = {
+                            "code": diagnostic_error.code if type(diagnostic_error) is EvidenceError else "INPUT",
+                            "exception": type(diagnostic_error).__name__ if type(diagnostic_error) in
+                                (EvidenceError, OSError, FileNotFoundError, PermissionError, FileExistsError,
+                                 IsADirectoryError, NotADirectoryError, ValueError, TypeError) else "UNKNOWN",
+                            "encryptionDiagnostic": getattr(diagnostic_error, "encryption_diagnostic", None)
+                                if type(diagnostic_error) is EvidenceError else None}
+                        try:
+                            updated = output / "failure-update.json"
+                            write_private(updated, encoded(failure))
+                            os.replace(updated, output / "failure.json")
+                        except BaseException:
+                            (output / "failure-update.json").unlink(missing_ok=True)
+                            print("CI_EVIDENCE DIAGNOSTIC_RECEIPT_UPDATE_FAILED", file=sys.stderr)
                         print("CI_EVIDENCE DIAGNOSTIC_ENCRYPTION_FAILED", file=sys.stderr)
         except BaseException:
             # An OS cleanup error must not print a private filename/exception or

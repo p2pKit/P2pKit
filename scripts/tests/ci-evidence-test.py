@@ -438,6 +438,97 @@ class EvidenceTests(unittest.TestCase):
                 self.assertNotIn("PRIVATE", public.getvalue())
                 self.assertIn("DIAGNOSTIC_ENCRYPTION_FAILED", public.getvalue())
 
+    def test_nested_failure_keeps_finite_encryption_phase_and_original_failure(self):
+        class PrivateExceptionName(RuntimeError):
+            pass
+        for problem in ("import", "encrypt-cleanup", "filesystem", "unknown"):
+            with self.subTest(problem=problem):
+                case = self.root / problem; case.mkdir()
+                repo = case / "repo"; repo.mkdir()
+                private = case / "private"; private.mkdir()
+                outcome = {"code": "COMMAND_FAILED", "exitCode": 1, "cleanupKnown": False,
+                           "capturesClosed": True, "timedOut": False}
+                error = (OSError("PRIVATE_PATH") if problem == "filesystem" else
+                         PrivateExceptionName("PRIVATE_SECRET") if problem == "unknown" else E.EvidenceError("ENCRYPTION"))
+                nested = None
+                if type(error) is E.EvidenceError:
+                    nested = {"phase": "key-import" if problem == "import" else "encrypt",
+                              "outcome": {"code": "COMMAND_FAILED", "exitCode": 2, "timedOut": False,
+                                          "cleanupKnown": problem == "import", "capturesClosed": True},
+                              "categories": ["AGENT_UNAVAILABLE"] if problem == "import" else []}
+                    error.encryption_diagnostic = nested
+                else:
+                    error.encryption_diagnostic = {"PRIVATE_NOT_SOURCE_OWNED": "PRIVATE_SECRET"}
+                output = case / "output"
+                with mock.patch.object(E, "source_identity", return_value={"commit": "a" * 40}), \
+                        mock.patch.object(E, "github_identity", return_value={}), \
+                        mock.patch.object(E, "run_command", return_value=outcome), \
+                        mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                        mock.patch.object(E, "encrypt_closed_failure_captures", side_effect=error), \
+                        mock.patch.object(E, "failure_diagnostics", return_value={}), \
+                        contextlib.redirect_stderr(io.StringIO()) as public:
+                    result = E.main(["--component", "bundle-diagnostic", "--timeout-seconds", "5",
+                                     "--output-dir", str(output), "--source-root", str(repo), "--", "synthetic"])
+                failure = json.loads((output / "failure.json").read_text())
+                self.assertEqual(result, 1)
+                self.assertEqual(failure["outcome"], outcome)
+                self.assertEqual((failure["stage"], failure["code"]), ("COMMAND", "CLEANUP"))
+                self.assertIsNone(failure["encryptionDiagnostic"])
+                self.assertIsNone(failure["taskResults"])
+                self.assertEqual(failure["closedCaptureFailure"], {
+                    "code": "ENCRYPTION" if nested is not None else "INPUT",
+                    "exception": "EvidenceError" if nested is not None else "OSError" if problem == "filesystem" else "UNKNOWN",
+                    "encryptionDiagnostic": nested})
+                self.assertEqual({p.name for p in output.iterdir()}, {"failure.json"})
+                self.assertTrue(private.is_dir())
+                self.assertNotIn("PRIVATE", json.dumps(failure) + public.getvalue())
+                self.assertNotIn("PrivateExceptionName", json.dumps(failure) + public.getvalue())
+                self.assertIn("DIAGNOSTIC_ENCRYPTION_FAILED", public.getvalue())
+
+    def test_nested_receipt_failure_preserves_first_receipt_without_cipher_attachment(self):
+        for replacement_fails in (1, 2):
+            with self.subTest(replacement_fails=replacement_fails):
+                case = self.root / str(replacement_fails); case.mkdir()
+                repo = case / "repo"; repo.mkdir()
+                private = case / "private"; private.mkdir()
+                output = case / "output"
+                outcome = {"code": "COMMAND_FAILED", "exitCode": 1, "cleanupKnown": False,
+                           "capturesClosed": True, "timedOut": False}
+                def encrypted(*_args):
+                    (output / "evidence.tar.gz.gpg").write_bytes(b"SYNTHETIC_CIPHER")
+                    return {"kind": "CLOSED_CAPTURES_ONLY_NOT_QUALIFICATION"}
+                original_replace = E.os.replace
+                calls = []
+                def replace(source, target):
+                    calls.append((source, target))
+                    if len(calls) <= replacement_fails:
+                        raise OSError("PRIVATE_REPLACEMENT_PATH")
+                    original_replace(source, target)
+                with mock.patch.object(E, "source_identity", return_value={"commit": "a" * 40}), \
+                        mock.patch.object(E, "github_identity", return_value={}), \
+                        mock.patch.object(E, "run_command", return_value=outcome), \
+                        mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                        mock.patch.object(E, "encrypt_closed_failure_captures", side_effect=encrypted), \
+                        mock.patch.object(E, "failure_diagnostics", return_value={}), \
+                        mock.patch.object(E.os, "replace", side_effect=replace), \
+                        contextlib.redirect_stderr(io.StringIO()) as public:
+                    result = E.main(["--component", "bundle-diagnostic", "--timeout-seconds", "5",
+                                     "--output-dir", str(output), "--source-root", str(repo), "--", "synthetic"])
+                failure = json.loads((output / "failure.json").read_text())
+                self.assertEqual(result, 1)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(failure["outcome"], outcome)
+                self.assertNotIn("closedCaptureArchive", failure)
+                self.assertEqual({p.name for p in output.iterdir()}, {"failure.json"})
+                if replacement_fails == 1:
+                    self.assertEqual(failure["closedCaptureFailure"],
+                                     {"code": "INPUT", "exception": "OSError", "encryptionDiagnostic": None})
+                else:
+                    self.assertNotIn("closedCaptureFailure", failure)
+                    self.assertIn("DIAGNOSTIC_RECEIPT_UPDATE_FAILED", public.getvalue())
+                self.assertTrue(private.is_dir())
+                self.assertNotIn("PRIVATE", json.dumps(failure) + public.getvalue())
+
     def test_unknown_capture_proof_never_encrypts_failed_cleanup(self):
         for closed in (False, None, 1, "true"):
             case = self.root / str(closed); case.mkdir()
