@@ -145,6 +145,54 @@ internal class PhoneOperationTerminalFailure(private val owner: PhoneOperationFa
     val retirementFailure: Throwable? get() = owner.retirementFailure
 }
 
+/**
+ * Owns only the scope and resource actually returned to this factory. A null resource does not prove that
+ * the underlying library factory retired every unpublished owner. Allocate the fatal carrier before effects.
+ */
+internal class PhoneFactoryOwner<R : Any>(private val closeResource: suspend (R) -> Unit) {
+    val failure = PhoneFactoryOwnershipError(this)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    var resource: R? = null
+    var initialFailure: Throwable? = null
+        private set
+    var resourceCloseFailure: Throwable? = null
+        private set
+    var scopeCloseFailure: Throwable? = null
+        private set
+
+    suspend fun failed(original: Throwable): Nothing {
+        initialFailure = original
+        withContext(NonCancellable) {
+            try { resource?.let { closeResource(it) } } catch (cleanup: Throwable) {
+                resourceCloseFailure = cleanup
+            } finally {
+                // A reporting Error from resource.close must not skip the independent owned job-tree drain.
+                try { checkNotNull(scope.coroutineContext[Job]).cancelAndJoin() } catch (cleanup: Throwable) {
+                    scopeCloseFailure = cleanup
+                }
+            }
+        }
+        // Keep the library's established ordinary creation-refusal contract, including refusals before
+        // a resource is returned. This wrapper does not newly prove custody of unpublished library owners.
+        if (original is Exception && original !is PhoneOperationTerminalFailure &&
+            resourceCloseFailure == null && scopeCloseFailure == null
+        ) throw original
+        // Preserve existing fatal Android/iOS behavior: their ordinary Exception paths assume factory
+        // cleanup succeeded. Never translate retained ownership into that retryable success assumption.
+        throw failure
+    }
+}
+
+/** No raw cause/message or new @Throws contract; retains actual owners even after a failed factory returns. */
+internal class PhoneFactoryOwnershipError(private val owner: PhoneFactoryOwner<*>) :
+    Error("RPC factory ownership is unproven; retained owner review is required") {
+    val initialFailure: Throwable? get() = owner.initialFailure
+    val resourceCloseFailure: Throwable? get() = owner.resourceCloseFailure
+    val scopeCloseFailure: Throwable? get() = owner.scopeCloseFailure
+    val retainedResource: Any? get() = owner.resource
+    val retainedScope: CoroutineScope get() = owner.scope
+}
+
 internal fun <T> startPhoneOperation(
     scope: CoroutineScope,
     busy: MutableStateFlow<Boolean>,
@@ -516,10 +564,10 @@ public class RpcPhoneLab private constructor(
                 trustStore.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients,
                     parseCapacityPins(explicitlyApprovedCapacityPins))
             }
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-            var host: RpcHost? = null
+            val owner = PhoneFactoryOwner<RpcHost>(RpcHost::close)
+            val scope = owner.scope
             try {
-                host = RpcHost.create(platform, scope) {
+                val host = RpcHost.create(platform, scope) {
                     appId = RpcCapacityContract.appId
                     lan = policy
                     this.trustStore = trustStore
@@ -535,15 +583,13 @@ public class RpcPhoneLab private constructor(
                     register(RpcCapacityContract.largeEcho, authorize = { it.fingerprint != null }) { _, value ->
                         RpcReply.Success(value)
                     }
-                }
+                }.also { owner.resource = it }
                 host.start()
                 return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby }
             } catch (failure: Exception) {
-                withContext(NonCancellable) {
-                    try { host?.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
-                    scope.coroutineContext[Job]?.cancelAndJoin()
-                }
-                throw failure
+                owner.failed(failure)
+            } catch (failure: Error) {
+                owner.failed(failure)
             }
         }
 
@@ -568,27 +614,26 @@ public class RpcPhoneLab private constructor(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
             application: RpcApplicationSession?, nearby: Boolean = false,
         ): RpcPhoneLab {
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-            var client: RpcClient? = null
+            val owner = PhoneFactoryOwner<RpcClient>(RpcClient::close)
+            val scope = owner.scope
             try {
-                client = RpcClient.create(platform, scope) {
+                val client = RpcClient.create(platform, scope) {
                     appId = RpcCapacityContract.appId
                     lan = settings.policy(host = false)
                     transportReconnect = !nearby
                     this.trustStore = trustStore
-                }
+                }.also { owner.resource = it }
                 val lab = RpcPhoneLab(scope, null, client, application)
                 if (nearby) {
-                    lab.discovery = RpcDiscoveryCoordinator(scope, RpcClientDiscoveryAdapter(client), trustStore)
+                    lab.discovery = RpcDiscoveryCoordinator(scope, RpcClientDiscoveryAdapter(client), trustStore,
+                        lab.operationFailures)
                     checkNotNull(lab.discovery).start()
                 }
                 return lab
             } catch (failure: Exception) {
-                withContext(NonCancellable) {
-                    try { client?.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
-                    scope.coroutineContext[Job]?.cancelAndJoin()
-                }
-                throw failure
+                owner.failed(failure)
+            } catch (failure: Error) {
+                owner.failed(failure)
             }
         }
     }
