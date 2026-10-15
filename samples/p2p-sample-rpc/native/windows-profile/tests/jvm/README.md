@@ -1,11 +1,11 @@
 # Actual development-JVM registration component controls
 
 `../../check-jvm-registration.py` compiles the unchanged registrar, JNI translation unit and policy source
-into a **test-only Mac executable**. Its separate storage backend aborts every `pwp_win_*` entry. It does not
-compile `profile_win32.c`, load a Windows DLL, authorize a candidate, or alter the production selector.
+into a **test-only development-JVM executable**. Its separate storage backend aborts every `pwp_win_*` entry. It does not
+compile `profile_win32.c`, load the Windows profile DLL, authorize a candidate, or alter the production selector.
 The default four cases call the registrar directly; optional `--ffm` adds the connected controls below.
 
-Supply existing trusted absolute `--clang`, `--sdk`, `--jdk` (JDK21), and `--classes` paths, plus a **new** private
+On macOS, supply existing trusted absolute `--clang`, `--sdk`, `--jdk` (JDK21), and `--classes` paths, plus a **new** private
 `--output` directory outside the checkout. `--classes` must be this checkout's existing
 `samples/p2p-sample-rpc/build/classes/kotlin/jvm/main`. No compiler/runtime downloads or Gradle rebuild occurs.
 The two real custody classes are copied byte-for-byte into the private test classpath; no same-name Java fixture
@@ -23,7 +23,7 @@ Four fresh-process cases use a real development JVM with `-Xcheck:jni`:
 
 The test driver alone creates/destroys its development VM, retaining its runtime mapping through process exit.
 The registrar never creates a VM or attaches a thread. All storage calls remain forbidden. Every process has a
-60-second timeout; nonzero exits, timeouts, unexpected output and JNI warnings fail the command. Receipts record
+60-second timeout and each output stream has a live 64KiB capture limit; nonzero exits, timeouts, unexpected output and JNI warnings fail the command. Receipts record
 exact selected source/class/tool/image hashes and verify those inputs did not change. The existing class/source
 observations do not replace the Gradle producer receipt, full compiler provenance or installed authority.
 
@@ -59,7 +59,35 @@ All three cases reject managed re-entry/duplicate ownership, keep original scope
 and prove the native one-shot was consumed by a subsequent direct duplicate refusal. Every JVM runs with
 `-Xcheck:jni` and must emit only its exact PASS line, with no JNI warnings. The receipt additionally binds original
 module sources and compiler inputs, compiled test-module class hashes and their unchanged post-run bytes.
-This exercises the host macOS native linker, not the Windows x64 calling convention.
+On macOS this exercises the host native linker, not the Windows x64 calling convention.
+
+## Scoped hosted Windows x64 execution
+
+The existing `rpc-windows` job runs these same seven cases after actual JVM-class compilation, including in its
+explicit BUILD-ONLY mode. This is additional development-JVM component execution, **not** execution of the profile
+DLL or custody smoke. No existing standard-user, account, profile-runtime or release admission changes.
+
+Only the exact authorized hosted job/branch, clean source SHA, setup-selected `RPC_WINDOWS_JDK21` and fixed fresh
+output directory are accepted. `--vsdevcmd` supplies the selected existing MSVC installation; it replaces the Mac
+`--clang`/`--sdk` options, and `--ffm` is mandatory. The fixed C producer uses JDK21 headers, `/W4 /WX /MT`, x64 and
+only the original policy/JNI/registrar plus deny-all backend/test driver. No `profile_win32.c`, `jvm.lib`, candidate
+profile DLL, runtime download or alternate application launcher is built or invoked. Windows compilation evidence
+must come from the hosted run, never inferred from Mac success.
+
+Before creating its own development VM, the test-only Windows driver refuses an already loaded `jvm.dll`, removes
+inherited/current-directory DLL search, sets default search to System32 plus user directories, and adds **only**
+the selected JDK `bin` directory. It loads the exact canonical `bin/server/jvm.dll` using `LoadLibraryExW` with
+DLL-load-directory/System32/user-directory flags, verifies the returned module's original path, and resolves only
+`JNI_CreateJavaVM` from that retained handle. The module and directory cookie remain held through VM/process exit.
+The controller hashes selected runtime `bin`/`lib`/headers before and after, and verifies test EXE/module bytes do
+not change. These selected development-image observations are not installed-runtime/import authority.
+
+Runtime children receive an explicit isolated environment with System32-only PATH and test-owned temporary/profile
+directories, not ambient Java/compiler options. Only the separate compiler child receives selected VS setup and
+fixed system-tool directories. Original native Win32 registrar atomics and Windows x64 FFM/JNI calling conventions
+are exercised by the seven real JVM cases; all runtime output remains exact PASS lines with no JNI warnings.
+Raw CRLF output is retained and normalized only for exact line comparison. Process/capture failures are fatal;
+bounded direct-child ownership is not whole-descendant or Foundation supervisor qualification.
 
 **This is real JNI registration and optional connected FFM component evidence, not productive Windows DLL loading,
 original Windows module ownership/import verification, protected-profile storage, standard-user admission, an installed
