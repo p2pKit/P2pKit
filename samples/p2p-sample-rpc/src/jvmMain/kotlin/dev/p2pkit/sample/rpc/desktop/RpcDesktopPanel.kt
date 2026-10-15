@@ -7,7 +7,6 @@ import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import dev.p2pkit.sample.rpc.RpcNearbyHost
 import dev.p2pkit.sample.rpc.RpcKnownDevice
-import java.nio.file.Path
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -321,9 +320,8 @@ public class RpcDesktopPanel(
         unlocking = true
         renderButtons()
         val task = createDesktopRpcProfileUnlock(scope, DesktopRpcEdt,
-            open = {
-                DesktopRpcProfile.openAttempt(Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop"), password)
-            }, isClosing = { closing }, accept = { attempt ->
+            open = { DesktopRpcProfile.openApplicationAttempt(password) },
+            isClosing = { closing }, accept = { attempt ->
                 val result = attempt.result
                 unlocking = false
                 profile = result.getOrNull()

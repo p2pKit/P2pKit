@@ -66,6 +66,26 @@ internal class DesktopRpcProfile private constructor(
             } finally { password.fill('\u0000') }
         }
 
+        /**
+         * Application entry: own the password before platform/default-path resolution. Windows must never
+         * evaluate a POSIX home path; its fixed native root remains unavailable until trusted loading exists.
+         * Pre-acquisition refusal is not uncertain provider cleanup and must not poison a later valid attempt.
+         */
+        internal fun openApplicationAttempt(password: CharArray): DesktopRpcProfileOpenAttempt {
+            var acquisitionStarted = false
+            try {
+                require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
+                WindowsProfileAvailability.requirePosixProductionHost()
+                val directory = Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop")
+                acquisitionStarted = true
+                return openAttempt(directory, password)
+            } catch (failure: Throwable) {
+                return DesktopRpcProfileOpenAttempt(
+                    Result.failure(failure), if (acquisitionStarted) failure else null,
+                )
+            } finally { password.fill('\u0000') }
+        }
+
         /** Failed cleanup is explicit even when a provider rethrows the very same cached exception. */
         internal fun openAttempt(directory: Path, password: CharArray): DesktopRpcProfileOpenAttempt {
             try {
