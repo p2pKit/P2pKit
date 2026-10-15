@@ -960,14 +960,20 @@ class EvidenceTests(unittest.TestCase):
 
     def test_actual_public_key_encrypts_without_private_key_or_agent(self):
         key = (SCRIPTS.parent / ".github/ci-evidence-recipient.asc").read_bytes()
+        # Public-only encryption must not depend on an agent socket fitting a
+        # short homedir. Target 136 characters without inflating Windows paths.
+        padding = max(1, 136 - len(str(self.root / "public-only-" / "gnupg")))
+        work = self.root / ("public-only-" + "x" * padding)
+        work.mkdir()
+        self.assertGreater(len(str(work / "gnupg")), 128)
         source = self.root / "evidence.tar.gz"
         source.write_bytes(b"PUBLIC_SYNTHETIC_TEST_ONLY" * 100)
         result = E.encrypt_archive(source, self.root / "evidence.tar.gz.gpg", key,
-            hashlib.sha256(key).hexdigest(), PUBLIC_FINGERPRINT, self.root, dict(os.environ))
+            hashlib.sha256(key).hexdigest(), PUBLIC_FINGERPRINT, work, dict(os.environ))
         self.assertEqual(result["recipientFingerprint"], PUBLIC_FINGERPRINT)
         self.assertEqual(result["sha256"], E.digest_file(self.root / "evidence.tar.gz.gpg")["sha256"])
         self.assertGreater(result["bytes"], 32)
-        secret_dir = self.root / "gnupg/private-keys-v1.d"
+        secret_dir = work / "gnupg/private-keys-v1.d"
         self.assertFalse(list(secret_dir.iterdir()) if secret_dir.exists() else [])
 
     def test_actual_git_identity_detects_tracked_mutation(self):
