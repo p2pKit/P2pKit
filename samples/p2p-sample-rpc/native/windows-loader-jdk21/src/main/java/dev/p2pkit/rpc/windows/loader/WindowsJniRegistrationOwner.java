@@ -29,7 +29,8 @@ final class WindowsJniRegistrationOwner {
      * Internal synchronous integration boundary, not a public callback loader. A future implementation
      * owns its live, disjoint frame and verified original entry; it must not return while native work runs.
      * Retirement clears/closes ONLY invocation buffers, never module/runtime/class/installation owners.
-     * Tests supply inert invocations; no implementation currently performs a native call.
+     * The dormant fixed FFM implementation has no productive caller or load authority. Portable tests
+     * use inert invocations or a JDK-generated upcall stub, never a candidate DLL or protected storage.
      */
     interface Invocation {
         int invoke() throws Throwable;
@@ -97,6 +98,7 @@ final class WindowsJniRegistrationOwner {
 
     static synchronized WindowsJniRegistrationOwner retainedProcessOwner() { return processOwner; }
     State state() { return state; }
+    boolean ownsInvocation(Invocation candidate) { return invocation == candidate; }
 
     private void run() {
         state = State.Invoking;

@@ -168,6 +168,12 @@ establish independent initial loading
 authority, then execute actual JNI and installed Host/Client qualification. No Windows capability or
 qualification claim is promoted by compiling or testing this dormant component.
 
+The named JDK21 adapter now contains a dormant fixed-signature FFM invocation implementation. It owns
+its disjoint bounded input/report frame, requires the exact reserved registration owner and platform
+thread, and retains uncertainty without retiring original module/runtime scopes. Its fresh-process
+downcall/upcall controls use only a JDK-generated inert stub: no original DLL, JNI or profile execution.
+This supplies call mechanics, not address authority, an exported registrar or productive integration.
+
 The separate [development-JVM controls](tests/jvm/README.md) now exercise this actual registrar and
 original JNI translation unit with the real compiled custody classes in a development JDK21. The test-only
 Mac executable links an abort-on-entry storage backend, not `profile_win32.c`. Real registration, pure

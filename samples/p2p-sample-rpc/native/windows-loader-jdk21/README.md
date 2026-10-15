@@ -196,8 +196,8 @@ invoked by preparing the plan or inspecting the declaring class.
 
 The native [post-admission registration core](../windows-profile/jni-contract.md#post-admission-registration-core)
 now implements the single-invocation operation, but is not exported or reachable
-from production. The managed lifetime component below is implemented separately;
-its actual native invocation and productive loading remain unimplemented. The design direction is
+from production. The managed lifetime and fixed FFM invocation components below are implemented separately;
+they have no productive caller and loading remains unimplemented. The design direction is
 explicit `RegisterNatives` against original verified function addresses, after
 independent loading authority. Preload plus `System.load` does not pin each Java
 method to that module. JNI references and pending exceptions need a reviewed
@@ -216,7 +216,7 @@ strongly retaining the original installation/runtime/module owners, declaring cl
 immutable registration plan and invocation frame. These references are **not** installed
 authority or OS handle pins. A future reviewed loader must first establish real authority
 and transfer exclusive originals, not borrowed objects with independent close paths.
-There is no productive caller or native invocation implementation yet.
+There is no productive caller. The fixed dormant invocation implementation below is not wired to a DLL.
 
 Every admitted attempt consumes the slot, even a phase-0 refusal, thrown invocation,
 partial registration or malformed report. Success requires coherent result-0/phase-2
@@ -234,3 +234,32 @@ copy. The owner class must itself belong to the original boot module; delegating
 runtime check to that module cannot admit another singleton. These controls are separate
 from the 14 FFM data models and do not execute native registration or establish physical
 module retention. Test-only classes never enter the packaged adapter JAR.
+
+## Fixed registration FFM invocation
+
+`WindowsJniRegistrationInvocation` implements the internal invocation interface with the exact C signature
+`int32_t(JavaVM*, uintptr_t[23], uint32_t, report32*, uint32_t)`. It accepts already-admitted original entry/VM
+segments and a one-time copied address list. **Those parameters do not grant native execution authority.**
+Before any productive use, the reviewed loader must independently establish the original runtime, entry,
+module/imports and installed custody and transfer exclusive original owners. No such loader caller exists.
+The native registration core remains non-exported; the production loading refusal is unchanged.
+
+The mechanism requires its original named boot module and one platform thread, native non-global live scoped
+addresses, 64-bit little-endian layouts, positive user-mode addresses and an aligned VM pointer. It performs no
+symbol search, library loading, numeric-pointer construction or global reinterpretation. Its fixed descriptor
+and private confined arena contain disjoint aligned 184-byte input and 32-byte output allocations. Original
+address observations are copied once; the Java input view is read-only. These checks establish data mechanics,
+not Windows system-library/bootstrap trust or correspondence of a pointer to an admitted VM.
+
+Only the exact process owner's reserved invocation can enter. There is one attempt, on its original platform
+thread, one immutable report read after normal return, and no frame retirement during native use. Cleanup
+independently clears each buffer and closes only the invocation arena, retaining separate preallocated failure
+slots and never retrying an uncertain retirement. It never closes the entry/VM scopes or unloads a module.
+
+The diagnostic command exercises **13 fresh-process FFM invocation controls** using a JDK-generated upcall stub
+and an inert allocation in place of a VM pointer. The real downcall/upcall checks argument order, exact counts,
+bounded pointer layouts, source-array isolation, initial zero output, report readback, owner/thread/one-shot
+constraints and frame retirement. The callback never invokes JNI or storage and never lets a Java exception
+escape its native boundary. A test-only reflective read-only-buffer fault verifies retained retirement failure;
+no production fault-injection hook is added. These are host-ABI FFM mechanics, **not Windows ABI/JNI registration,
+DLL loading, protected NTFS, installed application or production authority qualification**.
