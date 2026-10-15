@@ -438,6 +438,70 @@ class EvidenceTests(unittest.TestCase):
                 E.encrypt_archive(self.root / "none", self.root / "cipher", b"NOT A KEY", "0" * 64,
                                   "1" * 40, self.root, dict(os.environ))
 
+    def test_dependency_terminal_errors_project_only_exact_maintained_labels(self):
+        command = self.root / "dependency-markers"; command.mkdir()
+        stdout = command / "stdout.log"
+        for label in E.DEPENDENCY_UPDATE_ERRORS | E.DEPENDENCY_UPDATE_EXCEPTIONS:
+            stdout.write_text("DEPENDENCY_UPDATE_FAILED: " + label + "\n")
+            result = E.failure_diagnostics(self.root, command, include_reports=False)
+            prefix = "DEPENDENCY_UPDATE_" if label in E.DEPENDENCY_UPDATE_ERRORS else "DEPENDENCY_UPDATE_EXCEPTION_"
+            self.assertEqual(result['categories'], [prefix + label])
+            self.assertNotIn('dependencyUpdateExits', result)
+        for line in ("DEPENDENCY_UPDATE_FAILED: PRIVATE", "DEPENDENCY_UPDATE_FAILED: SOURCE_DIRTY PRIVATE",
+                     "PRIVATE PREFIX DEPENDENCY_UPDATE_FAILED: SOURCE_DIRTY", "DEPENDENCY_UPDATE_FAILED: " + "x" * 4096):
+            stdout.write_text(line + "\n")
+            self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)['categories'], [])
+
+    def test_dependency_returned_exits_survive_closed_capture_only_diagnosis(self):
+        command = self.root / "dependency-steps"; command.mkdir()
+        stdout = command / "stdout.log"
+        for newline in ("\n", "\r\n"):
+            stdout.write_bytes(("DEPENDENCY_UPDATE_STEP GENERATOR EXIT 7" + newline +
+                                "DEPENDENCY_UPDATE_STEP GRADLE_STOP EXIT 0" + newline +
+                                "DEPENDENCY_UPDATE_FAILED: GENERATION_OR_GRADLE_STOP_FAILED" + newline).encode())
+            with mock.patch.object(E, 'junit_failures', side_effect=AssertionError('live report read')):
+                result = E.failure_diagnostics(self.root, command, include_reports=False)
+            self.assertEqual(result['dependencyUpdateExits'], {'GENERATOR': 7, 'GRADLE_STOP': 0})
+            self.assertEqual(result['categories'], ['DEPENDENCY_UPDATE_GENERATION_OR_GRADLE_STOP_FAILED'])
+            self.assertEqual(result['platformTests'], [])
+            with mock.patch.object(E, 'junit_failures', return_value=[]):
+                self.assertEqual(E.failure_diagnostics(self.root, command)['dependencyUpdateExits'],
+                                 result['dependencyUpdateExits'])
+        stdout.write_text('DEPENDENCY_UPDATE_STEP GENERATOR EXIT -2147483648\nDEPENDENCY_UPDATE_STEP GRADLE_STOP EXIT 4294967295\n')
+        self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)['dependencyUpdateExits'],
+                         {'GENERATOR': -(2**31), 'GRADLE_STOP': 2**32-1})
+
+    def test_dependency_exit_projection_refuses_private_noncanonical_duplicate_and_oversize(self):
+        command = self.root / "dependency-invalid"; command.mkdir()
+        stdout = command / "stdout.log"
+        for line in ('DEPENDENCY_UPDATE_STEP PRIVATE EXIT 0',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT PRIVATE',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT 0 PRIVATE',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT True',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT +1',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT 01',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT -0',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT -2147483649',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT 4294967296',
+                     'DEPENDENCY_UPDATE_STEP GENERATOR EXIT ' + '9' * 4096):
+            stdout.write_text(line + '\n')
+            result = E.failure_diagnostics(self.root, command, include_reports=False)
+            self.assertNotIn('dependencyUpdateExits', result)
+            self.assertNotIn('PRIVATE', json.dumps(result))
+        stdout.write_text('DEPENDENCY_UPDATE_STEP GENERATOR EXIT 0\nDEPENDENCY_UPDATE_STEP GENERATOR EXIT 0\n')
+        self.assertNotIn('dependencyUpdateExits', E.failure_diagnostics(self.root, command, include_reports=False))
+        stdout.write_text('DEPENDENCY_UPDATE_STEP GENERATOR EXIT 7\nDEPENDENCY_UPDATE_STEP GENERATOR EXIT 4294967296\nDEPENDENCY_UPDATE_STEP GRADLE_STOP EXIT 0\n')
+        self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)['dependencyUpdateExits'],
+                         {'GRADLE_STOP': 0})
+
+    def test_dependency_error_allowlist_covers_literal_adapter_refusals(self):
+        import ast
+        source = ast.parse((Path(__file__).resolve().parents[1] / 'dependency_update.py').read_text())
+        labels = {node.args[1].value for node in ast.walk(source) if isinstance(node, ast.Call) and
+                  isinstance(node.func, ast.Name) and node.func.id == 'need' and len(node.args) == 2 and
+                  isinstance(node.args[1], ast.Constant)}
+        self.assertEqual(labels, set(E.DEPENDENCY_UPDATE_ERRORS))
+
     def test_public_failure_diagnostics_keep_identifiers_not_private_messages(self):
         command = self.root / "command"
         command.mkdir()

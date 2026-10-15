@@ -59,6 +59,27 @@ PENDING_OPERATIONS = {"environment": "ENVIRONMENT", "identity": "IDENTITY",
 PENDING_FAILURE_LABELS = frozenset((*PENDING_FAILURES.values(),
                                   *PENDING_OPERATIONS.values(), "OTHER"))
 
+# Exact maintained adapter errors only; arbitrary exception text never leaves logs.
+DEPENDENCY_UPDATE_ERRORS = frozenset({
+    'CANDIDATE_ROSTER_CHANGED', 'CONTROLLER_CHANGED', 'DEPENDENCY_BASE_ALREADY_CHANGED',
+    'DUPLICATE_OR_EMPTY_COMPONENT', 'DUPLICATE_VERIFICATION_ARTIFACT', 'DUPLICATE_VERIFICATION_ENTRY',
+    'EMPTY_SOURCE', 'EMPTY_VERIFICATION', 'GENERATION_OR_GRADLE_STOP_FAILED',
+    'GIT_METADATA_REFUSED', 'HOSTED_CONTROLLER_IDENTITY', 'LINKED_OR_TRAVERSAL_PATH',
+    'LINKED_SOURCE', 'MAINTAINED_GENERATOR_CHANGED', 'NON_DEPENDENCY_SOURCE_CHANGED',
+    'OUTPUT_MUST_BE_FRESH_EXTERNAL', 'PATCH_LIMIT_OR_DELTA_MISMATCH', 'REQUEST_IDENTITY',
+    'SEPARATE_CANDIDATE_REQUIRED', 'SOURCE_DIRTY', 'SOURCE_FILE_CHANGED',
+    'SOURCE_FILE_TYPE_OR_SIZE', 'SOURCE_IDENTITY', 'SOURCE_MODE_CHANGED',
+    'SOURCE_ROSTER', 'SOURCE_ROSTER_LIMIT', 'UNCHANGED_VERIFICATION_BYTES_DIFFER',
+    'VERIFICATION_ARTIFACT', 'VERIFICATION_CHECKSUM', 'VERIFICATION_COMPONENT',
+    'VERIFICATION_HISTORY_REMOVED', 'VERIFICATION_STRUCTURE', 'VERIFICATION_TRUST_CHANGED',
+    'VERIFICATION_XML',
+})
+DEPENDENCY_UPDATE_EXCEPTIONS = frozenset({
+    "ValueError", "KeyError", "TypeError", "OSError", "FileNotFoundError", "PermissionError",
+    "FileExistsError", "IsADirectoryError", "NotADirectoryError", "UnicodeDecodeError",
+    "JSONDecodeError", "SubprocessError", "CalledProcessError", "TimeoutExpired",
+})
+
 TASK_NAMES = frozenset({
     'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
     'intel-advertising-prepare', 'intel-advertising-restore',
@@ -626,6 +647,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     the already bounded closed captures; never copy arbitrary error messages.
     """
     categories, tasks, publication_lines, platform_lines = set(), set(), [], []
+    dependency_exits, duplicate_dependency_steps = {}, set()
     modules = {"p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
                "p2p-network-provisioning-desktop", "p2p-sample-android", "p2p-sample-desktop",
                "p2p-sample-desktop-ui", "p2p-sample-diagnostics", "sample-kmp-shared", "p2p-sample-rpc", "buildSrc"}
@@ -682,6 +704,21 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 location = re.fullmatch(rb"PLATFORM_CHECK_LINES ([0-9]{1,5}(?:,[0-9]{1,5}){0,15})\s*", line)
                 if location:
                     platform_lines = [int(value) for value in location[1].split(b",")]
+                dependency_error = re.fullmatch(rb"DEPENDENCY_UPDATE_FAILED: ([A-Za-z_]{1,80})\r?\n?", line)
+                if dependency_error:
+                    label = dependency_error[1].decode("ascii")
+                    if label in DEPENDENCY_UPDATE_ERRORS:
+                        categories.add("DEPENDENCY_UPDATE_" + label)
+                    elif label in DEPENDENCY_UPDATE_EXCEPTIONS:
+                        categories.add("DEPENDENCY_UPDATE_EXCEPTION_" + label)
+                dependency_step = re.fullmatch(
+                    rb"DEPENDENCY_UPDATE_STEP (GENERATOR|GRADLE_STOP) EXIT (0|-?[1-9][0-9]{0,9})\r?\n?", line)
+                if dependency_step:
+                    label, value = dependency_step[1].decode("ascii"), int(dependency_step[2])
+                    if label in dependency_exits or not -(2**31) <= value < 2**32:
+                        duplicate_dependency_steps.add(label)
+                    else:
+                        dependency_exits[label] = value
                 bundle_phase = re.fullmatch(
                     rb"FATAL: disposable-key bundle test failed during: ([a-z -]{1,80})\r?\n?", line)
                 if bundle_phase:
@@ -697,13 +734,16 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                     pieces = task.split(":")
                     if len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names:
                         tasks.add(task)
+    observed_exits = {key: value for key, value in dependency_exits.items()
+                      if key not in duplicate_dependency_steps}
+    dependency_fields = {"dependencyUpdateExits": observed_exits} if observed_exits else {}
     if not include_reports:
         # Original capture EOF/join/close is independent from descendant census.
         # After uncertain retirement read ONLY those closed private captures;
         # other reports may still have writers. These labels never qualify a run.
         return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": [],
                 "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
-                "platformTests": [], "failedSourceTests": []}
+                "platformTests": [], "failedSourceTests": [], **dependency_fields}
     phases = []
     for path in sorted((root / "build/reports/platform-tests").glob("*/intel-simulator/*/result.json")):
         try:
@@ -738,7 +778,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
             continue
     return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32],
             "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
-            "platformTests": platform_reports[:8], "failedSourceTests": junit_failures(root, source_commit)}
+            "platformTests": platform_reports[:8], "failedSourceTests": junit_failures(root, source_commit), **dependency_fields}
 
 
 def public_outcome(value):

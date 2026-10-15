@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Tiny real Git checkouts + modeled generator; no Gradle/network/private key."""
 import copy
+import contextlib
+import io
 import hashlib
 import importlib.util
 import json
@@ -201,6 +203,61 @@ class UpdateTests(unittest.TestCase):
                 with self.assertRaises(D.UpdateError):
                     self.execute(run=altered)
                 self.assertFalse(self.output.exists())
+
+    def test_diagnostic_exits_are_actual_original_returns_and_do_not_change_failure(self):
+        for codes in ((9, 0), (0, 7), (9, 7)):
+            with self.subTest(codes=codes):
+                self.command(self.candidate, "reset", "--hard", "HEAD")
+                returns = iter(codes)
+                def failed(argv, **kwargs):
+                    self.generator(argv, **kwargs)
+                    return Mock(returncode=next(returns))
+                diagnostic = io.StringIO()
+                with contextlib.redirect_stdout(diagnostic), self.assertRaisesRegex(D.UpdateError, "GENERATION_OR_GRADLE_STOP_FAILED"):
+                    self.execute(run=failed)
+                self.assertEqual(diagnostic.getvalue(),
+                    f"DEPENDENCY_UPDATE_STEP GENERATOR EXIT {codes[0]}\nDEPENDENCY_UPDATE_STEP GRADLE_STOP EXIT {codes[1]}\n")
+                self.assertFalse(self.output.exists())
+                self.assertEqual(self.calls[-1][0][-1], "--stop")
+                self.assertEqual(self.calls[-1][1]["timeout"], 90)
+        self.assertEqual(self.reports.call_count, 3)
+
+    def test_diagnostic_no_invented_exit_on_launch_or_report_error(self):
+        for failing in ("generator", "stop", "reports"):
+            with self.subTest(failing=failing):
+                original = OSError("PRIVATE_UNAVAILABLE_PATH")
+                self.reports.reset_mock()
+                self.reports.side_effect = original if failing == "reports" else None
+                calls = []
+                def invoke(argv, **kwargs):
+                    step = "stop" if argv[-1] == "--stop" else "generator"
+                    calls.append(step)
+                    if step == failing:
+                        raise original
+                    return Mock(returncode=7 if step == "generator" else 0)
+                diagnostic = io.StringIO()
+                with contextlib.redirect_stdout(diagnostic), self.assertRaises(OSError) as caught:
+                    self.execute(run=invoke)
+                self.assertIs(caught.exception, original)
+                expected = ("" if failing == "generator" else "DEPENDENCY_UPDATE_STEP GENERATOR EXIT 7\n")
+                expected += "" if failing == "stop" else "DEPENDENCY_UPDATE_STEP GRADLE_STOP EXIT 0\n"
+                self.assertEqual(diagnostic.getvalue(), expected)
+                self.assertEqual(calls, ["generator", "stop"])
+                self.reports.assert_called_once()
+                self.assertFalse(self.output.exists())
+
+    def test_diagnostic_step_output_is_typed_bounded_and_closed(self):
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stdout(diagnostic):
+            for value in (True, "PRIVATE", None, -(2**31)-1, 2**32):
+                D.step_exit_diagnostic("GENERATOR", value)
+            D.step_exit_diagnostic("PRIVATE", 0)
+        self.assertEqual(diagnostic.getvalue(), "")
+        with contextlib.redirect_stdout(diagnostic):
+            D.step_exit_diagnostic("GENERATOR", -(2**31))
+            D.step_exit_diagnostic("GRADLE_STOP", 2**32-1)
+        self.assertEqual(diagnostic.getvalue(),
+                         "DEPENDENCY_UPDATE_STEP GENERATOR EXIT -2147483648\nDEPENDENCY_UPDATE_STEP GRADLE_STOP EXIT 4294967295\n")
 
     def test_generator_failure_and_stop_failure_never_publish_candidate(self):
         for codes in ((9, 0), (0, 7)):

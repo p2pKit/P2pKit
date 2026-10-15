@@ -154,6 +154,13 @@ def retain_reports(candidate, controller):
                                 parent / "dependency-update")
 
 
+def step_exit_diagnostic(step, code):
+    # Only a returned original subprocess code, never an initialized fallback.
+    # These labels are diagnostic observations, not completion/cleanup authority.
+    if step in ("GENERATOR", "GRADLE_STOP") and type(code) is int and -(2**31) <= code < 2**32:
+        print("DEPENDENCY_UPDATE_STEP " + step + " EXIT " + str(code))
+
+
 def execute(controller, candidate, request, output, *, run=subprocess.run, reports=retain_reports):
     controller, candidate, output = (Path(p).absolute() for p in (controller, candidate, output))
     need(all(".." not in p.parts and not any(parent.is_symlink() for parent in (p, *p.parents))
@@ -183,9 +190,11 @@ def execute(controller, candidate, request, output, *, run=subprocess.run, repor
         generator_code = run([str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]],
                              cwd=candidate, check=False,
                              env={**os.environ, "P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED": "1"}).returncode
+        step_exit_diagnostic("GENERATOR", generator_code)
     finally:
         try:
             stop_code = run([str(candidate / "gradlew"), "--stop"], cwd=candidate, check=False, timeout=90).returncode
+            step_exit_diagnostic("GRADLE_STOP", stop_code)
         finally:
             reports(candidate, controller)
     need(generator_code == 0 and stop_code == 0, "GENERATION_OR_GRADLE_STOP_FAILED")
