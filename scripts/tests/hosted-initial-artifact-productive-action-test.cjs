@@ -14,6 +14,52 @@ const D = require('../hosted-initial-artifact-productive-action-data.cjs');
 const LegacyData = require('../hosted-initial-artifact-action-data.cjs');
 const readerSource = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-reader.cjs'), 'utf8');
 const actionSource = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-action.cjs'), 'utf8');
+const DIAGNOSTIC_PHASES = new Set([
+    'ADMISSION', 'ENVIRONMENT', 'UPLOAD_ADMISSION',
+    'READER_READY', 'READER_BIND', 'BEFORE_OBSERVER',
+    'UPLOAD_TRANSPORT', 'FINISH_INPUT', 'FINITE_FINISH',
+    'AFTER_READY', 'AFTER_OBSERVER', 'FINITE_COMPLETION',
+    'RESULT', 'OUTPUT'
+]);
+const DIAGNOSTIC_CODES = new Set([
+    'AFTER_ORIGINAL_PRESPAWN', 'API_CREDENTIAL_BOUNDARY', 'CANCELLED',
+    'FINITE_BIND_ONCE', 'FINITE_CANCELLED', 'FINITE_COMPLETE_ORIGINAL_CLOSE',
+    'FINITE_DUPLICATE_PIPE_CLOSE', 'FINITE_END_CALLBACK_ONCE', 'FINITE_FAILED_OR_CANCELLED',
+    'FINITE_FINAL_AFTER_INPUT', 'FINITE_FRAME_BOUND', 'FINITE_FRAME_HEADER',
+    'FINITE_FRAME_LIFETIME', 'FINITE_INPUT_ONCE', 'FINITE_KNOWN_ORIGINAL_CLOSE',
+    'FINITE_MODE', 'FINITE_NO_EXTENSION', 'FINITE_NO_KNOWN_RETURN',
+    'FINITE_NO_READY', 'FINITE_OPERATION_FAILED', 'FINITE_ORIGINAL_CHILD_CLOSE',
+    'FINITE_ORIGINAL_DEADLINE', 'FINITE_ORIGINAL_END', 'FINITE_ORIGINAL_EXIT',
+    'FINITE_ORIGINAL_PIPES', 'FINITE_PRIVATE_DIAGNOSTIC', 'FINITE_READY_ONCE_FIRST',
+    'FINITE_SPAWN_ORDER', 'FINITE_STDERR_BOUND', 'FINITE_STDERR_END_ONCE',
+    'FINITE_STDIN_FINISH', 'FINITE_STDOUT_EOF', 'FINITE_WRITE_CALLBACK_ONCE',
+    'FIXED_TOOLS_AND_OUTPUT', 'HELPER_ENVIRONMENT', 'NOT_ACCEPTED',
+    'ONE_INVOCATION', 'ORIGINAL_BYTES_CHANGED', 'ORIGINAL_ENVIRONMENT',
+    'ORIGINAL_ENVIRONMENT_CHANGED', 'ORIGINAL_HTTP_ROWS_REPLACED', 'ORIGINAL_HTTP_ROW_REPLACED',
+    'ORIGINAL_JOB_WORKSPACE', 'ORIGINAL_LOCAL_REGRESSION', 'ORIGINAL_PHASE_FENCE',
+    'ORIGINAL_PRIVATE_PARENT', 'ORIGINAL_READER_MAPPING', 'ORIGINAL_RESULTS_CREDENTIALS',
+    'ORIGINAL_RETENTION_SETTING', 'ORIGINAL_RETURN_CHANGED', 'ORIGINAL_RETURN_HANDLE_CHANGED',
+    'ORIGINAL_TIMER', 'PARTIAL_ANCESTORS', 'RETENTION_REQUIRES_14_DAYS'
+].map(code => 'INITIAL_ARTIFACT_ACTION_' + code));
+function diagnostics(errors) {
+    assert(errors.includes('INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n'));
+    const found = [];
+    for (const text of errors) {
+        if (text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n') continue;
+        const prefix = 'INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ';
+        assert.equal(typeof text, 'string'); assert(text.length <= 1024);
+        assert(text.startsWith(prefix) && text.endsWith('\n'));
+        const value = JSON.parse(text.slice(prefix.length));
+        assert.deepEqual(Object.keys(value), ['schema', 'selection', 'phase', 'code']);
+        assert.equal(value.schema, 1); assert.equal(value.selection, 'FIRST_CONTROLLER_FAIL');
+        assert(DIAGNOSTIC_PHASES.has(value.phase));
+        assert(value.code === 'UNKNOWN' || DIAGNOSTIC_CODES.has(value.code));
+        found.push(value);
+    }
+    assert.equal(found.length, 1); // Original invocation only; reentry retains its old generic marker.
+    return found[0];
+}
+
 const NS = 1000000000n, cases = [], test = (name, run) => cases.push({name, run});
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const sha = raw => crypto.createHash('sha256').update(raw).digest('hex');
@@ -271,7 +317,7 @@ test('public productive after has fixed worker helper but no acceptance from tra
     await m.s.close(); await pending;
     assert.equal(m.s.processModel.exitCode, 125); assert.equal(m.observerCalls.length, 0);
     assert.equal(m.outputs.length, 0); assert.equal(m.transportCalls.length, 0);
-    assert(m.s.errors.every(text => text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n'));
+    diagnostics(m.s.errors);
 });
 test('public productive gate or API credential refusal cannot fall back to legacy', async () => {
     for (const failure of ['gate', 'token']) {
@@ -284,7 +330,7 @@ test('public productive gate or API credential refusal cannot fall back to legac
         assert.equal(m.s.calls.length, 0); assert.equal(m.readerCalls.length, 0); assert.equal(m.outputs.length, 0);
         assert.equal(m.legacyReaderCalls.length, 0);
         assert.equal(m.s.processModel.exitCode, 125);
-        assert(m.s.errors.every(text => text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n'));
+        diagnostics(m.s.errors);
     }
 });
 

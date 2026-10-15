@@ -11,6 +11,52 @@ const D = require('../hosted-initial-artifact-action-data.cjs');
 const ProductiveData = require('../hosted-initial-artifact-productive-action-data.cjs');
 const {finiteFixture, headers, sha, NS, NOW} = require('./hosted-initial-artifact-action-fixtures.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-action.cjs'), 'utf8');
+const DIAGNOSTIC_PHASES = new Set([
+    'ADMISSION', 'ENVIRONMENT', 'UPLOAD_ADMISSION',
+    'READER_READY', 'READER_BIND', 'BEFORE_OBSERVER',
+    'UPLOAD_TRANSPORT', 'FINISH_INPUT', 'FINITE_FINISH',
+    'AFTER_READY', 'AFTER_OBSERVER', 'FINITE_COMPLETION',
+    'RESULT', 'OUTPUT'
+]);
+const DIAGNOSTIC_CODES = new Set([
+    'AFTER_ORIGINAL_PRESPAWN', 'API_CREDENTIAL_BOUNDARY', 'CANCELLED',
+    'FINITE_BIND_ONCE', 'FINITE_CANCELLED', 'FINITE_COMPLETE_ORIGINAL_CLOSE',
+    'FINITE_DUPLICATE_PIPE_CLOSE', 'FINITE_END_CALLBACK_ONCE', 'FINITE_FAILED_OR_CANCELLED',
+    'FINITE_FINAL_AFTER_INPUT', 'FINITE_FRAME_BOUND', 'FINITE_FRAME_HEADER',
+    'FINITE_FRAME_LIFETIME', 'FINITE_INPUT_ONCE', 'FINITE_KNOWN_ORIGINAL_CLOSE',
+    'FINITE_MODE', 'FINITE_NO_EXTENSION', 'FINITE_NO_KNOWN_RETURN',
+    'FINITE_NO_READY', 'FINITE_OPERATION_FAILED', 'FINITE_ORIGINAL_CHILD_CLOSE',
+    'FINITE_ORIGINAL_DEADLINE', 'FINITE_ORIGINAL_END', 'FINITE_ORIGINAL_EXIT',
+    'FINITE_ORIGINAL_PIPES', 'FINITE_PRIVATE_DIAGNOSTIC', 'FINITE_READY_ONCE_FIRST',
+    'FINITE_SPAWN_ORDER', 'FINITE_STDERR_BOUND', 'FINITE_STDERR_END_ONCE',
+    'FINITE_STDIN_FINISH', 'FINITE_STDOUT_EOF', 'FINITE_WRITE_CALLBACK_ONCE',
+    'FIXED_TOOLS_AND_OUTPUT', 'HELPER_ENVIRONMENT', 'NOT_ACCEPTED',
+    'ONE_INVOCATION', 'ORIGINAL_BYTES_CHANGED', 'ORIGINAL_ENVIRONMENT',
+    'ORIGINAL_ENVIRONMENT_CHANGED', 'ORIGINAL_HTTP_ROWS_REPLACED', 'ORIGINAL_HTTP_ROW_REPLACED',
+    'ORIGINAL_JOB_WORKSPACE', 'ORIGINAL_LOCAL_REGRESSION', 'ORIGINAL_PHASE_FENCE',
+    'ORIGINAL_PRIVATE_PARENT', 'ORIGINAL_READER_MAPPING', 'ORIGINAL_RESULTS_CREDENTIALS',
+    'ORIGINAL_RETENTION_SETTING', 'ORIGINAL_RETURN_CHANGED', 'ORIGINAL_RETURN_HANDLE_CHANGED',
+    'ORIGINAL_TIMER', 'PARTIAL_ANCESTORS', 'RETENTION_REQUIRES_14_DAYS'
+].map(code => 'INITIAL_ARTIFACT_ACTION_' + code));
+function diagnostics(errors) {
+    assert(errors.includes('INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n'));
+    const found = [];
+    for (const text of errors) {
+        if (text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n') continue;
+        const prefix = 'INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ';
+        assert.equal(typeof text, 'string'); assert(text.length <= 1024);
+        assert(text.startsWith(prefix) && text.endsWith('\n'));
+        const value = JSON.parse(text.slice(prefix.length));
+        assert.deepEqual(Object.keys(value), ['schema', 'selection', 'phase', 'code']);
+        assert.equal(value.schema, 1); assert.equal(value.selection, 'FIRST_CONTROLLER_FAIL');
+        assert(DIAGNOSTIC_PHASES.has(value.phase));
+        assert(value.code === 'UNKNOWN' || DIAGNOSTIC_CODES.has(value.code));
+        found.push(value);
+    }
+    assert.equal(found.length, 1); // Original invocation only; reentry retains its old generic marker.
+    return found[0];
+}
+
 const cases = [], test = (name, body) => cases.push({name, body});
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function packet(tag, raw) {
@@ -38,7 +84,10 @@ function model(mode = 'upload', config = {}) {
         demand++; assert(created, 'only actual transport Create model may precede demand'); this.push(null);
     }});
     const processModel = {platform: 'linux', versions: {node: '24.0.0'}, execPath: '/model/node', env, exitCode: undefined,
-        hrtime: {bigint: () => now}, stderr: {write(text) { errors.push(text); }},
+        hrtime: {bigint: () => now}, stderr: {write(text) {
+            if (typeof config.stderrWrite === 'function') config.stderrWrite(text);
+            errors.push(text);
+        }},
         on: signals.on.bind(signals), removeListener: signals.removeListener.bind(signals)};
     function hook(name, ...args) { if (typeof config[name] === 'function') config[name](api, ...args); }
     function settleReader() {
@@ -134,11 +183,12 @@ function model(mode = 'upload', config = {}) {
     './hosted-initial-artifact-transport.cjs': {uploadOnce: transport}};
     // Same realm avoids bypassing DATA prototype rules. No arbitrary import,
     // real process/fs/network backend or test seam enters the production module.
-    const factory = vm.runInThisContext('(function(require,module,__dirname,process,Date){\n' + source + '\n})',
+    const factory = vm.runInThisContext('(function(require,module,__dirname,process,Date){\n' + source +
+        '\nreturn {ActionError, diagnosticErrors, diagnosticCodes};\n})',
         {filename: 'offline-new-artifact-controller.cjs', timeout: 1000});
-    factory(name => { assert(Object.hasOwn(imports, name)); return imports[name]; }, module,
+    const diagnosticModel = factory(name => { assert(Object.hasOwn(imports, name)); return imports[name]; }, module,
         '/model/p2pkit/scripts', processModel, {now: () => nowMs});
-    const api = {m, f, calls, outputs, errors, writes, timers, options, env, signals, readerReady, reader, module,
+    const api = {m, f, calls, outputs, errors, writes, timers, options, env, signals, readerReady, reader, module, diagnosticModel,
         get child() { return child; }, get demand() { return demand; }, get exitCode() { return processModel.exitCode; },
         get result() { return mainPromise; }, setNow(value) { now = value; }, setUtc(value) { nowMs = value; },
         settleReader, childClose,
@@ -154,7 +204,7 @@ function model(mode = 'upload', config = {}) {
 function notAccepted(m, emitted = 0) {
     assert.equal(m.exitCode, 125); assert.equal(m.outputs.length, emitted);
     assert(m.errors.length > 0);
-    assert(m.errors.every(text => text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n'));
+    diagnostics(m.errors);
     assert(m.calls.filter(name => name === 'Create').length <= 1);
     assert(m.calls.filter(name => name === 'finite-spawn').length <= 1);
 }
@@ -300,6 +350,104 @@ test('signal cancellation and original environment substitution never become lat
         const m = await model('upload', {observerReturn: change}).run(); notAccepted(m);
         assert(!m.calls.includes('Create')); assert.equal(m.demand, 0);
     }
+});
+
+test('finite diagnostic selects only own admission codes and exact last-entered phase', async () => {
+    const cases = [
+        [m => { m.env.INPUT_PYTHON = ''; }, 'ADMISSION', 'FIXED_TOOLS_AND_OUTPUT'],
+        [m => { delete m.env.RUNNER_NAME; }, 'ENVIRONMENT', 'ORIGINAL_ENVIRONMENT'],
+        [m => { m.env.GITHUB_RETENTION_DAYS = '13'; }, 'UPLOAD_ADMISSION', 'RETENTION_REQUIRES_14_DAYS'],
+        [m => { m.env.GITHUB_TOKEN = 'PRIVATE_NOT_A_REAL_CREDENTIAL'; }, 'ENVIRONMENT', 'API_CREDENTIAL_BOUNDARY'],
+    ];
+    for (const [setup, phase, code] of cases) {
+        const m = await model('upload', {setup}).run(); notAccepted(m);
+        assert.deepEqual(diagnostics(m.errors), {schema: 1, selection: 'FIRST_CONTROLLER_FAIL', phase,
+            code: 'INITIAL_ARTIFACT_ACTION_' + code});
+        assert(!m.calls.includes('reader-open')); assert(!m.errors.join('').includes('PRIVATE'));
+    }
+});
+test('foreign error data and poisoned inherited toJSON cannot enter diagnostic output', async () => {
+    let accessed = 0;
+    const getter = {};
+    for (const name of ['message', 'name', 'stack', 'toJSON']) Object.defineProperty(getter, name, {
+        get() { accessed++; throw new Error('PRIVATE_GETTER'); }});
+    const proxy = new Proxy({}, {get() { accessed++; throw new Error('PRIVATE_PROXY'); },
+        getPrototypeOf() { accessed++; throw new Error('PRIVATE_PROTOTYPE'); },
+        ownKeys() { accessed++; throw new Error('PRIVATE_KEYS'); }});
+    for (const error of [new Error('PRIVATE_MESSAGE'),
+        new Error('INITIAL_ARTIFACT_ACTION_ORIGINAL_ENVIRONMENT'), getter, proxy, 'PRIVATE_STRING', null, 17]) {
+        const m = await model('upload', {bind() { throw error; }}).run(); notAccepted(m);
+        assert.equal(diagnostics(m.errors).code, 'UNKNOWN');
+        assert.equal(diagnostics(m.errors).phase, 'READER_BIND');
+        assert(!m.errors.join('').includes('PRIVATE'));
+    }
+    const previous = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+    let m;
+    try {
+        m = await model('upload', {bind() {
+            Object.defineProperty(Object.prototype, 'toJSON', {configurable: true,
+                value() { accessed++; throw new Error('PRIVATE_INHERITED_JSON'); }});
+            throw getter;
+        }}).run();
+    } finally {
+        if (previous) Object.defineProperty(Object.prototype, 'toJSON', previous);
+        else delete Object.prototype.toJSON;
+    }
+    notAccepted(m); assert.equal(diagnostics(m.errors).code, 'UNKNOWN'); assert.equal(accessed, 0);
+});
+test('first controller diagnostic survives abort reentry and later fence failures', async () => {
+    const m = await model('upload', {wrongBind: true, bind(m) {
+        m.options.reader.signal.addEventListener('abort', () => { void m.module.exports.main(); }, {once: true});
+    }}).run();
+    notAccepted(m); assert.equal(diagnostics(m.errors).code, 'INITIAL_ARTIFACT_ACTION_ORIGINAL_READER_MAPPING');
+    assert.equal(diagnostics(m.errors).phase, 'READER_BIND');
+    assert.equal(m.errors.filter(text => text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n').length, 2);
+    assert(!m.calls.includes('Create')); assert(m.calls.includes('reader-close'));
+});
+test('late output failure reports only OUTPUT UNKNOWN without changing original write semantics', async () => {
+    const m = await model('upload', {append() { throw new Error('PRIVATE_OUTPUT_PATH'); }}).run();
+    notAccepted(m, 1); assert.equal(diagnostics(m.errors).phase, 'OUTPUT');
+    assert.equal(diagnostics(m.errors).code, 'UNKNOWN'); assert(!m.errors.join('').includes('PRIVATE'));
+    assert(m.calls.includes('finite-child-close')); assert.equal(m.timers.size, 0);
+});
+test('diagnostic write failure cannot skip original refusal or finally cleanup', async () => {
+    const m = await model('upload', {wrongBind: true, stderrWrite(text) {
+        if (text.startsWith('INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ')) throw new Error('PRIVATE_STDERR');
+    }}).run();
+    assert.equal(m.exitCode, 125); assert.equal(m.outputs.length, 0);
+    assert.deepEqual(m.errors, ['INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n']);
+    assert(m.calls.includes('reader-close')); assert(!m.calls.includes('Create'));
+    assert.equal(m.timers.size, 0);
+    for (const name of ['SIGINT', 'SIGTERM']) assert.equal(m.signals.listenerCount(name), 0);
+});
+test('private constructor registers exact literal codes only without changing public Action exports', async () => {
+    const m = model(), {ActionError, diagnosticErrors, diagnosticCodes} = m.diagnosticModel;
+    assert.deepEqual([...diagnosticCodes].sort(), [...DIAGNOSTIC_CODES].sort());
+    assert.equal(diagnosticCodes.size, 54);
+    const literals = new Set([...source.matchAll(/\bneed\([\s\S]*?,\s*'([A-Z0-9_]+)'\)/g)]
+        .map(row => 'INITIAL_ARTIFACT_ACTION_' + row[1]));
+    for (const row of source.matchAll(/'(INITIAL_ARTIFACT_ACTION_[A-Z0-9_]+)'/g)) literals.add(row[1]);
+    assert.deepEqual([...literals].sort(), [...DIAGNOSTIC_CODES].sort());
+    for (const code of DIAGNOSTIC_CODES) {
+        const original = new ActionError(code);
+        assert(original instanceof Error); assert.equal(original.message, code);
+        assert.equal(diagnosticErrors.get(original), code);
+        assert.equal(diagnosticErrors.get(new Error(code)), undefined);
+    }
+    assert.equal(diagnosticErrors.get(new ActionError('PRIVATE_NOT_WHITELISTED')), undefined);
+    assert.deepEqual(Object.keys(m.module.exports), ['main', 'mainProductive']);
+    assert.deepEqual([...source.matchAll(/phase = '([A-Z_]+)'/g)].map(row => row[1]).sort(),
+        [...DIAGNOSTIC_PHASES].sort());
+    assert.equal(m.errors.length, 0); assert.equal(m.calls.length, 0);
+    let accessed = 0;
+    const current = await model('upload', {bind(m) {
+        const error = new m.diagnosticModel.ActionError('INITIAL_ARTIFACT_ACTION_FINITE_ORIGINAL_EXIT');
+        Object.defineProperty(error, 'message', {get() { accessed++; throw new Error('PRIVATE_REPLACED_MESSAGE'); }});
+        throw error;
+    }}).run();
+    notAccepted(current); assert.equal(accessed, 0);
+    assert.equal(diagnostics(current.errors).code, 'INITIAL_ARTIFACT_ACTION_FINITE_ORIGINAL_EXIT');
+    assert.equal(diagnostics(current.errors).phase, 'READER_BIND');
 });
 
 (async () => {

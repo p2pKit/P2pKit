@@ -49,7 +49,37 @@ let used = false, reentered = false, originalFailure = null;
 // reopen, remove or print them merely because a finite command has failed.
 const quarantine = [];
 
-class ActionError extends Error {}
+// Only this module's own constructor can register a finite diagnostic code.
+// Never inspect a caught object's message/name/prototype (including Proxies).
+const diagnosticErrors = new WeakMap();
+const diagnosticCodes = new Set([
+    'AFTER_ORIGINAL_PRESPAWN', 'API_CREDENTIAL_BOUNDARY', 'CANCELLED',
+    'FINITE_BIND_ONCE', 'FINITE_CANCELLED', 'FINITE_COMPLETE_ORIGINAL_CLOSE',
+    'FINITE_DUPLICATE_PIPE_CLOSE', 'FINITE_END_CALLBACK_ONCE', 'FINITE_FAILED_OR_CANCELLED',
+    'FINITE_FINAL_AFTER_INPUT', 'FINITE_FRAME_BOUND', 'FINITE_FRAME_HEADER',
+    'FINITE_FRAME_LIFETIME', 'FINITE_INPUT_ONCE', 'FINITE_KNOWN_ORIGINAL_CLOSE',
+    'FINITE_MODE', 'FINITE_NO_EXTENSION', 'FINITE_NO_KNOWN_RETURN',
+    'FINITE_NO_READY', 'FINITE_OPERATION_FAILED', 'FINITE_ORIGINAL_CHILD_CLOSE',
+    'FINITE_ORIGINAL_DEADLINE', 'FINITE_ORIGINAL_END', 'FINITE_ORIGINAL_EXIT',
+    'FINITE_ORIGINAL_PIPES', 'FINITE_PRIVATE_DIAGNOSTIC', 'FINITE_READY_ONCE_FIRST',
+    'FINITE_SPAWN_ORDER', 'FINITE_STDERR_BOUND', 'FINITE_STDERR_END_ONCE',
+    'FINITE_STDIN_FINISH', 'FINITE_STDOUT_EOF', 'FINITE_WRITE_CALLBACK_ONCE',
+    'FIXED_TOOLS_AND_OUTPUT', 'HELPER_ENVIRONMENT', 'NOT_ACCEPTED',
+    'ONE_INVOCATION', 'ORIGINAL_BYTES_CHANGED', 'ORIGINAL_ENVIRONMENT',
+    'ORIGINAL_ENVIRONMENT_CHANGED', 'ORIGINAL_HTTP_ROWS_REPLACED', 'ORIGINAL_HTTP_ROW_REPLACED',
+    'ORIGINAL_JOB_WORKSPACE', 'ORIGINAL_LOCAL_REGRESSION', 'ORIGINAL_PHASE_FENCE',
+    'ORIGINAL_PRIVATE_PARENT', 'ORIGINAL_READER_MAPPING', 'ORIGINAL_RESULTS_CREDENTIALS',
+    'ORIGINAL_RETENTION_SETTING', 'ORIGINAL_RETURN_CHANGED', 'ORIGINAL_RETURN_HANDLE_CHANGED',
+    'ORIGINAL_TIMER', 'PARTIAL_ANCESTORS', 'RETENTION_REQUIRES_14_DAYS'
+].map(code => 'INITIAL_ARTIFACT_ACTION_' + code));
+class ActionError extends Error {
+    constructor(message) {
+        super(message);
+        try {
+            if (typeof message === 'string' && diagnosticCodes.has(message)) diagnosticErrors.set(this, message);
+        } catch (_) { /* Diagnostic unavailability never replaces the original error. */ }
+    }
+}
 function need(value, code) { if (!value) throw new ActionError('INITIAL_ARTIFACT_ACTION_' + code); }
 function absolute(value) {
     return typeof value === 'string' && value.length > 0 && value.length <= 4096 &&
@@ -287,11 +317,20 @@ async function mainFixed(route) {
     const control = new AbortController(), signal = control.signal, pins = [], bytePins = [], completions = [];
     let failed = null, quarantined = false, lastNs = null, endNs = null, timer = null, validity = null, utcFence = null;
     let originalEnvironment = null, signalsInstalled = false;
+    let phase = 'ADMISSION', diagnostic = null;
     const signals = ['SIGINT', 'SIGTERM', ...(windows ? ['SIGBREAK'] : [])];
     function fail(error) {
         process.exitCode = 125;
         if (retained.errors.length < 8) retained.errors.push(error);
-        if (failed === null) failed = 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED';
+        if (failed === null) {
+            failed = 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED'; // Latch BEFORE diagnostic work or abort reentry.
+            try {
+                // First controller-selected failure, not necessarily the first underlying cause.
+                // Last-entered phase only. Null prototype prevents inherited toJSON callbacks.
+                diagnostic = Object.assign(Object.create(null), {schema: 1, selection: 'FIRST_CONTROLLER_FAIL',
+                    phase, code: diagnosticErrors.get(error) || 'UNKNOWN'});
+            } catch (_) { /* Keep the original failure and cleanup even without diagnostics. */ }
+        }
         if (!quarantined) { quarantined = true; quarantine.push(retained); }
         if (!Reflect.apply(aborted, signal, [])) control.abort();
     }
@@ -372,6 +411,7 @@ async function mainFixed(route) {
         const kind = process.env.GITHUB_JOB === 'initial-recipient-gate' ? 'gate' :
             process.env.GITHUB_JOB === 'populate' ? 'worker' : null;
         need(kind !== null && (!route.productive || kind === 'worker') && process.env.GITHUB_WORKSPACE === workspace, 'ORIGINAL_JOB_WORKSPACE');
+        phase = 'ENVIRONMENT';
         const names = [...IDENTITY, ...SEED, ...ANCESTORS, ...NATIVE, ...(mode === 'after' ? UPLOAD : []),
             'INPUT_MODE', 'INPUT_PYTHON', 'INPUT_TOOL-PATH', 'GITHUB_OUTPUT', 'GITHUB_RETENTION_DAYS',
             ...(mode === 'upload' ? ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL'] : [])];
@@ -393,12 +433,14 @@ async function mainFixed(route) {
         signalsInstalled = true; checkpoint();
         let readyRaw, readyValue, bounds, inputRaw, expectedArtifactId;
         if (mode === 'upload') {
+            phase = 'UPLOAD_ADMISSION';
             need(/^[1-9][0-9]{0,2}$/.test(originalEnvironment.GITHUB_RETENTION_DAYS || ''), 'ORIGINAL_RETENTION_SETTING');
             const maxRetentionDays = Number(originalEnvironment.GITHUB_RETENTION_DAYS);
             need(maxRetentionDays >= 14 && maxRetentionDays <= 400, 'RETENTION_REQUIRES_14_DAYS');
             const service = Object.freeze({ACTIONS_RUNTIME_TOKEN: originalEnvironment.ACTIONS_RUNTIME_TOKEN,
                 ACTIONS_RESULTS_URL: originalEnvironment.ACTIONS_RESULTS_URL});
             need(Object.values(service).every(safeString), 'ORIGINAL_RESULTS_CREDENTIALS');
+            phase = 'READER_READY';
             retained.reader = route.openReader({python, kind, environment: env, signal});
             const reader = retained.reader;
             pinHandle(reader, ['ready', 'stream', 'bind', 'completion', 'cancel', 'finalFrame']);
@@ -409,6 +451,7 @@ async function mainFixed(route) {
             readyValue = pin(D.ready(readyRaw, env, Date.now()), RECORD); validity = readyValue;
             bounds = D.localBounds(readyValue, readyReturn.preSpawnLocalNs);
             endNs = bounds.closeEndNs; arm(); checkpoint(bounds.startByNs);
+            phase = 'READER_BIND';
             const bound = pin(reader.bind({readySha256: D.sha(readyRaw), beforeSha256: readyValue.beforeSha256,
                 firstRawNs: D.decimal(readyValue.firstRawNs), [route.startField]: D.integer(readyValue[route.boundsField][route.startField]),
                 uploadEndNs: D.integer(readyValue[route.boundsField].uploadEndNs), zipBytes: readyValue.zipBytes}));
@@ -416,6 +459,7 @@ async function mainFixed(route) {
             need(bound.startByNs === bounds.startByNs && bound.workEndNs === bounds.workEndNs &&
                 bound.closeEndNs === bounds.closeEndNs, 'ORIGINAL_READER_MAPPING');
             checkpoint(bounds.startByNs);
+            phase = 'BEFORE_OBSERVER';
             retained.observer = Observer.beforeOnce({jobId: String(readyValue.github.jobId), requestSha256: D.sha(readyRaw),
                 preSpawnLocalNs: bounds.preSpawnLocalNs, ...bound, signal});
             const before = retained.observer; pinHandle(before, ['completion', 'cancel', 'originals']);
@@ -424,6 +468,7 @@ async function mainFixed(route) {
             D.observerClosed(beforeValue, originals, readyValue, bounds, 'before', D.sha(readyRaw), Date.now());
             D.serviceJob(readyValue, originals[0].body, originals[0].rawHeaderVector, env, 'upload', Date.now());
             checkpoint(bounds.startByNs); // COMPLETE original job/Step semantics BEFORE Create.
+            phase = 'UPLOAD_TRANSPORT';
             retained.transport = Transport.uploadOnce({stream: reader.stream, artifactName: D.artifactName(readyValue),
                 expectedZipBytes: readyValue.zipBytes, requestSha256: D.sha(readyRaw), ...bound, signal, service,
                 maxRetentionDays});
@@ -431,13 +476,16 @@ async function mainFixed(route) {
             const transportValue = pin(await retained.transport), readerValue = pin(await reader.completion),
                 finalRaw = pinBytes(reader.finalFrame(), RECORD);
             checkpoint(bounds.workEndNs);
+            phase = 'FINISH_INPUT';
             inputRaw = pinBytes(D.finishInput({readyRaw, finalRaw, readerValue, transportValue, beforeValue, originals},
                 readyValue, bounds, Date.now()), INPUT - 5);
             expectedArtifactId = transportValue.artifactId;
             checkpoint(bounds.workEndNs);
+            phase = 'FINITE_FINISH';
             retained.finite = openFinite({mode: 'finish', python, kind, environment: env, signal,
                 originalEndNs: bounds.closeEndNs, checkpoint, poison: fail}, route);
         } else {
+            phase = 'AFTER_READY';
             retained.finite = openFinite({mode: 'after', python, kind, environment: env, signal,
                 originalEndNs: null, checkpoint, poison: fail}, route);
             const finite = retained.finite;
@@ -450,6 +498,7 @@ async function mainFixed(route) {
             readyValue = pin(D.afterReady(readyRaw, env, Date.now()), RECORD); validity = readyValue;
             bounds = D.afterBounds(readyValue, readyReturn.preSpawnLocalNs);
             endNs = bounds.endNs; finite.bindAfter(endNs); arm(); checkpoint();
+            phase = 'AFTER_OBSERVER';
             retained.observer = Observer.afterOnce({jobId: String(readyValue.github.jobId), artifactId: readyValue.artifactId,
                 requestSha256: D.sha(readyRaw), preSpawnLocalNs: bounds.preSpawnLocalNs, endNs, signal});
             const after = retained.observer; pinHandle(after, ['completion', 'cancel', 'originals']);
@@ -459,6 +508,7 @@ async function mainFixed(route) {
             inputRaw = pinBytes(D.afterInput({afterValue, originals}, readyRaw, readyValue, bounds, Date.now()), INPUT - 5);
             expectedArtifactId = readyValue.artifactId;
         }
+        phase = 'FINITE_COMPLETION';
         const finite = retained.finite;
         if (mode === 'upload') completions.push(finite.completion);
         checkpoint(); finite.input(inputRaw);
@@ -466,8 +516,10 @@ async function mainFixed(route) {
         need(finiteClosed.transport === 'closed' && finiteClosed.code === null, 'FINITE_KNOWN_ORIGINAL_CLOSE');
         const finalRaw = pinBytes(finite.finalFrame(), RECORD);
         checkpoint();
+        phase = 'RESULT';
         const result = pin(D.finiteResult(finalRaw, {mode, readyRaw, readyValue, bounds, inputRaw, artifactId: expectedArtifactId,
             environment: env, nowMs: Date.now()}), RECORD);
+        phase = 'OUTPUT';
         const outputs = D.outputs(result), text = Object.entries(outputs).map(([name, value]) => name + '=' + value + '\n').join('');
         checkpoint();
         fs.appendFileSync(output, text, {encoding: 'utf8'}); // Six bounded SAFE values only, exactly once.
@@ -478,6 +530,12 @@ async function mainFixed(route) {
         // incomplete. Waiting here neither creates a new deadline nor calls a
         // retry/replacement helper. UNKNOWN handles remain in quarantine.
         await Promise.allSettled(completions);
+        try {
+            if (diagnostic !== null) {
+                const line = 'INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ' + JSON.stringify(diagnostic) + '\n';
+                if (line.length <= 1024) process.stderr.write(line);
+            }
+        } catch (_) { /* Do not skip the original marker or finally cleanup. */ }
         process.stderr.write('INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n');
     } finally {
         clearTimeout(timer);
