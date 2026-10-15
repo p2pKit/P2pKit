@@ -342,6 +342,57 @@ class WorkflowRetentionTests(unittest.TestCase):
                 check(changed)
 
 
+class GeneratorPhaseTests(unittest.TestCase):
+    def test_actual_generator_phase_order_arguments_and_first_failure_are_preserved(self):
+        maintained = Path(__file__).resolve().parents[1] / "prepare-dependency-update.sh"
+        with tempfile.TemporaryDirectory(prefix="generator-phase-model-") as temporary:
+            root = Path(temporary)
+            (root / "scripts").mkdir()
+            (root / "bin").mkdir()
+            script = root / "scripts/prepare-dependency-update.sh"
+            script.write_bytes(maintained.read_bytes())
+            expected = [
+                ("WRAPPER", ["scripts/check-gradle-wrapper.sh"]),
+                ("GENERATE", ["./gradlew", "resolveAndLockAll", "--write-locks", "--write-verification-metadata",
+                              "sha256", "--no-configure-on-demand", "--no-daemon", "--console=plain"]),
+                ("INTEGRITY", ["scripts/check-dependency-verification.sh"]),
+                ("STRICT", ["./gradlew", "verifyBuildPluginSecurityFloors", "help",
+                            "--dependency-verification=strict", "--no-daemon", "--console=plain"]),
+                ("PROVENANCE", ["scripts/review-dependency-verification.sh", "synthetic-base"]),
+                ("DIFF", ["git", "diff", "--check"]),
+            ]
+            fake = ("#!" + sys.executable + "\n" +
+                    "import json,os,pathlib,sys\n"
+                    "name=pathlib.Path(sys.argv[0]).name\n"
+                    "phase={'check-gradle-wrapper.sh':'WRAPPER','check-dependency-verification.sh':'INTEGRITY',"
+                    "'review-dependency-verification.sh':'PROVENANCE','git':'DIFF'}.get(name)\n"
+                    "if name=='gradlew': phase='GENERATE' if sys.argv[1]=='resolveAndLockAll' else 'STRICT'\n"
+                    "with open(os.environ['TRACE'],'a') as stream: stream.write(json.dumps([phase,sys.argv[1:]])+'\\n')\n"
+                    "sys.exit(int(os.environ['FAIL_CODE']) if phase==os.environ.get('FAIL_PHASE') else 0)\n")
+            for name in ("scripts/check-gradle-wrapper.sh", "scripts/check-dependency-verification.sh",
+                         "scripts/review-dependency-verification.sh", "gradlew", "bin/git"):
+                path = root / name
+                path.write_text(fake); path.chmod(0o755)
+            trace = root / "trace"
+            for failed in (None, *range(len(expected))):
+                trace.write_text("")
+                count = len(expected) if failed is None else failed + 1
+                code = 0 if failed is None else 37 + failed
+                environment = {**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
+                               "TRACE": str(trace), "FAIL_PHASE": "" if failed is None else expected[failed][0],
+                               "FAIL_CODE": str(code)}
+                result = subprocess.run(["bash", str(script), "synthetic-base"], env=environment,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                with self.subTest(failed=failed):
+                    self.assertEqual(result.returncode, code)
+                    self.assertEqual([json.loads(line) for line in trace.read_text().splitlines()],
+                                     [[phase, argv[1:]] for phase, argv in expected[:count]])
+                    self.assertEqual(result.stderr.decode().splitlines(),
+                                     [f"DEPENDENCY_GENERATOR_PHASE {phase} EXIT {code if i == failed else 0}"
+                                      for i, (phase, _) in enumerate(expected[:count])])
+                    self.assertEqual(b"RESULT: PASS" in result.stdout, failed is None)
+
+
 class UnchangedCuratorTests(unittest.TestCase):
     """Actual shell orchestration; Gradle/checker/tools are explicit offline models."""
     def setUp(self):

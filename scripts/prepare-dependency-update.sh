@@ -7,12 +7,22 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE_REF="${1:-origin/main}"
 
 cd "$ROOT"
-scripts/check-gradle-wrapper.sh
-./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256 \
+run_phase() {
+    local phase="$1" result
+    shift
+    if "$@"; then result=0; else result=$?; fi
+    # Fixed source-owned labels only; command arguments and diagnostics remain
+    # in the private capture. Preserve the original status, including failures.
+    printf 'DEPENDENCY_GENERATOR_PHASE %s EXIT %s\n' "$phase" "$result" >&2 || :
+    return "$result"
+}
+
+run_phase WRAPPER scripts/check-gradle-wrapper.sh
+run_phase GENERATE ./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256 \
     --no-configure-on-demand --no-daemon --console=plain
-scripts/check-dependency-verification.sh
-./gradlew verifyBuildPluginSecurityFloors help --dependency-verification=strict --no-daemon --console=plain
-scripts/review-dependency-verification.sh "$BASE_REF"
-git diff --check
+run_phase INTEGRITY scripts/check-dependency-verification.sh
+run_phase STRICT ./gradlew verifyBuildPluginSecurityFloors help --dependency-verification=strict --no-daemon --console=plain
+run_phase PROVENANCE scripts/review-dependency-verification.sh "$BASE_REF"
+run_phase DIFF git diff --check
 
 echo "RESULT: PASS — dependency lock/checksum candidates are generated and independently reviewed; inspect the complete diff before committing"

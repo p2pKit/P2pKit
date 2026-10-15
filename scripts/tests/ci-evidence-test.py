@@ -732,6 +732,63 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)['dependencyUpdateExits'],
                          {'GRADLE_STOP': 0})
 
+    def test_fixed_generator_phases_and_root_tasks_are_diagnostic_only(self):
+        command = self.root / "generator-phases"; command.mkdir()
+        stdout = command / "stdout.log"
+        expected = {"WRAPPER", "GENERATE", "INTEGRITY", "STRICT", "PROVENANCE", "DIFF"}
+        self.assertEqual(set(E.DEPENDENCY_GENERATOR_PHASES), expected)
+        for code in (0, 1, 143, 255):
+            for newline in ("\n", "\r\n"):
+                stdout.write_bytes((newline.join(f"DEPENDENCY_GENERATOR_PHASE {phase} EXIT {code}"
+                                                for phase in sorted(expected)) + newline +
+                                    "> Task :resolveAndLockAll FAILED" + newline +
+                                    "> Task :verifyBuildPluginSecurityFloors FAILED" + newline +
+                                    "> Task :help FAILED" + newline).encode())
+                with mock.patch.object(E, "junit_failures", side_effect=AssertionError("private report read")):
+                    result = E.failure_diagnostics(self.root, command, include_reports=False)
+                self.assertEqual(result["dependencyGeneratorPhases"], {phase: code for phase in expected})
+                self.assertEqual(result["failedGradleTasks"], [":help", ":resolveAndLockAll", ":verifyBuildPluginSecurityFloors"])
+                self.assertEqual(result["failedSourceTests"], [])
+                self.assertNotIn("outcome", result)
+
+    def test_generator_phase_projection_rejects_unknown_private_duplicate_and_invalid_exit(self):
+        command = self.root / "bad-generator-phases"; command.mkdir()
+        stdout = command / "stdout.log"
+        for line in ("DEPENDENCY_GENERATOR_PHASE PRIVATE EXIT 0",
+                     "DEPENDENCY_GENERATOR_PHASE GENERATE EXIT 0 PRIVATE",
+                     "PRIVATE DEPENDENCY_GENERATOR_PHASE GENERATE EXIT 0",
+                     "DEPENDENCY_GENERATOR_PHASE GENERATE EXIT 01",
+                     "DEPENDENCY_GENERATOR_PHASE GENERATE EXIT -1",
+                     "DEPENDENCY_GENERATOR_PHASE GENERATE EXIT 256",
+                     "DEPENDENCY_GENERATOR_PHASE GENERATE EXIT " + "9" * 4096,
+                     "> Task :PRIVATE FAILED", "> Task :resolveAndLockAll FAILED PRIVATE"):
+            stdout.write_text(line + "\n")
+            result = E.failure_diagnostics(self.root, command, include_reports=False)
+            self.assertNotIn("dependencyGeneratorPhases", result)
+            self.assertEqual(result["failedGradleTasks"], [])
+            self.assertNotIn("PRIVATE", json.dumps(result))
+        stdout.write_text("DEPENDENCY_GENERATOR_PHASE WRAPPER EXIT 0\n"
+                          "DEPENDENCY_GENERATOR_PHASE GENERATE EXIT 7\n"
+                          "DEPENDENCY_GENERATOR_PHASE GENERATE EXIT 0\n")
+        self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)["dependencyGeneratorPhases"],
+                         {"WRAPPER": 0})
+
+    def test_static_dependency_failure_catalog_is_exact_source_owned_not_private_text(self):
+        command = self.root / "dependency-fatal"; command.mkdir()
+        stdout = command / "stdout.log"
+        scripts = Path(__file__).resolve().parents[1]
+        sources = "\n".join((scripts / name).read_text() for name in
+                            ("review-dependency-verification.sh", "check-dependency-verification.sh"))
+        for text, category in E.DEPENDENCY_FATAL_MESSAGES.items():
+            self.assertIn('fail "' + text + '"', sources)
+            stdout.write_text("FATAL: " + text + "\n")
+            self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)["categories"], [category])
+            for changed in ("FATAL: " + text + " PRIVATE\n", "PRIVATE FATAL: " + text + "\n"):
+                stdout.write_text(changed)
+                result = E.failure_diagnostics(self.root, command, include_reports=False)
+                self.assertEqual(result["categories"], [])
+                self.assertNotIn("PRIVATE", json.dumps(result))
+
     def test_dependency_error_allowlist_covers_literal_adapter_refusals(self):
         import ast
         source = ast.parse((Path(__file__).resolve().parents[1] / 'dependency_update.py').read_text())

@@ -85,6 +85,21 @@ BUNDLE_FATAL_MESSAGES = {
     "could not stop isolated bundle GPG workers; private directory retained": "BUNDLE_GPG_RETIREMENT",
 }
 
+# Existing curator/checker wrapper failures, with no dynamic coordinate or path.
+DEPENDENCY_FATAL_MESSAGES = {
+    "artifact checksum review failed": "DEPENDENCY_REVIEW_CHECKSUM",
+    "artifact signature review failed": "DEPENDENCY_REVIEW_SIGNATURE",
+    "variant metadata checksum review failed": "DEPENDENCY_REVIEW_VARIANT_CHECKSUM",
+    "variant metadata signature review failed": "DEPENDENCY_REVIEW_VARIANT_SIGNATURE",
+    "variant artifact location review failed": "DEPENDENCY_REVIEW_VARIANT_LOCATION",
+    "KMP root checksum review failed": "DEPENDENCY_REVIEW_KMP_CHECKSUM",
+    "KMP root signature review failed": "DEPENDENCY_REVIEW_KMP_SIGNATURE",
+    "KMP artifact location review failed": "DEPENDENCY_REVIEW_KMP_LOCATION",
+    "unchanged review requires exact complete original verification metadata": "DEPENDENCY_REVIEW_UNCHANGED_XML",
+    "verification metadata structure is invalid": "DEPENDENCY_VERIFICATION_STRUCTURE",
+}
+DEPENDENCY_GENERATOR_PHASES = frozenset({"WRAPPER", "GENERATE", "INTEGRITY", "STRICT", "PROVENANCE", "DIFF"})
+
 # Exact maintained adapter errors only; arbitrary exception text never leaves logs.
 DEPENDENCY_UPDATE_ERRORS = frozenset({
     'CANDIDATE_ROSTER_CHANGED', 'CONTROLLER_CHANGED', 'DEPENDENCY_BASE_ALREADY_CHANGED',
@@ -928,6 +943,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     """
     categories, tasks, publication_lines, platform_lines = set(), set(), [], []
     dependency_exits, duplicate_dependency_steps = {}, set()
+    generator_phases, duplicate_generator_phases = {}, set()
     phase_observations, duplicate_phases = {}, set()
     inventory_observations, signature_counts = [], []
     modules = {"p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
@@ -1032,11 +1048,21 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                         duplicate_dependency_steps.add(label)
                     else:
                         dependency_exits[label] = value
+                generator_phase = re.fullmatch(
+                    rb"DEPENDENCY_GENERATOR_PHASE ([A-Z]{1,16}) EXIT (0|[1-9][0-9]{0,2})\r?\n?", line)
+                if generator_phase:
+                    label, value = generator_phase[1].decode("ascii"), int(generator_phase[2])
+                    if label in DEPENDENCY_GENERATOR_PHASES:
+                        if label in generator_phases or value > 255:
+                            duplicate_generator_phases.add(label)
+                        else:
+                            generator_phases[label] = value
                 if line.startswith(b"FATAL: "):
                     # Strip only the one actual line terminator; whitespace or
                     # appended private text cannot turn into an admitted label.
                     message = line.removesuffix(b"\n").removesuffix(b"\r")[7:]
-                    category = BUNDLE_FATAL_MESSAGES.get(message.decode("ascii", errors="replace"))
+                    text = message.decode("ascii", errors="replace")
+                    category = BUNDLE_FATAL_MESSAGES.get(text) or DEPENDENCY_FATAL_MESSAGES.get(text)
                     if category is not None:
                         categories.add(category)
                 bundle_phase = re.fullmatch(
@@ -1048,6 +1074,10 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 for token, category in known.items():
                     if token.lower() in line.lower():
                         categories.add(category)
+                root_task = re.fullmatch(
+                    rb"> Task :(resolveAndLockAll|verifyBuildPluginSecurityFloors|help) FAILED\s*", line)
+                if root_task:
+                    tasks.add(":" + root_task[1].decode("ascii"))
                 match = re.fullmatch(rb"> Task (:(?:p2p-[a-z0-9-]+|sample-kmp-shared|buildSrc):[A-Za-z0-9_:.-]{1,120}) FAILED\s*", line)
                 if match:
                     task = match[1].decode("ascii")
@@ -1060,6 +1090,10 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     observed_exits = {key: value for key, value in dependency_exits.items()
                       if key not in duplicate_dependency_steps}
     dependency_fields = {"dependencyUpdateExits": observed_exits} if observed_exits else {}
+    observed_generator_phases = {key: value for key, value in generator_phases.items()
+                                if key not in duplicate_generator_phases}
+    if observed_generator_phases:
+        dependency_fields["dependencyGeneratorPhases"] = observed_generator_phases
     observed_phases = [row for label, row in phase_observations.items() if label not in duplicate_phases]
     if not include_reports:
         # Original capture EOF/join/close is independent from descendant census.
