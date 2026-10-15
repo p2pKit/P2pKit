@@ -1335,6 +1335,11 @@ class DarwinScope(PosixScope):
                 self.pending_discoveries[identity["pid"]] = record
                 self.discovery_reconciliations.append(record)
             session_exclusion = getattr(error, "audit_session_exclusion", None)
+            if record["message"] != message:
+                # Keep one current retryable error per bound lifetime, as on
+                # Linux. Positive reconciliation must not leave a stale class.
+                self.discovery_errors.discard(record["message"])
+                record["message"] = message
             record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1,
                           auditSessionExclusion=session_exclusion if session_exclusion in DARWIN_SESSION_EXCLUSIONS
                           else "NOT_RECORDED")

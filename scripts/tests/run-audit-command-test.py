@@ -3165,6 +3165,80 @@ class DarwinObservationTests(unittest.TestCase):
         self.assertEqual(self.scope.system.mock_calls, [])
         self.scope._identity.assert_not_called()
 
+    def test_pending_failure_class_transitions_replace_only_current_message(self):
+        other = "Cannot inspect new same-uid process 43211: DiscoveryUncertain"
+        self.scope.discovery_errors.add(other)
+        errors = [processes.DarwinObservationExhausted("first observation"),
+                  processes.DiscoveryUncertain("missing parent"),
+                  processes.DarwinObservationExhausted("later observation")]
+        for count, error in enumerate(errors, 1):
+            message = self.scope._discovery_failed(self.identity, error)
+            record = self.scope.pending_discoveries[self.identity["pid"]]
+            self.assertEqual(self.scope.discovery_errors, {other, message})
+            self.assertEqual(record["message"], message)
+            self.assertEqual(record["firstFailure"], "first observation")
+            self.assertEqual((record["failures"], record["outcome"]), (count, "unresolved"))
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.handles)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_changed_pending_error_clears_on_exit_but_not_structural_or_other_errors(self):
+        for terminal, outcome in ((None, "lifetime-ended"),
+                                  ({**self.identity, "status": 5, "live": False}, "nonrunning"),
+                                  ({**self.identity, "uniqueId": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.scope._discovery_failed(self.identity, processes.DarwinObservationExhausted("first"))
+                self.scope._discovery_failed(self.identity, processes.DiscoveryUncertain("second"))
+                structural = self.scope._discovery_failed(self.identity, processes.OwnershipError("structural"))
+                other = "Cannot inspect new same-uid process 43211: DiscoveryUncertain"
+                self.scope.discovery_errors.add(other)
+                self.current = terminal
+                self.scope._pids = lambda: []
+                with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                        mock.patch.object(self.scope, "_inspect_environment", return_value={}), \
+                        mock.patch.object(self.scope, "_acquire") as acquire:
+                    self.assertEqual(self.scope.discover(), [])
+                self.assertEqual(self.scope.discovery_errors, {structural, other})
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], outcome)
+                acquire.assert_not_called()
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_changed_pending_error_clears_on_positive_foreign_lineage_only(self):
+        self.scope._discovery_failed(self.identity, processes.DarwinObservationExhausted("first"))
+        self.scope._discovery_failed(self.identity, processes.DiscoveryUncertain("second"))
+        other = "Cannot inspect new same-uid process 43211: DarwinObservationExhausted"
+        self.scope.discovery_errors.add(other)
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_inspect_environment", return_value={}), \
+                mock.patch.object(self.scope, "_acquire") as acquire:
+            self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(self.scope.discovery_errors, {other})
+        self.assertFalse(self.scope.pending_discoveries)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unmarked")
+        self.assertFalse(self.scope.known)
+        acquire.assert_not_called()
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_changed_pending_error_preserves_live_unknown_drain_failure(self):
+        self.scope._discovery_failed(self.identity, processes.DarwinObservationExhausted("first"))
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_inspect_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                self.scope.drain(grace=.1, kill_wait=.1)
+        record = self.scope.pending_discoveries[self.identity["pid"]]
+        self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.assertTrue(record["message"].endswith(": DiscoveryUncertain"))
+        self.assertEqual(record["firstFailure"], "first")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.handles)
+        send.assert_not_called()
+
     def test_pending_context_does_not_promote_missing_traced_or_invalid_parentage(self):
         self.fail_environment_census()
         for parent, flags, expected in ((999, 0, 'UNOBSERVED'), (91, 2, 'TRACED'), (99, 0, 'INVALID')):
