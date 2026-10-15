@@ -897,6 +897,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     categories, tasks, publication_lines, platform_lines = set(), set(), [], []
     dependency_exits, duplicate_dependency_steps = {}, set()
     phase_observations, duplicate_phases = {}, set()
+    inventory_observations, signature_counts = [], []
     modules = {"p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
                "p2p-network-provisioning-desktop", "p2p-sample-android", "p2p-sample-desktop",
                "p2p-sample-desktop-ui", "p2p-sample-diagnostics", "sample-kmp-shared", "p2p-sample-rpc", "buildSrc"}
@@ -953,6 +954,24 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 location = re.fullmatch(rb"PLATFORM_CHECK_LINES ([0-9]{1,5}(?:,[0-9]{1,5}){0,15})\s*", line)
                 if location:
                     platform_lines = [int(value) for value in location[1].split(b",")]
+                signature = re.fullmatch(rb"CENTRAL_SIGNATURE_COUNTS CHECKED (0|[1-9][0-9]{0,3}) "
+                                         rb"UNSIGNED (0|[1-9][0-9]{0,3}) INVALID (0|[1-9][0-9]{0,3})\r?\n?", line)
+                if signature:
+                    checked, unsigned, invalid = map(int, signature.groups())
+                    if unsigned + invalid <= checked <= 4096:
+                        signature_counts.append({"checked": checked, "unsigned": unsigned, "invalid": invalid})
+                inventory_keys = ("expected", "observed", "missing", "extra", "jar", "aar", "klib", "pom",
+                                  "module", "maven_metadata", "resolver_metadata", "other")
+                inventory = re.fullmatch(
+                    rb"CENTRAL_INVENTORY " + b" ".join(key.upper().encode() + rb" (0|[1-9][0-9]{0,3})"
+                                                        for key in inventory_keys) + rb"\r?\n?", line)
+                if inventory:
+                    values = dict(zip(inventory_keys, map(int, inventory.groups())))
+                    if (all(value <= 4096 for value in values.values()) and values["expected"] in (84, 117) and
+                            values["missing"] <= values["expected"] and
+                            values["observed"] == values["expected"] - values["missing"] + values["extra"] and
+                            sum(values[key] for key in inventory_keys[4:]) == values["extra"]):
+                        inventory_observations.append(values)
                 phase = re.fullmatch(
                     rb"INTEL_PHASE_RESULT ([a-z-]{1,40}) EXIT (null|0|-?[1-9][0-9]{0,2}) "
                     rb"TIMEOUT ([01]) OVERFLOW ([01]) DRAINED ([01])\r?\n?", line)
@@ -1003,6 +1022,9 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                     pieces = task.split(":")
                     if len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names:
                         tasks.add(task)
+    inventory_fields = {"centralInventory": inventory_observations[0]} if len(inventory_observations) == 1 else {}
+    if len(signature_counts) == 1:
+        inventory_fields["centralSignatureCounts"] = signature_counts[0]
     observed_exits = {key: value for key, value in dependency_exits.items()
                       if key not in duplicate_dependency_steps}
     dependency_fields = {"dependencyUpdateExits": observed_exits} if observed_exits else {}
@@ -1013,7 +1035,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
         # other reports may still have writers. These labels never qualify a run.
         return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": observed_phases,
                 "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
-                "platformTests": [], "failedSourceTests": [], **dependency_fields}
+                "platformTests": [], "failedSourceTests": [], **dependency_fields, **inventory_fields}
     phases = list(observed_phases)
     # Prefer the closed command's observations; do not mix duplicated or
     # contradictory logs with a second report-derived phase history.
@@ -1052,7 +1074,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
             continue
     return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32],
             "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
-            "platformTests": platform_reports[:8], "failedSourceTests": junit_failures(root, source_commit), **dependency_fields}
+            "platformTests": platform_reports[:8], "failedSourceTests": junit_failures(root, source_commit), **dependency_fields, **inventory_fields}
 
 
 def public_outcome(value):

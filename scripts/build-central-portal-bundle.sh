@@ -213,7 +213,21 @@ done < <(
         -print0
 )
 
-[[ $checked -eq 117 ]] || fail "complete Central publication requires exactly 117 signed files across 21 coordinates"
+[[ $checked -eq 117 ]] || {
+    printf 'CENTRAL_SIGNATURE_COUNTS CHECKED %s UNSIGNED %s INVALID %s\n' "$checked" "$unsigned" "$invalid_signature"
+    # Failure-only, fixed numeric diagnosis. Never rewrite the expected roster
+    # or admit a partial/extra publication in order to make this gate pass.
+    python3 -B - "$ROOT/scripts" "$REPOSITORY" "$VERSION" <<'PY_INVENTORY' || true
+import sys
+sys.path.insert(0, sys.argv[1])
+from central_bundle_evidence import print_inventory_diagnostics
+try:
+    print_inventory_diagnostics(sys.argv[2], sys.argv[3])
+except (OSError, ValueError):
+    print("CENTRAL_INVENTORY_UNAVAILABLE")
+PY_INVENTORY
+    fail "complete Central publication requires exactly 117 signed files across 21 coordinates"
+}
 [[ $unsigned -eq 0 ]] || fail "$unsigned of $checked publication files lack PGP signatures"
 [[ $invalid_signature -eq 0 ]] ||
     fail "$invalid_signature of $checked publication files have invalid or unexpected signatures"

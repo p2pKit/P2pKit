@@ -74,6 +74,62 @@ def listing(primary=FINGERPRINT, subkey=None, validity="-"):
     return (record("pub", primary) + (record("sub", subkey) if subkey else "")).encode()
 
 
+class InventoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name)
+        for name in BASES:
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+            for suffix in (".asc", ".md5", ".sha1", ".sha256", ".sha512"):
+                Path(str(path) + suffix).touch()
+
+    def test_exact_actual_roster_excludes_all_sidecars(self):
+        result = E.inventory_diagnostics(self.repo, VERSION)
+        self.assertEqual((result["expected"], result["observed"], result["missing"], result["extra"]), (117, 117, 0, 0))
+        self.assertEqual(sum(result[key] for key in E.INVENTORY_CLASSES), 0)
+
+    def test_missing_expected_original_is_counted(self):
+        (self.repo / sorted(BASES)[0]).unlink()
+        result = E.inventory_diagnostics(self.repo, VERSION)
+        self.assertEqual((result["observed"], result["missing"], result["extra"]), (116, 1, 0))
+
+    def test_extra_versions_coordinates_and_private_names_only_project_classes(self):
+        parent = self.repo / E.GROUP_PATH / "unexpected-coordinate" / "other-version"
+        parent.mkdir(parents=True)
+        for name in ("PRIVATE.jar", "PRIVATE.aar", "PRIVATE.klib", "PRIVATE.pom", "PRIVATE.module",
+                     "maven-metadata-local.xml", "_remote.repositories", "PRIVATE.secret"):
+            (parent / name).touch()
+        result = E.inventory_diagnostics(self.repo, VERSION)
+        self.assertEqual((result["observed"], result["missing"], result["extra"]), (125, 0, 8))
+        self.assertEqual({key: result[key] for key in E.INVENTORY_CLASSES}, dict.fromkeys(E.INVENTORY_CLASSES, 1))
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            E.print_inventory_diagnostics(self.repo, VERSION)
+        self.assertNotIn("PRIVATE", output.getvalue())
+        self.assertNotIn(str(self.repo), output.getvalue())
+
+    def test_equal_count_substitution_not_misreported_as_exact_roster(self):
+        (self.repo / sorted(BASES)[0]).unlink()
+        (self.repo / E.GROUP_PATH / "other.jar").touch()
+        result = E.inventory_diagnostics(self.repo, VERSION)
+        self.assertEqual((result["observed"], result["missing"], result["extra"]), (117, 1, 1))
+
+    def test_linked_file_or_directory_refused(self):
+        parent = self.repo / E.GROUP_PATH
+        for directory in (False, True):
+            with self.subTest(directory=directory):
+                link = parent / "linked"
+                link.symlink_to(self.repo if directory else self.repo / sorted(BASES)[0], target_is_directory=directory)
+                try:
+                    with self.assertRaises(ValueError):
+                        E.inventory_diagnostics(self.repo, VERSION)
+                finally:
+                    link.unlink()
+
+
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="p2pkit-public-central-test-")

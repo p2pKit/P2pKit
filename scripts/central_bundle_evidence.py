@@ -85,6 +85,49 @@ def roster(version):
     return result
 
 
+INVENTORY_CLASSES = ("jar", "aar", "klib", "pom", "module", "maven_metadata", "resolver_metadata", "other")
+
+
+def inventory_diagnostics(repository, version):
+    """Diagnose a refused build, never admit or change a publication roster.
+
+    Names/content are not returned. The public diagnostic consists of fixed
+    counts and does not follow links or scan outside the staging group.
+    """
+    repository = Path(repository)
+    expected = roster(version)
+    observed = set()
+    group = repository / GROUP_PATH
+    need(group.is_dir() and not group.is_symlink(), "Invalid inventory group")
+    entries = 0
+    for directory, dirs, files in os.walk(group, followlinks=False):
+        need(not any((Path(directory) / name).is_symlink() for name in dirs), "Linked inventory directory")
+        for name in files:
+            entries += 1
+            need(entries <= 4096, "Inventory exceeds bound")
+            path = Path(directory) / name
+            need(path.is_file() and not path.is_symlink(), "Nonregular inventory file")
+            if not name.endswith((".asc", ".md5", ".sha1", ".sha256", ".sha512")):
+                observed.add(path.relative_to(repository).as_posix())
+    counts = {kind: 0 for kind in INVENTORY_CLASSES}
+    for extra in observed - expected:
+        name = Path(extra).name
+        if name.startswith("maven-metadata"):
+            kind = "maven_metadata"
+        elif name in ("_remote.repositories", "resolver-status.properties") or name.endswith(".lastUpdated"):
+            kind = "resolver_metadata"
+        else:
+            kind = next((kind for kind in INVENTORY_CLASSES[:5] if name.endswith("." + kind)), "other")
+        counts[kind] += 1
+    return {"expected": len(expected), "observed": len(observed), "missing": len(expected - observed),
+            "extra": len(observed - expected), **counts}
+
+
+def print_inventory_diagnostics(repository, version):
+    counts = inventory_diagnostics(repository, version)
+    print("CENTRAL_INVENTORY " + " ".join(key.upper() + " " + str(value) for key, value in counts.items()))
+
+
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
 

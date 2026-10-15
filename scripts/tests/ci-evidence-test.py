@@ -854,6 +854,37 @@ class EvidenceTests(unittest.TestCase):
             log.write_text("FATAL: " + message + "\n")
             self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)["categories"], [])
 
+    def test_central_signature_counts_report_actual_loop_not_inventory_reconstruction(self):
+        command = self.root / "signature-counts"
+        command.mkdir()
+        log = command / "stderr.log"
+        line = "CENTRAL_SIGNATURE_COUNTS CHECKED 116 UNSIGNED 1 INVALID 2"
+        log.write_text(line + "\n")
+        self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)["centralSignatureCounts"],
+                         {"checked": 116, "unsigned": 1, "invalid": 2})
+        for bad in (line + " PRIVATE", line.replace("116", "2"), line.replace("116", "9999"), line + "\n" + line):
+            log.write_text(bad + "\n")
+            self.assertNotIn("centralSignatureCounts", E.failure_diagnostics(self.root, command, include_reports=False))
+
+    def test_central_inventory_diagnostic_is_finite_and_arithmetically_consistent(self):
+        command = self.root / "inventory-command"
+        command.mkdir()
+        log = command / "stderr.log"
+        line = ("CENTRAL_INVENTORY EXPECTED 117 OBSERVED 118 MISSING 0 EXTRA 1 JAR 0 AAR 0 KLIB 0 POM 0 "
+                "MODULE 0 MAVEN_METADATA 0 RESOLVER_METADATA 1 OTHER 0")
+        log.write_text(line + "\n")
+        result = E.failure_diagnostics(self.root, command, include_reports=False)["centralInventory"]
+        self.assertEqual(result["observed"], 118)
+        self.assertEqual(result["resolver_metadata"], 1)
+        for bad in (line + " PRIVATE", line.replace("118", "119"), line.replace("118", "9999"),
+                    line.replace("117", "116"), line.replace("OTHER 0", "OTHER 1"),
+                    line.replace("MISSING 0", "MISSING 118"), line.replace("JAR 0", "JAR -1")):
+            with self.subTest(bad=bad):
+                log.write_text(bad + "\n")
+                self.assertNotIn("centralInventory", E.failure_diagnostics(self.root, command, include_reports=False))
+        log.write_text(line + "\n" + line + "\n")
+        self.assertNotIn("centralInventory", E.failure_diagnostics(self.root, command, include_reports=False))
+
     def test_bundle_diagnostic_phases_are_closed_labels_not_private_messages(self):
         command = self.root / "bundle-command"
         command.mkdir()
