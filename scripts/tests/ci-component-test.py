@@ -196,6 +196,64 @@ class ComponentTests(unittest.TestCase):
                 report = json.loads((root / 'build/reports/ci-component' / (component + '.json')).read_text())
                 return code, report, invoked.call_args_list, error
 
+    def test_intel_transaction_wraps_original_native_then_stop_then_restore(self):
+        code, report, calls, error = self.execute_model([Mock(returncode=0) for _ in range(4)], component='apple-x64')
+        self.assertIsNone(error)
+        self.assertEqual(code, 0)
+        self.assertEqual([row['task'] for row in report['tasks']],
+                         ['intel-advertising-prepare', 'actual-tests', 'gradle-stop', 'intel-advertising-restore'])
+        for index, phase in ((0, 'prepare'), (3, 'restore')):
+            self.assertEqual(calls[index].args[0], [C.sys.executable, '-I', '-S', '-B',
+                                                  'scripts/with-intel-bonjour-advertising.py', phase])
+            self.assertEqual(calls[index].kwargs['timeout'], 150)
+        self.assertEqual(calls[2].kwargs['timeout'], 90)
+
+    def test_intel_failed_preparation_does_not_launch_product_but_restores_after_stop(self):
+        for prepare, expected in ((Mock(returncode=7), 7),
+                                  (subprocess.TimeoutExpired(['prepare'], 150), 124),
+                                  (OSError('synthetic prepare unavailable'), 125)):
+            with self.subTest(expected=expected):
+                code, report, calls, error = self.execute_model([prepare, Mock(returncode=0), Mock(returncode=9)],
+                                                               component='apple-x64')
+                self.assertIsNone(error)
+                self.assertEqual((code, report['exitCode']), (expected, expected))
+                self.assertEqual([row['task'] for row in report['tasks']],
+                                 ['intel-advertising-prepare', 'gradle-stop', 'intel-advertising-restore'])
+                self.assertEqual(report['tasks'][-1]['exitCode'], 9)
+
+    def test_intel_product_stop_and_restore_failures_never_become_pass(self):
+        for outcomes, expected in (((0, 7, 9, 11), 7), ((0, 0, 9, 11), 9), ((0, 0, 0, 11), 11)):
+            code, report, calls, error = self.execute_model([Mock(returncode=value) for value in outcomes],
+                                                           component='apple-x64')
+            self.assertIsNone(error)
+            self.assertEqual((code, report['exitCode']), (expected, expected))
+            self.assertEqual([row['task'] for row in report['tasks']],
+                             ['intel-advertising-prepare', 'actual-tests', 'gradle-stop', 'intel-advertising-restore'])
+        code, report, calls, error = self.execute_model([Mock(returncode=0), Mock(returncode=0),
+            subprocess.TimeoutExpired(['stop'], 90), Mock(returncode=0)], component='apple-x64')
+        self.assertEqual(code, 124)
+        self.assertEqual(report['tasks'][-1], {'task': 'intel-advertising-restore', 'exitCode': 0})
+        code, report, calls, error = self.execute_model([Mock(returncode=0), Mock(returncode=0), Mock(returncode=0),
+            subprocess.TimeoutExpired(['restore'], 150)], component='apple-x64')
+        self.assertEqual(code, 124)
+        self.assertEqual(report['tasks'][-1], {'task': 'intel-advertising-restore', 'exitCode': 124})
+
+    def test_intel_setup_failure_before_preparation_never_creates_restore_transaction(self):
+        original = RuntimeError('synthetic setup error')
+        code, report, calls, error = self.execute_model([Mock(returncode=0)], component='apple-x64', tool_error=original)
+        self.assertIs(error, original)
+        self.assertEqual([row['task'] for row in report['tasks']], ['component-setup', 'gradle-stop'])
+
+    def test_intel_transaction_offline_controls_are_source_routed_and_closed_evidence_labels(self):
+        actual = dict(C.commands('source'))
+        for name in ('rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py'):
+            self.assertEqual(actual[name], [C.sys.executable, '-B', 'scripts/tests/' + name, '-v'])
+        evidence_spec = importlib.util.spec_from_file_location('ci_evidence_intel', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        self.assertTrue({'intel-advertising-prepare', 'intel-advertising-restore'} <= evidence.TASK_NAMES)
+
     def test_original_task_failure_survives_cleanup_failure_and_stop_is_bounded(self):
         code, report, calls, error = self.execute_model([Mock(returncode=7), Mock(returncode=9)])
         self.assertIsNone(error)

@@ -44,6 +44,15 @@ def check_platform_policy(v)
          commands[0][1].drop(1) == ['-B', 'scripts/run-platform-tests.py', profile],
          'Native coverage driver/profile bypassed')
   end
+  # Transaction behavior (prepare -> actual native -> stop -> restore, including
+  # failure paths) is exercised by the routed offline component controls. Keep
+  # both the shared transaction and its modular caller controls in ordinary CI.
+  source_controls = v[:source].to_h
+  %w[ci-component-test.py rpc-apple-bonjour-environment-test.py intel-bonjour-advertising-test.py].each do |name|
+    command = source_controls.fetch(name)
+    need(File.basename(command[0]).start_with?('python') &&
+         command.drop(1) == ['-B', "scripts/tests/#{name}", '-v'], 'Intel transaction regression bypassed')
+  end
   component = v[:ci].fetch('jobs').fetch('component')
   need(component['uses'] == './.github/workflows/ci-component.yml' &&
        component.dig('strategy', 'fail-fast') == false && !component.key?('continue-on-error'),
@@ -167,11 +176,16 @@ end
 inputs.merge!(matrix: command_json('--matrix', 'all'),
               'apple-arm64': command_json('apple-arm64', '--list-commands'),
               'apple-x64': command_json('apple-x64', '--list-commands'),
+              source: command_json('source', '--list-commands'),
               setup: File.read(File.join(ROOT, 'scripts/setup-ci-component.sh')),
               driver: File.read(File.join(ROOT, 'scripts/run-platform-tests.py')),
               release: File.read(File.join(ROOT, 'scripts/run-release-gate.sh')))
 check_platform_policy(inputs)
 mutations = {
+  'missing Intel modular transaction controls' => ->(v) { v[:source].reject! { |name, _| name == 'ci-component-test.py' } },
+  'missing Intel transaction controls' => ->(v) { v[:source].reject! { |name, _| name == 'intel-bonjour-advertising-test.py' } },
+  'missing Intel shared restoration controls' => ->(v) { v[:source].reject! { |name, _| name == 'rpc-apple-bonjour-environment-test.py' } },
+  'ignored Intel transaction tests' => ->(v) { v[:source].find { |name, _| name == 'intel-bonjour-advertising-test.py' }[1].unshift('echo') },
   'raw FULL bypass' => ->(v) { v[:'apple-arm64'][0][1] = ['./gradlew', 'check'] },
   'wrong Intel profile' => ->(v) { v[:'apple-x64'][0][1][-1] = 'full' },
   'echo not execution' => ->(v) { v[:'apple-arm64'][0][1].unshift('echo') },

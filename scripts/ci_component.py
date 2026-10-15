@@ -85,6 +85,7 @@ def commands(component):
             *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
                    'dependency-update-test.py', 'embedded-jmdns-aar-test.py', 'intel-bonjour-environment-test.py',
                    'central-bundle-evidence-test.py', 'maven-recovery-test.py',
+                   'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
                    'application-release-version-test.py', 'sample-artifact-identity-test.py',
                    'package-sample-apps-test.py', 'publish-sample-release-test.py',
                    'release-application-set-test.py', 'run-platform-tests-test.py'),
@@ -191,6 +192,8 @@ def execute(component):
     package = component == 'android' or component.startswith('desktop-')
     kind = 'android' if component == 'android' else 'desktop'
     code = 0
+    intel_preparation_started = False
+    intel_adapter = [sys.executable, '-I', '-S', '-B', 'scripts/with-intel-bonjour-advertising.py']
 
     def run_task(name, argv, timeout=None):
         nonlocal code
@@ -212,6 +215,9 @@ def execute(component):
         if package:
             run_task('prepare-' + kind, [sys.executable, '-B', 'scripts/package-sample-apps.py', 'prepare',
                                         '--kind', kind, '--output', destination])
+        if component == 'apple-x64':
+            intel_preparation_started = True
+            run_task('intel-advertising-prepare', intel_adapter + ['prepare'], 150)
         for name, argv in commands(component):
             if code:
                 break
@@ -230,10 +236,19 @@ def execute(component):
     finally:
         # Cleanup is attempted even when a setup/launch failed. Preserve the
         # original task failure; uncertain retirement is never converted to PASS.
-        if is_gradle and not any(t['task'] == 'gradle-stop' for t in tasks):
-            run_task('gradle-stop', [str(ROOT / 'gradlew.bat') if os.name == 'nt' else './gradlew', '--stop'], 90)
-        (output / (component + '.json')).write_text(json.dumps({'component': component, 'tasks': tasks,
-                                                               'exitCode': code}, indent=2) + '\n')
+        try:
+            if is_gradle and not any(t['task'] == 'gradle-stop' for t in tasks):
+                run_task('gradle-stop', [str(ROOT / 'gradlew.bat') if os.name == 'nt' else './gradlew', '--stop'], 90)
+        finally:
+            try:
+                if intel_preparation_started:
+                    # Restore after product AND Gradle stop, including preparation
+                    # failure. The adapter refuses incomplete privileged commands;
+                    # neither missing state nor a failed restore becomes PASS.
+                    run_task('intel-advertising-restore', intel_adapter + ['restore'], 150)
+            finally:
+                (output / (component + '.json')).write_text(json.dumps({'component': component, 'tasks': tasks,
+                                                                       'exitCode': code}, indent=2) + '\n')
     return code
 
 

@@ -1,10 +1,14 @@
 /* Component test only: actual development JDK21 JNI with a statically linked registrar/bridge.
- * Opt-in FFM controls use the actual dormant named-module invocation, never a Windows DLL,
+ * Opt-in FFM controls use the actual dormant named-module invocation, never the profile DLL,
  * OS storage, installed runtime or productive loader.
  * The driver creates the VM; the unmodified registrar must never create or attach one.
  */
 #include "../../profile_jni_registration.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +19,65 @@
         exit(1); \
     } \
 } while (0)
+
+static int absolute_path(const char *path) {
+#ifdef _WIN32
+    return strlen(path) > 3 && ((path[0] >= 'A' && path[0] <= 'Z') ||
+        (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && path[2] == '\\';
+#else
+    return path[0] == '/';
+#endif
+}
+
+typedef jint (JNICALL *create_vm_entry)(JavaVM **, void **, void *);
+
+#ifdef _WIN32
+/* Test-process roots only. Never FreeLibrary/RemoveDllDirectory before VM/process exit. */
+static HMODULE development_runtime;
+static DLL_DIRECTORY_COOKIE development_bin;
+#endif
+
+static create_vm_entry development_vm_entry(const char *path) {
+#ifdef _WIN32
+    /* No ordinary jvm.lib import: that would resolve jvm.dll before this closed search policy.
+     * The hosted controller supplies only the selected existing development JDK's canonical path. */
+    wchar_t original[8192], bin[8192], observed[8192];
+    const char suffix[] = "\\bin\\server\\jvm.dll";
+    size_t length = strlen(path), suffix_length = sizeof(suffix) - 1;
+    REQUIRE(absolute_path(path) && length < 8192 && length > suffix_length);
+    REQUIRE(strcmp(path + length - suffix_length, suffix) == 0);
+    for (size_t i = 0; i <= length; ++i) {
+        REQUIRE((unsigned char)path[i] < 128);
+        original[i] = (wchar_t)(unsigned char)path[i];
+        bin[i] = original[i];
+    }
+    bin[length - suffix_length + 4] = L'\0'; /* Preserve only the exact selected JDK\bin. */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    REQUIRE(GetModuleHandleW(L"jvm.dll") == NULL);
+    REQUIRE(SetDllDirectoryW(L""));
+    REQUIRE(SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS));
+    development_bin = AddDllDirectory(bin);
+    REQUIRE(development_bin);
+    development_runtime = LoadLibraryExW(original, NULL,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS);
+    REQUIRE(development_runtime);
+    DWORD observed_length = GetModuleFileNameW(development_runtime, observed, 8192);
+    REQUIRE(observed_length > 0 && observed_length < 8192);
+    REQUIRE(CompareStringOrdinal(original, -1, observed, -1, TRUE) == CSTR_EQUAL);
+    FARPROC symbol = GetProcAddress(development_runtime, "JNI_CreateJavaVM");
+#else
+    /* Explicit existing development JDK, NOT a candidate helper or productive bootstrap. */
+    void *runtime = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!runtime) fprintf(stderr, "development JDK load failed: %s\n", dlerror());
+    REQUIRE(runtime);
+    void *symbol = dlsym(runtime, "JNI_CreateJavaVM");
+#endif
+    REQUIRE(symbol);
+    create_vm_entry create_vm;
+    _Static_assert(sizeof(create_vm) == sizeof(symbol), "Function pointer size");
+    memcpy(&create_vm, &symbol, sizeof(create_vm));
+    return create_vm;
+}
 
 static const char target_name[] = "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni";
 
@@ -121,24 +184,15 @@ static void ffm_registration(JNIEnv *env, JavaVM *vm, const uintptr_t *entries, 
 }
 
 int main(int argc, char **argv) {
-    REQUIRE((argc == 4 || argc == 5) && argv[1][0] == '/' && argv[2][0] == '/');
+    REQUIRE((argc == 4 || argc == 5) && absolute_path(argv[1]) && absolute_path(argv[2]));
     const int ffm = strncmp(argv[3], "ffm-", 4) == 0;
-    REQUIRE((ffm && argc == 5 && argv[4][0] == '/') || (!ffm && argc == 4));
+    REQUIRE((ffm && argc == 5 && absolute_path(argv[4])) || (!ffm && argc == 4));
     const int success = strcmp(argv[3], "success") == 0 || strcmp(argv[3], "ffm-success") == 0;
     const int pending = strcmp(argv[3], "pending") == 0;
     const int address = strcmp(argv[3], "address") == 0 || strcmp(argv[3], "ffm-address") == 0;
     const int missing = strcmp(argv[3], "missing-class") == 0 || strcmp(argv[3], "ffm-missing-class") == 0;
     REQUIRE(success || pending || address || missing);
-    /* Explicit existing trusted development JDK, NOT a candidate helper or production bootstrap.
-     * Keep the loaded development runtime alive through process exit; never dlclose it. */
-    void *runtime = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
-    if (!runtime) fprintf(stderr, "development JDK load failed: %s\n", dlerror());
-    REQUIRE(runtime);
-    void *symbol = dlsym(runtime, "JNI_CreateJavaVM");
-    REQUIRE(symbol);
-    jint (JNICALL *create_vm)(JavaVM **, void **, void *);
-    _Static_assert(sizeof(create_vm) == sizeof(symbol), "Function pointer size");
-    memcpy(&create_vm, &symbol, sizeof(create_vm));
+    create_vm_entry create_vm = development_vm_entry(argv[1]);
     char classpath[8192];
     int length = snprintf(classpath, sizeof(classpath), "-Djava.class.path=%s", argv[2]);
     REQUIRE(length > 0 && (size_t)length < sizeof(classpath));
