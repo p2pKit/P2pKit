@@ -878,12 +878,20 @@ class EvidenceTests(unittest.TestCase):
         output = self.root / 'public output' / 'evidence.tar.gz.gpg'; output.parent.mkdir()
         key = (SCRIPTS.parent / '.github/ci-evidence-recipient.asc').read_bytes()
         calls = []
+        encryption_fingerprint = '4D7CF63A16AFC0BDDC82F3E686D7D3D9A7B44350'
         def invoke(argv, **kwargs):
             calls.append(argv)
             self.assertEqual(kwargs['cwd'], work)
             self.assertEqual(argv[argv.index('--homedir') + 1], 'gnupg')
             self.assertIn('--no-autostart', argv)
             self.assertIn('--no-auto-key-retrieve', argv)
+            for flag in ('--no-default-keyring', '--no-auto-key-import', '--disable-dirmngr', '--no-random-seed-file'):
+                self.assertIn(flag, argv)
+            self.assertEqual(argv[argv.index('--auto-key-locate') + 1], 'clear')
+            self.assertEqual(argv[argv.index('--keyring') + 1], './recipient.gpg')
+            self.assertEqual((work / 'recipient.gpg').read_bytes(), E._public_armor(key))
+            if os.name == 'posix':
+                self.assertEqual((work / 'recipient.gpg').stat().st_mode & 0o777, 0o600)
             expected = {'--import': work / 'recipient.asc', '--output': output, '--encrypt': source}
             for flag, path in expected.items():
                 if flag in argv:
@@ -895,14 +903,16 @@ class EvidenceTests(unittest.TestCase):
             (directory / 'stdout.log').write_bytes(b'public-key-listing-model')
             (directory / 'stderr.log').write_bytes(b'')
             if '--encrypt' in argv:
+                self.assertEqual(argv[argv.index('--recipient') + 1], encryption_fingerprint + '!')
                 output.write_bytes(b'public-ciphertext-model' * 4)
             return {'code': 'PASS', 'exitCode': 0, 'timedOut': False, 'cleanupKnown': True}
         with mock.patch.object(E, 'run_command', side_effect=invoke), \
                 mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
-                mock.patch.object(E, '_key_identity', return_value=(PUBLIC_FINGERPRINT, 0)):
+                mock.patch.object(E, '_key_identity', return_value=(encryption_fingerprint, 1821484800)):
             E.encrypt_archive(source, output, key, hashlib.sha256(key).hexdigest(),
                               PUBLIC_FINGERPRINT, work, dict(os.environ))
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([argv[argv.index('--import-options') + 1] for argv in calls if '--import' in argv], ['show-only'])
         other = self.root / 'different-drive-model'; other.mkdir()
         with mock.patch.object(E.os.path, 'relpath', side_effect=ValueError('PRIVATE_DRIVE')), \
                 mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
@@ -912,6 +922,41 @@ class EvidenceTests(unittest.TestCase):
                                   PUBLIC_FINGERPRINT, other, dict(os.environ))
         self.assertEqual(caught.exception.code, 'ENCRYPTION')
         unused.assert_not_called()
+
+    def test_public_keyring_selected_identity_or_expiry_mismatch_stops_before_encryption(self):
+        key = (SCRIPTS.parent / '.github/ci-evidence-recipient.asc').read_bytes()
+        chosen = '4D7CF63A16AFC0BDDC82F3E686D7D3D9A7B44350'
+        for index, selected in enumerate((('F' * 40, 1821484800), (chosen, 1821484801))):
+            with self.subTest(selected=selected):
+                work = self.root / ('mismatch-' + str(index)); work.mkdir()
+                calls = []
+                def invoke(argv, **kwargs):
+                    calls.append(kwargs['private'].name)
+                    kwargs['private'].mkdir()
+                    (kwargs['private'] / 'stdout.log').write_bytes(b'PUBLIC_LISTING_MODEL')
+                    return {'code': 'PASS', 'exitCode': 0, 'cleanupKnown': True}
+                with mock.patch.object(E, 'run_command', side_effect=invoke), \
+                        mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
+                        mock.patch.object(E, '_key_identity', side_effect=[(chosen, 1821484800), selected]) as identity:
+                    with self.assertRaises(E.EvidenceError) as caught:
+                        E.encrypt_archive(work / 'archive', work / 'cipher', key, hashlib.sha256(key).hexdigest(),
+                                          PUBLIC_FINGERPRINT, work, dict(os.environ))
+                self.assertEqual(caught.exception.code, 'RECIPIENT')
+                self.assertEqual(calls, ['key-show', 'key-list'])
+                self.assertEqual([call.args[1] for call in identity.call_args_list], [PUBLIC_FINGERPRINT] * 2)
+                self.assertFalse((work / 'cipher').exists())
+
+    def test_public_keyring_is_exclusive_and_never_overwrites_existing_input(self):
+        key = (SCRIPTS.parent / '.github/ci-evidence-recipient.asc').read_bytes()
+        ring = self.root / 'recipient.gpg'
+        ring.write_bytes(b'EXISTING_PUBLIC_FIXTURE')
+        with mock.patch.object(E, 'run_command') as unused:
+            with self.assertRaises(FileExistsError):
+                E.encrypt_archive(self.root / 'archive', self.root / 'cipher', key, hashlib.sha256(key).hexdigest(),
+                                  PUBLIC_FINGERPRINT, self.root, dict(os.environ))
+        unused.assert_not_called()
+        self.assertEqual(ring.read_bytes(), b'EXISTING_PUBLIC_FIXTURE')
+        self.assertFalse((self.root / 'cipher').exists())
 
     def test_actual_public_key_encrypts_without_private_key_or_agent(self):
         key = (SCRIPTS.parent / ".github/ci-evidence-recipient.asc").read_bytes()
@@ -991,7 +1036,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_gpg_failure_keeps_only_fixed_phase_outcome_and_closed_error_categories(self):
         key = (SCRIPTS.parent / '.github/ci-evidence-recipient.asc').read_bytes()
-        for failed_phase in ('key-show', 'key-import', 'key-list', 'encrypt'):
+        for failed_phase in ('key-show', 'key-list', 'encrypt'):
             for cleanup in (True, False):
                 with self.subTest(phase=failed_phase, cleanup=cleanup):
                     work = self.root / (failed_phase + str(cleanup)); work.mkdir()

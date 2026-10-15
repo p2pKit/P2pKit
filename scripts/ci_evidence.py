@@ -484,9 +484,13 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
     require(re.fullmatch(r"[0-9a-f]{64}", expected_sha or "") and
             re.fullmatch(r"[A-Fa-f0-9]{40}", expected_fingerprint or ""), "RECIPIENT")
     require(hashlib.sha256(key_raw).hexdigest() == expected_sha, "RECIPIENT")
-    _public_armor(key_raw)  # Reject secret packets even before a GPG invocation.
+    packets = _public_armor(key_raw)  # Reject secret packets before a GPG invocation.
     key_file = work / "recipient.asc"
     write_private(key_file, key_raw)
+    # Match the maintained public recipient validator: a real --import can
+    # contact an agent even for public keys. Select only these validated packets.
+    keyring = work / "recipient.gpg"
+    write_private(keyring, packets)
     home = work / "gnupg"
     home.mkdir(mode=0o700)
     gpg = shutil.which("gpg", path=environment.get("PATH"))
@@ -500,7 +504,9 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
         except ValueError:
             raise EvidenceError("ENCRYPTION") from None  # Different Windows drives.
     base = [gpg, "--no-options", "--batch", "--no-tty", "--no-autostart", "--pinentry-mode", "error",
-            "--homedir", filename(home), "--no-auto-key-retrieve"]
+            "--homedir", filename(home), "--no-auto-key-retrieve", "--no-auto-key-import",
+            "--auto-key-locate", "clear", "--disable-dirmngr", "--no-random-seed-file",
+            "--no-default-keyring", "--keyring", "./" + filename(keyring)]
     environment = {key: value for key, value in environment.items() if key in {
         "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR",
         "LANG", "LC_ALL", "PATHEXT"}}
@@ -522,9 +528,8 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
     listing = invoke("key-show", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint",
                                    "--import-options", "show-only", "--import", filename(key_file)])
     fingerprint, expires_at = _key_identity(listing, expected_fingerprint.upper())
-    invoke("key-import", ["--import", filename(key_file)])
-    imported = invoke("key-list", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint", "--list-keys"])
-    require(_key_identity(imported, expected_fingerprint.upper()) == (fingerprint, expires_at), "RECIPIENT")
+    selected = invoke("key-list", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint", "--list-keys"])
+    require(_key_identity(selected, expected_fingerprint.upper()) == (fingerprint, expires_at), "RECIPIENT")
     invoke("encrypt", ["--trust-model", "always", "--compress-algo", "none", "--recipient", fingerprint + "!",
                         "--output", filename(output), "--encrypt", filename(archive)], timeout=300)
     require(output.is_file() and 32 < output.stat().st_size <= MAX_BUNDLE_BYTES + 16 * 1024 * 1024, "ENCRYPTION")
