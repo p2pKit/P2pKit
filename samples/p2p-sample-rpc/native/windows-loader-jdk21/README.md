@@ -182,8 +182,8 @@ module changes custody ABI13/0x43, provider availability or release gates.
 
 The Java17 sample's
 [`WindowsProfileJniPlan`](../../src/jvmMain/kotlin/dev/p2pkit/sample/rpc/profile/WindowsProfileJniPlan.kt)
-prepares the fixed 23-method registration inventory. It verifies the actual
-declaring class, exact compiled instance-native descriptors/modifiers and original
+prepares the fixed 23-method registration inventory plus a separate registrar-v1 binding. It verifies the actual
+declaring class, exact compiled instance-native descriptors/modifiers and all 24 original
 export-address observations. Bounded private snapshots prevent a verified list
 from being reread as different registration inputs. The result is immutable data,
 not permission to call an address, a registration attempt or native ownership.
@@ -195,18 +195,18 @@ does not establish Foundation's installed runtime provenance. No native method i
 invoked by preparing the plan or inspecting the declaring class.
 
 The native [post-admission registration core](../windows-profile/jni-contract.md#post-admission-registration-core)
-now implements the single-invocation operation, but is not exported or reachable
+now exports the single-invocation operation, but remains unreachable
 from production. The managed lifetime and fixed FFM invocation components below are implemented separately;
 they have no productive caller and loading remains unimplemented. The design direction is
 explicit `RegisterNatives` against original verified function addresses, after
 independent loading authority. Preload plus `System.load` does not pin each Java
-method to that module. JNI references and pending exceptions need a reviewed
-single-native-invocation bridge; a future native registration export requires joint
-review and exact export/build-inventory changes. `RegisterNatives` can partially
+method to that module. JNI references and pending exceptions need the reviewed
+single-native-invocation bridge; its exported interface still requires exact current-source
+MSVC/build pins and a qualified integrated caller. `RegisterNatives` can partially
 succeed: reserve process-lifetime module/class ownership before the attempt, and
 retain it on failure without retry, unregister or unload. Profile Stop must not
 retire cached JNI code. None of these lifetime or runtime guarantees follows from
-the inert plan, and no production registration entry is enabled here.
+the inert plan, and no productive registration caller is enabled here.
 
 ## Registration lifetime component
 
@@ -242,7 +242,9 @@ module retention. Test-only classes never enter the packaged adapter JAR.
 segments and a one-time copied address list. **Those parameters do not grant native execution authority.**
 Before any productive use, the reviewed loader must independently establish the original runtime, entry,
 module/imports and installed custody and transfer exclusive original owners. No such loader caller exists.
-The native registration core remains non-exported; the production loading refusal is unchanged.
+The native registration core has one explicit registrar-v1 export, separate from its unchanged 23 JNI
+methods. The managed byte/address plan requires all 24 exports, but neither creates a callable scoped
+segment nor supplies authority. The production loading refusal is unchanged.
 
 The mechanism requires its original named boot module and one platform thread, native non-global live scoped
 addresses, 64-bit little-endian layouts, positive user-mode addresses and an aligned VM pointer. It performs no

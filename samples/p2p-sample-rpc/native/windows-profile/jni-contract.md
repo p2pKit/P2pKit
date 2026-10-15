@@ -106,9 +106,11 @@ lifecycle retirement remain W01–W11 requirements. Track results separately in
 ## Post-admission registration core
 
 [`profile_jni_registration.h`](profile_jni_registration.h) and
-[`profile_jni_registration.c`](profile_jni_registration.c) implement a **dormant, non-exported**
-single-invocation registrar. The existing MSVC producer compiles it; no productive caller or exported
-shim is added. The original 23 JNI exports, ABI13/0x43 and provider availability remain unchanged.
+[`profile_jni_registration.c`](profile_jni_registration.c) implement a **dormant, explicitly exported**
+single-invocation registrar. The existing MSVC producer exports exactly `pwp_jni_register_once` in addition
+to the original 23 JNI methods; the original method table is not exported. There is no productive caller,
+automatic registration or loading hook. The custody API remains ABI13/0x43 with unchanged availability.
+The separate registrar interface is version 1 (32-byte report); adding it promotes no custody capability.
 This component must never execute to authorize its own initial load.
 
 Before entry, RPC/Foundation must independently admit the installed runtime, exact single live JVM,
@@ -162,7 +164,7 @@ pending exceptions, thread/runtime/class mismatch, allocation and retention faul
 cleanup failure, reentry, changed caller observations and duplicate refusal. ASan/UBSan evidence is
 source/controller evidence, **not actual JVM registration, Win32 atomics, NTFS or installed runtime**.
 
-Still required: review and expose the final post-admission entry with exact PE inventory/build pins,
+Still required: verify the exact exported inventory in current-source MSVC artifacts,
 connect the dormant managed process-lifetime owner to real exclusive original leases and FFM invocation,
 establish independent initial loading
 authority, then execute actual JNI and installed Host/Client qualification. No Windows capability or
@@ -172,7 +174,10 @@ The named JDK21 adapter now contains a dormant fixed-signature FFM invocation im
 its disjoint bounded input/report frame, requires the exact reserved registration owner and platform
 thread, and retains uncertainty without retiring original module/runtime scopes. Its fresh-process
 downcall/upcall controls use only a JDK-generated inert stub: no original DLL, JNI or profile execution.
-This supplies call mechanics, not address authority, an exported registrar or productive integration.
+This supplies call mechanics, not address authority or productive integration. The inert managed plan
+validates all 24 original export/address observations once, retaining the separate registrar-v1 binding
+and exactly 23 JNI bindings in the unchanged native-table order. A numeric binding is not a callable
+scoped segment or a trusted load context.
 
 The separate [development-JVM controls](tests/jvm/README.md) now exercise this actual registrar and
 original JNI translation unit with the real compiled custody classes in a development JDK21. The test-only

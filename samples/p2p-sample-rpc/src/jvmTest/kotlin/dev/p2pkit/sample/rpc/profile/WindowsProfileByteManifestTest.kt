@@ -152,11 +152,11 @@ class WindowsProfileByteManifestTest {
         )) rejectsRePinned(manifest.replace(old, new), dll)
     }
 
-    @Test fun numericAbiRejectsTwelveEvenThoughItsExportInventoryIsUnchanged() {
+    @Test fun numericAbiStillRejectsTwelveWithTheSeparateRegistrarExport() {
         val dll = WindowsProfilePeFixture.create()
-        assertEquals(23, WindowsProfilePeImage.verify(dll).exports.size)
+        assertEquals(24, WindowsProfilePeImage.verify(dll).exports.size)
         assertEquals(13, WindowsProfilePeImage.ABI)
-        // PE symbols cannot distinguish ABI12/13; numeric authority and later real runtime checks must.
+        // Adding a registrar changes no custody semantics; numeric ABI13 remains an independent prerequisite.
         rejectsRePinned(produce(dll).replace("abi=13", "abi=12"), dll)
     }
 

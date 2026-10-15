@@ -11,6 +11,22 @@ import kotlin.test.assertNotEquals
 
 /** Inert PE bytes and address arithmetic only. No Windows load, JNI execution or installed-runtime evidence. */
 class WindowsProfileExportAddressesTest {
+    @Test fun registrarResolutionCannotBeOmittedRenamedOrSubstitutedByAnotherInImageFunction() {
+        val image = authorize()
+        val original = resolve(image)
+        assertEquals(24, original.size)
+        val registrar = original.single { it.name == "pwp_jni_register_once" }
+        val other = original.first { it.name != registrar.name }
+        val candidates = listOf(
+            original.filterNot { it.name == registrar.name },
+            original.map { if (it == registrar) it.copy(name = "pwp_jni_methods") else it },
+            original.map { if (it == registrar) it.copy(address = other.address) else it },
+        )
+        for (candidate in candidates) assertFailsWith<IllegalArgumentException> {
+            WindowsProfileExportAddresses.verify(image, BASE, image.imageBytes, candidate)
+        }
+    }
+
     @Test fun exportBindingsFollowOrdinalTableRatherThanSortedNamePosition() {
         val bytes = WindowsProfilePeFixture.create()
         val names = WindowsProfilePeImage.expectedExports.sorted()

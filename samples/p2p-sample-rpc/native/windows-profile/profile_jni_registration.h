@@ -6,6 +6,11 @@
 
 #define PWP_JNI_METHOD_COUNT 23u
 #define PWP_JNI_RUNTIME_VERSION ((jint)0x00150000) /* JNI_VERSION_21, including JDK17-header builds. */
+#ifdef _WIN32
+#define PWP_JNI_REGISTRATION_EXPORT __declspec(dllexport)
+#else
+#define PWP_JNI_REGISTRATION_EXPORT
+#endif
 
 typedef enum {
     PWP_JNI_REGISTER_OK = 0,
@@ -35,7 +40,7 @@ typedef struct {
 /* Original compiled symbols, never a caller-supplied table. Not an exported DLL interface. */
 extern const JNINativeMethod pwp_jni_methods[PWP_JNI_METHOD_COUNT];
 
-/* Dormant, NOT EXPORTED, post-admission implementation. No production caller yet.
+/* Exported post-admission interface version 1; dormant with no production caller yet.
  * Before entry the loader must independently admit the installed runtime, exactly one VM, this
  * original module/mappings/imports and fixed compiled Java class, and permanently reserve their
  * owners. Arguments and output must be live, disjoint, bounded allocations on the platform thread.
@@ -46,7 +51,7 @@ extern const JNINativeMethod pwp_jni_methods[PWP_JNI_METHOD_COUNT];
  * API exists. Profile Stop must not unload code. Once JNIEnv is acquired, no pending JNI exception
  * crosses the return. Earlier argument/duplicate refusals do not inspect or alter caller JNI state.
  */
-int32_t pwp_jni_register_once(JavaVM *expected_vm, const uintptr_t *expected_entry_points,
+PWP_JNI_REGISTRATION_EXPORT int32_t pwp_jni_register_once(JavaVM *expected_vm, const uintptr_t *expected_entry_points,
                             uint32_t entry_count, pwp_jni_registration_report *report, uint32_t report_bytes);
 
 #endif

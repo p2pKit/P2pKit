@@ -37,6 +37,8 @@ class WindowsProfilePeImportWriteTest {
 
     private fun ordinalBoundary(overlap: Boolean): ByteArray {
         val original = WindowsProfilePeFixture.create()
+        val count = WindowsProfilePeImage.expectedExports.size
+        val importNameRva = 0x10000L + count - 1
         return original.copyOf(0xf800).apply {
             // Extend raw-backed data so an import-name RVA has the valid final ordinal as its low word.
             fill(0, 0x1000, size)
@@ -50,12 +52,17 @@ class WindowsProfilePeImportWriteTest {
             original.copyOfRange(0x1000, 0x100c).copyInto(this, 0xf600)
             put16(0xf608, 0xa960)
             put32(0xe00, 0x2920)
-            put64(0xf20, 0x10016)
-            put64(0xe80, 0x10016)
-            "CloseHandle\u0000".toByteArray(Charsets.US_ASCII).copyInto(this, 0xe618)
-            val start = if (overlap) 0xe54 else 0xe52
+            put64(0xf20, importNameRva)
+            put64(0xe80, importNameRva)
+            "CloseHandle\u0000".toByteArray(Charsets.US_ASCII)
+                .copyInto(this, (importNameRva - 0x1a00 + 2).toInt())
+            // Keep the IAT aligned at 0xe80: adjacency ends exactly there; the negative overlaps one word.
+            val start = 0xe80 - count * 2 + if (overlap) 2 else 0
             put32(0x624, (start + 0x1a00).toLong())
-            repeat(WindowsProfilePeImage.expectedExports.size) { put16(start + it * 2, it) }
+            repeat(count) { put16(start + it * 2, it) }
+            val pointer = ByteArray(8).apply { put64(0, importNameRva) }
+            check(copyOfRange(0xe80, 0xe88).contentEquals(pointer))
+            check(copyOfRange(0xf20, 0xf28).contentEquals(pointer))
         }
     }
 

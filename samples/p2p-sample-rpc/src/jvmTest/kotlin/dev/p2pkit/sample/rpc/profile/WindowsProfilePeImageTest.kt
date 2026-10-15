@@ -8,12 +8,27 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WindowsProfilePeImageTest {
+    @Test fun exactRegistrarExportIsRequiredSeparatelyFromTheUnchangedJniSubset() {
+        val registrar = "pwp_jni_register_once"
+        val jni = WindowsProfilePeImage.expectedJniExports
+        assertEquals(23, jni.size)
+        assertEquals(registrar, WindowsProfilePeImage.REGISTRATION_EXPORT)
+        assertEquals(jni + registrar, WindowsProfilePeImage.expectedExports)
+        rejected(WindowsProfilePeFixture.create(jni))
+        rejected(WindowsProfilePeFixture.create(jni + "pwp_jni_register_other"))
+        rejected(WindowsProfilePeFixture.create(jni + "pwp_jni_methods"))
+        assertEquals(24, WindowsProfilePeImage.verify(fixture()).exports.size)
+        assertEquals(13, WindowsProfilePeImage.ABI)
+        assertFalse(WindowsProfileAvailability.IMPLEMENTED)
+        assertFalse(WindowsProfileAvailability.QUALIFIED)
+    }
+
     @Test fun acceptsExplicitProtectedChildDirectoryCreationExport() {
         val child = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_createChildDirectory"
         val expected = WindowsProfilePeImage.expectedExports + child
         val result = WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(expected))
         assertEquals(expected, result.exports)
-        assertEquals(23, result.exports.size)
+        assertEquals(24, result.exports.size)
         assertEquals(13, WindowsProfilePeImage.ABI)
     }
 
@@ -79,8 +94,8 @@ class WindowsProfilePeImageTest {
         assertTrue(WindowsProfilePeFixture.EXPORT_NAMES + count * 4 <= WindowsProfilePeFixture.EXPORT_ORDINALS)
         assertTrue(WindowsProfilePeFixture.EXPORT_ORDINALS + count * 2 <= WindowsProfilePeFixture.EXPORT_STRINGS)
         val exports = WindowsProfilePeImage.expectedExports
-        assertEquals(23, count)
-        assertEquals(1665, exports.sumOf { it.length + 1 })
+        assertEquals(24, count)
+        assertEquals(1687, exports.sumOf { it.length + 1 })
         assertTrue(
             WindowsProfilePeFixture.EXPORT_STRINGS + exports.sumOf { it.length + 1 } <
                 WindowsProfilePeFixture.IMPORT_DIRECTORY,
@@ -266,7 +281,9 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(23, WindowsProfilePeImage.expectedExports.size)
+        (WindowsProfilePeImage.expectedJniExports as MutableSet<String>).clear()
+        assertEquals(23, WindowsProfilePeImage.expectedJniExports.size)
+        assertEquals(24, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {
