@@ -18,6 +18,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import socket
 import stat
 import sys
 import time
@@ -323,7 +324,24 @@ def _pipe_identity(stream, number):
     raw = buffer if type(buffer) is io.FileIO else buffer.raw
     require(type(raw) is io.FileIO and not raw.closed and raw.fileno() == number, "ORIGINAL_STDIO_RAW")
     info = os.fstat(number)
-    require(stat.S_ISFIFO(info.st_mode), "ORIGINAL_PIPE_ONLY")
+    if os.name == "posix" and stat.S_ISSOCK(info.st_mode):
+        # Node/libuv uses anonymous Unix socketpairs for POSIX stdio pipes.
+        # Borrow the ORIGINAL descriptor only; detach, never close or duplicate.
+        require(socket.getdefaulttimeout() is None, "ORIGINAL_PIPE_ONLY")
+        view = socket.socket(fileno=number)
+        try:
+            require(view.family == socket.AF_UNIX and
+                view.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_STREAM and
+                view.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 0 and
+                view.getsockname() == "" and view.getpeername() == "", "ORIGINAL_PIPE_ONLY")
+        finally:
+            detached = view.detach()
+            require(type(detached) is int and detached == number, "ORIGINAL_PIPE_ONLY")
+        after = os.fstat(number)
+        require((after.st_dev, after.st_ino, after.st_mode) ==
+            (info.st_dev, info.st_ino, info.st_mode), "ORIGINAL_PIPE_ONLY")
+    else:
+        require(stat.S_ISFIFO(info.st_mode), "ORIGINAL_PIPE_ONLY")
     handle = None
     if os.name == "nt":
         import msvcrt

@@ -39,6 +39,8 @@ SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
 if len(SOURCE.encode("utf-8")) > 128 * 1024:
     raise AssertionError("U_STREAM_SOURCE_BOUND")
 TREE = ast.parse(SOURCE, filename=str(SOURCE_PATH))
+PRODUCTIVE_PATH = SCRIPTS / "run-hosted-initial-recipient-productive-upload.py"
+PRODUCTIVE_TREE = ast.parse(PRODUCTIVE_PATH.read_text(encoding="utf-8"), filename=str(PRODUCTIVE_PATH))
 SPEC = importlib.util.spec_from_file_location("_new_u_stream_controls", SOURCE_PATH)
 U = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = U
@@ -608,6 +610,208 @@ class PipeControls(unittest.TestCase):
             with self.assertRaises(ValueError):
                 U._pipe_identity(object(), 0)
             operation.assert_not_called()
+
+
+class SocketIdentityControls(unittest.TestCase):
+    """Exact admission function over explicit stdlib/descriptor models only.
+
+    The separately bounded Node/Python primitive regression exercises real IPC;
+    these branch/failure controls create no sockets, descriptors or children.
+    """
+    @contextmanager
+    def model(self, **changes):
+        from types import SimpleNamespace
+        cfg = dict(number=1, platform="posix", mode=U.stat.S_IFSOCK | 0o600,
+            family=1, socket_type=1, listening=0, local="", peer="", timeout=None,
+            error=None, detached=1, metadata_changed=False)
+        cfg.update(changes)
+        events = []
+
+        class Raw:
+            closed = False
+            def fileno(self):
+                return cfg["number"]
+
+        class Buffer:
+            closed = False
+            def __init__(self):
+                self.raw = Raw()
+            def fileno(self):
+                return cfg["number"]
+
+        class Writer(Buffer):
+            pass
+
+        class Text:
+            closed = False
+            def __init__(self):
+                self.buffer = Buffer()
+            def fileno(self):
+                return cfg["number"]
+
+        stream = Text()
+        info = SimpleNamespace(st_dev=3, st_ino=5, st_mode=cfg["mode"])
+        failure = RuntimeError("EXPLICIT_SOCKET_OPERATION_MODEL_FAILURE")
+
+        def step(label):
+            events.append(label)
+            if cfg["error"] == label:
+                raise failure
+
+        def fstat(number):
+            self.assertEqual(number, cfg["number"])
+            label = "fstat-after" if "detach" in events else "fstat-before"
+            step(label)
+            return SimpleNamespace(st_dev=3, st_ino=6, st_mode=cfg["mode"]) if (
+                label == "fstat-after" and cfg["metadata_changed"]) else info
+
+        class View:
+            family = cfg["family"]
+            def getsockopt(self, level, option):
+                self_level = 1
+                if level != self_level or option not in (2, 3):
+                    raise AssertionError("MODEL_FIXED_SOCKET_OPTIONS_ONLY")
+                step("type" if option == 2 else "listening")
+                return cfg["socket_type"] if option == 2 else cfg["listening"]
+            def getsockname(self):
+                step("local")
+                return cfg["local"]
+            def getpeername(self):
+                step("peer")
+                return cfg["peer"]
+            def detach(self):
+                step("detach")
+                return cfg["detached"]
+            def close(self):
+                raise AssertionError("BORROWED_ORIGINAL_MUST_NOT_CLOSE")
+
+        def socket_view(*args, **kwargs):
+            self.assertEqual(args, ())
+            self.assertEqual(kwargs, {"fileno": cfg["number"]})
+            step("borrow")
+            return View()
+
+        def default_timeout():
+            step("default-timeout")
+            return cfg["timeout"]
+
+        socket_model = SimpleNamespace(AF_UNIX=1, SOCK_STREAM=1, SOL_SOCKET=1,
+            SO_TYPE=2, SO_ACCEPTCONN=3, socket=socket_view, getdefaulttimeout=default_timeout)
+        io_model = SimpleNamespace(TextIOWrapper=Text, BufferedReader=Buffer,
+            BufferedWriter=Writer, FileIO=Raw)
+        os_model = SimpleNamespace(name=cfg["platform"], fstat=fstat)
+        def windows_handle(number):
+            self.assertEqual(number, cfg["number"])
+            step("windows-handle")
+            return 123
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(U, "socket", socket_model))
+            stack.enter_context(patch.object(U, "io", io_model))
+            stack.enter_context(patch.object(U, "os", os_model))
+            stack.enter_context(patch.dict(sys.modules, {"msvcrt": SimpleNamespace(get_osfhandle=windows_handle)}))
+            yield SimpleNamespace(cfg=cfg, events=events, stream=stream, info=info, failure=failure,
+                run=lambda: U._pipe_identity(stream, cfg["number"]))
+
+    def test_fifo_and_windows_original_handle_paths_do_not_borrow_socket(self):
+        for platform in ("posix", "nt"):
+            with self.subTest(platform=platform), self.model(platform=platform, mode=U.stat.S_IFIFO | 0o600) as m:
+                pin = m.run()
+                self.assertEqual(len(pin), 6)
+                self.assertIs(pin[0], m.stream)
+                self.assertIs(pin[1], m.stream.buffer)
+                self.assertIs(pin[2], m.stream.buffer.raw)
+                self.assertEqual(pin[3:5], (1, (3, 5, U.stat.S_IFIFO | 0o600)))
+                self.assertEqual(pin[5], 123 if platform == "nt" else None)
+                self.assertEqual(m.events, ["fstat-before"] + (["windows-handle"] if platform == "nt" else []))
+
+    def test_posix_unnamed_connected_stream_detaches_original_and_keeps_pin_shape(self):
+        for number in (0, 1, 2):
+            with self.subTest(number=number), self.model(number=number, detached=number) as m:
+                pin = m.run()
+                self.assertEqual(len(pin), 6)
+                self.assertEqual(pin, (m.stream, m.stream.buffer, m.stream.buffer.raw,
+                    number, (3, 5, m.info.st_mode), None))
+                self.assertEqual(m.events, ["fstat-before", "default-timeout", "borrow", "type",
+                    "listening", "local", "peer", "detach", "fstat-after"])
+                self.assertTrue(all(not item.closed for item in pin[:3]))
+
+    def test_nonfixed_socket_types_addresses_and_platforms_refuse(self):
+        changes = ({"platform": "nt"}, {"platform": "other"}, {"mode": U.stat.S_IFREG | 0o600},
+            {"family": 2}, {"socket_type": 2}, {"listening": 1}, {"local": "named"},
+            {"local": b"\0abstract"}, {"peer": "named"}, {"peer": ("127.0.0.1", 9)})
+        for change in changes:
+            with self.subTest(change=change), self.model(**change) as m:
+                with self.assertRaisesRegex(ValueError, "NATIVE_ORIGINAL_PIPE_ONLY"):
+                    m.run()
+                self.assertEqual(m.events.count("detach"), int("borrow" in m.events))
+                self.assertNotIn("fstat-after", m.events)
+                self.assertFalse(m.stream.closed)
+
+    def test_inspection_failures_detach_but_constructor_failure_has_no_close_claim(self):
+        for operation in ("borrow", "type", "listening", "local", "peer"):
+            with self.subTest(operation=operation), self.model(error=operation) as m:
+                with self.assertRaises(RuntimeError) as raised:
+                    m.run()
+                self.assertIs(raised.exception, m.failure)
+                self.assertEqual(m.events.count("detach"), int(operation != "borrow"))
+                self.assertNotIn("fstat-after", m.events)
+                self.assertFalse(m.stream.closed)
+
+    def test_detach_failure_wrong_descriptor_or_changed_original_refuses(self):
+        changes = ({"error": "detach"}, {"detached": 2}, {"detached": True},
+            {"detached": None}, {"metadata_changed": True}, {"error": "fstat-after"})
+        for change in changes:
+            with self.subTest(change=change), self.model(**change) as m:
+                with self.assertRaises((ValueError, RuntimeError)):
+                    m.run()
+                self.assertEqual(m.events.count("detach"), 1)
+                self.assertFalse(m.stream.closed)
+
+    def test_default_timeout_refuses_before_borrow_or_descriptor_mutation(self):
+        for timeout in (0, 0.5, False):
+            with self.subTest(timeout=timeout), self.model(timeout=timeout) as m:
+                with self.assertRaisesRegex(ValueError, "NATIVE_ORIGINAL_PIPE_ONLY"):
+                    m.run()
+                self.assertEqual(m.events, ["fstat-before", "default-timeout"])
+        with self.model(error="default-timeout") as m:
+            with self.assertRaises(RuntimeError) as raised:
+                m.run()
+            self.assertIs(raised.exception, m.failure)
+            self.assertEqual(m.events, ["fstat-before", "default-timeout"])
+
+    def test_wrong_wrapper_slot_and_closed_original_refuse_before_descriptor_access(self):
+        for change in ("wrapper", "slot", "closed", "buffer", "raw"):
+            with self.subTest(change=change), self.model() as m:
+                if change == "closed":
+                    m.stream.closed = True
+                elif change == "buffer":
+                    m.stream.buffer = object()
+                elif change == "raw":
+                    m.stream.buffer.raw = object()
+                with self.assertRaises(ValueError):
+                    U._pipe_identity(object() if change == "wrapper" else m.stream,
+                        2 if change == "slot" else 1)
+                self.assertEqual(m.events, [])
+
+    def test_mirrored_helpers_keep_exact_admission_and_borrowed_finally_contract(self):
+        productive = next(item for item in PRODUCTIVE_TREE.body
+            if isinstance(item, ast.FunctionDef) and item.name == "_pipe_identity")
+        current = node("_pipe_identity")
+        self.assertEqual(ast.dump(current, include_attributes=False), ast.dump(productive, include_attributes=False))
+        text = source("_pipe_identity")
+        self.assertIn('if os.name == "posix" and stat.S_ISSOCK(info.st_mode):', text)
+        self.assertIn('view = socket.socket(fileno=number)', text)
+        self.assertEqual(text.count("view.detach()"), 1)
+        self.assertNotIn("view.close(", text)
+        self.assertNotIn("fromfd(", text)
+        self.assertEqual(text.count('require(stat.S_ISFIFO(info.st_mode), "ORIGINAL_PIPE_ONLY")'), 1)
+        view_calls = {item.func.attr for item in ast.walk(current) if isinstance(item, ast.Call) and
+            isinstance(item.func, ast.Attribute) and isinstance(item.func.value, ast.Name) and item.func.value.id == "view"}
+        self.assertEqual(view_calls, {"getsockopt", "getsockname", "getpeername", "detach"})
+        guarded = next(item for item in ast.walk(current) if isinstance(item, ast.Try))
+        self.assertTrue(any(isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute) and
+            item.func.attr == "detach" for statement in guarded.finalbody for item in ast.walk(statement)))
+        self.assertIn('return stream, buffer, raw, number, (info.st_dev, info.st_ino, info.st_mode), handle', text)
 
 
 def node(name, owner=None):
