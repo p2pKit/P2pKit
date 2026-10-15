@@ -163,6 +163,74 @@ class EvidenceTests(unittest.TestCase):
         (phase / "result.json").write_text(json.dumps(row))
         self.assertEqual(E.failure_diagnostics(self.root, command)["simulatorPhases"], [])
 
+    def test_junit_failure_diagnostics_only_reveal_existing_source_identifiers(self):
+        source = self.root / "library/p2p-core/src/commonTest/kotlin/dev/p2pkit/ExampleTest.kt"
+        source.parent.mkdir(parents=True)
+        source.write_text("package dev.p2pkit\nclass ExampleTest { fun actualCase() {} }\n")
+        report = self.root / "library/p2p-core/build/test-results/jvmTest/TEST-example.xml"
+        report.parent.mkdir(parents=True)
+        report.write_text('<testsuite><testcase classname="dev.p2pkit.ExampleTest" name="actualCase[jvm]">'
+                          '<failure type="java.lang.AssertionError" message="PRIVATE_MESSAGE">PRIVATE_STACK</failure>'
+                          '</testcase><testcase classname="dev.p2pkit.ExampleTest" name="PRIVATE_PAYLOAD">'
+                          '<failure>PRIVATE_TEXT</failure></testcase>'
+                          '<testcase classname="private.SecretTest" name="actualCase"><error/></testcase></testsuite>')
+        expected = [{"source": source.relative_to(self.root).as_posix(), "test": "actualCase", "kinds": ["ASSERTION"]}]
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE)
+        git("init", "--quiet")
+        self.assertEqual(E.junit_failures(self.root), [])  # No original committed source.
+        git("add", source.relative_to(self.root).as_posix())
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Public test source fixture")
+        original = git("rev-parse", "HEAD").decode().strip()
+        saved = source.read_bytes()
+        source.write_bytes(saved + b"// modified source is not authority\n")
+        self.assertEqual(E.junit_failures(self.root, original), [])
+        git("add", source.relative_to(self.root).as_posix())
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Different test source fixture")
+        self.assertEqual(E.junit_failures(self.root, original), [])
+        source.write_bytes(saved)
+        self.assertEqual(E.junit_failures(self.root, original), expected)
+        git("checkout", original, "--", source.relative_to(self.root).as_posix())
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Restore public test source fixture")
+        self.assertEqual(E.junit_failures(self.root), expected)
+        self.assertNotIn("PRIVATE", json.dumps(E.junit_failures(self.root)))
+        report.write_text(report.read_text().replace('type="java.lang.AssertionError"', 'type="PRIVATE_TYPE"'))
+        self.assertEqual(E.junit_failures(self.root)[0]["kinds"], ["OTHER"])
+        report.write_text('<testsuite><testcase classname="dev.p2pkit.ExampleTest" name="actualCase"/></testsuite>')
+        self.assertEqual(E.junit_failures(self.root), [])
+
+    def test_junit_diagnostic_refuses_entities_malformed_and_linked_reports(self):
+        directory = self.root / "library/p2p-core/build/test-results/jvmTest"
+        directory.mkdir(parents=True)
+        report = directory / "TEST-example.xml"
+        source = self.root / "library/p2p-core/src/commonTest/kotlin/dev/p2pkit/ExampleTest.kt"
+        source.parent.mkdir(parents=True)
+        source.write_text("package dev.p2pkit\nclass ExampleTest { fun actualCase() {} }\n")
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE)
+        git("init", "--quiet")
+        git("add", source.relative_to(self.root).as_posix())
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Public negative-parser fixture")
+        valid = b'<testsuite><testcase classname="dev.p2pkit.ExampleTest" name="actualCase"><failure/></testcase></testsuite>'
+        report.write_bytes(valid)
+        self.assertEqual(len(E.junit_failures(self.root)), 1)
+        untracked = source.with_name("UntrackedTest.kt")
+        untracked.write_text("package dev.p2pkit\nclass UntrackedTest { fun actualCase() {} }\n")
+        report.write_bytes(valid.replace(b'ExampleTest', b'UntrackedTest'))
+        self.assertEqual(E.junit_failures(self.root), [])
+        for raw in (b'<!DOCTYPE testsuite [<!ENTITY a "private">]>' + valid, b'<broken>', b'x' * (4 * 1024 * 1024 + 1)):
+            report.write_bytes(raw)
+            self.assertEqual(E.junit_failures(self.root), [])
+        report.unlink()
+        outside = self.root / "private.xml"
+        outside.write_bytes(valid)
+        os.link(outside, report)
+        self.assertEqual(E.junit_failures(self.root), [])
+
     def test_embedded_publication_emits_source_lines_without_changing_failure(self):
         import ast
         import struct
