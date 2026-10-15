@@ -80,6 +80,7 @@ def commands(component):
                 ('maven-coordinate-controls', 'check-maven-central-version'),
                 ('maven-upload-controls', 'publish-central-portal-bundle'))],
             ('embedded-jmdns-archive-controls', bash + ['scripts/tests/check-embedded-jmdns-aar.sh']),
+            ('central-gpg-lifecycle-controls', bash + ['scripts/tests/central-gpg-lifecycle-test.sh']),
             ('workflow-contract', ['ruby', 'scripts/check-modular-ci-policy.rb']),
             ('workflow-syntax', ['actionlint', '-shellcheck=', '-pyflakes=',
                 *[str(p.relative_to(ROOT)) for p in sorted((ROOT / '.github/workflows').glob('*.yml'))
