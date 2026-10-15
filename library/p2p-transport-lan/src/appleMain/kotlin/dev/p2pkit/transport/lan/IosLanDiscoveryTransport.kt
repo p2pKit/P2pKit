@@ -10,6 +10,7 @@ import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
+import dev.p2pkit.transport.lan.interop.p2pkit_nw_required_lan_interface_index
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -132,6 +133,7 @@ internal class IosLanDiscoveryTransport(
     private class BrowserLease(
         val handle: nw_browser_t,
         val generation: Int,
+        val txtQueryScope: IosLanTxtQueryScope,
         @Volatile var recoveryAttempt: Int
     )
 
@@ -217,6 +219,7 @@ internal class IosLanDiscoveryTransport(
 
     /** The admitted token is part of the same cache/endpoint/relay transaction, not a TXT pid lookup. */
     private val admittedTxtOwners = mutableMapOf<String, IosLanTxtMonitor.Owner>()
+    private val hasInjectedTxtDns = txtDns != null
     private val txtMonitor = IosLanTxtMonitor(
         announceCacheLock,
         txtDns ?: PlatformIosLanTxtDns(dataTransport.queue),
@@ -680,11 +683,17 @@ internal class IosLanDiscoveryTransport(
         } catch (_: Throwable) {
             // Read-only diagnostics must not change browser creation.
         }
+        val txtQueryScope = if (policy == null) IosLanTxtQueryScope.ordinary else {
+            IosLanTxtQueryScope.organization {
+                p2pkit_nw_required_lan_interface_index(browserParams, policy.interfaceName, policy.localAddress)
+            }
+        }
         val b = nw_browser_create(descriptor, browserParams)
             ?: error("nw_browser_create returned null")
         val lease = BrowserLease(
             handle = b,
             generation = browserGeneration,
+            txtQueryScope = txtQueryScope,
             recoveryAttempt = recoveryAttempt
         )
         withAnnounceCacheLock {
@@ -920,6 +929,7 @@ internal class IosLanDiscoveryTransport(
 
     private fun txtService(endpoint: nw_endpoint_t, generation: Int): IosLanTxtService? {
         if (endpoint == null) return null
+        val scope = browser?.takeIf { it.generation == generation }?.txtQueryScope ?: return null
         val name = validDiscoveryPeerIdOrNull(copyLanDnsString(nw_endpoint_get_bonjour_service_name(endpoint)))
             ?: return null
         if (name == transportContext.localPeerId.value) return null
@@ -927,7 +937,7 @@ internal class IosLanDiscoveryTransport(
         if (type.removeSuffix(".") != transportContext.lanServiceTypeBonjour) return null
         val domain = copyLanDnsString(nw_endpoint_get_bonjour_service_domain(endpoint))
             ?.takeIf { it.isNotEmpty() } ?: return null
-        return IosLanTxtService(name, type, domain, endpoint, generation)
+        return IosLanTxtService(name, type, domain, endpoint, generation, scope)
     }
 
     /** Same owner transition as the native handler; tests inject only the native DNS-call boundary. */
@@ -946,7 +956,18 @@ internal class IosLanDiscoveryTransport(
     internal val txtReservedQueryCountForTest: Int get() = txtMonitor.reservedQueryCountForTest
     internal val txtRetainedBytesForTest: Int get() = txtMonitor.retainedBytesForTest
 
-    private fun acceptTxtSnapshot(snapshot: IosLanTxtMonitor.Snapshot) {
+    private fun acceptTxtSnapshot(snapshot: IosLanTxtMonitor.Snapshot) = acceptTxtSnapshot(snapshot, policy)
+
+    /** Validation-only seam: the ordinary fake-DNS rig cannot relax a configured organization policy. */
+    internal fun acceptOrganizationTxtSnapshotForTest(
+        snapshot: IosLanTxtMonitor.Snapshot,
+        organizationPolicy: OrganizationLan
+    ) {
+        check(policy == null && hasInjectedTxtDns)
+        acceptTxtSnapshot(snapshot, organizationPolicy)
+    }
+
+    private fun acceptTxtSnapshot(snapshot: IosLanTxtMonitor.Snapshot, organizationPolicy: OrganizationLan?) {
         if (snapshot.pending) return
         val service = snapshot.owner.service
         val records = snapshot.records.map { decoded -> validatedTxt(decoded, service.name) }
@@ -957,7 +978,7 @@ internal class IosLanDiscoveryTransport(
         }
         emitDecodedPeer(
             service.endpoint, snapshot.records.first(), isUpdate = true, generation = service.generation,
-            ownerSnapshot = snapshot
+            ownerSnapshot = snapshot, organizationPolicy = organizationPolicy
         )
     }
 
@@ -996,7 +1017,8 @@ internal class IosLanDiscoveryTransport(
         decoded: IosBonjour.DecodedRecord,
         isUpdate: Boolean,
         generation: Int,
-        ownerSnapshot: IosLanTxtMonitor.Snapshot? = null
+        ownerSnapshot: IosLanTxtMonitor.Snapshot? = null,
+        organizationPolicy: OrganizationLan? = policy
     ) {
         // A rejected record can contradict/omit its TXT pid. Only the native
         // service name identifies which previously admitted ownership to revoke.
@@ -1037,8 +1059,8 @@ internal class IosLanDiscoveryTransport(
         // Strict organization transport never dials an opaque Bonjour endpoint. Validate numeric hints
         // before publication; the transport STILL checks policy/interface and the actual connected socket.
         val numeric = record.numericEndpoint
-        if (policy != null && numeric != null && !policy.allows(numeric.host)) {
-            withdrawInvalidResolution(servicePid, generation)
+        if (organizationPolicy != null && numeric != null && !organizationPolicy.allows(numeric.host)) {
+            withdraw()
             return
         }
         val internalPeer = record.toInternalPeer(TransportHint(type = TransportKind.LAN,

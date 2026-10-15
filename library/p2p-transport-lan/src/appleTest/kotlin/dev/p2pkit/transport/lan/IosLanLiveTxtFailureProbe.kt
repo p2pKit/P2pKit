@@ -137,12 +137,13 @@ internal object IosLanLiveTxtFailureProbe {
 
             override fun start(
                 fullName: String,
+                scope: IosLanTxtQueryScope,
                 callback: (Int, () -> IosLanTxtAnswer) -> Unit
             ): IosLanTxtDns.Start {
                 // A queued start which loses the deadline must not create a native reference.
                 check(open())
                 return try {
-                    val start = native.start(fullName) { error, fields ->
+                    val start = native.start(fullName, scope) { error, fields ->
                         receive(error, fields, callback)
                     }
                     try {

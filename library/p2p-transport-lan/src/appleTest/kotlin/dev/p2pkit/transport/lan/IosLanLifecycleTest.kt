@@ -1012,7 +1012,7 @@ class IosLanLifecycleTest {
                 "$name.$type.$domain"
 
             override fun start(
-                fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit
+                fullName: String, scope: IosLanTxtQueryScope, callback: (Int, () -> IosLanTxtAnswer) -> Unit
             ): IosLanTxtDns.Start {
                 nativeCallback = callback
                 return IosLanTxtDns.Start(0, null)
@@ -1390,10 +1390,12 @@ private class ObservingLiveIosLanTxtDns(
         return result
     }
 
-    override fun start(fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit): IosLanTxtDns.Start {
+    override fun start(
+        fullName: String, scope: IosLanTxtQueryScope, callback: (Int, () -> IosLanTxtAnswer) -> Unit
+    ): IosLanTxtDns.Start {
         val target = fullName.startsWith("$targetName.")
         val result = try {
-            delegate.start(fullName) { error, fields ->
+            delegate.start(fullName, scope) { error, fields ->
                 if (target) advance(ProgressEvent.ENTERED)
                 val forwarded = if (target && error == 0) try {
                     {

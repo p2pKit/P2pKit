@@ -34,7 +34,9 @@ static inline nw_parameters_t p2pkit_nw_create_plain_tcp_parameters(void) {
 
 /* Cinterop may compile this Objective-C header with or without ARC. Created/copied
  * Network objects need an explicit release under MRC, but never a second release
- * under ARC. Do not apply this to borrowed callback arguments or returned objects. */
+ * under ARC. Do not apply this to borrowed callback arguments or returned objects.
+ * The SDK declares concrete Network objects with distinct Objective-C protocols;
+ * known owned Network objects are explicitly cast at each call, without an ownership transfer. */
 static inline void p2pkit_nw_release_owned(nw_object_t object) {
 #if !__has_feature(objc_arc)
     if (object != NULL) nw_release(object);
@@ -185,9 +187,33 @@ static inline bool p2pkit_nw_restrict_lan_parameters(
         nw_endpoint_t endpoint = nw_endpoint_create_host(local, port);
         if (endpoint == NULL) return false;
         nw_parameters_set_local_endpoint(parameters, endpoint);
-        p2pkit_nw_release_owned(endpoint);
+        p2pkit_nw_release_owned((nw_object_t)endpoint);
     }
     return true;
+}
+
+/* TXT queries must use the same actual required interface as their admitted browser.
+ * A name lookup alone is not physical-interface authority. Recheck the selected local
+ * address and original required NWInterface each time; zero never means "Any" here. */
+static inline uint32_t p2pkit_nw_required_lan_interface_index(
+    nw_parameters_t parameters, const char *name, const char *local
+) {
+    if (parameters == NULL || name == NULL || local == NULL ||
+        nw_parameters_get_include_peer_to_peer(parameters) ||
+        !p2pkit_lan_selected_address_is_live(name, local)) return 0;
+    __attribute__((objc_precise_lifetime))
+    nw_interface_t interface = nw_parameters_copy_required_interface(parameters);
+    uint32_t result = 0;
+    if (interface != NULL) {
+        const char *actual_name = nw_interface_get_name(interface);
+        nw_interface_type_t type = nw_interface_get_type(interface);
+        uint32_t index = nw_interface_get_index(interface);
+        if (actual_name != NULL && strcmp(actual_name, name) == 0 &&
+            (type == nw_interface_type_wifi || type == nw_interface_type_wired) &&
+            index != 0 && index <= INT32_MAX && if_nametoindex(name) == index) result = index;
+    }
+    p2pkit_nw_release_owned((nw_object_t)interface);
+    return result;
 }
 
 /* Called before I/O and on NWConnection path changes; opaque/unverifiable endpoints fail closed. */
@@ -215,9 +241,9 @@ static inline bool p2pkit_nw_lan_path_is_allowed(
         allowed = p2pkit_lan_endpoint_numeric(destination, remote, sizeof(remote)) && remote_allowed(remote);
     }
 cleanup:
-    p2pkit_nw_release_owned(destination);
-    p2pkit_nw_release_owned(source);
-    p2pkit_nw_release_owned(path);
+    p2pkit_nw_release_owned((nw_object_t)destination);
+    p2pkit_nw_release_owned((nw_object_t)source);
+    p2pkit_nw_release_owned((nw_object_t)path);
     return allowed;
 }
 
