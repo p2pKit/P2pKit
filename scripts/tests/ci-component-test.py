@@ -51,6 +51,18 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(command[0], 'actionlint')
         self.assertIn('.github/workflows/ci-component.yml', command)
         self.assertIn('.github/workflows/publish-maven-central.yml', command)
+    def test_retained_publication_security_controls_are_in_source_component(self):
+        expected = {
+            'release-tag-controls': 'check-release-tag',
+            'release-identity-controls': 'check-release-identity',
+            'maven-environment-controls': 'check-maven-release-environment',
+            'maven-namespace-controls': 'check-maven-namespace-access',
+            'maven-coordinate-controls': 'check-maven-central-version',
+            'maven-upload-controls': 'publish-central-portal-bundle'}
+        actual = dict(C.commands('source'))
+        for name, script in expected.items():
+            self.assertEqual(actual[name], ['bash', 'scripts/tests/' + script + '-test.sh'])
+
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])
     def test_unknown_duplicate_empty_refused(self):

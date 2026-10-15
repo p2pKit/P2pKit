@@ -45,6 +45,8 @@ CODES = frozenset({"PASS", "INPUT", "SOURCE_CHANGED", "SPAWN", "COMMAND_FAILED",
                    "CANCELLED", "OUTPUT_LIMIT", "OUTPUT_IO", "CLEANUP", "REPORTS", "RECIPIENT",
                    "ENCRYPTION", "MANIFEST"})
 TASK_NAMES = frozenset({
+    "release-tag-controls", "release-identity-controls", "maven-environment-controls",
+    "maven-namespace-controls", "maven-coordinate-controls", "maven-upload-controls",
     "wrapper", "layout", "links", "release-metadata", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
