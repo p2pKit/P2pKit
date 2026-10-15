@@ -58,7 +58,8 @@ def main():
     with zipfile.ZipFile(jar) as archive:
         entries = archive.namelist()
         require(len(entries) == len(set(entries)) and "module-info.class" in entries and
-                not any("ModelTests" in name or name.startswith("META-INF/versions/") for name in entries),
+                not any("ModelTests" in name or "RegistrationOwnerTests" in name or
+                        name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
         require(probe[:8] == bytes.fromhex("cafebabeffff0041"), "Probe must require JDK21 preview class format")
@@ -120,6 +121,15 @@ def main():
                          "--module", MODULE + "/" + PACKAGE + ".ModelTests"], 0,
                    r"WINDOWS_LOADER_JDK21_MODELS_PASS tests=14 "
                    r"scope=PORTABLE_FFM_DATA_NOT_WINDOWS_NATIVE_OR_PROFILE\n", "")
+    # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
+    owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
+                   "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]
+    owner_cases += ["malformed-" + str(i) for i in range(24)] + ["refusal-" + str(i) for i in range(1, 11)]
+    for case in owner_cases:
+        run("registration-owner-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".RegistrationOwnerTests", case], 0,
+            "WINDOWS_JNI_OWNER_PASS case=" + re.escape(case) +
+            r" scope=PORTABLE_LIFETIME_NOT_NATIVE_REGISTRATION_OR_AUTHORITY\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_PREVIEW_REFUSALS_AND_PORTABLE_MODELS_NOT_OS_JNI_OR_RELEASE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},

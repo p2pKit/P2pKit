@@ -196,8 +196,8 @@ invoked by preparing the plan or inspecting the declaring class.
 
 The native [post-admission registration core](../windows-profile/jni-contract.md#post-admission-registration-core)
 now implements the single-invocation operation, but is not exported or reachable
-from production. The managed invocation/owner and productive loading remain
-unimplemented. The design direction is
+from production. The managed lifetime component below is implemented separately;
+its actual native invocation and productive loading remain unimplemented. The design direction is
 explicit `RegisterNatives` against original verified function addresses, after
 independent loading authority. Preload plus `System.load` does not pin each Java
 method to that module. JNI references and pending exceptions need a reviewed
@@ -207,3 +207,30 @@ succeed: reserve process-lifetime module/class ownership before the attempt, and
 retain it on failure without retry, unregister or unload. Profile Stop must not
 retire cached JNI code. None of these lifetime or runtime guarantees follows from
 the inert plan, and no production registration entry is enabled here.
+
+## Registration lifetime component
+
+`WindowsJniRegistrationOwner` is a package-private, dormant post-admission mechanism.
+It reserves one boot-module process slot before entering its synchronous invocation,
+strongly retaining the original installation/runtime/module owners, declaring class,
+immutable registration plan and invocation frame. These references are **not** installed
+authority or OS handle pins. A future reviewed loader must first establish real authority
+and transfer exclusive originals, not borrowed objects with independent close paths.
+There is no productive caller or native invocation implementation yet.
+
+Every admitted attempt consumes the slot, even a phase-0 refusal, thrown invocation,
+partial registration or malformed report. Success requires coherent result-0/phase-2
+readback and successful invocation-buffer retirement. Immutable readback prevents a
+caller-writable array from changing the validated result. Separate preallocated failure
+slots preserve invocation, readback, controller and retirement errors without suppression
+allocation. Failure enum initialization precedes native effects. Profile Stop cannot
+reset, unregister or unload through this component: no such API exists. Returning a
+registration owner does not publish a complete profile provider.
+
+The existing diagnostic command also runs **46 fresh-process lifetime controls** with
+inert invocations. They cover terminal errors, all report words, native refusal codes,
+concurrent/reentrant/later attempts, virtual-thread rejection and a child-loaded owner
+copy. The owner class must itself belong to the original boot module; delegating the
+runtime check to that module cannot admit another singleton. These controls are separate
+from the 14 FFM data models and do not execute native registration or establish physical
+module retention. Test-only classes never enter the packaged adapter JAR.
