@@ -132,6 +132,8 @@ class EvidenceTests(unittest.TestCase):
             "> Task :p2p-private:secret FAILED\n"
             "> Task :p2p-core:secret FAILED\n"
             "host_not_announced private-payload-123\n"
+            "PUBLICATION_EMBEDDED_CHECK_LINES 321,99,15\n"
+            "PUBLICATION_EMBEDDED_CHECK_LINES private-secret\n"
             "Dependency verification failed credential-never-public\n" +
             "a" * 5000 + "private-long-line\n")
         (command / "stderr.log").write_text("private URL or environment must not appear\n")
@@ -143,6 +145,7 @@ class EvidenceTests(unittest.TestCase):
         result = E.failure_diagnostics(self.root, command)
         self.assertEqual(result["categories"], ["DEPENDENCY_INTEGRITY", "LAN_HOST_NOT_ANNOUNCED"])
         self.assertEqual(result["failedGradleTasks"], [":p2p-core:jvmTest"])
+        self.assertEqual(result["embeddedPublicationCheckLines"], [321,99,15])
         self.assertEqual(result["simulatorPhases"], [{"label": "simulator-first-launch", "exitCode": 1,
             "timedOut": False, "outputLimitExceeded": False, "ownedGroupDrained": True}])
         self.assertNotIn("private", json.dumps(result))
@@ -159,6 +162,66 @@ class EvidenceTests(unittest.TestCase):
         row["exitCode"] = True
         (phase / "result.json").write_text(json.dumps(row))
         self.assertEqual(E.failure_diagnostics(self.root, command)["simulatorPhases"], [])
+
+    def test_embedded_publication_emits_source_lines_without_changing_failure(self):
+        import ast
+        import struct
+        import xml.etree.ElementTree as ET
+        import zipfile
+        shell = (SCRIPTS / "check-publish-artifacts.sh").read_text()
+        script = shell.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(script)
+        helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "require")
+        guard = next(node for node in tree.body if isinstance(node, ast.Try))
+        namespace = {"sys": sys, "ET": ET, "zipfile": zipfile, "struct": struct}
+        exec(compile(ast.Module(body=[helper], type_ignores=[]), "<stdin>", "exec"), namespace)
+        namespace["inspect"] = lambda: namespace["require"](False, "PRIVATE_TEST_INPUT")
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured), self.assertRaises(SystemExit) as caught:
+            exec(compile(ast.Module(body=[guard], type_ignores=[]), "<stdin>", "exec"), namespace)
+        self.assertEqual(caught.exception.code, 1)
+        self.assertRegex(captured.getvalue(), r"PUBLICATION_EMBEDDED_CHECK_LINES [0-9]+,[0-9]+\n")
+        public_line = captured.getvalue().splitlines()[0]
+        self.assertNotIn("PRIVATE", public_line)
+
+    def test_platform_failure_diagnostics_project_only_known_tasks_and_counts(self):
+        command = self.root / "command"
+        command.mkdir()
+        (command / "stdout.log").write_text("> Task :p2p-transport-lan:allTests FAILED\nPLATFORM_CHECK_LINES 831,134,58\n"
+                                           "PLATFORM_CHECK_LINES private-secret\n")
+        directory = self.root / "build/reports/platform-tests/current"
+        directory.mkdir(parents=True)
+        valid = {"outcome": "FAILED", "passed": 3, "failed": 1, "skipped": 0, "failure": "private-secret"}
+        report = {"buildFailed": True, "private": "private-secret", "tests": {
+            ":p2p-transport-lan:iosSimulatorArm64Test": valid,
+            ":private:secret": valid,
+            ":p2p-core:jvmTest": {**valid, "failed": True},
+            ":p2p-core:iosX64Test": {**valid, "outcome": "private-secret"}}}
+        (directory / "execution.json").write_text(json.dumps(report))
+        result = E.failure_diagnostics(self.root, command)
+        self.assertEqual(result["platformTests"], [{"buildFailed": True, "tests": [{
+            "task": ":p2p-transport-lan:iosSimulatorArm64Test", "outcome": "FAILED", "passed": 3, "failed": 1, "skipped": 0}]}])
+        self.assertEqual(result["failedGradleTasks"], [":p2p-transport-lan:allTests"])
+        self.assertEqual(result["platformCheckLines"], [831,134,58])
+        self.assertNotIn("private", json.dumps(result))
+        (directory / "execution.json").write_text('{"tests":[]}')
+        self.assertEqual(E.failure_diagnostics(self.root, command)["platformTests"], [])
+
+    def test_platform_actual_failure_locator_preserves_private_exception(self):
+        spec = importlib.util.spec_from_file_location("platform_locator_test", SCRIPTS / "run-platform-tests.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        output = io.StringIO()
+        try:
+            module.require(False, "PRIVATE_FAILURE")
+        except ValueError as error:
+            with contextlib.redirect_stderr(output):
+                module.report_failure_location(error)
+            self.assertEqual(str(error), "PRIVATE_FAILURE")
+        else:
+            self.fail("Original failure was not preserved")
+        self.assertRegex(output.getvalue(), r"^PLATFORM_CHECK_LINES [0-9]+\n$")
+        self.assertNotIn("PRIVATE", output.getvalue())
 
     def test_windows_autocrlf_checkout_preserves_exact_public_recipient_blob(self):
         # Actual Git checkout conversion, not a mocked newline transform. The
@@ -190,6 +253,47 @@ class EvidenceTests(unittest.TestCase):
                 else:
                     self.assertIn(b"\r\n", actual)
                     self.assertNotEqual(hashlib.sha256(actual).digest(), hashlib.sha256(original).digest())
+
+    def test_gpg_uses_cwd_relative_paths_for_native_and_msys_interoperation(self):
+        work = self.root / 'private work'; work.mkdir()
+        source = self.root / 'input archive.tar.gz'; source.write_bytes(b'public fixture')
+        output = self.root / 'public output' / 'evidence.tar.gz.gpg'; output.parent.mkdir()
+        key = (SCRIPTS.parent / '.github/ci-evidence-recipient.asc').read_bytes()
+        calls = []
+        def invoke(argv, **kwargs):
+            calls.append(argv)
+            self.assertEqual(kwargs['cwd'], work)
+            self.assertEqual(argv[argv.index('--homedir') + 1], 'gnupg')
+            self.assertIn('--no-autostart', argv)
+            self.assertIn('--no-auto-key-retrieve', argv)
+            expected = {'--import': work / 'recipient.asc', '--output': output, '--encrypt': source}
+            for flag, path in expected.items():
+                if flag in argv:
+                    argument = argv[argv.index(flag) + 1]
+                    self.assertFalse(os.path.isabs(argument))
+                    self.assertNotIn('\\', argument)
+                    self.assertEqual((work / argument).resolve(), path.resolve())
+            directory = kwargs['private']; directory.mkdir()
+            (directory / 'stdout.log').write_bytes(b'public-key-listing-model')
+            (directory / 'stderr.log').write_bytes(b'')
+            if '--encrypt' in argv:
+                output.write_bytes(b'public-ciphertext-model' * 4)
+            return {'code': 'PASS', 'exitCode': 0, 'timedOut': False, 'cleanupKnown': True}
+        with mock.patch.object(E, 'run_command', side_effect=invoke), \
+                mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
+                mock.patch.object(E, '_key_identity', return_value=(PUBLIC_FINGERPRINT, 0)):
+            E.encrypt_archive(source, output, key, hashlib.sha256(key).hexdigest(),
+                              PUBLIC_FINGERPRINT, work, dict(os.environ))
+        self.assertEqual(len(calls), 4)
+        other = self.root / 'different-drive-model'; other.mkdir()
+        with mock.patch.object(E.os.path, 'relpath', side_effect=ValueError('PRIVATE_DRIVE')), \
+                mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
+                mock.patch.object(E, 'run_command') as unused:
+            with self.assertRaises(E.EvidenceError) as caught:
+                E.encrypt_archive(source, output, key, hashlib.sha256(key).hexdigest(),
+                                  PUBLIC_FINGERPRINT, other, dict(os.environ))
+        self.assertEqual(caught.exception.code, 'ENCRYPTION')
+        unused.assert_not_called()
 
     def test_actual_public_key_encrypts_without_private_key_or_agent(self):
         key = (SCRIPTS.parent / ".github/ci-evidence-recipient.asc").read_bytes()

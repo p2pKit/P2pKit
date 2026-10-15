@@ -683,6 +683,14 @@ try:
     inspect()
 except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
         ET.ParseError, zipfile.BadZipFile, struct.error) as error:
+    # Publish only source-bound validator line numbers, never the failed input,
+    # private path or arbitrary exception text. Full diagnostics stay encrypted.
+    trace, lines = error.__traceback__, []
+    while trace is not None:
+        if trace.tb_frame.f_code.co_filename == "<stdin>":
+            lines.append(trace.tb_lineno)
+        trace = trace.tb_next
+    print("PUBLICATION_EMBEDDED_CHECK_LINES " + ",".join(map(str, lines)), file=sys.stderr)
     print("FAIL embedded JmDNS — " + str(error), file=sys.stderr)
     raise SystemExit(1)
 PY

@@ -338,8 +338,16 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
     home.mkdir(mode=0o700)
     gpg = shutil.which("gpg", path=environment.get("PATH"))
     require(gpg is not None, "RECIPIENT")
+    # The native supervisor sets cwd=work. Relative forward-slash arguments name
+    # the same files for both native Windows GPG and Git/MSYS GPG; native drive
+    # and backslash syntax is not a portable GPG homedir/filename contract.
+    def filename(path):
+        try:
+            return os.path.relpath(path, work).replace(os.sep, "/")
+        except ValueError:
+            raise EvidenceError("ENCRYPTION") from None  # Different Windows drives.
     base = [gpg, "--no-options", "--batch", "--no-tty", "--no-autostart", "--pinentry-mode", "error",
-            "--homedir", str(home), "--no-auto-key-retrieve"]
+            "--homedir", filename(home), "--no-auto-key-retrieve"]
     environment = {key: value for key, value in environment.items() if key in {
         "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR",
         "LANG", "LC_ALL", "PATHEXT"}}
@@ -359,13 +367,13 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
             raise error
         return (directory / "stdout.log").read_bytes()
     listing = invoke("key-show", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint",
-                                   "--import-options", "show-only", "--import", str(key_file)])
+                                   "--import-options", "show-only", "--import", filename(key_file)])
     fingerprint, expires_at = _key_identity(listing, expected_fingerprint.upper())
-    invoke("key-import", ["--import", str(key_file)])
+    invoke("key-import", ["--import", filename(key_file)])
     imported = invoke("key-list", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint", "--list-keys"])
     require(_key_identity(imported, expected_fingerprint.upper()) == (fingerprint, expires_at), "RECIPIENT")
     invoke("encrypt", ["--trust-model", "always", "--compress-algo", "none", "--recipient", fingerprint + "!",
-                        "--output", str(output), "--encrypt", str(archive)], timeout=300)
+                        "--output", filename(output), "--encrypt", filename(archive)], timeout=300)
     require(output.is_file() and 32 < output.stat().st_size <= MAX_BUNDLE_BYTES + 16 * 1024 * 1024, "ENCRYPTION")
     return {**digest_file(output), "recipientFingerprint": expected_fingerprint.upper()}
 
@@ -412,11 +420,11 @@ def failure_diagnostics(root, command_directory):
     These observations help diagnose a failed command, never qualify it. Scan
     the already bounded closed captures; never copy arbitrary error messages.
     """
-    categories, tasks = set(), set()
+    categories, tasks, publication_lines, platform_lines = set(), set(), [], []
     modules = {"p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
                "p2p-network-provisioning-desktop", "p2p-sample-android", "p2p-sample-desktop",
-               "p2p-sample-desktop-ui", "p2p-sample-rpc", "buildSrc"}
-    task_names = {"jvmTest", "test", "testDebugUnitTest", "testAndroidHostTest", "iosX64Test",
+               "p2p-sample-desktop-ui", "p2p-sample-diagnostics", "sample-kmp-shared", "p2p-sample-rpc", "buildSrc"}
+    task_names = {"allTests", "check", "jvmTest", "test", "testDebugUnitTest", "testAndroidHostTest", "iosX64Test",
                   "iosSimulatorArm64Test", "dokkaGeneratePublicationHtml", "checkKotlinAbi", "checkAndroidAbi",
                   "publishToMavenLocal", "assembleDebug", "packageMsi", "packageDmg", "packageDeb", "compileJava"}
     task_names.update(prefix + target for prefix in ("compileKotlin", "compileTestKotlin", "linkDebugTest", "cinteropP2pkit_nw")
@@ -452,10 +460,16 @@ def failure_diagnostics(root, command_directory):
                 # The captures themselves are bounded; cap each parsed line too.
                 if len(line) > 4096:
                     continue
+                location = re.fullmatch(rb"PUBLICATION_EMBEDDED_CHECK_LINES ([0-9]{1,5}(?:,[0-9]{1,5}){0,15})\s*", line)
+                if location:
+                    publication_lines = [int(value) for value in location[1].split(b",")]
+                location = re.fullmatch(rb"PLATFORM_CHECK_LINES ([0-9]{1,5}(?:,[0-9]{1,5}){0,15})\s*", line)
+                if location:
+                    platform_lines = [int(value) for value in location[1].split(b",")]
                 for token, category in known.items():
                     if token.lower() in line.lower():
                         categories.add(category)
-                match = re.fullmatch(rb"> Task (:(?:p2p-[a-z0-9-]+|buildSrc):[A-Za-z0-9_:.-]{1,120}) FAILED\s*", line)
+                match = re.fullmatch(rb"> Task (:(?:p2p-[a-z0-9-]+|sample-kmp-shared|buildSrc):[A-Za-z0-9_:.-]{1,120}) FAILED\s*", line)
                 if match:
                     task = match[1].decode("ascii")
                     pieces = task.split(":")
@@ -475,7 +489,27 @@ def failure_diagnostics(root, command_directory):
                 phases.append({k: row[k] for k in ("label", "exitCode", "timedOut", "outputLimitExceeded", "ownedGroupDrained")})
         except (OSError, ValueError, TypeError):
             continue
-    return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32]}
+    platform_reports = []
+    for path in sorted((root / "build/reports/platform-tests").glob("*/execution.json")):
+        try:
+            report = read_json(path, MAX_JSON_BYTES)
+            if type(report) is not dict or type(report.get("tests")) is not dict:
+                continue
+            tests = []
+            for task, row in report["tests"].items():
+                pieces = task.split(":")
+                if (len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names and
+                    type(row) is dict and type(row.get("outcome")) is str and row["outcome"] in
+                    {"EXECUTED", "FAILED", "NO_SOURCE", "SKIPPED", "UP-TO-DATE", "FROM-CACHE", "NOT_COMPLETED", "NOT_REQUESTED"} and
+                    all(type(row.get(k)) is int and 0 <= row[k] <= 1000000 for k in ("passed", "failed", "skipped"))):
+                    tests.append({"task": task, **{k: row[k] for k in ("outcome", "passed", "failed", "skipped")}})
+            platform_reports.append({"buildFailed": report.get("buildFailed") if type(report.get("buildFailed")) is bool else None,
+                                     "tests": sorted(tests, key=lambda row: row["task"])[:64]})
+        except (OSError, ValueError, TypeError):
+            continue
+    return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32],
+            "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
+            "platformTests": platform_reports[:8]}
 
 
 def public_outcome(value):

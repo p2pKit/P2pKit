@@ -58,6 +58,17 @@ def require(condition, reason):
         raise ValueError(reason)
 
 
+def report_failure_location(error):
+    """Only source line numbers leave the private report, never error values."""
+    trace, lines = error.__traceback__, []
+    while trace is not None:
+        if trace.tb_frame.f_code.co_filename == __file__:
+            lines.append(trace.tb_lineno)
+        trace = trace.tb_next
+    if lines:
+        print("PLATFORM_CHECK_LINES " + ",".join(map(str, lines)), file=sys.stderr)
+
+
 def unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -841,6 +852,7 @@ def run(profile):
                None if ordinary is None else ordinary["start"], None if ordinary is None else ordinary["prelaunch"],
                **intel_arguments)
     except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
+        report_failure_location(error)
         errors.append(str(error))
     if code and (profile != "ios-x64" or gradle_attempted):
         errors.append(f"Gradle exited {code}")
@@ -889,6 +901,7 @@ def main():
     try:
         return run(arguments.profile)
     except (OSError, ValueError, TypeError, KeyError, RecursionError, audit_processes.OwnershipError) as error:
+        report_failure_location(error)
         print(f"FATAL: {error}", file=sys.stderr)
         return 1
 
