@@ -63,6 +63,16 @@ class ComponentTests(unittest.TestCase):
         for name, script in expected.items():
             self.assertEqual(actual[name], ['bash', 'scripts/tests/' + script + '-test.sh'])
 
+    def test_signed_original_and_recovery_regressions_are_run_offline_in_source(self):
+        actual = dict(C.commands('source'))
+        for name in ('central-bundle-evidence-test.py', 'maven-recovery-test.py'):
+            self.assertEqual(actual[name], [C.sys.executable, '-B', 'scripts/tests/' + name, '-v'])
+        evidence_spec = importlib.util.spec_from_file_location('ci_evidence_routes', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        self.assertTrue(set(actual) <= evidence.TASK_NAMES)
+
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])
     def test_unknown_duplicate_empty_refused(self):
