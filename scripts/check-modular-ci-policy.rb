@@ -32,11 +32,13 @@ module ModularCI
     jobs = ci.fetch('jobs')
     require!(jobs.keys.sort == %w[complete-gate component plan qualify], 'Missing or extra active CI stage')
     triggers = ci.fetch('on') { ci.fetch(true) }
-    require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?('bundle-diagnostic'),
-             'Explicit disposable bundle diagnostic route missing')
-    %w[qualify complete-gate].each do |name|
-      require!(jobs[name].fetch('if').include?("inputs.component != 'bundle-diagnostic' &&"),
-               'Diagnostic must not aggregate or complete qualification')
+    %w[bundle-diagnostic jmdns-diagnostic].each do |diagnostic|
+      require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),
+               'Explicit focused diagnostic route missing')
+      %w[qualify complete-gate].each do |name|
+        require!(jobs[name].fetch('if').include?("inputs.component != '#{diagnostic}' &&"),
+                 'Diagnostic must not aggregate or complete qualification')
+      end
     end
     require!(jobs['component'].dig('strategy', 'fail-fast') == false, 'One component must not cancel another')
     require!(jobs['component']['uses'] == './.github/workflows/ci-component.yml', 'Component executor changed')

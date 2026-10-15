@@ -121,7 +121,7 @@ TASK_NAMES = frozenset({
     "package-sample-apps-test.py", "release-application-set-test.py", "publish-sample-release-test.py",
     "run-platform-tests-test.py", "integrity-policy",
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
-    "build-plugin-floors", "jvm-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
+    "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
     "isolated-consumers", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
     "prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop", "gradle-stop", "component-setup"})
@@ -835,10 +835,36 @@ def junit_failures(root, source_commit="HEAD"):
             if record:
                 identity, name = record.split("\t", 1)
                 mode, kind, blob = identity.split()
-                if mode in ("100644", "100755") and kind == "blob" and name.endswith(".kt"):
+                if mode in ("100644", "100755") and kind == "blob" and name.endswith((".kt", ".java")):
                     blobs[name] = blob
     except (OSError, ValueError, subprocess.SubprocessError, EvidenceError):
         return []
+
+    def jmdns_details(failures, test_source):
+        # Only this exact tracked fixture may define public labels. Never import
+        # the RPC branch-specific runner or publish arbitrary assertion text.
+        fixture = "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java"
+        try:
+            content = bounded(root / fixture, 1024 * 1024)
+            blob = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+            require(blob == blobs.get(fixture))
+            labels = set(re.findall(r'"([a-z][A-Za-z0-9_]{4,100})"', content.decode("utf-8")))
+            require(len(labels) <= 256)
+            text = "\n".join(" ".join(node.itertext()) + " " + node.get("message", "") + " " + node.get("type", "") for node in failures)
+            codes = {label for label in labels if re.search(r"(?<![A-Za-z0-9_])" + re.escape(label) +
+                                                           r"(?![A-Za-z0-9_])", text)}
+            jdk_message = "The real-resource close fixture requires JDK 17"
+            if jdk_message in text and jdk_message in test_source and "jdk17_required" in labels:
+                codes.add("jdk17_required")
+            # Same fixed exception vocabulary as the maintained RPC diagnostic.
+            classes = {"java.lang.AssertionError", "kotlin.AssertionError", "java.lang.IllegalStateException",
+                       "org.opentest4j.AssertionFailedError", "java.net.NoRouteToHostException",
+                       "java.net.SocketException", "java.net.BindException", "java.io.IOException",
+                       "java.lang.InterruptedException", "java.util.concurrent.TimeoutException"}
+            return {"sourceDefinedCodes": sorted(codes), "exceptionClasses": sorted(cls for cls in classes
+                    if re.search(r"(?<![A-Za-z0-9_.$])" + re.escape(cls) + r"(?![A-Za-z0-9_.$])", text))}
+        except (OSError, ValueError, UnicodeError, EvidenceError):
+            return None
 
     rows, consumed = [], 0
     for number, path in enumerate(root.glob("**/build/test-results/**/TEST-*.xml")):
@@ -882,6 +908,11 @@ def junit_failures(root, source_commit="HEAD"):
                                  "java.net.NoRouteToHostException": "NETWORK_NO_ROUTE"}
                         row = {"source": source.relative_to(root).as_posix(), "test": method,
                                "kinds": sorted({kinds.get(node.get("type"), "OTHER") for node in failures})}
+                        if relative == "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt" and method in (
+                                "realResourceCloseRegressionsExitNaturally", "failedSendsCannotMultiplyTheSdkCleanupBudget"):
+                            details = jmdns_details(failures, text)
+                            if details is not None:
+                                row["jmdnsFixture"] = details
                         if row not in rows:
                             rows.append(row)
         except (OSError, ValueError, UnicodeError, ET.ParseError, EvidenceError):

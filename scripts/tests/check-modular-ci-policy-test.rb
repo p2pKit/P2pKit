@@ -20,7 +20,13 @@ class ModularPolicyTests < Minitest::Test
     assert ModularCI.check(ROOT)
   end
   def test_bundle_diagnostic_requires_explicit_choice
-    altered('.github/workflows/ci.yml', ', bundle-diagnostic]', ']')
+    altered('.github/workflows/ci.yml', ', bundle-diagnostic,', ',')
+  end
+  def test_jmdns_diagnostic_requires_choice_and_excludes_qualification
+    altered('.github/workflows/ci.yml', ', jmdns-diagnostic]', ']')
+    altered('.github/workflows/ci.yml', "inputs.component != 'jmdns-diagnostic' && inputs.component", 'inputs.component')
+    altered('.github/workflows/ci.yml', "inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name",
+            "inputs.component != 'bundle-diagnostic' && (github.event_name")
   end
   def test_bundle_diagnostic_cannot_aggregate
     altered('.github/workflows/ci.yml', "inputs.component != 'bundle-diagnostic' && needs.plan.result",

@@ -197,7 +197,7 @@ class ComponentTests(unittest.TestCase):
                 return code, report, invoked.call_args_list, error
 
     def test_bundle_diagnostic_explicit_only_and_never_in_required_all(self):
-        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60)})
+        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30)})
         self.assertEqual(len(C.COMPONENTS), 12)
         self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
         self.assertEqual({row['component'] for row in C.matrix('all')['include']}, set(C.COMPONENTS))
@@ -207,6 +207,32 @@ class ComponentTests(unittest.TestCase):
                         'bundle-diagnostic,bundle-diagnostic', 'all,bundle-diagnostic'):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 C.matrix(invalid)
+
+    def test_jmdns_diagnostic_is_focused_independent_and_preserves_failure_cleanup(self):
+        self.assertEqual(C.matrix('jmdns-diagnostic'), {'include': [{'component': 'jmdns-diagnostic',
+                         'os': 'macos-26', 'minutes': 30, 'job_minutes': 40}]})
+        self.assertNotIn('jmdns-diagnostic', C.COMPONENTS)
+        self.assertEqual(len(C.matrix('all')['include']), 12)
+        for invalid in ('jmdns-diagnostic,source', 'bundle-diagnostic,jmdns-diagnostic',
+                        'jmdns-diagnostic,jmdns-diagnostic', 'all,jmdns-diagnostic'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                C.matrix(invalid)
+        command = C.commands('jmdns-diagnostic')
+        self.assertEqual(len(command), 1)
+        self.assertEqual(command[0][0], 'jmdns-close-tests')
+        self.assertEqual(command[0][1][1:], [*C.FLAGS, ':p2p-transport-lan:jvmTest', '--tests',
+                         'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])
+        self.assert_no_publish_or_bootstrap_commands(command)
+        for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
+                                                           component='jmdns-diagnostic')
+            self.assertIsNone(error)
+            self.assertEqual(code, status or stopped)
+            self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
+                                               {'task': 'gradle-stop', 'exitCode': stopped}])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+            self.assertEqual(calls[-1].kwargs['timeout'], 90)
+            self.assertEqual(len(calls), 2)
 
     def test_bundle_diagnostic_is_only_existing_disposable_test_and_cli_can_list_without_execution(self):
         command = [('signed-bundle-test', ['bash', 'scripts/tests/build-central-portal-bundle-test.sh'])]

@@ -960,6 +960,54 @@ class EvidenceTests(unittest.TestCase):
         report.write_text('<testsuite><testcase classname="dev.p2pkit.ExampleTest" name="actualCase"/></testsuite>')
         self.assertEqual(E.junit_failures(self.root), [])
 
+    def test_jmdns_junit_details_are_finite_and_bound_to_original_fixture_source(self):
+        source = self.root / "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt"
+        fixture = self.root / "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java"
+        source.parent.mkdir(parents=True)
+        fixture.parent.mkdir(parents=True)
+        source.write_text('package dev.p2pkit.transport.lan\nclass JmdnsCloseLifecycleTest { '
+                          'fun realResourceCloseRegressionsExitNaturally() {} '
+                          'fun failedSendsCannotMultiplyTheSdkCleanupBudget() {} }\n'
+                          '// The real-resource close fixture requires JDK 17\n')
+        fixture.write_text('class JmdnsCloseLifecycleFixture { String a="host_not_announced"; '
+                           'String b="jdk17_required"; }\n')
+        report = self.root / "library/p2p-transport-lan/build/test-results/jvmTest/TEST-close.xml"
+        report.parent.mkdir(parents=True)
+        def write_failure(message, method="realResourceCloseRegressionsExitNaturally[jvm]"):
+            report.write_text('<testsuite><testcase classname="dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest" '
+                              'name="' + method + '"><failure type="java.lang.AssertionError">' + message +
+                              '</failure></testcase></testsuite>')
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE)
+        git("init", "--quiet")
+        git("add", source.relative_to(self.root).as_posix())
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Public test source")
+        write_failure('host_not_announced: java.net.NoRouteToHostException PRIVATE_PAYLOAD /private/path')
+        self.assertNotIn('jmdnsFixture', E.junit_failures(self.root)[0])  # Untracked Java is not authority.
+        git("add", fixture.relative_to(self.root).as_posix())
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Public fixture source")
+        original = git("rev-parse", "HEAD").decode().strip()
+        expected = {'sourceDefinedCodes': ['host_not_announced'],
+                    'exceptionClasses': ['java.lang.AssertionError', 'java.net.NoRouteToHostException']}
+        self.assertEqual(E.junit_failures(self.root, original)[0]['jmdnsFixture'], expected)
+        self.assertNotIn('PRIVATE', json.dumps(E.junit_failures(self.root, original)))
+        self.assertNotIn('/private/path', json.dumps(E.junit_failures(self.root, original)))
+        saved = fixture.read_bytes()
+        fixture.write_bytes(saved + b'// changed authority\n')
+        self.assertNotIn('jmdnsFixture', E.junit_failures(self.root, original)[0])
+        fixture.write_bytes(saved)
+        write_failure('host_not_announced_PRIVATE java.net.NoRouteToHostExceptionPRIVATE PRIVATE_CODE')
+        self.assertEqual(E.junit_failures(self.root, original)[0]['jmdnsFixture'],
+                         {'sourceDefinedCodes': [], 'exceptionClasses': ['java.lang.AssertionError']})
+        write_failure('The real-resource close fixture requires JDK 17',
+                      'failedSendsCannotMultiplyTheSdkCleanupBudget()')
+        self.assertEqual(E.junit_failures(self.root, original)[0]['jmdnsFixture']['sourceDefinedCodes'],
+                         ['jdk17_required'])
+        fixture.unlink()
+        self.assertNotIn('jmdnsFixture', E.junit_failures(self.root, original)[0])
+
     def test_junit_diagnostic_refuses_entities_malformed_and_linked_reports(self):
         directory = self.root / "library/p2p-core/build/test-results/jvmTest"
         directory.mkdir(parents=True)

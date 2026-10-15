@@ -125,20 +125,21 @@ class QualificationTests(unittest.TestCase):
             with self.subTest(rows=len(rows)), self.assertRaises(Q.AdmissionError):
                 Q.aggregate(self.api, {**original, "components": rows})
 
-    def test_optional_bundle_diagnostic_cannot_replace_or_extend_qualification(self):
+    def test_optional_diagnostics_cannot_replace_or_extend_qualification(self):
         self.assertEqual(len(Q.COMPONENTS), 12)
-        self.assertNotIn('bundle-diagnostic', Q.COMPONENTS)
-        original = self.f.selection()
-        diagnostic = {**original['components'][-1], 'component': 'bundle-diagnostic'}
-        for rows in (original['components'] + [diagnostic],
-                     [diagnostic if row['component'] == 'compatibility' else row for row in original['components']],
-                     [diagnostic]):
-            with self.subTest(count=len(rows)), self.assertRaisesRegex(Q.AdmissionError, 'Missing/duplicate required components'):
-                Q.aggregate(self.api, {**original, 'components': rows})
-        manifests = copy.deepcopy(self.f.manifests)
-        manifests['compatibility']['component'] = 'bundle-diagnostic'
-        with self.assertRaisesRegex(Q.AdmissionError, 'Evidence schema/component differs'):
-            Q.aggregate(self.api, original, manifests=manifests)
+        for name in ('bundle-diagnostic', 'jmdns-diagnostic'):
+            self.assertNotIn(name, Q.COMPONENTS)
+            original = self.f.selection()
+            diagnostic = {**original['components'][-1], 'component': name}
+            for rows in (original['components'] + [diagnostic],
+                         [diagnostic if row['component'] == 'compatibility' else row for row in original['components']],
+                         [diagnostic]):
+                with self.subTest(name=name, count=len(rows)), self.assertRaisesRegex(Q.AdmissionError, 'Missing/duplicate required components'):
+                    Q.aggregate(self.api, {**original, 'components': rows})
+            manifests = copy.deepcopy(self.f.manifests)
+            manifests['compatibility']['component'] = name
+            with self.assertRaisesRegex(Q.AdmissionError, 'Evidence schema/component differs'):
+                Q.aggregate(self.api, original, manifests=manifests)
 
     def test_failed_skipped_cancelled_unassigned_or_wrong_source_job_refuse(self):
         job = self.f.jobs[0]
