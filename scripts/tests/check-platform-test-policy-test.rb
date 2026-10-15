@@ -94,6 +94,32 @@ def check_platform_policy(inputs)
     java = job.fetch("steps").find { |step| step.fetch("uses", "").start_with?("actions/setup-java@") }
     raise "Intel job requires JDK 17" unless java && java.fetch("with")["java-version"] == "17"
     check_job(job, "ios-x64", false)
+    controls = by_id(job, "check-intel-advertising")
+    prepare = by_id(job, "prepare-intel-advertising")
+    restore = by_id(job, "restore-intel-advertising")
+    configuration_report = by_id(job, "intel-advertising-report")
+    raise "Intel configuration requires offline controls before mutation" unless controls["run"].lines.map(&:strip) == [
+        "python3 -I -S -B scripts/tests/rpc-apple-bonjour-environment-test.py",
+        "python3 -I -S -B scripts/tests/intel-bonjour-advertising-test.py",
+    ]
+    [controls, prepare, restore, configuration_report].each do |step|
+        raise "Intel configuration cannot suppress failure or substitute context" if
+            %w[continue-on-error env shell working-directory].any? { |key| step.key?(key) }
+    end
+    raise "Intel preparation must precede product normally" unless !prepare.key?("if") && !controls.key?("if") &&
+        prepare["run"] == "python3 -I -S -B scripts/with-intel-bonjour-advertising.py prepare"
+    raise "Intel restoration must always run using the exact retained transaction" unless restore["if"] == ALWAYS &&
+        restore["run"] == "python3 -I -S -B scripts/with-intel-bonjour-advertising.py restore"
+    raise "Intel private transaction contents must not be uploaded as test evidence" unless
+        configuration_report["if"] == ALWAYS && configuration_report["uses"].start_with?("actions/upload-artifact@") &&
+        configuration_report["with"] == {
+            "name" => "intel-advertising-configuration-${{ github.sha }}-${{ github.run_attempt }}",
+            "path" => "${{ runner.temp }}/rpc-intel-bonjour-advertising-result.json",
+            "if-no-files-found" => "warn", "retention-days" => 7,
+        }
+    ordered = [controls, prepare, by_id(job, "platform-tests"), by_id(job, "stop-platform-gradle"),
+               restore, configuration_report, by_id(job, "platform-reports")].map { |step| job["steps"].index(step) }
+    raise "Intel transaction/test/stop/restoration/evidence order changed" unless ordered == ordered.sort
     raise "Intel tests and diagnostics must remain separate jobs" unless
         intel.fetch("jobs").keys.sort == %w[intel-environment-diagnostics ios-x64]
     diagnostic = intel.fetch("jobs").fetch("intel-environment-diagnostics")
@@ -190,6 +216,25 @@ mutations = {
     "missing release policy" => ->(v) { v[:release].sub!("ruby scripts/tests/check-platform-test-policy-test.rb", "true") },
     "missing release regression" => ->(v) { v[:release].sub!("python3 scripts/tests/run-platform-tests-test.py", "true") },
 }
+%w[check-intel-advertising prepare-intel-advertising restore-intel-advertising intel-advertising-report].each do |id|
+    mutations["Intel config missing #{id}"] = ->(v) { v[:intel]["jobs"]["ios-x64"]["steps"].delete(by_id(v[:intel]["jobs"]["ios-x64"], id)) }
+    mutations["Intel config ignored #{id}"] = ->(v) { by_id(v[:intel]["jobs"]["ios-x64"], id)["continue-on-error"] = true }
+    mutations["Intel config conditional #{id}"] = ->(v) { by_id(v[:intel]["jobs"]["ios-x64"], id)["if"] = "success()" }
+end
+mutations["Intel tests before preparation"] = ->(v) do
+    steps = v[:intel]["jobs"]["ios-x64"]["steps"]
+    steps.unshift(steps.delete(by_id(v[:intel]["jobs"]["ios-x64"], "platform-tests")))
+end
+mutations["Intel restore before Gradle stop"] = ->(v) do
+    steps = v[:intel]["jobs"]["ios-x64"]["steps"]
+    steps.unshift(steps.delete(by_id(v[:intel]["jobs"]["ios-x64"], "restore-intel-advertising")))
+end
+mutations["Intel upload private state"] = ->(v) do
+    by_id(v[:intel]["jobs"]["ios-x64"], "intel-advertising-report")["with"]["path"] = "${{ runner.temp }}/rpc-intel-bonjour-advertising/**"
+end
+mutations["Intel old-context prepare"] = ->(v) do
+    by_id(v[:intel]["jobs"]["ios-x64"], "prepare-intel-advertising")["run"] = "python3 scripts/with-darwin-audit-session.py"
+end
 (APPLE_FAILURE_REPORTS + LAN_FAILURE_REPORTS).each do |report|
     mutations["missing native failure evidence #{report}"] = ->(v) do
         by_id(v[:ci]["jobs"]["platform-checks"], "platform-reports")["with"]["path"].sub!(report, "")

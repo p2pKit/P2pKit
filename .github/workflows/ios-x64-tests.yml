@@ -44,6 +44,16 @@ jobs:
         run: |
           "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
 
+      - name: Verify offline configuration transaction controls
+        id: check-intel-advertising
+        run: |
+          python3 -I -S -B scripts/tests/rpc-apple-bonjour-environment-test.py
+          python3 -I -S -B scripts/tests/intel-bonjour-advertising-test.py
+
+      - name: Prepare reversible ordinary-runner Bonjour advertising
+        id: prepare-intel-advertising
+        run: python3 -I -S -B scripts/with-intel-bonjour-advertising.py prepare
+
       - name: Execute Intel simulator suites
         id: platform-tests
         run: python3 scripts/run-platform-tests.py ios-x64
@@ -52,6 +62,21 @@ jobs:
         id: stop-platform-gradle
         if: ${{ always() }}
         run: ./gradlew --stop
+
+      - name: Restore the original Bonjour advertising preference
+        id: restore-intel-advertising
+        if: ${{ always() }}
+        run: python3 -I -S -B scripts/with-intel-bonjour-advertising.py restore
+
+      - name: Upload closed Bonjour configuration observations
+        id: intel-advertising-report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: intel-advertising-configuration-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rpc-intel-bonjour-advertising-result.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload Intel test evidence
         id: platform-reports
