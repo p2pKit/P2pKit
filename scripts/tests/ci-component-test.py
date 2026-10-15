@@ -126,4 +126,48 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': 0}])
         self.assertEqual(len(calls), 1)
 
+class SecurityInputTests(unittest.TestCase):
+    def arguments(self, root):
+        # Execute the actual argument-selection loop only: no tool installation,
+        # scanner, network, vulnerability exception or private evidence access.
+        source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
+        begin = source.index("    git ls-files '*gradle.lockfile' | while IFS= read -r path; do")
+        end = source.index('\n    done', begin) + len('\n    done')
+        result = subprocess.run(['bash', '-euo', 'pipefail', '-c', source[begin:end]],
+                                cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=10, check=True)
+        self.assertEqual(result.stderr, b'')
+        return result.stdout.decode().splitlines()
+
+    def test_actual_security_inputs_equal_maintained_nonempty_lock_roster(self):
+        expected = [line.strip() for line in (ROOT / '.github/workflows/osv-scanner.yml').read_text().splitlines()
+                    if line.strip().startswith('--lockfile=')]
+        actual = self.arguments(ROOT)
+        self.assertEqual(sorted(actual), sorted(expected))
+        self.assertEqual(len(actual), len(set(actual)))
+        self.assertNotIn('--lockfile=./gradle.lockfile', actual)
+        self.assertNotIn('--lockfile=./settings-gradle.lockfile', actual)
+
+    def test_empty_roots_excluded_and_nonstandard_gradle_names_typed(self):
+        with tempfile.TemporaryDirectory(prefix='ci-security-lock-model-') as temporary:
+            root = Path(temporary)
+            files = {'gradle.lockfile': '# empty root\nempty=runtimeClasspath\n',
+                     'settings-gradle.lockfile': 'org.example:plugin:1=classpath\n',
+                     'buildscript-gradle.lockfile': 'org.example:build:1=classpath\n',
+                     'library/gradle.lockfile': 'org.example:library:1=runtimeClasspath\n',
+                     'empty/gradle.lockfile': '# only comments\n',
+                     'not-a-lock.txt': 'org.example:ignored:1=classpath\n'}
+            for name, body in files.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body)
+            for argv in (['git', 'init', '--quiet'], ['git', 'add', '.']):
+                subprocess.run(argv, cwd=root, check=True, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(self.arguments(root), [
+                '--lockfile=gradle.lockfile:./buildscript-gradle.lockfile',
+                '--lockfile=./library/gradle.lockfile',
+                '--lockfile=gradle.lockfile:./settings-gradle.lockfile'])
+
+
 if __name__ == '__main__': unittest.main()

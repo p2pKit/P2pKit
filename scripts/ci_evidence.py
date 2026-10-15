@@ -396,6 +396,74 @@ def component_tasks(root, component):
         return None
 
 
+def failure_diagnostics(root, command_directory):
+    """Public error identifiers only; logs/payloads/paths remain encrypted.
+
+    These observations help diagnose a failed command, never qualify it. Scan
+    the already bounded closed captures; never copy arbitrary error messages.
+    """
+    categories, tasks = set(), set()
+    modules = {"p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
+               "p2p-network-provisioning-desktop", "p2p-sample-android", "p2p-sample-desktop",
+               "p2p-sample-desktop-ui", "p2p-sample-rpc", "buildSrc"}
+    task_names = {"jvmTest", "test", "testDebugUnitTest", "testAndroidHostTest", "iosX64Test",
+                  "iosSimulatorArm64Test", "dokkaGeneratePublicationHtml", "checkKotlinAbi", "checkAndroidAbi",
+                  "publishToMavenLocal", "assembleDebug", "packageMsi", "packageDmg", "packageDeb", "compileJava"}
+    task_names.update(prefix + target for prefix in ("compileKotlin", "compileTestKotlin", "linkDebugTest", "cinteropP2pkit_nw")
+                      for target in ("Jvm", "IosArm64", "IosSimulatorArm64", "IosX64"))
+    phase_labels = {"simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
+                    "simulator-runtimes", "intel-bootstatus-help", "simulator-devices", "intel-boot",
+                    "intel-bootstatus", "intel-prelaunch", "intel-retire-before", "intel-shutdown", "intel-retire-after"}
+    known = {
+        b"Dependency verification failed": "DEPENDENCY_INTEGRITY",
+        b"Unresolved reference": "COMPILATION_UNRESOLVED_REFERENCE",
+        b"unresolved link": "DOCUMENTATION_UNRESOLVED_LINK",
+        b"NoRouteToHostException": "NETWORK_NO_ROUTE",
+        b"host_not_announced": "LAN_HOST_NOT_ANNOUNCED",
+        b"SIMULATOR_UNADMITTED_XCODE": "SIMULATOR_XCODE_MISMATCH",
+        b"SIMULATOR_RUNTIME_UNAVAILABLE_OR_CHANGED": "SIMULATOR_RUNTIME_MISMATCH",
+        b"INTEL_PHASE_FAILED": "SIMULATOR_COMMAND_FAILED",
+        b"extraction failed on specified lockfile": "OSV_LOCKFILE_EXTRACTION_FAILED",
+        b"cannot determine extractor": "OSV_UNSUPPORTED_LOCKFILE",
+        b"FAIL embedded JmDNS": "PUBLICATION_EMBEDDED_JMDNS",
+        b"publishing artifact set incomplete": "PUBLICATION_INCOMPLETE",
+        b"Cannot convert the provided notation": "GRADLE_INVALID_NOTATION",
+        b"Could not determine the dependencies of task": "GRADLE_TASK_DEPENDENCIES",
+        b"Could not resolve all files": "GRADLE_DEPENDENCY_RESOLUTION",
+        b"could not determine extractor": "OSV_UNSUPPORTED_LOCKFILE",
+    }
+    for name in ("stdout.log", "stderr.log"):
+        with (Path(command_directory) / name).open("rb") as stream:
+            for line in stream:
+                # The captures themselves are bounded; cap each parsed line too.
+                if len(line) > 4096:
+                    continue
+                for token, category in known.items():
+                    if token.lower() in line.lower():
+                        categories.add(category)
+                match = re.fullmatch(rb"> Task (:(?:p2p-[a-z0-9-]+|buildSrc):[A-Za-z0-9_:.-]{1,120}) FAILED\s*", line)
+                if match:
+                    task = match[1].decode("ascii")
+                    pieces = task.split(":")
+                    if len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names:
+                        tasks.add(task)
+    phases = []
+    for path in sorted((root / "build/reports/platform-tests").glob("*/intel-simulator/*/result.json")):
+        try:
+            row = read_json(path, 64 * 1024)
+            if type(row) is not dict:
+                continue
+            label = row.get("label")
+            if (type(label) is str and label in phase_labels
+                    and "exitCode" in row and (row["exitCode"] is None or
+                        type(row["exitCode"]) is int and -255 <= row["exitCode"] <= 255)
+                    and all(type(row.get(k)) is bool for k in ("timedOut", "outputLimitExceeded", "ownedGroupDrained"))):
+                phases.append({k: row[k] for k in ("label", "exitCode", "timedOut", "outputLimitExceeded", "ownedGroupDrained")})
+        except (OSError, ValueError, TypeError):
+            continue
+    return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32]}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--component", required=True)
@@ -458,6 +526,7 @@ def main(argv=None):
             "timing": {"startedAt": started, "completedAt": utc()}, "tools": tool_identity(tools_file),
             "command": {"sha256": hashlib.sha256(encoded(command)).hexdigest()}, "outcome": outcome,
             "taskResults": component_tasks(root, args.component),
+            "failureDiagnostics": failure_diagnostics(root, private / "command") if outcome["code"] != "PASS" else None,
             "reports": reports, "privateArchive": digest_file(archive), "ciphertext": ciphertext}
         write_private(output / "manifest.json", encoded(manifest))
         print("CI_EVIDENCE " + ("PASS" if outcome["code"] == "PASS" else "FAIL") + " " + outcome["code"])

@@ -124,6 +124,73 @@ class EvidenceTests(unittest.TestCase):
                 E.encrypt_archive(self.root / "none", self.root / "cipher", b"NOT A KEY", "0" * 64,
                                   "1" * 40, self.root, dict(os.environ))
 
+    def test_public_failure_diagnostics_keep_identifiers_not_private_messages(self):
+        command = self.root / "command"
+        command.mkdir()
+        (command / "stdout.log").write_text(
+            "> Task :p2p-core:jvmTest FAILED\n"
+            "> Task :p2p-private:secret FAILED\n"
+            "> Task :p2p-core:secret FAILED\n"
+            "host_not_announced private-payload-123\n"
+            "Dependency verification failed credential-never-public\n" +
+            "a" * 5000 + "private-long-line\n")
+        (command / "stderr.log").write_text("private URL or environment must not appear\n")
+        phase = self.root / "build/reports/platform-tests/token/intel-simulator/simulator-first-launch"
+        phase.mkdir(parents=True)
+        (phase / "result.json").write_text(json.dumps({"label": "simulator-first-launch", "exitCode": 1,
+            "timedOut": False, "outputLimitExceeded": False, "ownedGroupDrained": True,
+            "argv": ["private-path"], "cwd": "private-directory"}))
+        result = E.failure_diagnostics(self.root, command)
+        self.assertEqual(result["categories"], ["DEPENDENCY_INTEGRITY", "LAN_HOST_NOT_ANNOUNCED"])
+        self.assertEqual(result["failedGradleTasks"], [":p2p-core:jvmTest"])
+        self.assertEqual(result["simulatorPhases"], [{"label": "simulator-first-launch", "exitCode": 1,
+            "timedOut": False, "outputLimitExceeded": False, "ownedGroupDrained": True}])
+        self.assertNotIn("private", json.dumps(result))
+        self.assertNotIn("credential", json.dumps(result))
+        self.assertNotIn("secret", json.dumps(result))
+        row = json.loads((phase / "result.json").read_text())
+        row["label"] = "simulator-private-secret"
+        (phase / "result.json").write_text(json.dumps(row))
+        self.assertEqual(E.failure_diagnostics(self.root, command)["simulatorPhases"], [])
+        row["label"] = "simulator-first-launch"
+        row.pop("exitCode")
+        (phase / "result.json").write_text(json.dumps(row))
+        self.assertEqual(E.failure_diagnostics(self.root, command)["simulatorPhases"], [])
+        row["exitCode"] = True
+        (phase / "result.json").write_text(json.dumps(row))
+        self.assertEqual(E.failure_diagnostics(self.root, command)["simulatorPhases"], [])
+
+    def test_windows_autocrlf_checkout_preserves_exact_public_recipient_blob(self):
+        # Actual Git checkout conversion, not a mocked newline transform. The
+        # original public blob is unchanged; no private key or GPG invocation.
+        original = subprocess.check_output([
+            "git", "-C", str(SCRIPTS.parent), "show", "HEAD:.github/ci-evidence-recipient.asc"])
+        attributes = (SCRIPTS.parent / ".gitattributes").read_bytes()
+        rule = b".github/ci-evidence-recipient.asc text eol=lf\n"
+        self.assertEqual(attributes.count(rule), 1)
+        self.assertNotIn(b"\r", original)
+        for protected in (False, True):
+            with self.subTest(protected=protected):
+                repo = self.root / ("protected" if protected else "old-autocrlf")
+                repo.mkdir()
+                def git(*args, raw=None):
+                    return subprocess.check_output(["git", "-C", str(repo), *args],
+                                                   input=raw, stderr=subprocess.PIPE)
+                git("init", "--quiet")
+                git("config", "core.autocrlf", "true")
+                for name, raw in ((".gitattributes", attributes if protected else attributes.replace(rule, b"")),
+                                  (".github/ci-evidence-recipient.asc", original)):
+                    blob = git("hash-object", "-w", "--stdin", raw=raw).decode().strip()
+                    git("update-index", "--add", "--cacheinfo", "100644", blob, name)
+                git("checkout-index", "--all", "--force")
+                actual = (repo / ".github/ci-evidence-recipient.asc").read_bytes()
+                if protected:
+                    self.assertEqual(actual, original)
+                    self.assertEqual(hashlib.sha256(actual).digest(), hashlib.sha256(original).digest())
+                else:
+                    self.assertIn(b"\r\n", actual)
+                    self.assertNotEqual(hashlib.sha256(actual).digest(), hashlib.sha256(original).digest())
+
     def test_actual_public_key_encrypts_without_private_key_or_agent(self):
         key = (SCRIPTS.parent / ".github/ci-evidence-recipient.asc").read_bytes()
         source = self.root / "evidence.tar.gz"

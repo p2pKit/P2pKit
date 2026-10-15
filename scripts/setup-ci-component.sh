@@ -42,7 +42,10 @@ if [[ "$component" == security ]]; then
     echo '--config=./osv-scanner.toml'
     echo '--sbom=./library/p2p-transport-lan/vendor/jmdns/upstream.cdx.json'
     git ls-files '*gradle.lockfile' | while IFS= read -r path; do
-      if [[ "$path" == buildscript-gradle.lockfile ]]; then echo "--lockfile=gradle.lockfile:./$path"
+      # Match the maintained OSV route: empty Gradle roots are not dependency
+      # inputs, and nonstandard basenames need the explicit Gradle parser.
+      if ! grep -Eq '^[^#[:space:]][^=]*:[^=]*=' "$path"; then continue; fi
+      if [[ "${path##*/}" != gradle.lockfile ]]; then echo "--lockfile=gradle.lockfile:./$path"
       else echo "--lockfile=./$path"; fi
     done
     echo 'P2PKIT_OSV_ARGS'
