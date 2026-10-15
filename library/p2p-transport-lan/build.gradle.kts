@@ -1,11 +1,12 @@
-import com.android.build.gradle.tasks.BundleAar
-import dev.p2pkit.build.EmbeddedJmdnsAar
 import dev.p2pkit.build.GitCommitValueSource
 import java.io.File
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
+import dev.p2pkit.build.RestoreEmbeddedJmdnsAarTask
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
 import dev.p2pkit.build.WriteXcframeworkProvenanceTask
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.variant.KotlinMultiplatformAndroidComponentsExtension
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.tasks.Jar
@@ -87,16 +88,19 @@ val embeddedJmdnsJar = tasks.register<Jar>("embeddedJmdnsJar") {
 val embeddedJmdnsDependency = files(embeddedJmdnsJar.flatMap { it.archiveFile })
     .builtBy(embeddedJmdnsJar)
 
-// AGP normally splits file-dependency JAR resources into classes.jar and emits
-// a class-only libs JAR. Preserve the reviewed producer exactly in the public
-// AAR, without changing its classes or duplicating resources. This belongs to
-// the producing task, before Maven/module checksums; the artifact guard remains
-// byte-exact and also checks licenses, private resources and publication shape.
-tasks.withType<BundleAar>().configureEach {
-    val producer = embeddedJmdnsJar.flatMap { it.archiveFile }
-    inputs.file(producer).withPropertyName("completeEmbeddedJmdnsProducer")
-    doLast {
-        EmbeddedJmdnsAar.preserve(archiveFile.get().asFile, producer.get().asFile)
+// AGP splits a local dependency into a classes-only libs JAR and resources in
+// classes.jar. Restore the declared publication layout without changing the
+// implementation dependency used by project consumers and Android host tests.
+extensions.configure<KotlinMultiplatformAndroidComponentsExtension> {
+    onVariants(selector().all()) { variant ->
+        val restore = tasks.register<RestoreEmbeddedJmdnsAarTask>(
+            "restore${variant.name.replaceFirstChar { it.uppercaseChar() }}EmbeddedJmdnsAar"
+        ) {
+            producerJar.set(embeddedJmdnsJar.flatMap { it.archiveFile })
+        }
+        variant.artifacts.use(restore)
+            .wiredWithFiles({ it.inputAar }, { it.outputAar })
+            .toTransform(SingleArtifact.AAR)
     }
 }
 

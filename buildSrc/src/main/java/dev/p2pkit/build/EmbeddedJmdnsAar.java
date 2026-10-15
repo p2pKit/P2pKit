@@ -32,17 +32,27 @@ public final class EmbeddedJmdnsAar {
 
     private EmbeddedJmdnsAar() { }
 
-    /**
-     * Runs inside BundleAar after its ordinary assembly, before publication/GMM checksums.
-     * Class bytes must already match the producer: this does not repair stale compilation.
-     * Only byte-identical private resources are moved out of classes.jar into that producer.
-     * Unexpected input fails before replacing the task's output; inspectors stay unchanged.
-     */
+    /** Legacy in-place API retained for existing callers and controls. */
     public static void preserve(File aarFile, File producerFile) throws IOException {
-        Path aar = aarFile.toPath();
-        byte[] producerBytes = read(producerFile.toPath());
+        rewrite(aarFile.toPath(), producerFile.toPath(), aarFile.toPath());
+    }
+
+    /** Public artifact-transform API: original inputs are never overwritten. */
+    public static void restore(Path inputAar, Path producerJar, Path outputAar) throws IOException {
+        Path output = outputAar.toAbsolutePath().normalize();
+        for (Path input : new Path[]{inputAar, producerJar}) {
+            require(!input.toAbsolutePath().normalize().equals(output)
+                    && (!Files.exists(output) || !Files.isSameFile(input, output)),
+                    "Output must not overwrite an input");
+        }
+        rewrite(inputAar, producerJar, output);
+    }
+
+    /** Validate before writing: publication does not repair stale classes or resources. */
+    private static void rewrite(Path inputAar, Path producerJar, Path outputAar) throws IOException {
+        byte[] producerBytes = read(producerJar);
         Map<String, byte[]> producer = unzip(producerBytes);
-        Map<String, byte[]> outer = unzip(read(aar));
+        Map<String, byte[]> outer = unzip(read(inputAar));
         require(outer.containsKey(EMBEDDED) && outer.containsKey("classes.jar"), "Missing AAR JAR inputs");
         require(producer.containsKey("META-INF/LICENSE") && producer.containsKey(PRIVATE + "version.properties")
                 && producer.containsKey(NOTICES + "PROVENANCE.json"), "Incomplete private producer resources");
@@ -63,6 +73,14 @@ public final class EmbeddedJmdnsAar {
             if (entry.getKey().endsWith(".class")) packagedClasses.add(entry.getKey());
         }
         require(classes.equals(packagedClasses), "AGP local JAR class inventory differs from producer");
+        for (Map.Entry<String, byte[]> entry : producer.entrySet()) {
+            String name = entry.getKey();
+            if ((name.startsWith(PRIVATE) || name.startsWith(NOTICES)) && !name.endsWith(".class")) {
+                require(Arrays.equals(entry.getValue(), filtered.get(name))
+                        || Arrays.equals(entry.getValue(), module.get(name)),
+                        "Missing private resource in AGP inputs");
+            }
+        }
         for (String name : new HashSet<>(module.keySet())) {
             if (name.startsWith(PRIVATE) || name.startsWith(NOTICES)) {
                 require(!name.endsWith(".class"), "AAR classes.jar duplicates private classes");
@@ -74,13 +92,15 @@ public final class EmbeddedJmdnsAar {
         outer.put(EMBEDDED, producerBytes);
         outer.put("classes.jar", zip(module));
         byte[] replacement = zip(outer);
-        Path temporary = Files.createTempFile(aar.getParent(), "p2pkit-aar-producer-", ".tmp");
+        Path parent = outputAar.toAbsolutePath().getParent();
+        Files.createDirectories(parent);
+        Path temporary = Files.createTempFile(parent, "p2pkit-aar-producer-", ".tmp");
         // No in-place ZIP mutation. Preserve a failed temporary rather than hiding a write failure.
         try (FileOutputStream stream = new FileOutputStream(temporary.toFile())) {
             stream.write(replacement);
             stream.getFD().sync();
         }
-        Files.move(temporary, aar, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        Files.move(temporary, outputAar, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }
 
     private static byte[] read(Path path) throws IOException {

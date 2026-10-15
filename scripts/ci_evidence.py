@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import uuid
+import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 if __name__ == "__main__":
@@ -50,6 +51,7 @@ TASK_NAMES = frozenset({
     "wrapper", "layout", "links", "release-metadata", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
+    "embedded-jmdns-aar-test.py",
     "application-release-version-test.py", "sample-artifact-identity-test.py",
     "package-sample-apps-test.py", "release-application-set-test.py", "publish-sample-release-test.py",
     "run-platform-tests-test.py", "integrity-policy",
@@ -416,7 +418,82 @@ def component_tasks(root, component):
         return None
 
 
-def failure_diagnostics(root, command_directory):
+def junit_failures(root, source_commit="HEAD"):
+    """Project failed JUnit cases onto public source names, never error text.
+
+    Unmatched/dynamic names remain private. This diagnostic is not acceptance;
+    malformed/oversized reports cannot create passing test evidence.
+    """
+    def bounded(path, limit):
+        require(not any(p.is_symlink() for p in (path, *path.parents)))
+        info = path.stat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= limit)
+        with path.open("rb") as stream:
+            raw = stream.read(limit + 1)
+        require(len(raw) == info.st_size)
+        return raw
+
+    try:
+        blobs = {}
+        for record in git_value(root, "--no-replace-objects", "ls-tree", "-r", "-z", source_commit).split("\0"):
+            if record:
+                identity, name = record.split("\t", 1)
+                mode, kind, blob = identity.split()
+                if mode in ("100644", "100755") and kind == "blob" and name.endswith(".kt"):
+                    blobs[name] = blob
+    except (OSError, ValueError, subprocess.SubprocessError, EvidenceError):
+        return []
+
+    rows, consumed = [], 0
+    for number, path in enumerate(root.glob("**/build/test-results/**/TEST-*.xml")):
+        if number >= MAX_REPORTS or consumed >= 32 * 1024 * 1024 or len(rows) >= 32:
+            break
+        try:
+            raw = bounded(path, 4 * 1024 * 1024)
+            consumed += len(raw)
+            if re.search(br"<!\s*(DOCTYPE|ENTITY)\b", raw, re.I):
+                continue
+            document = ET.fromstring(raw)
+            for case in document.iter("testcase"):
+                failures = [node for node in case if node.tag in ("failure", "error")]
+                if not failures or len(rows) >= 32:
+                    continue
+                classname, method = case.get("classname", ""), case.get("name", "")
+                if not re.fullmatch(r"(?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*", classname):
+                    continue
+                # Gradle may append a target suffix; publish only the source identifier.
+                match = re.fullmatch(r"([A-Za-z_]\w*)(?:\(\)|\[[A-Za-z0-9_-]{1,40}\])?", method)
+                if not match:
+                    continue
+                method = match[1]
+                package, cls = classname.rsplit(".", 1)
+                for group in ("library", "samples"):
+                    for source in (root / group).glob("*/src/*Test/**/" + cls + ".kt"):
+                        relative = source.relative_to(root).as_posix()
+                        if relative not in blobs:
+                            continue
+                        content = bounded(source, 1024 * 1024)
+                        blob = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+                        if blob != blobs[relative]:
+                            continue
+                        text = content.decode("utf-8")
+                        if (not re.search(r"(?m)^package " + re.escape(package) + r"\s*$", text) or
+                            not re.search(r"\bclass\s+" + re.escape(cls) + r"\b", text) or
+                            not re.search(r"\bfun\s+" + re.escape(method) + r"\s*\(", text)):
+                            continue
+                        kinds = {"java.lang.AssertionError": "ASSERTION", "org.opentest4j.AssertionFailedError": "ASSERTION",
+                                 "kotlinx.coroutines.TimeoutCancellationException": "TIMEOUT",
+                                 "java.net.NoRouteToHostException": "NETWORK_NO_ROUTE"}
+                        row = {"source": source.relative_to(root).as_posix(), "test": method,
+                               "kinds": sorted({kinds.get(node.get("type"), "OTHER") for node in failures})}
+                        if row not in rows:
+                            rows.append(row)
+        except (OSError, ValueError, UnicodeError, ET.ParseError, EvidenceError):
+            continue
+    return rows[:32]
+
+
+def failure_diagnostics(root, command_directory, source_commit="HEAD"):
     """Public error identifiers only; logs/payloads/paths remain encrypted.
 
     These observations help diagnose a failed command, never qualify it. Scan
@@ -511,7 +588,7 @@ def failure_diagnostics(root, command_directory):
             continue
     return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32],
             "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
-            "platformTests": platform_reports[:8]}
+            "platformTests": platform_reports[:8], "failedSourceTests": junit_failures(root, source_commit)}
 
 
 def public_outcome(value):
@@ -646,7 +723,7 @@ def main(argv=None):
             "timing": {"startedAt": started, "completedAt": utc()}, "tools": tool_identity(tools_file),
             "command": {"sha256": hashlib.sha256(encoded(command)).hexdigest()}, "outcome": outcome,
             "taskResults": component_tasks(root, args.component),
-            "failureDiagnostics": failure_diagnostics(root, private / "command") if outcome["code"] != "PASS" else None,
+            "failureDiagnostics": failure_diagnostics(root, private / "command", source["commit"]) if outcome["code"] != "PASS" else None,
             "reports": reports, "privateArchive": digest_file(archive), "ciphertext": ciphertext}
         write_private(output / "manifest.json", encoded(manifest))
         print("CI_EVIDENCE " + ("PASS" if outcome["code"] == "PASS" else "FAIL") + " " + outcome["code"])
@@ -671,7 +748,7 @@ def main(argv=None):
                     "source": source, "github": github, "stage": stage, "code": code,
                     "outcome": public_outcome(outcome), "encryptionDiagnostic": encryption,
                     "taskResults": component_tasks(root, args.component) if source is not None else None,
-                    "failureDiagnostics": failure_diagnostics(root, private / "command")
+                    "failureDiagnostics": failure_diagnostics(root, private / "command", source["commit"])
                         if source is not None and outcome is not None and outcome["cleanupKnown"] else None}
                 write_private(output / "failure.json", encoded(failure))
         except BaseException:
