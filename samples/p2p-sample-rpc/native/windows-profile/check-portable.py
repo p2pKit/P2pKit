@@ -133,6 +133,19 @@ def main():
                              "-o", str(jni_test)],
         [str(jni_test)],
     ]
+    registration_test = args.output / "profile-jni-registration-test"
+    commands += [flags + jni_flags + [str(source / "profile_jni_registration.c"),
+                                      str(source / "tests/profile_jni_registration_test.c"),
+                                      "-o", str(registration_test)]]
+    registration_modes = (
+        "ok", "arguments", "detached", "nullenv", "version", "vm", "vmerror", "pending", "push", "push-pending",
+        "owner", "owner-null", "class-global", "class-global-null", "register-error", "register-noerror",
+        "register-pending", "retain-error", "pop-error", "double-error", "lost-primary", "reenter", "mutate",
+        "push-null", "class-global-pending", "retain-pending", "lost-exception",
+    )
+    commands += [[str(registration_test), mode] for mode in registration_modes]
+    commands += [[str(registration_test), "address", str(index)] for index in range(23)]
+    commands += [[str(registration_test), mode, str(index)] for mode in ("fault", "null") for index in range(32)]
     results = []
     for index, command in enumerate(commands):
         with (args.output / f"{index}-stdout.log").open("xb") as stdout:

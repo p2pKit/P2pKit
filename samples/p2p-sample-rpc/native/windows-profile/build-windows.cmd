@@ -23,7 +23,7 @@ set "LINK="
 set "_LINK_="
 cl.exe /nologo /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf /D_WIN32_WINNT=0x0A00 ^
  /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" ^
- /LD "%SOURCE%profile_policy.c" "%SOURCE%profile_win32.c" "%SOURCE%profile_jni.c" ^
+ /LD "%SOURCE%profile_policy.c" "%SOURCE%profile_win32.c" "%SOURCE%profile_jni.c" "%SOURCE%profile_jni_registration.c" ^
  /link /OUT:p2pkit-windows-profile.dll /MACHINE:X64 /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
  /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF ^
  kernel32.lib advapi32.lib ntdll.lib shell32.lib ole32.lib uuid.lib

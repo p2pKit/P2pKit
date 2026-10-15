@@ -194,7 +194,10 @@ incidental FFM `FindClass` context is not a substitute. This relationship check
 does not establish Foundation's installed runtime provenance. No native method is
 invoked by preparing the plan or inspecting the declaring class.
 
-Actual registration remains unimplemented. The reviewed design direction is
+The native [post-admission registration core](../windows-profile/jni-contract.md#post-admission-registration-core)
+now implements the single-invocation operation, but is not exported or reachable
+from production. The managed invocation/owner and productive loading remain
+unimplemented. The design direction is
 explicit `RegisterNatives` against original verified function addresses, after
 independent loading authority. Preload plus `System.load` does not pin each Java
 method to that module. JNI references and pending exceptions need a reviewed

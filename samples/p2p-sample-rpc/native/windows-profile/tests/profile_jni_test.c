@@ -1,7 +1,7 @@
 /* Real JNI C translation unit + real bounded-buffer controller, mocked JNI/backend only.
  * Neither a JVM execution nor a Windows/SRWLOCK/NTFS simulation or runtime qualification. */
 #include "../profile_win32.h"
-#include <jni.h>
+#include "../profile_jni_registration.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1331,11 +1331,84 @@ static void existence_input_exception_never_reaches_backend(void) {
         assert(string_acquires == string_releases && !allocations && !calls);
     }
 }
+static void original_registration_table_matches_every_compiled_entry(void) {
+    assert(PWP_JNI_METHOD_COUNT == 23);
+    assert(!strcmp(pwp_jni_methods[0].name, "abi"));
+    assert(!strcmp(pwp_jni_methods[0].signature, "()I"));
+    assert(pwp_jni_methods[0].fnPtr == (void *)JNI_NAME(abi));
+    assert(!strcmp(pwp_jni_methods[1].name, "capabilities"));
+    assert(!strcmp(pwp_jni_methods[1].signature, "()J"));
+    assert(pwp_jni_methods[1].fnPtr == (void *)JNI_NAME(capabilities));
+    assert(!strcmp(pwp_jni_methods[2].name, "openRoot"));
+    assert(!strcmp(pwp_jni_methods[2].signature, "()J"));
+    assert(pwp_jni_methods[2].fnPtr == (void *)JNI_NAME(openRoot));
+    assert(!strcmp(pwp_jni_methods[3].name, "child"));
+    assert(!strcmp(pwp_jni_methods[3].signature, "(JLjava/lang/String;)J"));
+    assert(pwp_jni_methods[3].fnPtr == (void *)JNI_NAME(child));
+    assert(!strcmp(pwp_jni_methods[4].name, "createChildDirectory"));
+    assert(!strcmp(pwp_jni_methods[4].signature, "(JLjava/lang/String;)J"));
+    assert(pwp_jni_methods[4].fnPtr == (void *)JNI_NAME(createChildDirectory));
+    assert(!strcmp(pwp_jni_methods[5].name, "identity"));
+    assert(!strcmp(pwp_jni_methods[5].signature, "(J)[J"));
+    assert(pwp_jni_methods[5].fnPtr == (void *)JNI_NAME(identity));
+    assert(!strcmp(pwp_jni_methods[6].name, "fileIdentity"));
+    assert(!strcmp(pwp_jni_methods[6].signature, "(JLjava/lang/String;)[J"));
+    assert(pwp_jni_methods[6].fnPtr == (void *)JNI_NAME(fileIdentity));
+    assert(!strcmp(pwp_jni_methods[7].name, "exists"));
+    assert(!strcmp(pwp_jni_methods[7].signature, "(JLjava/lang/String;)Z"));
+    assert(pwp_jni_methods[7].fnPtr == (void *)JNI_NAME(exists));
+    assert(!strcmp(pwp_jni_methods[8].name, "names"));
+    assert(!strcmp(pwp_jni_methods[8].signature, "(J)[Ljava/lang/String;"));
+    assert(pwp_jni_methods[8].fnPtr == (void *)JNI_NAME(names));
+    assert(!strcmp(pwp_jni_methods[9].name, "read"));
+    assert(!strcmp(pwp_jni_methods[9].signature, "(JLjava/lang/String;I)[B"));
+    assert(pwp_jni_methods[9].fnPtr == (void *)JNI_NAME(read));
+    assert(!strcmp(pwp_jni_methods[10].name, "lockExisting"));
+    assert(!strcmp(pwp_jni_methods[10].signature, "(JLjava/lang/String;)J"));
+    assert(pwp_jni_methods[10].fnPtr == (void *)JNI_NAME(lockExisting));
+    assert(!strcmp(pwp_jni_methods[11].name, "createProfileLock"));
+    assert(!strcmp(pwp_jni_methods[11].signature, "(J)J"));
+    assert(pwp_jni_methods[11].fnPtr == (void *)JNI_NAME(createProfileLock));
+    assert(!strcmp(pwp_jni_methods[12].name, "createVaultLock"));
+    assert(!strcmp(pwp_jni_methods[12].signature, "(J)J"));
+    assert(pwp_jni_methods[12].fnPtr == (void *)JNI_NAME(createVaultLock));
+    assert(!strcmp(pwp_jni_methods[13].name, "stageRecord"));
+    assert(!strcmp(pwp_jni_methods[13].signature, "(JLjava/lang/String;[B)J"));
+    assert(pwp_jni_methods[13].fnPtr == (void *)JNI_NAME(stageRecord));
+    assert(!strcmp(pwp_jni_methods[14].name, "prepareRecord"));
+    assert(!strcmp(pwp_jni_methods[14].signature, "(JLjava/lang/String;[B)J"));
+    assert(pwp_jni_methods[14].fnPtr == (void *)JNI_NAME(prepareRecord));
+    assert(!strcmp(pwp_jni_methods[15].name, "writeRecord"));
+    assert(!strcmp(pwp_jni_methods[15].signature, "(JLjava/lang/String;Ljava/lang/String;[BZ)V"));
+    assert(pwp_jni_methods[15].fnPtr == (void *)JNI_NAME(writeRecord));
+    assert(!strcmp(pwp_jni_methods[16].name, "renameCandidate"));
+    assert(!strcmp(pwp_jni_methods[16].signature, "(JLjava/lang/String;)V"));
+    assert(pwp_jni_methods[16].fnPtr == (void *)JNI_NAME(renameCandidate));
+    assert(!strcmp(pwp_jni_methods[17].name, "replaceCandidate"));
+    assert(!strcmp(pwp_jni_methods[17].signature, "(JLjava/lang/String;)V"));
+    assert(pwp_jni_methods[17].fnPtr == (void *)JNI_NAME(replaceCandidate));
+    assert(!strcmp(pwp_jni_methods[18].name, "syncDirectory"));
+    assert(!strcmp(pwp_jni_methods[18].signature, "(J)V"));
+    assert(pwp_jni_methods[18].fnPtr == (void *)JNI_NAME(syncDirectory));
+    assert(!strcmp(pwp_jni_methods[19].name, "discardStage"));
+    assert(!strcmp(pwp_jni_methods[19].signature, "(J)V"));
+    assert(pwp_jni_methods[19].fnPtr == (void *)JNI_NAME(discardStage));
+    assert(!strcmp(pwp_jni_methods[20].name, "requestExpectedFileDeletion"));
+    assert(!strcmp(pwp_jni_methods[20].signature, "(JLjava/lang/String;[J)V"));
+    assert(pwp_jni_methods[20].fnPtr == (void *)JNI_NAME(requestExpectedFileDeletion));
+    assert(!strcmp(pwp_jni_methods[21].name, "deleteRecord"));
+    assert(!strcmp(pwp_jni_methods[21].signature, "(JLjava/lang/String;[J)V"));
+    assert(pwp_jni_methods[21].fnPtr == (void *)JNI_NAME(deleteRecord));
+    assert(!strcmp(pwp_jni_methods[22].name, "close"));
+    assert(!strcmp(pwp_jni_methods[22].signature, "(J)V"));
+    assert(pwp_jni_methods[22].fnPtr == (void *)JNI_NAME(close));
+}
 int main(int argc, char **argv) {
     /* Bounded isolated modes also run these regression controls against the earlier production JNI. */
     if (argc == 2 && !strcmp(argv[1], "--pending")) { pending_exception_blocks_all_effectful_entries(); return 0; }
     if (argc == 2 && !strcmp(argv[1], "--errors")) { exact_integer_errors_do_not_depend_on_message_parsing(); return 0; }
     assert(argc == 1);
+    original_registration_table_matches_every_compiled_entry();
     rejected_admission_never_copies(); accepted_copy_stays_owned(); jni_exceptions_clear_before_gate_release();
     allocation_failure_never_copies(); storage_failure_never_publishes(); empty_results_and_payloads();
     callback_bounds_reject_before_java_copy(); busy_reentry_cannot_copy_inside_owner(); entry_bounds_reject_before_backend();
@@ -1383,5 +1456,5 @@ int main(int argc, char **argv) {
     bootstrap_and_profile_forward_single_native_owner(); namespace_errors_are_not_fallbacks();
     profile_creation_bad_tokens_do_not_enter(); strict_existence_success_and_errors_remain_distinct();
     namespace_reporting_failures_never_restart_or_cleanup(); existence_input_exception_never_reaches_backend();
-    reset(); puts("73 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
+    reset(); puts("74 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
 }

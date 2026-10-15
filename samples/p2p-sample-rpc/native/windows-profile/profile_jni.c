@@ -1,5 +1,5 @@
 #include "profile_win32.h"
-#include <jni.h>
+#include "profile_jni_registration.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -374,3 +374,30 @@ JNIEXPORT void JNICALL JNI_NAME(close)(JNIEnv *env, jobject instance, jlong hand
     if (handle <= 0) { fail(env, PWP_ARGUMENT); return; }
     fail(env, pwp_win_close((uint64_t)handle));
 }
+
+/* Fixed original-symbol table; native registration is not exported or enabled by this data. */
+const JNINativeMethod pwp_jni_methods[PWP_JNI_METHOD_COUNT] = {
+    {"abi", "()I", (void *)JNI_NAME(abi)},
+    {"capabilities", "()J", (void *)JNI_NAME(capabilities)},
+    {"openRoot", "()J", (void *)JNI_NAME(openRoot)},
+    {"child", "(JLjava/lang/String;)J", (void *)JNI_NAME(child)},
+    {"createChildDirectory", "(JLjava/lang/String;)J", (void *)JNI_NAME(createChildDirectory)},
+    {"identity", "(J)[J", (void *)JNI_NAME(identity)},
+    {"fileIdentity", "(JLjava/lang/String;)[J", (void *)JNI_NAME(fileIdentity)},
+    {"exists", "(JLjava/lang/String;)Z", (void *)JNI_NAME(exists)},
+    {"names", "(J)[Ljava/lang/String;", (void *)JNI_NAME(names)},
+    {"read", "(JLjava/lang/String;I)[B", (void *)JNI_NAME(read)},
+    {"lockExisting", "(JLjava/lang/String;)J", (void *)JNI_NAME(lockExisting)},
+    {"createProfileLock", "(J)J", (void *)JNI_NAME(createProfileLock)},
+    {"createVaultLock", "(J)J", (void *)JNI_NAME(createVaultLock)},
+    {"stageRecord", "(JLjava/lang/String;[B)J", (void *)JNI_NAME(stageRecord)},
+    {"prepareRecord", "(JLjava/lang/String;[B)J", (void *)JNI_NAME(prepareRecord)},
+    {"writeRecord", "(JLjava/lang/String;Ljava/lang/String;[BZ)V", (void *)JNI_NAME(writeRecord)},
+    {"renameCandidate", "(JLjava/lang/String;)V", (void *)JNI_NAME(renameCandidate)},
+    {"replaceCandidate", "(JLjava/lang/String;)V", (void *)JNI_NAME(replaceCandidate)},
+    {"syncDirectory", "(J)V", (void *)JNI_NAME(syncDirectory)},
+    {"discardStage", "(J)V", (void *)JNI_NAME(discardStage)},
+    {"requestExpectedFileDeletion", "(JLjava/lang/String;[J)V", (void *)JNI_NAME(requestExpectedFileDeletion)},
+    {"deleteRecord", "(JLjava/lang/String;[J)V", (void *)JNI_NAME(deleteRecord)},
+    {"close", "(J)V", (void *)JNI_NAME(close)},
+};

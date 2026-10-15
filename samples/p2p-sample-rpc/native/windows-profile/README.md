@@ -949,7 +949,7 @@ array creation similarly preserves pending allocation/copy failures and retires 
 array. The encoder copies raw unsigned native identity words without changing their high bits.
 
 The initial lock slice included fifteen lock-policy/controller groups and twenty-five actual-JNI
-mock-backend groups; the maintained actual-JNI suite now has seventy-three groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
+mock-backend groups; the maintained actual-JNI suite now has seventy-four groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
 changes, exact reverse ownership retirement, all twenty-one effectful pending-entry boundaries, exact
 integer error forwarding, linkage/allocation failure, identity output and local-reference cleanup. JVM tests separately
 inspect the actual exception class/constructor and the current twenty-three-export PE/manifest contract. Synthetic

@@ -102,3 +102,67 @@ Windows controls. No self-pinned candidate, sidecar or nominal trusted-context o
 Actual admission, NTFS faults/recovery, JNI, exact runtime/MSI bindings, two-device operations and installed
 lifecycle retirement remain W01–W11 requirements. Track results separately in
 [campaign #462](https://github.com/p2pKit/P2pKit/issues/462); missing engineering is not a deferred test.
+
+## Post-admission registration core
+
+[`profile_jni_registration.h`](profile_jni_registration.h) and
+[`profile_jni_registration.c`](profile_jni_registration.c) implement a **dormant, non-exported**
+single-invocation registrar. The existing MSVC producer compiles it; no productive caller or exported
+shim is added. The original 23 JNI exports, ABI13/0x43 and provider availability remain unchanged.
+This component must never execute to authorize its own initial load.
+
+Before entry, RPC/Foundation must independently admit the installed runtime, exact single live JVM,
+original custody module, mappings/protections/import providers and original compiled declaring class.
+The loader must already have permanently reserved module/runtime/ancestor ownership and restricted
+execution to its dedicated attached platform thread. Caller pointers, class relationships, matching
+function addresses and a successful report cannot establish that authority.
+
+`pwp_jni_register_once` takes the independently obtained `JavaVM *`, exactly 23 expected original
+function addresses in the table order above, and a distinct live 32-byte report plus its exact size.
+There are no caller-selected classes, descriptors, functions or paths. The original compiled symbol
+table lives in `profile_jni.c`; expectations are read once before Java calls. Actual registration uses
+only the immutable original table, even if class initialization changes caller-owned expectations.
+
+The report is eight consecutive 32-bit fields: size, version (1), phase, signed result, class-retained,
+exception-observed, primary-exception-retained and retention-uncertain. Phases distinguish not attempted
+(0), attempted/uncertain (1) and completed without a pending exception (2). Fixed result codes in the
+header distinguish arguments, duplicate calls, address mismatch, unavailable thread environment,
+runtime mismatch, class/method lookup, Java exception, registration failure and uncertain retention.
+No object address, path, throwable text or profile data is emitted.
+
+- Invalid pointer/count/size arguments are refused without JNI entry. Valid pointer *memory and
+  lifetime* remain a required loader precondition, not something a C null check establishes.
+- The first valid invocation atomically consumes the opportunity in the original module; later, concurrent
+  or reentrant calls refuse without touching JNI or earlier owners. Even pre-registration failure after
+  this reservation is terminal. There is no reset or retry API. The external process-lifetime owner
+  must prohibit loading another copy or unloading/reloading this mapping; a per-module latch cannot
+  independently establish that process-wide guarantee.
+- `GetEnv(JNI_VERSION_21)`, exact reported JNI version and `GetJavaVM` identity must agree. No attach,
+  detach, new VM, filesystem, symbol search or OS privilege operation occurs.
+- Only bootstrap `java.lang.ClassLoader` and `java.lang.Class` use `FindClass`. The fixed application
+  name resolves through `Class.forName(name, false, actualSystemLoader)`, and its defining loader must
+  be that exact system loader. The maintained managed plan separately verifies the compiled class,
+  declared instance-native modifiers and full descriptors. These are not runtime provenance checks.
+- Each fixed descriptor resolves before registration. A strong global class reference is reserved
+  before `RegisterNatives`; that operation can partially bind methods before returning failure.
+  Original class and external native-module owners remain held through process exit in every outcome.
+- Pending exceptions are retained as original global references and cleared within this invocation,
+  before the local frame returns. A separate cleanup exception cannot replace the first throwable.
+  Failed exception retention remains explicit terminal uncertainty; there is no claim that an
+  unretainable original survived. After acquiring JNIEnv, no exception or local reference may escape
+  through the FFM return. Earlier argument/duplicate refusals neither inspect nor change JNI state.
+  A JVM that cannot clear a pending exception is terminated rather than treated as successful.
+- Global references intentionally have no release API. Profile Stop closes storage, never the class,
+  cached native code or module. A report does not authorize publication of a complete provider.
+
+The maintained portable command includes 114 fresh-process registrar controls using a **mocked JNI
+vtable and inert method table**, plus an original-symbol/descriptor table check in the existing real
+JNI translation-unit suite. It covers all 23 address mismatches, all 32 lookup positions with/without
+pending exceptions, thread/runtime/class mismatch, allocation and retention faults, partial binding,
+cleanup failure, reentry, changed caller observations and duplicate refusal. ASan/UBSan evidence is
+source/controller evidence, **not actual JVM registration, Win32 atomics, NTFS or installed runtime**.
+
+Still required: review and expose the final post-admission entry with exact PE inventory/build pins,
+wire the managed process-lifetime owner and FFM invocation, establish independent initial loading
+authority, then execute actual JNI and installed Host/Client qualification. No Windows capability or
+qualification claim is promoted by compiling or testing this dormant component.
