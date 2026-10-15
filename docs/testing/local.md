@@ -506,14 +506,15 @@ an authenticated GitHub CLI (`gh`), and Python 3:
 scripts/prepare-dependency-update.sh origin/main
 ```
 
-The complete writer also retires three obsolete Dokka v1 configurations left in
-older library locks (`dokkaHtmlRuntime`, `dokkaJavadocPlugin`, `dokkaJavadocRuntime`).
-After all required check, Dokka v2 and SBOM tasks succeed, Gradle resolves locked,
-empty migration configurations and replaces only those obsolete dependency rows
-with `empty=` entries. An existing configuration with any of those names causes
-an early failure, even when empty. No live graph is cleared or unlocked, and no
-lockfile is hand-edited. Review every tracked lock, including unchanged files;
-source floors alone do not prove that old vulnerable rows have disappeared.
+The complete writer retains the genuine Dokka compatibility configurations
+`dokkaJavadocPlugin` and `dokkaHtmlRuntime`. After every required check, current
+Dokka HTML and SBOM task succeeds, each Dokka subproject's
+`resolveDokkaMigrationLocks` task resolves its own configurations under Gradle's
+project execution lock. Disabled compatibility tasks are only realized, not
+executed. Invalid configuration roles and selection of an owner task without
+`resolveAndLockAll` fail before execution. No graph is cleared, unlocked or
+replaced with synthetic empty entries; no lockfile is hand-edited. Review all
+fourteen tracked locks and newly generated integrity metadata.
 
 The artifact-review workspace follows `${TMPDIR:-/tmp}`; an unusable selected directory fails rather than silently
 moving downloads to another volume. Its small GPG home is separately created under `${P2PKIT_GPG_TMPDIR:-/tmp}`.
