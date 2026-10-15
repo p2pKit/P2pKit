@@ -2,6 +2,12 @@ name: Intel iOS simulator tests
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnostics-only:
+        description: "Read-only Intel Bonjour environment observations; NOT qualification"
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: "27 3 * * 1"
 
@@ -14,6 +20,7 @@ concurrency:
 
 jobs:
   ios-x64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.diagnostics-only != true }}
     runs-on: macos-15-intel
     timeout-minutes: 40
     steps:
@@ -58,5 +65,33 @@ jobs:
             library/p2p-transport-lan/build/test-results/iosX64Test/**
             library/p2p-rpc/build/test-results/iosX64Test/**
             samples/p2p-sample-rpc/build/test-results/iosX64Test/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  intel-environment-diagnostics:
+    name: Intel Bonjour environment (READ ONLY, NOT QUALIFICATION)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics-only == true }}
+    runs-on: macos-15-intel
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact diagnostic source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check offline refusal and output-schema controls
+        timeout-minutes: 1
+        run: python3 -I -S -B scripts/tests/intel-bonjour-environment-test.py
+
+      - name: Observe protected Bonjour configuration without changing it
+        timeout-minutes: 2
+        run: python3 -I -S -B scripts/diagnose-intel-bonjour-environment.py
+
+      - name: Upload only closed read-only observations
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: intel-bonjour-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rpc-intel-bonjour-diagnostic.json
           if-no-files-found: warn
           retention-days: 7

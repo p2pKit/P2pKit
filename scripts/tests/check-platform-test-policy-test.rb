@@ -8,6 +8,14 @@ FULL = "needs.repository-checks.outputs.full == 'true'"
 ALWAYS_FULL = "${{ always() && needs.repository-checks.outputs.full == 'true' }}"
 ALWAYS = "${{ always() }}"
 REPORT = "build/reports/platform-tests/**"
+INTEL_NORMAL = "${{ github.event_name != 'workflow_dispatch' || inputs.diagnostics-only != true }}"
+INTEL_DIAGNOSTIC = "${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics-only == true }}"
+INTEL_DIAGNOSTIC_INPUT = {
+    "inputs" => {"diagnostics-only" => {
+        "description" => "Read-only Intel Bonjour environment observations; NOT qualification",
+        "type" => "boolean", "required" => false, "default" => false,
+    }},
+}.freeze
 APPLE_FAILURE_REPORTS = %w[
     library/p2p-core/build/test-results/iosSimulatorArm64Test/**
     library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/**
@@ -72,18 +80,38 @@ def check_platform_policy(inputs)
     raise "Intel simulator validation must remain secret-free/read-only" unless
         intel.fetch("permissions") == {"contents" => "read"} && !JSON.generate(intel).include?("secrets.")
     triggers = intel.fetch("on") { intel.fetch(true) }
-    raise "Intel coverage needs unfiltered manual and weekly triggers" unless
-        triggers.keys.sort == %w[schedule workflow_dispatch] && triggers["workflow_dispatch"].nil? &&
+    raise "Intel coverage needs default manual/weekly tests and an explicit optional read-only diagnostic" unless
+        triggers.keys.sort == %w[schedule workflow_dispatch] &&
+        triggers["workflow_dispatch"] == INTEL_DIAGNOSTIC_INPUT &&
         triggers["schedule"] == [{"cron" => "27 3 * * 1"}]
     raise "Intel test invocations must not overlap" unless
         intel.fetch("concurrency") == {"group" => "ios-x64-tests-${{ github.ref }}", "cancel-in-progress" => false}
     job = intel.fetch("jobs").fetch("ios-x64")
     raise "Intel job must run on a native Intel Mac" unless job["runs-on"] == "macos-15-intel"
-    raise "Intel job cannot be conditional or protected" if job.key?("if") || job.key?("environment")
+    raise "Intel normal tests require the exact default-on guard and no protection change" unless
+        job["if"] == INTEL_NORMAL && !job.key?("environment")
     raise "Intel job needs a bounded timeout" unless job["timeout-minutes"] == 40
     java = job.fetch("steps").find { |step| step.fetch("uses", "").start_with?("actions/setup-java@") }
     raise "Intel job requires JDK 17" unless java && java.fetch("with")["java-version"] == "17"
     check_job(job, "ios-x64", false)
+    raise "Intel tests and diagnostics must remain separate jobs" unless
+        intel.fetch("jobs").keys.sort == %w[intel-environment-diagnostics ios-x64]
+    diagnostic = intel.fetch("jobs").fetch("intel-environment-diagnostics")
+    raise "Intel diagnostics must be explicit, bounded and non-qualifying" unless
+        diagnostic["if"] == INTEL_DIAGNOSTIC && diagnostic["runs-on"] == "macos-15-intel" &&
+        diagnostic["timeout-minutes"] == 5 && !diagnostic.key?("environment") &&
+        !diagnostic.key?("continue-on-error") && diagnostic["name"].include?("NOT QUALIFICATION")
+    diagnostic_steps = diagnostic.fetch("steps")
+    raise "Intel diagnostic cannot substitute product tests or acquire tools" unless
+        diagnostic_steps.size == 4 && diagnostic_steps.map { |step| step["run"] }.compact == [
+            "python3 -I -S -B scripts/tests/intel-bonjour-environment-test.py",
+            "python3 -I -S -B scripts/diagnose-intel-bonjour-environment.py",
+        ] && diagnostic_steps.none? { |step| step.key?("continue-on-error") }
+    diagnostic_report = diagnostic_steps.last
+    raise "Intel diagnostic observations must not be relabeled as test evidence" unless
+        diagnostic_report["if"] == ALWAYS &&
+        diagnostic_report.fetch("with")["path"] == "${{ runner.temp }}/rpc-intel-bonjour-diagnostic.json" &&
+        diagnostic_report.fetch("with")["name"] == "intel-bonjour-diagnostic-${{ github.sha }}-${{ github.run_attempt }}"
     {dry => ["local-release", "Upload local release evidence"],
      publish => ["verify-release", "Upload verification evidence"]}.each do |workflow, names|
         steps = workflow.fetch("jobs").fetch(names[0]).fetch("steps")
@@ -118,6 +146,39 @@ mutations = {
     },
     "arm64 instead of Intel" => ->(v) { v[:intel]["jobs"]["ios-x64"]["runs-on"] = "macos-latest" },
     "Intel job disabled" => ->(v) { v[:intel]["jobs"]["ios-x64"]["if"] = false },
+    "Intel default diagnostic instead of tests" => ->(v) {
+        (v[:intel]["on"] || v[:intel][true])["workflow_dispatch"]["inputs"]["diagnostics-only"]["default"] = true
+    },
+    "Intel implicit diagnostic default" => ->(v) {
+        (v[:intel]["on"] || v[:intel][true])["workflow_dispatch"]["inputs"]["diagnostics-only"].delete("default")
+    },
+    "Intel mandatory diagnostic input" => ->(v) {
+        (v[:intel]["on"] || v[:intel][true])["workflow_dispatch"]["inputs"]["diagnostics-only"]["required"] = true
+    },
+    "Intel untyped diagnostic input" => ->(v) {
+        (v[:intel]["on"] || v[:intel][true])["workflow_dispatch"]["inputs"]["diagnostics-only"]["type"] = "string"
+    },
+    "Intel weekly coverage disabled" => ->(v) {
+        v[:intel]["jobs"]["ios-x64"]["if"] = "${{ github.event_name == 'workflow_dispatch' }}"
+    },
+    "Intel normal guard inverted" => ->(v) { v[:intel]["jobs"]["ios-x64"]["if"] = INTEL_DIAGNOSTIC },
+    "Intel diagnostic guard inverted" => ->(v) {
+        v[:intel]["jobs"]["intel-environment-diagnostics"]["if"] = INTEL_NORMAL
+    },
+    "Intel diagnostic always runs" => ->(v) {
+        v[:intel]["jobs"]["intel-environment-diagnostics"].delete("if")
+    },
+    "Intel product replaced with diagnostic" => ->(v) {
+        by_id(v[:intel]["jobs"]["ios-x64"], "platform-tests")["run"] =
+            "python3 -I -S -B scripts/diagnose-intel-bonjour-environment.py"
+    },
+    "Intel diagnostic executes product" => ->(v) {
+        v[:intel]["jobs"]["intel-environment-diagnostics"]["steps"][2]["run"] =
+            "python3 scripts/run-platform-tests.py ios-x64"
+    },
+    "Intel diagnostic mislabels evidence" => ->(v) {
+        v[:intel]["jobs"]["intel-environment-diagnostics"]["steps"].last["with"]["path"] = REPORT
+    },
     "missing Intel schedule" => ->(v) { (v[:intel]["on"] || v[:intel][true]).delete("schedule") },
     "ignored Intel failures" => ->(v) { v[:intel]["jobs"]["ios-x64"]["continue-on-error"] = true },
     "wrong Intel profile" => ->(v) {
