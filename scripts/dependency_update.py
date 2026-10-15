@@ -98,7 +98,6 @@ def changes(before, after, staged, untracked):
             need(name in allowed, "NON_DEPENDENCY_SOURCE_CHANGED")
             result.append({"path": name, "before": original["sha256"],
                            "after": current["sha256"], "bytes": current["bytes"]})
-    need(result and any(row["path"] == XML for row in result), "NO_VERIFICATION_CANDIDATE")
     return sorted(result, key=lambda row: row["path"])
 
 
@@ -178,8 +177,12 @@ def execute(controller, candidate, request, output, *, run=subprocess.run, repor
     old_xml = read(candidate / XML)
     generator_code, stop_code = 125, 125
     try:
+        # Only this real generator invocation opts into the curator's exact-XML
+        # no-additions case. The generator still performs its normal writer,
+        # verification-policy, strict resolution and plugin-floor checks first.
         generator_code = run([str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]],
-                             cwd=candidate, check=False).returncode
+                             cwd=candidate, check=False,
+                             env={**os.environ, "P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED": "1"}).returncode
     finally:
         try:
             stop_code = run([str(candidate / "gradlew"), "--stop"], cwd=candidate, check=False, timeout=90).returncode
@@ -192,12 +195,16 @@ def execute(controller, candidate, request, output, *, run=subprocess.run, repor
     delta = changes(before, snapshot(candidate), git(candidate, "diff", "--cached", "--binary"),
                     git(candidate, "ls-files", "--others", "--exclude-standard", "-z"))
     old_policy, old_entries = verification(old_xml)
-    new_policy, new_entries = verification(read(candidate / XML))
-    need(old_policy == new_policy and old_entries < new_entries, "VERIFICATION_HISTORY_REMOVED_OR_UNCHANGED")
+    new_xml = read(candidate / XML)
+    new_policy, new_entries = verification(new_xml)
+    need(old_policy == new_policy and old_entries <= new_entries, "VERIFICATION_HISTORY_REMOVED")
+    need(old_entries != new_entries or old_xml == new_xml, "UNCHANGED_VERIFICATION_BYTES_DIFFER")
     git(candidate, "diff", "--check")
     patch = git(candidate, "diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD")
-    need(0 < len(patch) <= PATCH_LIMIT, "PATCH_LIMIT")
+    need(len(patch) <= PATCH_LIMIT and bool(patch) == bool(delta), "PATCH_LIMIT_OR_DELTA_MISMATCH")
+    outcome = "UPDATED_VERIFICATION" if new_entries != old_entries else "LOCK_ONLY" if delta else "UNCHANGED"
     document = {"schema": 1, "scope": "DEPENDENCY_UPDATE_CANDIDATE_NOT_QUALIFICATION", "request": request,
+                "outcome": outcome,
                 "generatorExitCode": generator_code, "gradleStopExitCode": stop_code,
                 "changes": delta, "addedVerifiedArtifacts": len(new_entries - old_entries),
                 "patch": {"sha256": hashlib.sha256(patch).hexdigest(), "bytes": len(patch)},

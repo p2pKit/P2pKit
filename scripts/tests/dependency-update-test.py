@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Tiny real Git checkouts + modeled generator; no Gradle/network/private key."""
 import copy
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
 import unittest
 from unittest.mock import Mock, patch
 
@@ -69,12 +71,60 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(result["releaseQualified"])
         self.assertTrue(result["requiresReviewBeforeApply"])
         self.assertEqual(1, result["addedVerifiedArtifacts"])
+        self.assertEqual("UPDATED_VERIFICATION", result["outcome"])
         self.assertEqual(["gradle.lockfile", D.XML], [row["path"] for row in result["changes"]])
         self.assertEqual([str(self.candidate / "scripts/prepare-dependency-update.sh"), self.request["dependency_base_sha"]], self.calls[0][0])
+        self.assertEqual("1", self.calls[0][1]["env"]["P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED"])
+        self.assertNotIn("env", self.calls[1][1])
         self.assertEqual(([str(self.candidate / "gradlew"), "--stop"], 90), (self.calls[1][0], self.calls[1][1]["timeout"]))
         self.assertEqual({"generated-dependencies.patch", "generated-dependencies.json"}, {p.name for p in self.output.iterdir()})
         self.assertEqual(result, json.loads((self.output / "generated-dependencies.json").read_text()))
         self.assertEqual(b"", D.git(self.controller, "status", "--porcelain=v1"))
+
+    def test_real_invocation_sequence_can_report_unchanged_without_inventing_delta(self):
+        def unchanged(argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            return Mock(returncode=0)
+        before_environment = dict(os.environ)
+        result = self.execute(run=unchanged)
+        self.assertEqual("UNCHANGED", result["outcome"])
+        self.assertEqual([], result["changes"])
+        self.assertEqual(0, result["addedVerifiedArtifacts"])
+        self.assertEqual({"sha256": hashlib.sha256(b"").hexdigest(), "bytes": 0}, result["patch"])
+        self.assertEqual(b"", (self.output / "generated-dependencies.patch").read_bytes())
+        self.assertFalse(result["releaseQualified"])
+        self.assertEqual(2, len(self.calls))  # modeled real generator, then original bounded stop
+        self.assertEqual("1", self.calls[0][1]["env"]["P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED"])
+        self.assertNotIn("env", self.calls[1][1])
+        self.assertEqual(before_environment, dict(os.environ))
+        self.reports.assert_called_once()
+
+    def test_lock_only_delta_requires_unchanged_complete_verification(self):
+        def lock_only(argv, **kwargs):
+            if argv[-1] != "--stop":
+                (self.candidate / "gradle.lockfile").write_text("regenerated lock graph\n")
+            return Mock(returncode=0)
+        result = self.execute(run=lock_only)
+        self.assertEqual("LOCK_ONLY", result["outcome"])
+        self.assertEqual(["gradle.lockfile"], [row["path"] for row in result["changes"]])
+        self.assertEqual(0, result["addedVerifiedArtifacts"])
+        self.assertGreater(result["patch"]["bytes"], 0)
+
+    def test_equal_checksum_set_does_not_allow_xml_rewrite_or_failed_noop(self):
+        for change in ("format", "annotation", "generator", "stop"):
+            self.command(self.candidate, "reset", "--hard", "HEAD")
+            def modeled(argv, **kwargs):
+                if argv[-1] != "--stop":
+                    if change == "format":
+                        (self.candidate / D.XML).write_bytes(xml() + b"\n")
+                    elif change == "annotation":
+                        (self.candidate / D.XML).write_bytes(xml().replace(b'<sha256 value=', b'<sha256 reason="changed" value='))
+                    return Mock(returncode=7 if change == "generator" else 0)
+                return Mock(returncode=7 if change == "stop" else 0)
+            expected = "GENERATION_OR_GRADLE_STOP_FAILED" if change in ("generator", "stop") else "UNCHANGED_VERIFICATION_BYTES_DIFFER"
+            with self.subTest(change=change), self.assertRaisesRegex(D.UpdateError, expected):
+                self.execute(run=modeled)
+            self.assertFalse(self.output.exists())
 
     def test_stale_source_or_base_never_executes_generator(self):
         for key in self.request:
@@ -202,6 +252,109 @@ class UpdateTests(unittest.TestCase):
                     xml().replace(b'</components>', xml().split(b'<components>')[1].split(b'</components>')[0] + b'</components>')):
             with self.subTest(raw=raw[:20]), self.assertRaises(D.UpdateError):
                 D.verification(raw)
+
+
+class UnchangedCuratorTests(unittest.TestCase):
+    """Actual shell orchestration; Gradle/checker/tools are explicit offline models."""
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="dependency-noop-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        for name in ("scripts", "gradle", "bin", "work", "home"):
+            (self.root / name).mkdir()
+        maintained = Path(__file__).resolve().parents[1]
+        for name in ("prepare-dependency-update.sh", "review-dependency-verification.sh"):
+            self.write("scripts/" + name, (maintained / name).read_text())
+        self.write("scripts/check-gradle-wrapper.sh", '#!/bin/sh\necho wrapper >> "$TRACE"\n')
+        self.write("scripts/check-dependency-verification.sh",
+                   '#!/bin/sh\necho policy >> "$TRACE"\n[ "${FAIL_STAGE:-}" != policy ]\n')
+        self.write("gradlew", '''#!/bin/sh
+case " $* " in
+  *" --write-locks "*) echo writer >> "$TRACE" ;;
+  *) echo strict-floors >> "$TRACE"; [ "${FAIL_STAGE:-}" != strict ] || exit 7 ;;
+esac
+''')
+        for name in ("curl", "gh", "gpg"):
+            self.write("bin/" + name, '#!/bin/sh\necho ' + name + ' >> "$TRACE"\nexit 97\n')
+        self.write("bin/gpgconf", '#!/bin/sh\necho cleanup >> "$TRACE"\nexit 0\n')
+        self.metadata = self.root / D.XML
+        self.original = xml().replace(b'><', b'>\n<') + b'\n'
+        self.metadata.write_bytes(self.original)
+        (self.root / "gradle/plugin-provenance-policy.txt").write_text("# No exceptions\n")
+        self.trace = self.root / "trace"
+        self.environment = {**os.environ, "PATH": str(self.root / "bin") + os.pathsep + os.environ["PATH"],
+                            "HOME": str(self.root / "home"), "GIT_CONFIG_NOSYSTEM": "1",
+                            "GIT_CONFIG_GLOBAL": os.devnull, "P2PKIT_PYTHON3": sys.executable,
+                            "P2PKIT_GPG_TMPDIR": str(self.root / "work"), "TMPDIR": str(self.root / "work"),
+                            "TRACE": str(self.trace)}
+        for name in ("P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED", "FAIL_STAGE"):
+            self.environment.pop(name, None)
+        self.git("init", "--quiet")
+        self.git("add", "scripts", "gradlew", "gradle")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Synthetic baseline")
+        self.base = self.git("rev-parse", "HEAD").decode().strip()
+
+    def write(self, name, text):
+        path = self.root / name
+        path.write_text(text)
+        path.chmod(0o755)
+
+    def git(self, *arguments):
+        return subprocess.check_output(["git", "-C", str(self.root), *arguments],
+                                       env=self.environment, stderr=subprocess.PIPE)
+
+    def invoke(self, flag=None, *, generator=False, fail=None):
+        self.trace.write_text("")
+        environment = dict(self.environment)
+        if flag is not None:
+            environment["P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED"] = flag
+        if fail:
+            environment["FAIL_STAGE"] = fail
+        script = "prepare-dependency-update.sh" if generator else "review-dependency-verification.sh"
+        result = subprocess.run([str(self.root / "scripts" / script), self.base], cwd=self.root,
+                                env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        events = self.trace.read_text().splitlines()
+        self.assertNotIn("gh", events)
+        self.assertNotIn("gpg", events)
+        return result, events
+
+    def test_default_and_invalid_opt_in_still_refuse_no_additions(self):
+        for flag in (None, "0", "", "true", "2"):
+            with self.subTest(flag=flag):
+                result, events = self.invoke(flag)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"RESULT: PASS", result.stdout)
+                self.assertNotIn("curl", events)
+
+    def test_actual_generator_orders_all_checks_before_exact_noop(self):
+        result, events = self.invoke("1", generator=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(events, ["wrapper", "writer", "policy", "strict-floors", "cleanup"])
+        self.assertIn(b"byte-identical", result.stdout)
+        self.assertEqual(self.metadata.read_bytes(), self.original)
+        for stage in ("policy", "strict"):
+            with self.subTest(stage=stage):
+                result, events = self.invoke("1", generator=True, fail=stage)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"byte-identical", result.stdout)
+                self.assertNotIn("cleanup", events)  # Curator was never reached.
+
+    def test_noop_requires_entire_xml_and_additions_still_require_remote_review(self):
+        for raw in (self.original + b"\n", self.original.replace(b'true', b'false'),
+                    self.original.replace(b'<sha256 value=', b'<sha256 reason="changed" value='),
+                    b'<verification-metadata/>\n'):
+            with self.subTest(raw=raw[:30]):
+                self.metadata.write_bytes(raw)
+                result, events = self.invoke("1")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"byte-identical", result.stdout)
+                self.assertNotIn("curl", events)
+        self.metadata.write_bytes(xml(True).replace(b'><', b'>\n<') + b'\n')
+        result, events = self.invoke("1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("curl", events)  # Deliberately refused fixture transport, no network.
+        self.assertNotIn(b"byte-identical", result.stdout)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,16 @@ source is rejected. No generator is run merely because the dependency set is
 unchanged. Foundation and an eventual RPC integration are different sources;
 earlier Foundation evidence cannot qualify RPC's expanded graph.
 
+An explicitly requested regeneration may genuinely produce no changes. The
+adapter still runs the real maintained writer, policy checker, strict dependency
+resolution/plugin-floor check and Gradle stop; an empty diff is not a substitute
+for those successful executions. Only that generator subprocess receives
+`P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED=1`. The curator's default remains to
+reject a review with no new artifacts, and invalid flag values are rejected.
+The opt-in accepts no additions only when the **complete original verification
+XML is byte-identical** to the dependency base; it does not bypass remote review
+for any newly admitted artifact.
+
 ## Evidence and allowed output
 
 The small `scripts/dependency_update.py` adapter runs inside `ci_evidence.py` with
@@ -73,6 +83,11 @@ Two immutable, 14-day artifacts use the original run ID and attempt:
   file digests, patch digest, successful generator/Gradle-stop returns, and the
   count of newly verified artifacts. Its explicit scope is
   `DEPENDENCY_UPDATE_CANDIDATE_NOT_QUALIFICATION` and `releaseQualified` is false.
+  Its additive `outcome` is `UPDATED_VERIFICATION`, `LOCK_ONLY`, or `UNCHANGED`.
+  Lock-only output must retain the entire verification XML and all existing
+  hashes/trust settings after the same real generator checks. An unchanged
+  result has an empty change list, zero added artifacts, and the SHA-256/size of
+  an empty patch; it claims successful regeneration, not a fabricated update.
 
 Review the complete patch, source identities, manifest/digests and encrypted
 provenance results before applying anything. Apply reviewed bytes only to the

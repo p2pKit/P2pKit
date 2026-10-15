@@ -22,9 +22,15 @@ fail() {
     exit 1
 }
 
+# Explicitly scoped by the reviewed candidate adapter's generator subprocess.
+# Ordinary maintainer review retains its original requirement for new entries.
+ALLOW_UNCHANGED="${P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED-0}"
+[[ "$ALLOW_UNCHANGED" == 0 || "$ALLOW_UNCHANGED" == 1 ]] ||
+    fail "invalid unchanged-review flag"
+
 git -C "$ROOT" cat-file -e "$BASE_REF^{commit}" 2>/dev/null ||
     fail "base ref is not an available commit: $BASE_REF"
-for command in curl gh gpg gpgconf awk comm sort shasum; do
+for command in curl gh gpg gpgconf awk comm cmp sort shasum; do
     command -v "$command" >/dev/null 2>&1 || fail "required review tool is missing: $command"
 done
 PYTHON3="${P2PKIT_PYTHON3:-/usr/bin/python3}"
@@ -283,7 +289,16 @@ git -C "$ROOT" show "$BASE_REF:gradle/verification-metadata.xml" >"$work/base.xm
 parse_metadata "$work/base.xml" "$work/base.entries"
 parse_metadata "$ROOT/gradle/verification-metadata.xml" "$work/current.entries"
 comm -13 "$work/base.entries" "$work/current.entries" >"$work/new.entries"
-[[ -s "$work/new.entries" ]] || fail "no new verified artifacts relative to $BASE_REF"
+if [[ ! -s "$work/new.entries" ]]; then
+    [[ "$ALLOW_UNCHANGED" == 1 ]] || fail "no new verified artifacts relative to $BASE_REF"
+    # Equality of just parsed checksum tuples is insufficient: trust settings,
+    # removals, metadata annotations and the complete original XML must match.
+    [[ -s "$work/current.entries" ]] &&
+        cmp -s "$work/base.xml" "$ROOT/gradle/verification-metadata.xml" ||
+        fail "unchanged review requires exact complete original verification metadata"
+    echo "RESULT: PASS — verification metadata is byte-identical to the base; no new artifacts require remote provenance review"
+    exit 0
+fi
 
 reviewed=0
 while IFS='|' read -r group module version artifact expected_sha; do
