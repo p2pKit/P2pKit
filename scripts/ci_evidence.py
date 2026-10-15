@@ -5,7 +5,8 @@ Trust the reviewed workflow/host and the independent recipient pins supplied by
 Actions configuration. Capture command output privately, retire its owned process
 domain, bundle closed results, and encrypt with the pinned PUBLIC key only.
 Successful uploads contain manifest.json and evidence.tar.gz.gpg. A failed
-export may retain failure.json instead; it is diagnostic, never qualification.
+export may retain failure.json and encrypted closed captures instead; these are
+diagnostic, never qualification.
 """
 from __future__ import annotations
 
@@ -530,6 +531,47 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
     return {**digest_file(output), "recipientFingerprint": expected_fingerprint.upper()}
 
 
+def encrypt_closed_failure_captures(root, private, output, environment):
+    """Protect exactly the two independently closed captures, never mutable reports.
+
+    The caller has already retained a failed receipt. This archive does not
+    prove source stability, task completion or process retirement.
+    """
+    work = private / "failure-encryption"
+    work.mkdir(mode=0o700)
+    bundle = work / "bundle"
+    bundle.mkdir(mode=0o700)
+    names = ("stderr.log", "stdout.log")
+    for name in names:
+        original = private / "command" / name
+        info = original.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
+                0 <= info.st_size <= MAX_LOG_BYTES, "REPORTS")
+        target = bundle / name
+        shutil.copyfile(original, target)
+        if os.name == "posix":
+            os.chmod(target, 0o600)
+        require(digest_file(original) == digest_file(target), "REPORTS")
+    archive = work / "evidence.tar.gz"
+    records = archive_private(bundle, archive)
+    require(tuple(row["path"] for row in records) == names, "REPORTS")
+    with (root / ".github/ci-evidence-recipient.asc").open("rb") as public_key:
+        key_raw = public_key.read(64 * 1024 + 1)
+    require(0 < len(key_raw) <= 64 * 1024, "RECIPIENT")
+    # Partial ciphertext stays private, including an unknown GPG retirement.
+    cipher = work / "evidence.tar.gz.gpg"
+    metadata = encrypt_archive(archive, cipher, key_raw,
+        environment.get("CI_EVIDENCE_RECIPIENT_SHA256", ""),
+        environment.get("CI_EVIDENCE_RECIPIENT_FINGERPRINT", ""), work, environment)
+    target = output / "evidence.tar.gz.gpg"
+    shutil.copyfile(cipher, target)
+    if os.name == "posix":
+        os.chmod(target, 0o600)
+    require(digest_file(target) == {key: metadata[key] for key in ("bytes", "sha256")}, "ENCRYPTION")
+    return {"kind": "CLOSED_CAPTURES_ONLY_NOT_QUALIFICATION", "sourceValidation": "INITIAL_ONLY",
+            "members": list(names), "privateArchive": digest_file(archive), "ciphertext": metadata}
+
+
 def tool_identity(tools_file):
     result = {"python": {"version": platform.python_version(),
                          "executableSha256": digest_file(Path(sys.executable).resolve())["sha256"]}}
@@ -954,6 +996,22 @@ def main(argv=None):
                         if source is not None and outcome is not None and
                         (outcome["cleanupKnown"] or outcome.get("capturesClosed") is True) else None}
                 write_private(output / "failure.json", encoded(failure))
+                if (stage == "COMMAND" and code == "CLEANUP" and source is not None and
+                        outcome is not None and outcome["cleanupKnown"] is False and
+                        outcome.get("capturesClosed") is True):
+                    try:
+                        failure["closedCaptureArchive"] = encrypt_closed_failure_captures(
+                            root, private, output, environment)
+                        # The original failure survives interruption/encryption
+                        # failure. Replace it atomically only with a complete
+                        # diagnostic attachment; never create a success manifest.
+                        updated = output / "failure-update.json"
+                        write_private(updated, encoded(failure))
+                        os.replace(updated, output / "failure.json")
+                    except BaseException:
+                        for name in ("evidence.tar.gz.gpg", "failure-update.json"):
+                            (output / name).unlink(missing_ok=True)
+                        print("CI_EVIDENCE DIAGNOSTIC_ENCRYPTION_FAILED", file=sys.stderr)
         except BaseException:
             # An OS cleanup error must not print a private filename/exception or
             # convert this failure to PASS. Job/API failure still denies intake.

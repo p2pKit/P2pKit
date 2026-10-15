@@ -327,6 +327,151 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(private.is_dir())
         encrypt.assert_not_called()
 
+    def test_closed_failure_archive_encrypts_only_original_logs_and_never_qualifies(self):
+        repo = self.root / "repo"; repo.mkdir()
+        (repo / ".github").mkdir()
+        key = b"PUBLIC_RECIPIENT_MODEL_NOT_A_KEY"
+        (repo / ".github/ci-evidence-recipient.asc").write_bytes(key)
+        private = self.root / "private"; private.mkdir()
+        command = private / "command"; command.mkdir()
+        logs = {"stdout.log": b"PRIVATE_SYNTHETIC_CAUSE", "stderr.log": b"PRIVATE_SYNTHETIC_ERROR"}
+        for name, raw in logs.items():
+            (command / name).write_bytes(raw)
+        (command / "mutable-report.xml").write_text("MUTABLE_NOT_ALLOWED")
+        outcome = {"code": "COMMAND_FAILED", "exitCode": 7, "cleanupKnown": False,
+                   "capturesClosed": True, "timedOut": False, "cleanupReasons": ["DRAIN_UNCLASSIFIED"]}
+        source = {"commit": "a" * 40, "tree": "b" * 40, "version": "0.8.0-rc1"}
+        output = self.root / "output"
+        fingerprint = "A" * 40
+        cipher_bytes = b"SYNTHETIC_CIPHERTEXT_NOT_REAL_ENCRYPTION"
+        def encrypt(archive, target, key_raw, expected_sha, expected_fingerprint, work, environment):
+            initial = json.loads((output / "failure.json").read_text())
+            self.assertFalse(initial["outcome"]["cleanupKnown"])
+            self.assertNotIn("closedCaptureArchive", initial)
+            self.assertTrue(target.is_relative_to(private))
+            self.assertFalse((output / "evidence.tar.gz.gpg").exists())
+            self.assertEqual(key_raw, key)
+            self.assertEqual(expected_sha, hashlib.sha256(key).hexdigest())
+            self.assertEqual(expected_fingerprint, fingerprint)
+            with tarfile.open(archive) as saved:
+                self.assertEqual(saved.getnames(), ["stderr.log", "stdout.log"])
+                for name in saved.getnames():
+                    self.assertEqual(saved.extractfile(name).read(), logs[name])
+            target.write_bytes(cipher_bytes)
+            return {**E.digest_file(target), "recipientFingerprint": fingerprint}
+        with mock.patch.object(E, "source_identity", return_value=source), \
+                mock.patch.object(E, "github_identity", return_value={"runId": "123", "runAttempt": "1"}), \
+                mock.patch.object(E, "run_command", return_value=outcome), \
+                mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                mock.patch.object(E, "encrypt_archive", side_effect=encrypt) as encryption, \
+                mock.patch.object(E, "collect_reports", side_effect=AssertionError("mutable report read")), \
+                mock.patch.object(E, "junit_failures", side_effect=AssertionError("mutable JUnit read")), \
+                mock.patch.object(E, "component_tasks", side_effect=AssertionError("mutable task read")), \
+                mock.patch.dict(os.environ, {"CI_EVIDENCE_RECIPIENT_SHA256": hashlib.sha256(key).hexdigest(),
+                                            "CI_EVIDENCE_RECIPIENT_FINGERPRINT": fingerprint}), \
+                contextlib.redirect_stderr(io.StringIO()) as public:
+            result = E.main(["--component", "compatibility", "--timeout-seconds", "5", "--output-dir", str(output),
+                             "--source-root", str(repo), "--", "synthetic"])
+        self.assertEqual(result, 1)
+        encryption.assert_called_once()
+        self.assertEqual({p.name for p in output.iterdir()}, {"failure.json", "evidence.tar.gz.gpg"})
+        failure = json.loads((output / "failure.json").read_text())
+        self.assertEqual(failure["outcome"], outcome)
+        self.assertEqual((failure["stage"], failure["code"]), ("COMMAND", "CLEANUP"))
+        self.assertIsNone(failure["taskResults"])
+        attached = failure["closedCaptureArchive"]
+        self.assertEqual(attached["kind"], "CLOSED_CAPTURES_ONLY_NOT_QUALIFICATION")
+        self.assertEqual(attached["sourceValidation"], "INITIAL_ONLY")
+        self.assertEqual(attached["members"], ["stderr.log", "stdout.log"])
+        self.assertEqual(attached["privateArchive"], E.digest_file(private / "failure-encryption/evidence.tar.gz"))
+        self.assertEqual(attached["ciphertext"]["sha256"], hashlib.sha256(cipher_bytes).hexdigest())
+        self.assertTrue(private.is_dir())
+        self.assertNotIn("PRIVATE_SYNTHETIC", json.dumps(failure) + public.getvalue())
+        # The real maintained qualification consumer rejects this diagnostic ZIP.
+        import ci_qualification as Q
+        import zipfile
+        packed = io.BytesIO()
+        with zipfile.ZipFile(packed, "w") as archive:
+            for name in ("failure.json", "evidence.tar.gz.gpg"):
+                archive.writestr(name, (output / name).read_bytes())
+        raw = packed.getvalue()
+        api = mock.Mock()
+        api.download.side_effect = lambda _artifact, path: path.write_bytes(raw)
+        artifact = {"size_in_bytes": len(raw), "digest": "sha256:" + hashlib.sha256(raw).hexdigest()}
+        with self.assertRaisesRegex(Q.AdmissionError, "Unexpected record ZIP members"):
+            Q.read_archive(api, artifact, evidence=True)
+
+    def test_failed_diagnostic_encryption_or_receipt_replacement_preserves_original_failure(self):
+        for problem in ("encryption", "receipt-replace"):
+            with self.subTest(problem=problem):
+                case = self.root / problem; case.mkdir()
+                repo = case / "repo"; repo.mkdir()
+                private = case / "private"; private.mkdir()
+                command = private / "command"; command.mkdir()
+                for name in ("stdout.log", "stderr.log"):
+                    (command / name).write_text("PRIVATE_SYNTHETIC")
+                output = case / "output"
+                outcome = {"code": "COMMAND_FAILED", "exitCode": 9, "cleanupKnown": False,
+                           "capturesClosed": True, "timedOut": False}
+                def diagnostic(_root, _private, _output, _env):
+                    self.assertTrue((output / "failure.json").exists())
+                    (private / "partial-ciphertext").write_bytes(b"PRIVATE_PARTIAL_CIPHER")
+                    if problem == "encryption":
+                        raise E.EvidenceError("ENCRYPTION")
+                    (output / "evidence.tar.gz.gpg").write_bytes(b"SYNTHETIC_COMPLETE_CIPHER")
+                    return {"kind": "CLOSED_CAPTURES_ONLY_NOT_QUALIFICATION"}
+                with mock.patch.object(E, "source_identity", return_value={"commit": "a" * 40}), \
+                        mock.patch.object(E, "github_identity", return_value={}), \
+                        mock.patch.object(E, "run_command", return_value=outcome), \
+                        mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                        mock.patch.object(E, "encrypt_closed_failure_captures", side_effect=diagnostic), \
+                        mock.patch.object(E.os, "replace", side_effect=OSError("PRIVATE_ERROR")), \
+                        contextlib.redirect_stderr(io.StringIO()) as public:
+                    result = E.main(["--component", "compatibility", "--timeout-seconds", "5", "--output-dir", str(output),
+                                     "--source-root", str(repo), "--", "synthetic"])
+                self.assertEqual(result, 1)
+                self.assertEqual({p.name for p in output.iterdir()}, {"failure.json"})
+                failure = json.loads((output / "failure.json").read_text())
+                self.assertEqual(failure["outcome"], outcome)
+                self.assertNotIn("closedCaptureArchive", failure)
+                self.assertTrue((private / "partial-ciphertext").is_file())
+                self.assertNotIn("PRIVATE", public.getvalue())
+                self.assertIn("DIAGNOSTIC_ENCRYPTION_FAILED", public.getvalue())
+
+    def test_unknown_capture_proof_never_encrypts_failed_cleanup(self):
+        for closed in (False, None, 1, "true"):
+            case = self.root / str(closed); case.mkdir()
+            repo = case / "repo"; repo.mkdir()
+            private = case / "private"; private.mkdir()
+            outcome = {"code": "CLEANUP", "exitCode": 0, "cleanupKnown": False,
+                       "capturesClosed": closed, "timedOut": False}
+            with mock.patch.object(E, "source_identity", return_value={"commit": "a" * 40}), \
+                    mock.patch.object(E, "github_identity", return_value={}), \
+                    mock.patch.object(E, "run_command", return_value=outcome), \
+                    mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                    mock.patch.object(E, "encrypt_closed_failure_captures") as encrypt, \
+                    mock.patch.object(E, "failure_diagnostics") as diagnostics, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(E.main(["--component", "compatibility", "--timeout-seconds", "5",
+                    "--output-dir", str(case / "output"), "--source-root", str(repo), "--", "synthetic"]), 1)
+            encrypt.assert_not_called()
+            diagnostics.assert_not_called()
+
+    def test_failure_archive_rejects_linked_or_oversized_capture_before_encryption(self):
+        for kind in ("hardlink", "oversized"):
+            case = self.root / kind; case.mkdir()
+            private = case / "private"; private.mkdir()
+            command = private / "command"; command.mkdir()
+            (command / "stdout.log").write_bytes(b"synthetic")
+            if kind == "hardlink":
+                os.link(command / "stdout.log", command / "stderr.log")
+            else:
+                (command / "stderr.log").write_bytes(b"too large for modeled bound")
+            with mock.patch.object(E, "MAX_LOG_BYTES", 16), \
+                    mock.patch.object(E, "encrypt_archive") as encrypt, self.assertRaises(E.EvidenceError):
+                E.encrypt_closed_failure_captures(case, private, case / "output", {})
+            encrypt.assert_not_called()
+
     def test_capture_admission_requires_both_started_eof_closed_joined_error_free_streams(self):
         for defect in ("unstarted", "active", "no-eof", "open", "io-error"):
             with self.subTest(defect=defect):
