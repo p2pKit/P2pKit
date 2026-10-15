@@ -521,6 +521,56 @@ class PackageFixtures(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, "Prepare identity"):
             subject.package(self.root, self.output)
 
+    def test_android_kind_ignores_desktop_outputs_and_packages_only_android(self):
+        # An unrelated existing desktop tree must neither block prepare nor be
+        # read/packaged by the isolated Android component.
+        self.write(self.root / subject.IMAGE / "unrelated", b"preserve desktop")
+        for relative in subject.LICENSES.values():
+            self.write(self.root / relative, b"synthetic public notice")
+        with mock.patch.object(subject, "context", return_value=self.identity):
+            subject.prepare(self.root, self.output, "android")
+            self.assertEqual([subject.APK], subject.read_json(self.output / ".prepare.json")["generatedRoots"])
+            self.android_fixture()
+            with mock.patch.object(subject, "desktop_layout", side_effect=AssertionError("desktop inspected")), \
+                    mock.patch.object(subject, "desktop_installer", side_effect=AssertionError("desktop packaged")):
+                subject.package(self.root, self.output, "android")
+        self.assertEqual({".prepare.json", ".complete.json", "android"},
+                         {path.name for path in self.output.iterdir()})
+        manifest = subject.read_json(self.output / "android/manifest.json")
+        self.assertEqual(SHA, manifest["sourceAndRun"]["commit"])
+        self.assertEqual(b"preserve desktop", (self.root / subject.IMAGE / "unrelated").read_bytes())
+
+    def test_desktop_kind_ignores_android_outputs_and_packages_only_desktop(self):
+        self.write(self.root / subject.APK / "unrelated", b"preserve android")
+        with mock.patch.object(subject, "context", return_value=self.identity):
+            subject.prepare(self.root, self.output, "desktop")
+            self.assertNotIn(subject.APK, subject.read_json(self.output / ".prepare.json")["generatedRoots"])
+            self.application_fixture("linux")
+            with mock.patch.object(subject, "android_artifact", side_effect=AssertionError("android inspected")):
+                subject.package(self.root, self.output, "desktop")
+        self.assertEqual({".prepare.json", ".complete.json", "desktop"},
+                         {path.name for path in self.output.iterdir()})
+        self.assertEqual(3, len(subject.read_json(self.output / "desktop/manifest.json")["artifacts"]))
+        self.assertEqual(b"preserve android", (self.root / subject.APK / "unrelated").read_bytes())
+
+    def test_kind_switch_after_prepare_is_rejected_before_inspection(self):
+        with mock.patch.object(subject, "context", return_value=self.identity):
+            subject.prepare(self.root, self.output, "android")
+            for kind in ("all", "desktop"):
+                with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "Prepare identity"):
+                    subject.package(self.root, self.output, kind)
+        self.assertEqual({".prepare.json"}, {path.name for path in self.output.iterdir()})
+
+    def test_android_kind_rejects_non_linux_and_unknown_kind(self):
+        for system in ("windows", "macos"):
+            with self.subTest(system=system), \
+                    mock.patch.object(subject, "context", return_value={**self.identity, "platform": system}), \
+                    self.assertRaisesRegex(ValueError, "Android producer must be Linux"):
+                subject.prepare(self.root, self.output, "android")
+        with self.assertRaisesRegex(ValueError, "Unknown package component"):
+            subject.generated_roots(self.identity, "unknown")
+        self.assertFalse(self.output.exists())
+
     def test_failure_before_delivery_removes_only_own_packaging_stage(self):
         sentinel = self.write(self.base / "outside-sentinel", b"preserve")
         with mock.patch.object(subject, "context", return_value=self.identity):

@@ -341,7 +341,7 @@ increment adds no productive workflow or activation authority.
 
 The reviewed 53-file composition connects the productive receiver, native
 adapter, final tail and finite delivery to the separate dispatch-only
-[bootstrap workflow](../../.github/workflows/dependency-cache-bootstrap.yml).
+[bootstrap workflow](https://github.com/p2pKit/P2pKit/blob/0b64aaae4be21349bc21c7f17ecd76d8c20ac85b/.github/workflows/dependency-cache-bootstrap.yml).
 It also binds the complete 132-path compatibility roster across the initial
 bootstrap/ordinary boundary. Six required ordinary-provider/controller paths
 are still absent in this checkpoint; the roster is not shortened to conceal

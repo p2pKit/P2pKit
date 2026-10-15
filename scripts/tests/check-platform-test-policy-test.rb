@@ -1,175 +1,207 @@
 #!/usr/bin/env ruby
-require "yaml"
-require "json"
-require "shellwords"
-require_relative "../check-hosted-test-workflow-policy"
+# Active modular callers must execute the maintained native coverage driver.
+# These are offline routing/policy controls, not native test qualification.
+require 'yaml'
+require 'json'
+require 'open3'
 
-ROOT = File.expand_path("../..", __dir__)
-FULL = "steps.scope.outputs.full == 'true'"
-ALWAYS_FULL = "${{ always() && steps.scope.outputs.full == 'true' }}"
-ALWAYS = "${{ always() }}"
-REPORT = "build/reports/platform-tests/**"
+ROOT = File.expand_path('../..', __dir__)
+REPORT = 'build/reports/platform-tests/**'
 
-def by_id(job, id)
-    matches = job.fetch("steps").select { |step| step["id"] == id }
-    raise "expected one #{id} step" unless matches.size == 1
-    matches.first
+def need(value, message)
+  raise ArgumentError, message unless value
 end
 
-def check_job(job, profile, scoped)
-    raise "platform test failures cannot be ignored" if job.key?("continue-on-error")
-    test = by_id(job, "platform-tests")
-    raise "wrong platform-test invocation" unless
-        Shellwords.split(test.fetch("run")) == ["python3", "scripts/run-platform-tests.py", profile]
-    raise "platform tests cannot override execution context" if
-        %w[continue-on-error env shell working-directory].any? { |key| test.key?(key) }
-    raise "wrong platform-test condition" unless scoped ? test["if"] == FULL : !test.key?("if")
-
-    stop = by_id(job, "stop-platform-gradle")
-    evidence = by_id(job, "platform-reports")
-    condition = scoped ? ALWAYS_FULL : ALWAYS
-    [stop, evidence].each do |step|
-        raise "platform cleanup/evidence must run after failure" unless step["if"] == condition
-        raise "platform cleanup/evidence cannot ignore failure" if step.key?("continue-on-error")
-    end
-    raise "must stop the applicable Gradle wrapper" unless stop["run"] == "./gradlew --stop"
-    raise "test execution reports must be uploaded" unless
-        evidence.fetch("uses").start_with?("actions/upload-artifact@") &&
-        evidence.fetch("with").fetch("path").split.include?(REPORT)
-    paths = evidence.fetch("with").fetch("path").split
-    raise "report exclusions are not allowed" if paths.any? { |path| path.start_with?("!") }
-    if profile == "ios-x64"
-        %w[p2p-core p2p-transport-lan].each do |project|
-            raise "missing Intel XML evidence" unless paths.include?("library/#{project}/build/test-results/iosX64Test/**")
-        end
-    end
-    raise "platform evidence requires bounded retention" unless evidence.fetch("with")["retention-days"] == 7
-    raise "early failure must not manufacture missing-report failure" unless
-        evidence.fetch("with")["if-no-files-found"] == "warn"
-    steps = job.fetch("steps")
-    raise "platform test/cleanup/evidence order changed" unless
-        steps.index(test) < steps.index(stop) && steps.index(stop) < steps.index(evidence)
+def command_json(*arguments)
+  stdout, stderr, status = Open3.capture3('python3', '-B', File.join(ROOT, 'scripts/ci_component.py'), *arguments)
+  need(status.success? && stderr.empty?, 'Cannot observe actual component command routing')
+  JSON.parse(stdout)
 end
 
-def check_platform_policy(inputs)
-    ci, intel, dry, publish, release = inputs.values_at(:ci, :intel, :dry, :publish, :release)
-    # Ordinary FULL is now executed inside the private-custody controller.
-    # Its exact caller is checked here; executable driver/ABI/supplement edges
-    # are bound and mutated by check-hosted-test-composition-test.py.
-    HostedTestWorkflowPolicy.check_full(ci)
-    raise "Intel simulator validation must remain secret-free/read-only" unless
-        intel.fetch("permissions") == {"contents" => "read"} && !JSON.generate(intel).include?("secrets.")
-    triggers = intel.fetch("on") { intel.fetch(true) }
-    raise "Intel coverage needs unfiltered manual and weekly triggers" unless
-        triggers.keys.sort == %w[schedule workflow_dispatch] && triggers["workflow_dispatch"].nil? &&
-        triggers["schedule"] == [{"cron" => "27 3 * * 1"}]
-    raise "Intel test invocations must not overlap" unless
-        intel.fetch("concurrency") == {"group" => "ios-x64-tests-${{ github.ref }}", "cancel-in-progress" => false}
-    job = intel.fetch("jobs").fetch("ios-x64")
-    raise "Intel job must run on a native Intel Mac" unless job["runs-on"] == "macos-15-intel"
-    raise "Intel job cannot be conditional or protected" if job.key?("if") || job.key?("environment")
-    raise "Intel job needs a bounded timeout" unless job["timeout-minutes"] == 60
-    raise "Intel job must select the admitted Xcode for all steps" unless
-        job["env"] == {"DEVELOPER_DIR" => "/Applications/Xcode_26.3.app/Contents/Developer"}
-    raise "Intel steps must inherit the job Xcode selection" if
-        job.fetch("steps").any? { |step| step.fetch("env", {}).key?("DEVELOPER_DIR") }
-    java = job.fetch("steps").find { |step| step.fetch("uses", "").start_with?("actions/setup-java@") }
-    raise "Intel job requires JDK 17" unless java && java.fetch("with")["java-version"] == "17"
-    check_job(job, "ios-x64", false)
-    {dry => ["local-release", "Upload local release evidence"],
-     publish => ["verify-release", "Upload verification evidence"]}.each do |workflow, names|
-        steps = workflow.fetch("jobs").fetch(names[0]).fetch("steps")
-        caller = steps.find { |step| step["run"] == "scripts/run-release-gate.sh" }
-        raise "release caller must not bypass the platform gate" unless caller && !caller.key?("continue-on-error")
-        upload = steps.find { |step| step["name"] == names[1] }
-        raise "release caller must preserve execution evidence on failure" unless upload &&
-            upload["if"] == "always()" && upload.fetch("with").fetch("path").split.include?(REPORT)
-    end
-    lines = release.lines.map(&:strip)
-    raise "release gate must enforce shell failures" unless lines.include?("set -euo pipefail")
-    %w[check-platform-test-policy-test.rb run-platform-tests-test.py].each do |script|
-        interpreter = script.end_with?(".rb") ? "ruby" : "python3"
-        raise "release gate must execute #{script}" unless lines.include?("#{interpreter} scripts/tests/#{script}")
-    end
-    raise "release gate must run the same full platform driver" unless
-        lines.count("python3 scripts/run-platform-tests.py full") == 1
+def execution(inputs)
+  inputs[:worker].fetch('jobs').fetch('run').fetch('steps').find { |step| step['id'] == 'execution' }
 end
 
-inputs = {
-    ci: "ci.yml", intel: "ios-x64-tests.yml", dry: "release-dry-run.yml", publish: "publish-maven-central.yml",
-}.transform_values { |name| YAML.safe_load(File.read(File.join(ROOT, ".github/workflows", name)), aliases: true) }
-inputs[:release] = File.read(File.join(ROOT, "scripts/run-release-gate.sh"))
+def evidence(inputs)
+  inputs[:worker].fetch('jobs').fetch('run').fetch('steps').find do |step|
+    step.fetch('uses', '').start_with?('actions/upload-artifact@') &&
+      step.fetch('with', {}).fetch('name', '').start_with?('ci-evidence-')
+  end
+end
+
+def check_platform_policy(v)
+  matrix = v[:matrix].fetch('include').to_h { |row| [row.fetch('component'), row] }
+  {'apple-arm64' => ['macos-26', 150, 'full'], 'apple-x64' => ['macos-15-intel', 120, 'ios-x64']}.each do |name, (os, minutes, profile)|
+    need(matrix.fetch(name).values_at('os', 'minutes') == [os, minutes], 'Wrong native platform or operational budget')
+    commands = v.fetch(name.to_sym)
+    need(commands.size == 1 && commands[0][0] == 'native-platform-tests' &&
+         File.basename(commands[0][1][0]).start_with?('python') &&
+         commands[0][1].drop(1) == ['-B', 'scripts/run-platform-tests.py', profile],
+         'Native coverage driver/profile bypassed')
+  end
+  component = v[:ci].fetch('jobs').fetch('component')
+  need(component['uses'] == './.github/workflows/ci-component.yml' &&
+       component.dig('strategy', 'fail-fast') == false && !component.key?('continue-on-error'),
+       'Native components must execute independently without ignored failures')
+  intel = v[:intel]
+  need(intel['permissions'] == {'contents' => 'read', 'actions' => 'read'} && !JSON.generate(intel).include?('secrets.'),
+       'Intel workflow must remain read-only and secret-free')
+  triggers = intel.fetch('on') { intel.fetch(true) }
+  need(triggers.keys.sort == %w[schedule workflow_dispatch] && triggers['workflow_dispatch'].nil? &&
+       triggers['schedule'] == [{'cron' => '27 3 * * 1'}], 'Intel manual/weekly coverage changed')
+  job = intel.fetch('jobs').fetch('component')
+  need(job['uses'] == './.github/workflows/ci-component.yml' &&
+       job['with'] == {'component' => 'apple-x64', 'runner' => 'macos-15-intel', 'minutes' => 120} &&
+       !%w[if environment continue-on-error].any? { |key| job.key?(key) }, 'Intel native invocation changed')
+  worker = v[:worker].fetch('jobs').fetch('run')
+  need(worker['timeout-minutes'] == '${{ inputs.minutes + 10 }}' &&
+       !worker.key?('continue-on-error'), 'Missing bounded command plus cleanup/evidence window')
+  run = execution(v)
+  need(run && !%w[if continue-on-error shell working-directory].any? { |key| run.key?(key) },
+       'Native execution may not be skipped or ignored')
+  text = run.fetch('run')
+  need(text.scan('scripts/ci_evidence.py').size == 1 && text.scan('scripts/ci_component.py').size == 1 &&
+       text.include?('--timeout-seconds "$((MINUTES * 60))"') && !text.include?('||'), 'Actual bounded component wrapper missing')
+  need(text.include?("--report-glob '**/build/test-results/**/*.xml'") &&
+       text.include?("--report-glob 'build/reports/**/*'"), 'Native XML/coverage report capture missing')
+  upload = evidence(v)
+  need(upload && upload['if'] == "${{ always() && steps.execution.outcome != 'skipped' }}" &&
+       !upload.key?('continue-on-error'), 'Failure evidence must still be retained')
+  need(upload['with'].values_at('path', 'retention-days', 'overwrite', 'if-no-files-found') ==
+       ['${{ runner.temp }}/ci-evidence-${{ inputs.component }}/*', 14, false, 'error'],
+       'Evidence must be nonempty immutable encrypted bundle, not raw logs')
+  need(worker['steps'].index(run) < worker['steps'].index(upload), 'Evidence precedes actual execution')
+  need(v[:setup].include?('/Applications/Xcode_26.5.app/Contents/Developer') &&
+       v[:setup].include?('/Applications/Xcode_26.3.app/Contents/Developer') &&
+       v[:setup].include?('echo "DEVELOPER_DIR=$xcode" >> "$GITHUB_ENV"'), 'Admitted ARM/Intel Xcode selections missing')
+  # Retain actual coverage/failure decisions in the maintained driver. Its
+  # behavioral tests are invoked by release-gate and the source component.
+  %w[gradle/platform-test-coverage.init.gradle build/reports/platform-tests].each do |path|
+    need(v[:driver].include?(path), 'Native execution evidence location missing')
+  end
+  need(v[:driver].include?('assess(report, policy, profile, arch, token,') &&
+       v[:driver].include?('return (code or 1) if errors else 0'), 'Native coverage/failure assessment bypassed')
+  {dry: ['local-release', '$RELEASE_SHA'], publish: ['verify-release', '$GITHUB_SHA']}.each do |key, (job_name, source)|
+    steps = v[key].fetch('jobs').fetch(job_name).fetch('steps')
+    caller = steps.find { |step| step.fetch('run', '').include?('scripts/ci_qualification.py verify --source') }
+    command = caller && caller['run'].lines.map(&:strip).find { |line| line.start_with?('python3 -B scripts/ci_qualification.py verify ') }
+    need(command && command.include?("--source \"#{source}\"") &&
+         command.include?('--output "$RUNNER_TEMP/qualification.json"') && !command.match?(/(?:\|\||&&|;)/) &&
+         !%w[if continue-on-error].any? { |field| caller.key?(field) }, 'Release must verify exact qualified source without rebuilding')
+    if key == :publish
+      need(command.include?('--selection "$RUNNER_TEMP/qualification-binding.json"') &&
+           caller.fetch('env', {})['FROZEN_QUALIFICATION_BINDING'] == '${{ needs.freeze-applications.outputs.qualification_binding }}' &&
+           caller['run'].lines.any? { |line| line.strip == 'printf \'%s\\n\' "$FROZEN_QUALIFICATION_BINDING" > "$RUNNER_TEMP/qualification-binding.json"' },
+           'Tag verification must consume the already-frozen qualification, not reselect mutable settings')
+    end
+    need(!steps.any? { |step| step.fetch('run', '').include?('scripts/run-release-gate.sh') },
+         'Release selection must not restart a monolithic build after qualification')
+    upload = steps.find { |step| step.fetch('uses', '').start_with?('actions/upload-artifact@') }
+    need(upload && upload.fetch('with').values_at('path', 'retention-days', 'overwrite', 'if-no-files-found') ==
+         ['${{ runner.temp }}/qualification.json', 14, false, 'error'], 'Release must retain immutable qualification reference')
+  end
+  # Publication consumes already-qualified components; do not require a second
+  # monolithic platform rerun after the tag/protected approval boundary.
+  publish_jobs = v[:publish].fetch('jobs')
+  freeze = publish_jobs.fetch('freeze-applications')
+  publisher = publish_jobs.fetch('publish-release')
+  need(freeze['steps'].any? { |step| step['run'] == 'python3 -I -B -S scripts/release_application_set.py freeze' },
+       'Publisher must freeze real qualification before approval')
+  need(publisher.fetch('needs').include?('freeze-applications') && publisher.key?('environment'),
+       'Publication requires frozen set and protected approval')
+  need(publisher['steps'].any? { |step| step.fetch('run', '').include?('scripts/release_application_set.py revalidate --artifact') &&
+       !step.key?('continue-on-error') }, 'Publication must revalidate original frozen evidence')
+  lines = v[:release].lines.map(&:strip)
+  need(lines.include?('set -euo pipefail'), 'Release shell must propagate failures')
+  need(lines.count('python3 scripts/run-platform-tests.py full') == 1, 'Release FULL driver bypassed')
+  %w[check-platform-test-policy-test.rb run-platform-tests-test.py].each do |script|
+    interpreter = script.end_with?('.rb') ? 'ruby' : 'python3'
+    need(lines.include?("#{interpreter} scripts/tests/#{script}"), 'Release native regression missing')
+  end
+end
+
+inputs = {ci: 'ci.yml', worker: 'ci-component.yml', intel: 'ios-x64-tests.yml',
+          dry: 'release-dry-run.yml', publish: 'publish-maven-central.yml'}.transform_values do |file|
+  YAML.safe_load(File.read(File.join(ROOT, '.github/workflows', file)), aliases: false)
+end
+inputs.merge!(matrix: command_json('--matrix', 'all'),
+              'apple-arm64': command_json('apple-arm64', '--list-commands'),
+              'apple-x64': command_json('apple-x64', '--list-commands'),
+              setup: File.read(File.join(ROOT, 'scripts/setup-ci-component.sh')),
+              driver: File.read(File.join(ROOT, 'scripts/run-platform-tests.py')),
+              release: File.read(File.join(ROOT, 'scripts/run-release-gate.sh')))
 check_platform_policy(inputs)
 mutations = {
-    "raw check bypass" => ->(v) { by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-run")["run"] = "./gradlew check" },
-    "echo instead of execution" => ->(v) {
-        by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-run")["run"] = "echo python3 scripts/run-platform-tests.py full"
-    },
-    "missing full report" => ->(v) {
-        v[:ci]["jobs"]["complete-gate"]["steps"].delete(by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-evidence"))
-    },
-    "arm64 instead of Intel" => ->(v) { v[:intel]["jobs"]["ios-x64"]["runs-on"] = "macos-latest" },
-    "missing Intel job timeout" => ->(v) { v[:intel]["jobs"]["ios-x64"].delete("timeout-minutes") },
-    "different Intel job timeout" => ->(v) { v[:intel]["jobs"]["ios-x64"]["timeout-minutes"] = 61 },
-    "missing Intel Xcode selection" => ->(v) { v[:intel]["jobs"]["ios-x64"].delete("env") },
-    "default Intel Xcode selection" => ->(v) {
-        v[:intel]["jobs"]["ios-x64"]["env"]["DEVELOPER_DIR"] = "/Applications/Xcode_16.4.app/Contents/Developer"
-    },
-    "floating Intel Xcode selection" => ->(v) {
-        v[:intel]["jobs"]["ios-x64"]["env"]["DEVELOPER_DIR"] = "/Applications/Xcode.app/Contents/Developer"
-    },
-    "step-local Intel Xcode override" => ->(v) {
-        by_id(v[:intel]["jobs"]["ios-x64"], "stop-platform-gradle")["env"] =
-            {"DEVELOPER_DIR" => "/Applications/Xcode_16.4.app/Contents/Developer"}
-    },
-    "Intel job disabled" => ->(v) { v[:intel]["jobs"]["ios-x64"]["if"] = false },
-    "missing Intel schedule" => ->(v) { (v[:intel]["on"] || v[:intel][true]).delete("schedule") },
-    "ignored Intel failures" => ->(v) { v[:intel]["jobs"]["ios-x64"]["continue-on-error"] = true },
-    "wrong Intel profile" => ->(v) {
-        by_id(v[:intel]["jobs"]["ios-x64"], "platform-tests")["run"] = "python3 scripts/run-platform-tests.py full"
-    },
-    "raw release check" => ->(v) { v[:release].sub!("python3 scripts/run-platform-tests.py full", "./gradlew check") },
-    "ignored release failure" => ->(v) { v[:release].sub!("python3 scripts/run-platform-tests.py full",
-                                                                         "python3 scripts/run-platform-tests.py full || true") },
-    "missing release policy" => ->(v) { v[:release].sub!("ruby scripts/tests/check-platform-test-policy-test.rb", "true") },
-    "missing release regression" => ->(v) { v[:release].sub!("python3 scripts/tests/run-platform-tests-test.py", "true") },
+  'raw FULL bypass' => ->(v) { v[:'apple-arm64'][0][1] = ['./gradlew', 'check'] },
+  'wrong Intel profile' => ->(v) { v[:'apple-x64'][0][1][-1] = 'full' },
+  'echo not execution' => ->(v) { v[:'apple-arm64'][0][1].unshift('echo') },
+  'wrong Intel host' => ->(v) { v[:matrix]['include'].find { |x| x['component'] == 'apple-x64' }['os'] = 'macos-26' },
+  'missing native budget' => ->(v) { v[:matrix]['include'].find { |x| x['component'] == 'apple-arm64' }.delete('minutes') },
+  'cancel unrelated components' => ->(v) { v[:ci]['jobs']['component']['strategy']['fail-fast'] = true },
+  'ignored native matrix' => ->(v) { v[:ci]['jobs']['component']['continue-on-error'] = true },
+  'disabled Intel' => ->(v) { v[:intel]['jobs']['component']['if'] = false },
+  'wrong Intel reusable route' => ->(v) { v[:intel]['jobs']['component']['with']['component'] = 'apple-arm64' },
+  'missing Intel schedule' => ->(v) { (v[:intel]['on'] || v[:intel][true]).delete('schedule') },
+  'missing worker budget' => ->(v) { v[:worker]['jobs']['run'].delete('timeout-minutes') },
+  'ignored execution' => ->(v) { execution(v)['continue-on-error'] = true },
+  'skipped execution' => ->(v) { execution(v)['if'] = false },
+  'unwrapped native output' => ->(v) { execution(v)['run'].sub!('scripts/ci_evidence.py', 'scripts/unrelated.py') },
+  'ignored shell failure' => ->(v) { execution(v)['run'] += ' || true' },
+  'missing XML reports' => ->(v) { execution(v)['run'].sub!("--report-glob '**/build/test-results/**/*.xml'", '') },
+  'missing coverage reports' => ->(v) { execution(v)['run'].sub!("--report-glob 'build/reports/**/*'", '') },
+  'only successful evidence' => ->(v) { evidence(v)['if'] = 'success()' },
+  'ignored evidence failure' => ->(v) { evidence(v)['continue-on-error'] = true },
+  'raw private upload' => ->(v) { evidence(v)['with']['path'] = 'build/reports/**' },
+  'missing evidence accepted' => ->(v) { evidence(v)['with']['if-no-files-found'] = 'warn' },
+  'mutable evidence' => ->(v) { evidence(v)['with']['overwrite'] = true },
+  'unbounded retention' => ->(v) { evidence(v)['with']['retention-days'] = 90 },
+  'missing Intel Xcode' => ->(v) { v[:setup].sub!('/Applications/Xcode_26.3.app/Contents/Developer', '/Applications/Xcode.app/Contents/Developer') },
+  'missing ARM Xcode' => ->(v) { v[:setup].sub!('/Applications/Xcode_26.5.app/Contents/Developer', '/Applications/Xcode.app/Contents/Developer') },
+  'bypassed coverage' => ->(v) { v[:driver].gsub!('assess(report, policy, profile, arch, token,', 'skipped_coverage(') },
+  'ignored native errors' => ->(v) { v[:driver].sub!('return (code or 1) if errors else 0', 'return 0') },
+  'raw release check' => ->(v) { v[:release].sub!('python3 scripts/run-platform-tests.py full', './gradlew check') },
+  'ignored release errors' => ->(v) { v[:release].sub!('python3 scripts/run-platform-tests.py full', 'python3 scripts/run-platform-tests.py full || true') },
+  'missing regression' => ->(v) { v[:release].sub!('python3 scripts/tests/run-platform-tests-test.py', 'true') }
 }
-%w[ordinary-run ordinary-seal ordinary-evidence ordinary-required].each do |id|
-    mutations["FULL ignored #{id}"] = ->(v) { by_id(v[:ci]["jobs"]["complete-gate"], id)["continue-on-error"] = true }
-    mutations["FULL conditional #{id}"] = ->(v) { by_id(v[:ci]["jobs"]["complete-gate"], id)["if"] = "success()" }
-end
-mutations["FULL missing sealed evidence path"] = ->(v) {
-    by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-evidence")["with"]["path"] = "build/reports/**"
-}
-{intel: "ios-x64"}.each do |workflow, job|
-    %w[platform-tests stop-platform-gradle platform-reports].each do |id|
-        mutations["#{workflow} ignored #{id}"] = ->(v) { by_id(v[workflow]["jobs"][job], id)["continue-on-error"] = true }
-        mutations["#{workflow} conditional #{id}"] = ->(v) { by_id(v[workflow]["jobs"][job], id)["if"] = "success()" }
+{dry: 'local-release', publish: 'verify-release'}.each do |workflow, name|
+  mutations["#{workflow} wrong qualified source"] = ->(v) {
+    v[workflow]['jobs'][name]['steps'].each do |step|
+      step['run'] = step['run'].gsub('ci_qualification.py verify --source', 'ci_qualification.py verify --other-source') if step['run']
     end
-    mutations["#{workflow} missing evidence path"] = ->(v) {
-        by_id(v[workflow]["jobs"][job], "platform-reports")["with"]["path"] = "build/reports/unrelated/**"
-    }
-    mutations["#{workflow} missing stop"] = ->(v) {
-        by_id(v[workflow]["jobs"][job], "stop-platform-gradle")["run"] = "echo stopped"
-    }
+  }
+  mutations["#{workflow} missing qualification artifact"] = ->(v) {
+    v[workflow]['jobs'][name]['steps'].each do |step|
+      step['with']['path'] = 'build/reports/**' if step.fetch('with', {}).key?('path')
+    end
+  }
 end
-{dry: "local-release", publish: "verify-release"}.each do |workflow, job|
-    mutations["#{workflow} missing platform evidence"] = ->(v) {
-        v[workflow]["jobs"][job]["steps"].each do |step|
-            step["with"]["path"] = step["with"]["path"].sub(REPORT, "") if step.fetch("with", {}).key?("path")
-        end
-    }
-end
+mutations['missing frozen publisher dependency'] = ->(v) { v[:publish]['jobs']['publish-release']['needs'].delete('freeze-applications') }
+mutations['tag verification reselects mutable qualification'] = ->(v) {
+  v[:publish]['jobs']['verify-release']['steps'].each do |step|
+    step['run'] = step['run'].gsub('--selection "$RUNNER_TEMP/qualification-binding.json"', '') if step['run']
+  end
+}
+mutations['tag verification uses mutable binding'] = ->(v) {
+  v[:publish]['jobs']['verify-release']['steps'].each do |step|
+    step['env']['FROZEN_QUALIFICATION_BINDING'] = '${{ vars.RELEASE_QUALIFICATION_BINDING }}' if step.fetch('env', {}).key?('FROZEN_QUALIFICATION_BINDING')
+  end
+}
+mutations['unprotected publisher'] = ->(v) { v[:publish]['jobs']['publish-release'].delete('environment') }
+mutations['missing frozen evidence revalidation'] = ->(v) {
+  v[:publish]['jobs']['publish-release']['steps'].each do |step|
+    step['run'] = step['run'].gsub('scripts/release_application_set.py revalidate --artifact', 'echo skipped') if step['run']
+  end
+}
 mutations.each do |name, mutate|
-    altered = Marshal.load(Marshal.dump(inputs))
-    mutate.call(altered)
-    raise "platform mutation had no effect: #{name}" if altered == inputs
-    rejected = false
-    begin
-        check_platform_policy(altered)
-    rescue KeyError, RuntimeError, ArgumentError, HostedTestWorkflowPolicy::Error
-        rejected = true
-    end
-    raise "unsafe platform-test policy accepted: #{name}" unless rejected
+  altered = Marshal.load(Marshal.dump(inputs))
+  mutate.call(altered)
+  raise "mutation had no effect: #{name}" if altered == inputs
+  rejected = false
+  begin
+    check_platform_policy(altered)
+  rescue KeyError, ArgumentError, TypeError
+    rejected = true
+  end
+  raise "unsafe platform policy accepted: #{name}" unless rejected
 end
-puts "RESULT: PASS — platform test callers/evidence (#{mutations.size + 1} policy checks)"
+puts "RESULT: PASS — modular native callers/coverage/failure evidence (#{mutations.size + 1} policy checks)"

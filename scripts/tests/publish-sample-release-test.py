@@ -20,6 +20,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("releases", ROOT / "scripts/publish-sample-release.py")
 R = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(R)
+QUAL_FIXTURE_SPEC = importlib.util.spec_from_file_location("qualification_fixture", Path(__file__).with_name("ci-qualification-test.py"))
+QUAL_FIXTURE = importlib.util.module_from_spec(QUAL_FIXTURE_SPEC)
+QUAL_FIXTURE_SPEC.loader.exec_module(QUAL_FIXTURE)
 FROZEN_SPEC = importlib.util.spec_from_file_location("frozen_set_fixture_policy", ROOT / "scripts/release_application_set.py")
 F = importlib.util.module_from_spec(FROZEN_SPEC)
 FROZEN_SPEC.loader.exec_module(F)
@@ -144,6 +147,13 @@ class FakeApi:
             if path in self.data:
                 return copy.deepcopy(self.data[path])
             return copy.deepcopy(self.ref)
+        if path.startswith("/actions/artifacts/"):
+            identifier = int(path.rsplit("/", 1)[1])
+            if identifier in tuple(range(1, 5)) + tuple(range(5000, 5012)) + (8001,):
+                found = [item for item in self.collections["/actions/runs/300/artifacts"] if item["id"] == identifier]
+                if len(found) != 1:
+                    raise R.Hold("Synthetic original artifact missing/ambiguous")
+                return copy.deepcopy(found[0])
         if path.startswith("/actions/runs/900/attempts/") and path not in self.data:
             return copy.deepcopy(self.data["/actions/runs/900"])
         return copy.deepcopy(self.data[path])
@@ -188,6 +198,13 @@ class ReleaseTest(unittest.TestCase):
             self.api.files[i + 1] = raw
             self.api.collections["/actions/runs/300/artifacts"].append(artifact)
         self.api.add_evidence(300, "desktop", [("Linux", "X64"), ("Windows", "X64"), ("macOS", "ARM64")])
+        # Genuine validators over synthetic metadata/ciphertext; no qualification predicate is mocked.
+        bundles = {i: self.api.files[i] for i in range(1, 5)}
+        self.modular = QUAL_FIXTURE.Fixture(self.api)
+        for i, (_, (_, _, prefix)) in enumerate(R.QUAL.APPLICATIONS.items(), 1):
+            self.modular.artifact(i, prefix + "-300-1", bundles[i])
+        self.modular.artifacts.sort(key=lambda item: item["id"])
+        self.modular.qualify()
 
     def tearDown(self):
         self.temp.cleanup()  # Source-defined synthetic bytes only.
@@ -200,7 +217,7 @@ class ReleaseTest(unittest.TestCase):
             payload[f"desktop-installer-{platform}-{arch}-{SOURCE[:12]}.{R.PACK.INSTALLER_FORMATS[platform]}"] = b"synthetic installer, not executable"
         artifacts = [{"file": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()} for name, raw in payload.items()]
         context = {"repository": R.REPO, "commit": SOURCE, "tree": TREE, "event_name": "push", "ref": "refs/heads/main",
-            "run_id": "300", "run_attempt": "1", "job": "verify", "workflow_ref": R.REPO + "/" + R.PRODUCER + "@refs/heads/main",
+            "run_id": "300", "run_attempt": "1", "job": "run", "workflow_ref": R.REPO + "/" + R.QUAL.WORKFLOW + "@refs/heads/main",
             "workflow_sha": SOURCE, "platform": "linux" if platform == "android" else platform, "architecture": arch, "canonicalVersion": VERSION}
         context.update(context_change or {})
         binding = R.VERSION.version_fields(VERSION)
@@ -433,7 +450,7 @@ class ReleaseTest(unittest.TestCase):
         original = copy.deepcopy(self.api.data[path])
         for key, value in (("event", "pull_request"), ("head_sha", HEAD), ("head_branch", "topic"),
                            ("path", ".github/workflows/attacker.yml"), ("workflow_id", 1),
-                           ("head_repository", {"full_name": "fork/P2pKit"}), ("conclusion", "failure")):
+                           ("head_repository", {"full_name": "fork/P2pKit"}), ("event", "pull_request_target")):
             self.api.data[path] = {**original, key: value}
             with self.subTest(key=key), self.assertRaises(R.Hold):
                 self.plan()
@@ -523,6 +540,7 @@ class ReleaseTest(unittest.TestCase):
         self.api.files[2] = raw
         self.api.collections["/actions/runs/300/artifacts"][1].update(
             size_in_bytes=len(raw), digest="sha256:" + hashlib.sha256(raw).hexdigest())
+        self.modular.qualify()  # New synthetic selection binds the intentionally bad notices.
         with self.assertRaisesRegex(ValueError, "notices differ"):
             self.publish(self.api, self.plan(), self.output(), True)
         self.assertEqual([], self.api.mutations)
@@ -703,22 +721,20 @@ class ReleaseTest(unittest.TestCase):
         with self.assertRaises(R.Hold):
             self.plan()
 
-    def test_four_exact_encrypted_evidence_uploads_are_required_not_preview_outputs(self):
-        self.assertEqual(["desktop", "desktop", "desktop", "full"], [x["profile"] for x in self.plan()["evidence"]])
+    def test_all_twelve_exact_component_evidence_uploads_are_required(self):
+        self.assertEqual(list(R.QUAL.COMPONENTS), [x["component"] for x in self.plan()["evidence"]])
         original = copy.deepcopy(self.api.collections)
-        for run_id in (200, 300):
-            path = f"/actions/runs/{run_id}/artifacts"
-            for change in ("missing", "expired", "other_attempt", "wrong_source", "duplicate"):
-                self.api.collections = copy.deepcopy(original)
-                rows = self.api.collections[path]
-                item = next(x for x in rows if x["name"].startswith("ordinary-"))
-                if change == "missing": rows.remove(item)
-                elif change == "expired": item["expired"] = True
-                elif change == "other_attempt": item["name"] = item["name"][:-1] + "2"
-                elif change == "wrong_source": item["workflow_run"]["head_sha"] = HEAD
-                else: rows.append(copy.deepcopy(item))
-                with self.subTest(run=run_id, change=change), self.assertRaises(R.Hold):
-                    self.plan()
+        for change in ("missing", "expired", "other_attempt", "wrong_source", "duplicate"):
+            self.api.collections = copy.deepcopy(original)
+            rows = self.api.collections["/actions/runs/300/artifacts"]
+            item = next(x for x in rows if x["name"].startswith("ci-evidence-"))
+            if change == "missing": rows.remove(item)
+            elif change == "expired": item["expired"] = True
+            elif change == "other_attempt": item["name"] = item["name"][:-1] + "2"
+            elif change == "wrong_source": item["workflow_run"]["head_sha"] = HEAD
+            else: rows.append(copy.deepcopy(item))
+            with self.subTest(change=change), self.assertRaises(R.Hold):
+                self.plan()
         self.assertEqual([], self.api.mutations)
 
     def test_retention_and_wall_expiry_are_checked_even_if_expired_flag_is_false(self):
@@ -786,7 +802,7 @@ class ReleaseTest(unittest.TestCase):
         original_data, original_collections = copy.deepcopy(self.api.data), copy.deepcopy(self.api.collections)
         changes = [lambda: self.api.data["/environments/" + R.ENVIRONMENT].update(id=601),
             lambda: self.api.data[f"/actions/artifacts/{descriptor[0]}"].update(expired=True),
-            lambda: self.api.collections["/actions/runs/200/artifacts"][0].update(digest="sha256:" + "b" * 64),
+            lambda: next(x for x in self.api.collections["/actions/runs/300/artifacts"] if x["id"] == 5000).update(digest="sha256:" + "b" * 64),
             lambda: self.api.collections[f"/commits/{SOURCE}/check-runs?filter=all"][0].update(conclusion="failure")]
         for i, change in enumerate(changes):
             self.api.data, self.api.collections = copy.deepcopy(original_data), copy.deepcopy(original_collections)
@@ -980,7 +996,7 @@ class ReleaseTest(unittest.TestCase):
             lambda: self.api.collections["/actions/runs/300/artifacts"][0].update(expired=True),
             lambda: self.api.collections["/actions/runs/300/artifacts"].pop(0),
             lambda: self.api.collections["/actions/runs/300/artifacts"].pop(),
-            lambda: self.api.collections["/actions/runs/200/artifacts"].clear()]
+            lambda: self.api.collections["/actions/runs/300/artifacts"].remove(next(x for x in self.api.collections["/actions/runs/300/artifacts"] if x["id"] == 5000))]
         for index, change in enumerate(changes):
             self.api.data, self.api.collections = copy.deepcopy(original_data), copy.deepcopy(original_collections)
             change()
@@ -1006,12 +1022,11 @@ class ReleaseTest(unittest.TestCase):
 
     def test_maven_samples_cannot_substitute_an_intel_mac_for_the_required_arm64_dmg(self):
         self.maven_fixture()
-        row = self.api.collections["/actions/runs/300/artifacts"][3]
-        row["name"] = row["name"].replace("macOS-ARM64-", "macOS-X64-")
-        evidence = self.api.collections["/actions/runs/300/artifacts"][-1]
-        evidence["name"] = evidence["name"].replace("macOS-ARM64-", "macOS-X64-")
-        with self.assertRaisesRegex(R.Hold, "native macOS ARM64"):
-            self.maven_plan()
+        job = next(x for x in self.modular.jobs if x["name"] == "desktop-macos / Execute component")
+        self.modular.manifests["desktop-macos"]["host"]["arch"] = "x86_64"
+        with self.assertRaises(ValueError):
+            R.QUAL.manifest_identity(self.modular.manifests["desktop-macos"], SOURCE, "desktop-macos",
+                self.modular.run, job, self.api.data["/actions/artifacts/5009"])
         self.assertEqual([], self.api.mutations)
 
     def test_maven_rerun_is_idempotent_but_still_requires_new_owner_approval(self):

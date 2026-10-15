@@ -65,6 +65,9 @@ SPEC = importlib.util.spec_from_file_location("sample_packager", ROOT / "scripts
 PACK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PACK)
 VERSION = PACK.IDENTITY.VERSION
+QUAL_SPEC = importlib.util.spec_from_file_location("ci_qualification", ROOT / "scripts/ci_qualification.py")
+QUAL = importlib.util.module_from_spec(QUAL_SPEC)
+QUAL_SPEC.loader.exec_module(QUAL)
 
 
 class Hold(ValueError):
@@ -566,33 +569,7 @@ def artifact_identity(item, run_id, sha, branch="main"):
     return {key: item[key] for key in ("id", "name", "size_in_bytes", "digest", "created_at", "expires_at")}
 
 
-def evidence_set(api, source, producer, artifacts, applications, main_checks):
-    """Bind original encrypted uploads, not their plaintext or a test verdict.
-
-    The owner must retrieve/decrypt these exact artifacts and check the internal
-    source/policy/receipts before approving. Merely naming an upload is not that
-    inspection. No ciphertext is duplicated into the Release or review artifact.
-    """
-    result = []
-    for application in applications:
-        if application["platform"] == "android":
-            continue  # Android packaging shares the Linux Desktop invocation.
-        runner = {"linux": "Linux", "windows": "Windows", "macos": "macOS"}[application["platform"]]
-        name = f"ordinary-desktop-evidence-{runner}-{application['architecture'].upper()}-{source}-{producer['id']}-{producer['attempt']}"
-        found = [x for x in artifacts if x.get("name") == name]
-        need(len(found) == 1, "Missing/ambiguous original Desktop encrypted evidence")
-        result.append({**artifact_identity(found[0], producer["id"], source), "profile": "desktop",
-                       "run": {"id": producer["id"], "attempt": producer["attempt"], "workflow": PRODUCER}})
-    full = next(x["run"] for x in main_checks if x["name"] == "complete-gate")
-    names = [f"ordinary-full-evidence-macOS-{arch}-{source}-{full['id']}-{full['attempt']}" for arch in ("ARM64", "X64")]
-    found = [x for x in api.pages(f"/actions/runs/{full['id']}/artifacts", "artifacts") if x.get("name") in names]
-    need(len(found) == 1, "Missing/ambiguous original FULL encrypted evidence")
-    result.append({**artifact_identity(found[0], full["id"], source), "profile": "full", "run": full})
-    need(len({x["id"] for x in result + applications}) == len(result + applications), "Evidence/application artifact IDs overlap")
-    return result
-
-
-def admit(api, sha, producer_id=None, attempt=None, publication=None):
+def admit(api, sha, producer_id=None, attempt=None, publication=None, *, qualification_binding=None):
     need(isinstance(sha, str) and SHA.fullmatch(sha), "Expected a full source SHA")
     maven = None if publication is None else maven_publication(api, sha, publication["id"], publication["attempt"])
     rules = api.json("/rules/branches/main")
@@ -616,53 +593,26 @@ def admit(api, sha, producer_id=None, attempt=None, publication=None):
          comparison.get("merge_base_commit", {}).get("sha") == sha, "Candidate is not preserved in main")
     pull = approved_pull(api, sha, commit)
     main_checks = checks(api, sha, MAIN_REQUIRED, "main")
-    if producer_id is None:
-        runs = api.pages("/actions/workflows/desktop-cross-host.yml/runs?event=push&branch=main&head_sha=" + sha,
-                         "workflow_runs")
-        need(len(runs) == 1, "Require one exact main push producer; never select latest or substitute a run")
-        run = runs[0]
-        producer_id = number(run["id"])
-    producer_id = number(producer_id)
-    run = api.json("/actions/runs/" + str(producer_id))
-    trusted_run(run, PRODUCER, sha, "push")
-    workflow = api.json("/actions/workflows/desktop-cross-host.yml")
-    need(workflow.get("path") == PRODUCER and run.get("workflow_id") == workflow.get("id"), "Wrong producer workflow ID")
-    selected_attempt = number(run["run_attempt"])
-    need(attempt is None or number(attempt) == selected_attempt, "Producer attempt differs; never mix reruns")
-    jobs = api.pages(f"/actions/runs/{producer_id}/attempts/{selected_attempt}/jobs", "jobs")
-    hosts = ["ubuntu-latest", "windows-latest", "macos-15"]
-    for host in hosts:
-        found = [x for x in jobs if x.get("name") == host]
-        need(len(found) == 1 and found[0].get("conclusion") == "success" and found[0].get("status") == "completed" and
-             found[0].get("run_id") == producer_id and found[0].get("run_attempt") == selected_attempt,
-             "All three native host jobs must succeed in the same attempt")
-    artifacts = api.pages(f"/actions/runs/{producer_id}/artifacts", "artifacts")
-    suffix = f"-{sha}-{producer_id}-{selected_attempt}"
-    selected = []
-    for platform, prefix in (("android", "sample-android"), ("linux", "sample-desktop-Linux-"),
-                             ("windows", "sample-desktop-Windows-"), ("macos", "sample-desktop-macOS-")):
-        matches = [x for x in artifacts if x["name"] == prefix + suffix] if platform == "android" else [
-            x for x in artifacts if x["name"] in [prefix + arch + suffix for arch in ("X64", "ARM64")]]
-        need(len(matches) == 1, "Missing/ambiguous same-attempt sample artifact: " + platform)
-        item = matches[0]
-        arch = "apk-abis-not-inspected" if platform == "android" else (
-            "arm64" if item["name"].startswith(prefix + "ARM64-") else "x64")
-        selected.append({**artifact_identity(item, producer_id, sha), "platform": platform, "architecture": arch})
-    need(len({x["id"] for x in selected}) == 4 and sum(x["size_in_bytes"] for x in selected) <= TRANSFER_LIMIT,
-         "Artifact set duplicates/exceeds transfer budget")
-    producer = {"id": producer_id, "attempt": selected_attempt, "workflowId": run["workflow_id"],
-                "workflowPath": PRODUCER, "jobs": [{"id": x["id"], "name": x["name"]} for x in jobs if x["name"] in hosts]}
-    need([(x["platform"], x["architecture"]) for x in selected] ==
-         [("android", "apk-abis-not-inspected"), ("linux", "x64"), ("windows", "x64"), ("macos", "arm64")],
-         "Require Android, Linux x64, Windows x64 and native macOS ARM64")
-    plan = {"schema": 3, "source": {"commit": sha, "tree": tree}, "versionBinding": version,
+    try:
+        qualification, binding = QUAL.load_qualification(api, sha, qualification_binding)
+    except QUAL.AdmissionError as error:
+        raise Hold(str(error)) from None
+    need((producer_id is None or number(producer_id) == binding["runId"]) and
+         (attempt is None or number(attempt) == binding["runAttempt"]),
+         "Qualification invocation differs from explicit selection")
+    need(qualification["source"] == {"commit": sha, "tree": tree, "version": version["canonicalVersion"]},
+         "Qualified source tree/version differs from canonical release source")
+    selected = qualification["applications"]
+    need(sum(item["size_in_bytes"] for item in selected) <= TRANSFER_LIMIT, "Application transfer budget exceeded")
+    producer = {"id": binding["runId"], "attempt": binding["runAttempt"], "workflowPath": QUAL.WORKFLOW}
+    evidence = [{**item["artifact"], "component": item["component"], "run": item["run"]}
+                for item in qualification["components"]]
+    plan = {"schema": 4, "source": {"commit": sha, "tree": tree}, "versionBinding": version,
             "tag": "samples-v" + version["canonicalVersion"], "producer": producer,
+            "qualificationBinding": binding, "qualification": qualification,
             "pullRequest": pull, "mainChecks": main_checks, "artifacts": selected, "scope": PACK.SCOPE,
-            "evidence": evidence_set(api, sha, producer, artifacts, selected, main_checks)}
+            "evidence": evidence}
     if maven is not None:
-        need([(x["platform"], x["architecture"]) for x in selected] ==
-             [("android", "apk-abis-not-inspected"), ("linux", "x64"), ("windows", "x64"), ("macos", "arm64")],
-             "Maven sample delivery requires Android, Linux x64, Windows x64 and native macOS ARM64")
         plan.update(tag="samples-" + maven["tag"], mavenPublication=maven)
     return plan
 
@@ -790,10 +740,11 @@ def inspect_bundle(path, artifact, plan):
              "checksums.sha256" in entries and entries["checksums.sha256"].file_size <= 8192, "Missing bounded bundle metadata")
         manifest = parsed(archive.read("manifest.json"))
         context = manifest.get("sourceAndRun", {})
-        expected = {"repository": REPO, "commit": sha, "tree": plan["source"]["tree"], "event_name": "push",
-                    "ref": "refs/heads/main", "run_id": str(plan["producer"]["id"]),
-                    "run_attempt": str(plan["producer"]["attempt"]), "job": "verify",
-                    "workflow_ref": REPO + "/" + PRODUCER + "@refs/heads/main", "workflow_sha": sha,
+        producer = artifact["producer"]
+        expected = {"repository": REPO, "commit": sha, "tree": plan["source"]["tree"], "event_name": producer["event"],
+                    "ref": "refs/heads/main", "run_id": str(producer["id"]),
+                    "run_attempt": str(producer["attempt"]), "job": "run",
+                    "workflow_ref": REPO + "/" + QUAL.WORKFLOW + "@refs/heads/main", "workflow_sha": sha,
                     "platform": "linux" if platform == "android" else platform,
                     "canonicalVersion": plan["versionBinding"]["canonicalVersion"]}
         if platform != "android":
@@ -893,7 +844,7 @@ def release_body(plan, manifest_hash):
             "The Desktop UI includes its Java runtime; separate CLI archives remain in the producer's Actions artifacts. "
             "The ongoing audit is NOT_READY; advisory exceptions are not vulnerability fixes.\n\n"
             f"Source: `{plan['source']['commit']}` / tree `{plan['source']['tree']}`.\n"
-            f"Producer: https://github.com/{REPO}/actions/runs/{plan['producer']['id']} "
+            f"Qualification: https://github.com/{REPO}/actions/runs/{plan['producer']['id']} "
             f"(attempt {plan['producer']['attempt']}).\n"
             f"Reviewed PR: https://github.com/{REPO}/pull/{plan['pullRequest']['number']}.\n"
             f"Manifest SHA-256: `{manifest_hash}`.\n")

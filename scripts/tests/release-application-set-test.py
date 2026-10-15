@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import unittest
 from unittest import mock
 import zipfile
@@ -50,14 +51,14 @@ class FrozenApplicationTests(unittest.TestCase):
         self.api.files[9001] = binary
         self.api.data["/actions/artifacts/9001"].update(size_in_bytes=len(binary), digest="sha256:" + hashlib.sha256(binary).hexdigest())
 
-    def test_load_binds_original_tag_run_and_all_eight_main_originals(self):
+    def test_load_binds_original_tag_run_and_all_sixteen_main_originals(self):
         document, binding = self.load(artifact_id=9001, expected_hash=self.binding["sha256"])
         self.assertEqual(self.document, document)
         self.assertEqual(self.binding["artifact"], binding["artifact"])
         self.assertEqual(SUPPORT.SOURCE, document["qualification"]["source"]["commit"])
         self.assertEqual(SUPPORT.TREE, document["qualification"]["source"]["tree"])
         self.assertEqual(SUPPORT.VERSION, document["qualification"]["versionBinding"]["canonicalVersion"])
-        self.assertEqual(8, len(document["qualification"]["artifacts"] + document["qualification"]["evidence"]))
+        self.assertEqual(16, len(document["qualification"]["artifacts"] + document["qualification"]["evidence"]))
         self.assertEqual(["android", "linux", "windows", "macos"], [x["platform"] for x in document["packages"]])
         self.assertFalse(self.api.mutations)
 
@@ -79,6 +80,25 @@ class FrozenApplicationTests(unittest.TestCase):
             F.freeze(self.api, self.invocation, self.base)
         transfer.assert_not_called()
 
+    def test_freeze_outputs_original_qualification_binding_not_later_environment(self):
+        output = self.base / "workflow-output"
+        with mock.patch.dict(os.environ, {"RUNNER_TEMP": str(self.base), "GITHUB_OUTPUT": str(output),
+                                          "RELEASE_QUALIFICATION_BINDING": '{"wrong":"later selector"}'}), \
+                mock.patch.object(F.sys, "argv", ["release_application_set.py", "freeze"]), \
+                mock.patch.object(F, "hosted_context", return_value=self.invocation), \
+                mock.patch.object(F.P.PACK, "git", side_effect=[SUPPORT.SOURCE.encode(), b""]), \
+                mock.patch.object(F.P, "Api", return_value=self.api), \
+                mock.patch.object(F.P, "maven_invocation", return_value=self.invocation), \
+                mock.patch.object(F, "freeze", return_value=self.document), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as captured:
+            result = F.main()
+            self.assertEqual(0, result, captured.getvalue())
+        lines = output.read_text().splitlines()
+        self.assertEqual(2, len(lines))
+        self.assertEqual("sha256=" + hashlib.sha256(P.encoded(self.document)).hexdigest(), lines[0])
+        self.assertEqual(self.document["qualification"]["qualificationBinding"],
+                         json.loads(lines[1].removeprefix("qualification_binding=")))
+
     def test_preflight_revalidates_changed_gate_after_the_original_downloads(self):
         self.running()
         download = self.api.download
@@ -98,6 +118,7 @@ class FrozenApplicationTests(unittest.TestCase):
             self.api.files[2] = raw
             self.api.collections["/actions/runs/300/artifacts"][1].update(
                 size_in_bytes=len(raw), digest="sha256:" + hashlib.sha256(raw).hexdigest())
+            self.fixture.modular.qualify()  # Bind these original synthetic bytes before inspection.
             with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
                 F.freeze(self.api, self.invocation, self.base)
             self.assertFalse(self.api.mutations)
@@ -143,6 +164,18 @@ class FrozenApplicationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             F.eligibility(changed, F.DELIVERY_HEADROOM)
 
+    def test_publication_headroom_covers_actual_publisher_and_delivery_budgets(self):
+        workflow = (F.ROOT / ".github/workflows/publish-maven-central.yml").read_text()
+        job = re.search(r"(?ms)^  publish-release:\n(.*?)(?=^  [A-Za-z_-]+:|\Z)", workflow)
+        self.assertIsNotNone(job)
+        minutes = re.search(r"(?m)^    timeout-minutes: ([0-9]+)$", job[1])
+        self.assertIsNotNone(minutes)
+        self.assertEqual(F.MAVEN_HEADROOM, int(minutes[1]) * 60 + F.DELIVERY_HEADROOM)
+        # Former110min residual is insufficient for the new170min envelope.
+        with mock.patch.object(P.time, "time", return_value=P.timestamp(SUPPORT.EXPIRES) - 111 * 60):
+            with self.assertRaises(ValueError):
+                F.eligibility(self.document, F.MAVEN_HEADROOM)
+
     def test_original_stage_job_must_succeed_with_exact_source_and_window(self):
         job = self.api.collections["/actions/runs/900/attempts/1/jobs"][0]
         original = copy.deepcopy(job)
@@ -169,7 +202,7 @@ class FrozenApplicationTests(unittest.TestCase):
         self.assertFalse(self.api.mutations)
 
     def test_changed_original_evidence_digest_after_approval_prevents_delivery(self):
-        self.api.collections["/actions/runs/200/artifacts"][0]["digest"] = "sha256:" + "b" * 64
+        next(x for x in self.api.collections["/actions/runs/300/artifacts"] if x["id"] == 5000)["digest"] = "sha256:" + "b" * 64
         with self.assertRaises(ValueError):
             P.revalidate_plan(self.api, self.plan)
         self.assertFalse(self.api.mutations)

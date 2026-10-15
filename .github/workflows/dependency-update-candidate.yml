@@ -40,10 +40,6 @@ env:
 jobs:
   generate:
     if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.triggering_actor == 'Apdelrahman1911' }}
-    concurrency:
-      group: p2pkit-nonphysical-heavy
-      queue: max
-      cancel-in-progress: false
     runs-on: macos-26
     timeout-minutes: 210
     defaults:

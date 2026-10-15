@@ -37,8 +37,9 @@ for mapping in "${mappings[@]}"; do
         fail "tracked module files remain at obsolete root path $project_name"
 done
 
-grep -Fq 'library/p2p-core/api/**' "$ROOT/.github/workflows/publish-maven-central.yml" ||
-    fail "publication evidence upload still uses the old core API path"
+[[ -d "$ROOT/library/p2p-core/api" ]] &&
+    grep -Fq 'ci_qualification.py verify --source' "$ROOT/.github/workflows/publish-maven-central.yml" ||
+    fail "publication must use exact-source qualification with the relocated API baseline"
 grep -Fq 'library/p2p-transport-lan/build/XCFrameworks/release' "$ROOT/scripts/run-ios-app.sh" ||
     fail "iOS launcher does not use the relocated XCFramework"
 grep -Fq 'samples/iosApp/p2pkit-sample.xcodeproj' "$ROOT/scripts/run-release-gate.sh" ||

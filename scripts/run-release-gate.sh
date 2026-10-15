@@ -18,24 +18,11 @@ scripts/tests/check-osv-lockfile-coverage.sh
 scripts/tests/check-markdown-links.sh
 scripts/tests/classify-ci-scope-test.sh
 scripts/tests/resolve-ci-scope-test.sh
-ruby scripts/tests/check-ci-scope-policy-test.rb
-ruby scripts/tests/check-heavy-job-queue-policy-test.rb
-ruby scripts/tests/hosted-dependency-update-workflow-test.rb
-python3 -I -B -S scripts/tests/hosted-dependency-update-test.py -v -f
-python3 -I -B -S scripts/tests/hosted-dependency-update-context-test.py -v -f
-python3 -I -B -S scripts/tests/hosted-dependency-update-context-startup-observation-test.py -v -f
-ruby scripts/tests/check-sample-app-workflow-policy-test.rb
-python3 -I -B -S scripts/tests/test-transcript-custody-test.py
-ruby scripts/tests/check-hosted-test-workflow-policy-test.rb
-python3 -I -B -S scripts/tests/hosted-test-identity-test.py
-python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
-python3 -I -B -S scripts/tests/hosted-controller-import-test.py
-python3 -I -B -S scripts/tests/hosted-canonical-python-test.py
-python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
-python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
-python3 -I -B -S scripts/tests/hosted-recipient-routing-test.py
-python3 -I -B -S scripts/tests/hosted-jvm-library-test.py
-node scripts/tests/hosted-ordinary-cache-provider-action-test.cjs
+ruby scripts/check-modular-ci-policy.rb
+ruby scripts/tests/check-modular-ci-policy-test.rb
+python3 -B scripts/tests/ci-component-test.py
+python3 -B scripts/tests/ci-evidence-test.py
+python3 -B scripts/tests/ci-qualification-test.py
 scripts/tests/check-git-whitespace-test.sh
 scripts/tests/check-release-identity-test.sh
 python3 scripts/tests/check-publish-license-test.py
@@ -54,7 +41,6 @@ python3 -I -B scripts/tests/release-application-set-test.py
 python3 -I -B scripts/tests/central-bundle-evidence-test.py
 python3 -I -B scripts/tests/central-deployment-evidence-test.py
 python3 -I -B scripts/tests/maven-recovery-test.py
-ruby scripts/tests/release-foundation-workflow-test.rb
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh
 python3 scripts/tests/ios-project-generation-test.py

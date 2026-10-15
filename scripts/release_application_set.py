@@ -9,6 +9,7 @@ artifacts. Retaining this public JSON never renews their fourteen-day lifetime.
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -26,8 +27,9 @@ SPEC.loader.exec_module(P)
 ENVIRONMENT = "maven-central"
 FILE = "release-application-set.json"
 SCOPE = "QUALIFIED_APPLICATION_SET_BEFORE_MAVEN"
-# Preserve the existing publisher (90 min) and sample delivery (20 min) bounds.
-MAVEN_HEADROOM = (90 + 20) * 60
+# Cover the modular publisher (150 min) and sample delivery (20 min) bounds.
+# This does not renew the selected originals' fourteen-day retention.
+MAVEN_HEADROOM = (150 + 20) * 60
 DELIVERY_HEADROOM = 20 * 60
 
 
@@ -62,8 +64,8 @@ def protected_environment(api):
 
 def expiry(qualification):
     originals = qualification["artifacts"] + qualification["evidence"]
-    P.need(len(originals) == 8 and len({x["id"] for x in originals}) == 8,
-           "Require four application and four original encrypted-evidence artifacts")
+    P.need(len(originals) == 4 + len(P.QUAL.COMPONENTS) and len({x["id"] for x in originals}) == len(originals),
+           "Require four applications and every selected component evidence artifact")
     return min((x["expires_at"] for x in originals), key=P.timestamp)
 
 
@@ -95,13 +97,13 @@ def inspect_originals(api, qualification, directory):
     return packages
 
 
-def freeze(api, invocation, directory):
+def freeze(api, invocation, directory, *, qualification_binding=None):
     P.need(P.maven_invocation(api, invocation["source"], invocation["id"], invocation["attempt"], completed=False) == invocation,
            "Maven preflight invocation changed")
     existing = api.pages(f"/actions/runs/{invocation['id']}/artifacts", "artifacts")
     P.need(not any(x.get("name") == set_name(invocation) for x in existing),
            "This attempt already has a frozen set; never overwrite or replace it")
-    qualification = P.admit(api, invocation["source"])
+    qualification = P.admit(api, invocation["source"], qualification_binding=qualification_binding)
     P.need(qualification["versionBinding"]["canonicalVersion"] == invocation["version"] and
            qualification["tag"] == "samples-" + invocation["tag"], "Tag and application version differ")
     document = {"schema": 1, "scope": SCOPE, "maven": invocation, "qualification": qualification,
@@ -109,7 +111,7 @@ def freeze(api, invocation, directory):
                 "expiresAt": expiry(qualification)}
     eligibility(document, MAVEN_HEADROOM)
     document["packages"] = inspect_originals(api, qualification, directory)
-    P.need(P.admit(api, invocation["source"], qualification["producer"]["id"], qualification["producer"]["attempt"]) == qualification and
+    P.need(P.admit(api, invocation["source"], qualification_binding=qualification["qualificationBinding"]) == qualification and
            P.maven_invocation(api, invocation["source"], invocation["id"], invocation["attempt"], completed=False) == invocation and
            protected_environment(api) == document["environment"], "Source/gates/originals changed while freezing applications")
     eligibility(document, MAVEN_HEADROOM)
@@ -184,7 +186,7 @@ def load(api, invocation, directory, *, artifact_id=None, expected_hash=None, re
         validate_document(document, invocation)
         P.need(document["preparedAt"] <= P.timestamp(artifact["created_at"]), "Frozen record was not prepared before upload")
         qualification = document["qualification"]
-        P.need(P.admit(api, invocation["source"], qualification["producer"]["id"], qualification["producer"]["attempt"]) == qualification,
+        P.need(P.admit(api, invocation["source"], qualification_binding=qualification["qualificationBinding"]) == qualification,
                "Frozen source/gates/producer/original evidence changed")
         P.need(protected_environment(api) == document["environment"], "Maven protection changed after freeze")
         eligibility(document, remaining_seconds)
@@ -248,11 +250,14 @@ def main():
     parser.add_argument("operation", choices=("freeze", "revalidate"))
     parser.add_argument("--artifact")
     parser.add_argument("--sha256")
+    parser.add_argument("--qualification-binding", type=Path,
+                        help="Explicit runId/runAttempt/artifactId/digest JSON when multiple same-source qualifications exist")
     args = parser.parse_args()
     try:
         context = hosted_context(os.environ, args.operation)
         P.need((args.operation == "freeze" and args.artifact is None and args.sha256 is None) or
-               (args.operation == "revalidate" and args.artifact and args.sha256), "Wrong frozen-set argument binding")
+               (args.operation == "revalidate" and args.artifact and args.sha256 and args.qualification_binding is None),
+               "Wrong frozen-set argument binding")
         P.need(P.PACK.git(ROOT, "rev-parse", "HEAD").decode("ascii") == context["source"] and
                not P.PACK.git(ROOT, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"),
                "Maven checkout is dirty or not the exact tagged source")
@@ -265,7 +270,8 @@ def main():
             output = parent / "p2pkit-release-application-set"
             output.mkdir(mode=0o700)
             with tempfile.TemporaryDirectory(prefix="p2pkit-app-preflight-", dir=parent) as temporary:
-                document = freeze(api, invocation, Path(temporary))
+                binding = None if args.qualification_binding is None else P.parsed(args.qualification_binding.read_bytes())
+                document = freeze(api, invocation, Path(temporary), qualification_binding=binding)
             raw = P.encoded(document)
             P.need(len(raw) <= P.JSON_LIMIT, "Frozen document exceeds its finite bound")
             with (output / FILE).open("xb") as stream:
@@ -273,6 +279,9 @@ def main():
             digest = hashlib.sha256(raw).hexdigest()
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
                 stream.write("sha256=" + digest + "\n")
+                stream.write("qualification_binding=" + json.dumps(
+                    document["qualification"]["qualificationBinding"], sort_keys=True,
+                    separators=(",", ":"), allow_nan=False) + "\n")
             result = {"result": "FROZEN_NOT_PUBLISHED", "source": context["source"], "version": invocation["version"],
                       "sha256": digest, "expiresAt": document["expiresAt"], "ownerApprovalComment": approval_line(document)}
         else:

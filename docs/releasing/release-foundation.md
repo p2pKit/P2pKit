@@ -1,346 +1,166 @@
 # Exact-source library and development application releases
 
-## Activation status
+## Status and trust boundary
 
-This foundation is **not yet operationally qualified**. Its source controls do
-not replace ordinary FULL/Desktop, native packages, provider/cache/custody,
-Intel Apple coverage, required GitHub checks, or final owner approvals.
-The literal fail-only Stage1, Stage2 and ordinary source stops are removed.
-Real source routing, protected initial-recipient gates and each native worker's
-original current authority remain mandatory. This source transition does not
-supply execution authority by itself; explicit owner authority (including
-recorded delegation for routine operations) and genuine qualification remain
-required. Delegation does not release a technical HOLD or qualify an artifact.
-No historical preview or earlier campaign authorization qualifies this branch.
-Do not create a release tag merely to exercise the new preflight.
+The owner approved replacement of the custom bootstrap architecture on
+2026-10-15. The replacement still requires genuine hosted qualification before
+it is release-ready. A passing source/model test is not a platform build.
 
-The existing Maven signer, bundle inspector, publication-build SBOM, Central
-uploader and remote/consumer verification are retained. The new handoff adds a
-required frozen application set **before** any protected Maven publication.
-It does not make the retained gates optional or change the development-app
-classification. See the [checklist](checklist.md) and
-[application version encoding](application-versions.md).
+Dependency Cache Bootstrap, C1/H1/C2/H2, recipient activation windows, recursive
+custody proofs and global runner reservations are **retired release prerequisites**.
+Their old implementation and historical failures remain in Git history. They are
+not reported as passing. Routine CI uses GitHub's source/run/job/artifact identity;
+there are no owner VPS commands or special approval windows for routine tests.
+Final protected main merge, tag, signing and publication approvals remain required.
 
-## First activation remains a separate qualification
+The current source is not yet a published `0.8.0-rc1`. Foundation lands first via
+its own reviewed PR. RPC PR #463 then integrates the histories in isolation and
+qualifies the combined source, including its expanded dependency graph. No
+Foundation or RPC historical result qualifies that new combined commit.
 
-The retained initial-recipient exception is a one-time trust transition, not a
-second release path. Its current implementation does not lift these blockers:
+## Independent components
 
-1. Verify the existing registered-ID/ref bootstrap carrier against the final
-   reviewed Foundation source and actual GitHub service identity. Initial C1
-   binds the unchanged original main base and successfully observed absent
-   recipient policy; it does not claim the reviewed workflow or policy is
-   already trusted on main. GitHub documents default-branch presence for
-   `workflow_dispatch`: the observed one-time allocation is not a guarantee of
-   future support or qualified execution. Fail closed on refusal or any
-   source/identity change; do not fall back to a different ref or legacy workflow.
-   Confirm the actual protected execution environment and register fresh C1
-   authorization for the exact Foundation base/ref/commit/tree/policy and
-   selected bootstrap run attempts. With explicit recorded owner delegation,
-   the agent may register that canonical statement through the authenticated
-   owner account and submit the real protected routine execution approval.
-   Record this honestly as delegated operation, not personal authorship or a
-   human click. Retain the actual comment ID/body hash, unedited readback,
-   source/attempt bindings and exact environment challenge. A candidate policy,
-   workflow file, allocation result or agent review cannot authorize its own
-   recipient. Chat delegation is operational authority, not a substitute for
-   the maintained C1 statement or the original protected approval.
-2. Complete the genuine bootstrap/provider/retirement/custody/cache/timing
-   qualifications and preserve their original H1 records. Configuration-only
-   success does not satisfy ordinary ABI, simulator or transcript acceptance.
-3. Obtain fresh owner C2 authorization for the exact first Foundation PR/H2 and
-   its qualified H1 inputs. The separate `initial-recipient-gate` acquires a real
-   protected gate; every initial worker must acquire its own current authority.
-   Gate outputs and source-route decisions are not worker capabilities.
-4. Pass the actual ordinary FULL/Desktop and required GitHub gates, then deliver
-   the full maintained bootstrap workflow and reviewed recipient policy to
-   `main` by the normal qualified, personally authorized manual Foundation PR
-   merge. Initial Desktop execution never packages or publishes applications.
-   Subsequent ordinary runs use the genuinely trusted original-base policy.
+`ci.yml` calls `ci-component.yml` with these independently selectable components:
 
-### Routine operational delegation and parallel work
+| Component | Responsibility / runner |
+| --- | --- |
+| source | Repository, workflow, version and release-contract controls / Ubuntu |
+| dependencies | Locks, SHA-256 integrity, approved dependency floors / Ubuntu |
+| jvm-linux, jvm-windows | Real library JVM tests / Ubuntu, Windows x64 |
+| android | Android unit tests, build and native APK inspection / Ubuntu |
+| apple-arm64 | Maintained FULL checks and native Apple execution / macOS ARM64 |
+| apple-x64 | Actual `iosX64` execution, not cross-compilation / macOS Intel |
+| desktop-linux, desktop-windows, desktop-macos | Desktop tests and DEB/MSI/ARM64-DMG packaging |
+| security | Pinned OSV scan, unchanged expiring exceptions / Ubuntu |
+| compatibility | API/ABI, strict Dokka, SBOM, publication/consumers, XCFramework and Swift / macOS ARM64 |
 
-The owner's explicit routine-operation delegation permits source repairs,
-testing, CI dispatch/observation, exact-source C1 registration and corresponding
-protected execution approvals without a personal VPS command for every attempt.
-Keep the delegation's original record and digest with one durable request/result
-per operation and its original API evidence. Do not call the historical
-personal-only handler or label agent actions as personal approval. The small
-`initial_recipient_routine.py` primitives support canonical registration and
-complete carrier pagination; the reviewed caller still owns live acquisition,
-source/governance checks, bounded execution and transport receipts.
+List exact commands without executing them:
 
-RPC and Foundation may push and use Actions concurrently. Do not require a
-repository-global empty queue or pause RPC. Retain each workflow's noncancelling
-concurrency group, exact selected-source/run/attempt checks and bounded runner
-waiting. An unrelated queued/running workflow is not an authorization failure.
-The bootstrap's own complete inventory must still reject ambiguous allocation
-or changed attempts: preserve all original pages (up to the existing bounded
-20-page collector), not a truncated first 100 runs or a fabricated API envelope.
-A registration result is neither an environment approval nor native acceptance.
+```bash
+python3 scripts/ci_component.py android --list-commands
+```
 
-This delegation does **not** extend the current `2026-10-20T18:26:00Z` exclusive
-recipient-policy expiry, alter original phase/operation deadlines, authorize
-private-key access, or replace required qualification. No automatic write retry
-is allowed after a refused/ambiguous comment or approval; reconcile originals.
-Final protected `main` merge, immutable release tag, Maven/application-set and
-post-build evidence/publication approvals remain separate owner decisions under
-the final-release process below. Existing historical failures/authorizations are
-not rewritten or reused as a fresh source's evidence.
+Run one component locally with the required tools installed:
 
-`recipient-route` accepts the initial fallback only for the exact eligible
-same-repository Foundation PR with a successfully observed absent base policy.
-Malformed policy or failed queries never become fallback. Ordinary fork PRs
-with a valid trusted-base policy remain ordinary. Main pushes, ordinary manual
-runs and CI's weekly schedule cannot use initial fallback when the trusted-main
-policy is absent. Desktop has no scheduled route.
+```bash
+python3 scripts/ci_component.py jvm-linux
+```
 
-Both ordinary workflows retain `recipient-route` and the real protected
-`initial-recipient-gate`; no fail-only interlock or success stub stands in for
-them. The whole JVM job requires the exact successful route and origin/gate
-pair before any always-cleanup can run. The required `complete-gate` first
-rejects failed or skipped JVM results, then checks routing before checkout;
-Desktop also checks routing before checkout. Ordinary routes require the
-initial gate to be skipped with empty outputs. Initial routes require the real
-gate's successful result, but every worker still obtains its own current
-authority. Provider, private custody, seal, upload and terminal result checks
-remain required for each exact origin; removing ordinary source stops supplies
-none of their outcomes.
+Dispatch independently against a branch whose HEAD is the reviewed source:
 
-All final caller and activation source must be reviewed before H1's compatibility
-freeze. This includes both Stage1 first steps, both CI/Desktop whole-job
-interlocks, both ordinary acquisition stops and their exact policy/result-guard
-transitions. These workflow bytes are compatibility inputs: do not qualify H1
-and then change them to make H2 runnable. Changed bound sources require fresh
-compatible qualification, not a rewritten inventory/hash or reuse of stale
-C1/C2. The owner-authorized operational revision gives the initial bootstrap
-gate a sixty-minute job ceiling and its before-upload step a forty-five-minute
-kill ceiling. Gate work ends at the original job deadline minus the fixed
-180-second custody/retirement tail; its seal ends 75 seconds before that job
-deadline. K work is capped at 2400 seconds from its original start and at the
-inherited seal deadline minus its unchanged 45-second retirement reserve.
-Later entry or child FIRST cannot renew any stored absolute endpoint. Worker
-job/work limits remain 90 minutes/240 seconds; initializer120, pre-export
-crypto210, authority45, security freshness and all ownership/read checks remain
-unchanged. Parent final-only container requests are capped at 2445 seconds and still
-clipped by the original K final/seal endpoints. Nonfinal and child mechanism
-limits remain 900 seconds. Local-clock and independent mechanism limits may
-shorten execution.
-This operational allocation does not itself provide successful timing evidence.
-Gate-local query receipts are not claimed as uploaded custody; required
-productive/ordinary encrypted evidence still follows the existing fourteen-day
-Actions policy. Neither local models nor historical preview artifacts discharge
-any of these activation requirements.
+```bash
+gh workflow run ci.yml --ref YOUR_BRANCH -f component=desktop-windows
+```
 
-Upload retains two independent upper bounds: the original latest-Create deadline
-and the work end derived from actual FIRST (at most sixty seconds including the
-five-second close reserve). An early completed before-upload step need not wait
-until the original deadline; BEFORE must finish and Create must start before both bounds.
-Neither bound, the original job window, nor the authorization is renewed.
+Use `component=all` for a full qualification. Main pushes and PRs run the full
+matrix. Each component has its own job, reports and artifacts. A failure does
+not cancel other jobs. GitHub's **Re-run failed jobs** is supported; no repository-
+wide exclusive queue is required. The standalone source, Desktop and Intel
+wrappers are focused developer checks; final aggregation selects `ci.yml` results.
 
-## Identity and normal future procedure
+The plan reports reasonable external wall limits (30–180 minutes per component,
+plus 10 minutes for evidence/upload). No special CPU20, initializer120 or
+before-upload handshakes apply. Real timeouts, test failures, unknown process
+cleanup and corrupt dependencies still fail. Do not raise a timeout to mask a
+functional deadlock.
 
-Use these identities throughout, without overrides or floating branch selection:
+## Dependencies, evidence and retries
 
-- **S/T**: the exact approved main merge commit and its tree.
-- **V**: the single canonical `VERSION_NAME` stored in S.
-- **vV**: immutable library tag resolving to S, including annotated-tag identity.
-- **samples-vV**: development-app prerelease tag resolving to the same S.
-- **A**: the one frozen set of original producer artifacts, native package
-  metadata, embedded source/version, installer hashes and original evidence.
+Standard `gradle/actions/setup-gradle` caching is optional and read-only outside
+main. Build-cache and affected executable Kotlin/Gradle script-cache entries are
+excluded. A cache miss downloads through the approved repositories under strict
+Gradle locks and checksum verification. It is not a qualification failure.
 
-After this foundation's activation prerequisites are genuinely satisfied:
+`ci_evidence.py` captures the actual command and reports privately, retains owned
+process cleanup, checks the source before/after, and writes a small public
+manifest. It encrypts logs/reports to the **existing public key** in
+`.github/ci-evidence-recipient.asc`. Independently configured repository variables
+`CI_EVIDENCE_RECIPIENT_SHA256` and `CI_EVIDENCE_RECIPIENT_FINGERPRINT` pin that key.
+CI has no private key or passphrase. The retired policy's authorization dates do
+not govern routine tests; the real cryptographic key expiry still applies.
 
-1. Create normal feature/release-preparation branches from `main`. Review the
-   feature, select the canonical version through a PR, and pass all required
-   checks. The existing compatibility policy requires the next publication to
-   be a non-snapshot **0.8.0+** version; published RC3 history stays immutable.
-2. The owner posts `/p2pkit approve-pr <exact-final-head-SHA>` after successful
-   required checks. This is the approved replacement for GitHub's unavailable
-   author self-review, not an agent-generated approval. Use a normal,
-   history-preserving manual merge. Include case-sensitive `[release ci]` in
-   the **actual main merge commit message**, not only in the PR or a branch commit.
-3. The qualified ordinary main workflows run for S. FULL and all three native
-   Desktop hosts must succeed. They retain the Android APK, Windows **x64** MSI,
-   macOS **ARM64** DMG and Linux **x64** DEB, plus required encrypted evidence.
-   The apps use the in-repository library at S; no floating Maven dependency is
-   substituted. Package inspection reads the actual installer/APK metadata and
-   embedded source identity, not just a release title.
-4. Obtain the owner's explicit authorization for vV at S. Verify the existing
-   tag/source/version/coordinate-absence conditions, then push that immutable
-   tag. Do not move or recreate any library tag.
-5. `Publish Maven Central` first runs `freeze-applications`. This secret-free
-   job validates main/PR/marker/gates, inspects all four original bundles and
-   notices, and retains one immutable `release-application-set.json` artifact
-   named `release-application-set-<Maven-run>-<attempt>`.
-6. The existing `verify-release` complete gate must pass. At `maven-central`,
-   the owner reviews A and enters the **exact challenge from the freeze job's
-   summary** as the environment approval comment:
+Standard immutable Actions artifacts retain the manifest/ciphertext for 14 days
+from upload. Public app artifacts are separate and unencrypted. Reports include
+source/tree/version, command/tools, OS/architecture, run/attempt, completion,
+cleanup and file hashes. Genuine failed-task evidence is retained too. Missing
+or unreadable evidence is not success. Public diagnostics contain safe task names
+and result codes, never private log text.
 
-   ```text
-   APPROVE_APPLICATION_SET <Maven-run>/<attempt> <frozen-JSON-SHA256>
-   ```
+`ci_qualification.py` validates all twelve successful component jobs and four
+application producers. It compares exact source/tree/version, host, workflow,
+run/attempt, job completion, original artifact metadata and downloaded digests.
+There is **no fixed job-step count**. Failed overall matrix runs may still supply
+individually successful jobs, with their original attempt IDs. PR merge-source
+results remain premerge evidence, not main release evidence.
 
-   The workflow revalidates original artifact IDs/digests, source, version,
-   successful gates, retention and that real approval after the delay and
-   immediately before Central upload. A generic “approved”, another attempt's
-   challenge or an agent-written approval is not authority.
-7. The existing protected Maven job signs/inspects/publishes from S/V and
-   verifies remote bytes and isolated consumers. Signing material stays within
-   its existing secret-bearing steps; it never enters the frozen app record.
-8. **Only verified Maven completion**, or the separately approved verification
-   recovery described below, automatically starts `Development sample Releases`.
-   Ordinary CI/Desktop/OSV completions cannot publish applications. The delivery
-   job loads A from the original Maven attempt; it never selects a new producer
-   or builds replacement applications.
-9. A secret-free preparation job verifies those bytes again and creates a
-   fresh post-build evidence-review request. The owner retrieves/decrypts the
-   original encrypted evidence privately and approves the protected
-   `sample-development-release` environment with its exact summary challenge:
+To aggregate prior same-source successes without rerunning them, supply the
+`qualification_selection` dispatch input. It is the machine-readable selection
+from the previous attempt (or `ci_qualification.py collect`), with only the failed
+component's run/attempt/artifact/digest and its app artifact, if any, replaced.
+Each selector is revalidated; it is not an approval or an arbitrary success flag.
+Missing, failed, expired, stale-source and wrong-platform selections fail closed.
+Source changes require fresh compatible results; never combine different commits.
+If more than one complete qualification exists for the exact release source,
+select one explicitly with the public repository variable
+`RELEASE_QUALIFICATION_BINDING`: JSON containing `runId`, `runAttempt`,
+`artifactId`, and its `digest` (`sha256:…`). The verifier checks that original
+against the release source; it never chooses floating latest-main. Clear/update
+this optional selector for a different release. Once frozen, the record's binding
+wins and cannot be changed through the variable.
+If artifacts expired, rebuild/requalify before publication rather than silently
+reselecting after Maven.
 
-   ```text
-   APPROVE_EVIDENCE <sample-publisher-run>/<attempt> <review-request-SHA256>
-   ```
+## One release identity and protected publication
 
-   This second approval is required even when the same owner approved Maven.
-   Reruns/manual delivery cannot reuse an earlier request or approval.
-10. Publish the **already-qualified bytes** as a development prerelease, not
-    production-signed/notarized applications. Read back the complete asset
-    roster/digests, then anonymously download and SHA-256-check every complete
-    public asset. This is not merely an HTTP HEAD or one-byte access probe.
+1. Develop normally from main. Preserve APIs, samples, MainKt, Windows components
+   and all product functionality. Select canonical `VERSION_NAME` in the final
+   release PR; existing behavior changes require **0.8.0+**. Leave
+   `LATEST_PUBLISHED_VERSION` unchanged until remote publication is verified.
+2. Pass PR checks and obtain the owner's exact-head PR authorization. Use the
+   protected history-preserving merge process. The actual main merge message
+   must contain case-sensitive **`[release ci]`** for publication.
+3. Qualify that exact main commit. Build and inspect APK, Windows x64 MSI,
+   macOS ARM64 DMG and Linux x64 DEB from the same source/version. Use the existing
+   [canonical package encoding](application-versions.md), not release titles or
+   historical preview files. Ordinary CI may build packages without authorizing
+   their publication.
+4. Run the secret-free **Release dry run** for that exact main SHA/version. It
+   revalidates the completed qualification, ancestry and coordinate absence;
+   it does not rebuild all already-qualified components.
+5. Obtain separate owner authorization for immutable `v<VERSION_NAME>` at that
+   exact commit. Never move or replace the tag. A tag push begins Maven preflight.
+6. `freeze-applications` verifies all four original bundles and the source-bound
+   qualification and records one immutable `release-application-set.json` **before
+   signing or Maven upload**. `verify-release` rechecks qualification and identity
+   without rebuilding the application set.
+7. At protected `maven-central`, the owner reviews the frozen set and submits its
+   exact challenge: `APPROVE_APPLICATION_SET <run>/<attempt> <frozen-JSON-SHA256>`.
+   The publisher revalidates readiness after approval and before irreversible
+   upload. It rebuilds/signs/inspects the Maven bundle at the same source/version,
+   generates its actual publication-build SBOM and verifies remote bytes/consumers.
+   Signed Maven bytes are not claimed identical to an unsigned verification build.
+8. After Maven succeeds, **Development sample Releases** reuses the frozen app
+   bytes. The owner reviews the main-run evidence and separately approves the
+   protected `sample-development-release` stage. Publish only then, preserving
+   the development/prerelease classification and `samples-v<VERSION_NAME>` tag at
+   the same source. Verify all four complete public downloads anonymously against
+   recorded SHA-256 hashes.
 
-No automatic PR approval or merge is introduced. Required checks remain
-`complete-gate`, `review`, `scan / osv-scan`, and `osv-scanner`; the publisher
-fails closed if that live policy changes rather than silently ignoring a gate.
+## Partial failure and recovery
 
-## Retention and access
+A failed component can be rerun independently. A successful Maven upload cannot
+be rolled back or blindly retried. If upload status is ambiguous, use the existing
+**Recover Maven Central verification** read-only recovery procedure to reconcile
+original deployment/bundle evidence. Do not upload again or retag.
 
-Application bundles, the frozen public JSON and encrypted CI evidence use
-14-day Actions retention. Each original object's actual GitHub `created_at`
-and `expires_at` are retained. A frozen JSON upload **does not restart** the
-originals' lifetime. Eligibility ends at the earliest original application or
-evidence expiry. The pre-Maven checks preserve 90 minutes for the existing
-Maven job plus 20 minutes for sample delivery; delivery requires its remaining
-20-minute window. These are freshness headroom checks, not a runtime pass.
+If Maven succeeded but application publication failed, resume **Development sample
+Releases** with the original Maven run/attempt and frozen artifact/hash. It must
+reuse the same qualified app bytes, revalidate surviving evidence and require the
+existing final approval. No application rebuild/substitution is allowed after
+Maven. Existing draft/asset idempotency checks remain enforced. See the
+[release checklist](checklist.md) for publication contents and limitations.
 
-The public record contains hashes and identities, never private test originals,
-custodian private keys or passphrases. The owner decrypts evidence privately;
-the publisher does not. Actions permissions are not claimed to make artifact
-metadata or ciphertext owner-only. The separately published APK/MSI/DMG/DEB
-are unencrypted public Release assets and require no evidence decryption access.
-
-## Partial failure and app-only resume
-
-- **Before Maven upload:** fail closed on missing/mismatched gates or objects.
-  No absence/readiness failure is permission to change versions or fabricate
-  producer results. A new approved qualification must have its own identities.
-- **Maven completed successfully, sample delivery failed:** use the maintained
-  sample workflow's `workflow_dispatch` from `main`. Supply S, the **original**
-  Maven run/attempt, frozen artifact ID and frozen JSON SHA-256. `verify` has no
-  publication permission; `publish` always creates a fresh evidence request and
-  waits for the owner's protected approval. It performs no Maven upload/build.
-- **Draft already exists:** only missing, approved assets may be added. Existing
-  tags, assets, hashes, release body and source must match. Never clobber an asset
-  or adopt an unrelated/orphan tag. An already-public complete release is only
-  reverified; its bytes are not replaced.
-- **Central upload succeeded but the Maven job later failed:** do **not** rerun
-  the tag publisher or reinterpret that failed attempt as success. Use the
-  separate original-bound recovery below only when the failure is confined to
-  the post-publication verification/evidence tail and every required original
-  survives. Missing/expired signed-bundle or deployment originals remain HOLD;
-  rebuilding cannot recreate them.
-- **Original retention expired:** no automatic substitution, new producer,
-  reconstructed evidence or refreshed ciphertext lifetime is allowed. Stop at
-  the retained policy boundary even if Central publication already occurred.
-
-## Read-only recovery after an original PUBLISHED deployment
-
-`Recover Maven Central verification` (`recover-maven-central.yml`) is a separate
-main-only manual workflow. Its controller is the workflow's exact main commit;
-the original release S is checked out into a different directory. Advancing
-main does not select another library version, consumer fixture or application
-set. The original Maven attempt must remain **failed**, with no later rerun.
-
-Eligibility requires successful original freeze and complete-gate jobs, the
-original owner's application-set approval, successful signing/SBOM/upload, and
-both immutable, attempt-named original evidence artifacts:
-
-- `maven-central-signed-bundle-<tag>-<run>-<attempt>`: the original ZIP, SHA-256
-  manifest, source-bound summary and **public-only** signing certificate.
-- `maven-central-deployment-<tag>-<run>-<attempt>`: original Portal events,
-  PUBLISHED status, deployment ID, bundle/source hashes and their bound receipt.
-
-These are retained before the fallible remote-verification step. Cancellation,
-pre-upload failure, absent originals, changed tags, expired custody, a skipped
-remote-verification step or another failed stage cannot use this recovery path.
-An uploaded receipt is evidence, not owner approval or a successful Maven job.
-
-1. Dispatch `Recover Maven Central verification` from `main` with the five
-   required inputs: `source_sha` (S), `maven_run`, `maven_attempt`,
-   `frozen_artifact` (original frozen application-set artifact ID) and
-   `frozen_sha256` (the original JSON hash). No `latest` or version override is
-   accepted. This does not upload to Central or mutate tags/releases.
-2. The 20-minute secret-free preparation job checks original identity,
-   deployment, custody, gates and structural public-bundle data. It retains
-   a new exact-attempt recovery request. Structural preparation does **not**
-   count as signature, remote-byte or consumer verification.
-3. The separately configured `maven-central-recovery` environment must allow
-   only the `main` branch, name `Apdelrahman1911` as its sole reviewer, allow
-   self-review and disable administrator bypass. It has no Central or signing
-   secrets. The owner reviews the request and uses its exact summary challenge:
-
-   ```text
-   APPROVE_MAVEN_RECOVERY <recovery-run>/<attempt> <request-SHA256>
-   ```
-
-   The controller checks the actual environment and personal approval again;
-   adding the environment name to YAML cannot create that authority.
-4. The protected 90-minute macOS job revalidates the originals after the delay,
-   verifies all 84 original public signatures and the local 504-member
-   bundle/checksum roster, then runs S's existing remote-byte verifier against
-   that original bundle and S's **complete** isolated remote consumers. The
-   remote checker compares 168 base/signature files; do not describe that as
-   remote comparison of all 504 ZIP members. No library build, signing,
-   coordinate-absence probe, Central upload or application rebuild is allowed.
-5. Successful command/source/step/ownership records join the approved request
-   and original PUBLISHED deployment into `recovery-result.json`. Only a
-   successful recovery job and its exact retained artifact give distinct
-   `mavenRecovery` delivery authority. The original remains visibly failed;
-   there is no manufactured green status for it.
-6. Successful recovery automatically starts normal sample delivery using A.
-   The separate fresh `APPROVE_EVIDENCE` approval is still mandatory. If delivery
-   later fails, the normal sample manual path must supply its six original
-   inputs **and** all four recovery inputs: `recovery_run`, `recovery_attempt`,
-   `recovery_artifact` and `recovery_sha256`. These are the exact successful
-   recovery attempt, result artifact ID and JSON hash, not another recovery.
-
-Recovery records also have 14-day retention, but their creation never renews
-the original objects' lifetime. Preparation/authorization require the existing
-110-minute recovery-plus-delivery headroom; final delivery still needs 20 minutes
-before the earliest original expiry. A new recovery after failure needs its own
-request and personal approval. It may not replace A or reupload Maven.
-
-On command failure or unknown process retirement, owned command logs, consumer
-work and acquired public-bundle inputs are left on the ephemeral runner rather
-than being deleted while a child may still use them. Raw logs are not uploaded
-or printed. Bounded status/exit diagnostics do not claim retained encrypted
-failure evidence; successful public receipts contain hashes, not log contents.
-
-The recovery source controls are not hosted remote-consumer qualification.
-Its environment provisioning, genuine hosted qualification and this foundation's
-other activation prerequisites must be completed before operational use.
-
-## Maintained implementation boundary
-
-`release_application_set.py` is the preflight/frozen-record validator;
-`publish-sample-release.py` is the app-only admission/delivery controller;
-`package-sample-apps.py` and `sample_artifact_identity.py` produce and inspect
-source/version-bound application bundles on their native hosts. The existing
-Maven workflow remains the only Central upload path.
-`central_bundle_evidence.py` and `central_deployment_evidence.py` preserve and
-verify original public publication evidence; `maven_recovery.py` provides only
-the separate protected verification-recovery path, never a second publisher.
-
-The source-control workflow runs synthetic policy/package tests and the
-dependency-free version helper. Passing it is **not** a native app build,
-ordinary FULL/Desktop qualification, evidence decryption or Release approval.
+No local model, source-only CI, accepted Windows risk or historical preview is a
+substitute for an actually required gate. Windows RPC's unfinished productive
+loader/profile behavior and owner-accepted post-release testing limits must be
+stated honestly in the combined candidate; no unsafe load or fake runtime pass.

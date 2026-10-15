@@ -195,14 +195,18 @@ def output_path(value, environment=None):
     return output
 
 
-def generated_roots(identity):
+def generated_roots(identity, kind="all"):
+    require(kind in ("all", "android", "desktop"), "Unknown package component")
+    if kind == "android":
+        require(identity["platform"] == "linux", "Android producer must be Linux")
+        return [APK]
     return [IMAGE, CLI, INSTALLER_ROOT + "/" + INSTALLER_FORMATS[identity["platform"]]] + (
-        [APK] if identity["platform"] == "linux" else [])
+        [APK] if identity["platform"] == "linux" and kind == "all" else [])
 
 
-def prepare(root, output):
+def prepare(root, output, kind="all"):
     identity = context(root)
-    roots = generated_roots(identity)
+    roots = generated_roots(identity, kind)
     for relative in roots:
         require(not os.path.lexists(root / relative), "Intended generated application output already exists")
         for parent in (root / relative).parents:
@@ -559,34 +563,36 @@ def finish_manifest(root, directory, identity, payload):
         stream.write("\n".join(lines) + "\n")
 
 
-def package(root, output):
+def package(root, output, kind="all"):
     physical_directory(output)
     prepared = read_json(output / ".prepare.json")
     identity = context(root)
     require(prepared == {"schema": 1, "context": identity, "root": str(root), "outputIdentity": signature(output)[:2],
-                         "generatedRoots": generated_roots(identity)},
+                         "generatedRoots": generated_roots(identity, kind)},
             "Prepare identity differs from current source/run/output")
     require(set(path.name for path in output.iterdir()) == {".prepare.json"}, "Output is not an unused prepared directory")
-    images = root / IMAGE
-    physical_directory(images)
-    name = "P2pKit Sample.app" if identity["platform"] == "macos" else "P2pKit Sample"
-    require([path.name for path in images.iterdir()] == [name], "Missing or ambiguous Desktop app image")
-    image, cli = images / name, root / CLI
-    image_entries, cli_entries = inventory(image), inventory(cli)
-    inspected = desktop_layout(image, cli, identity)
+    if kind != "android":
+        images = root / IMAGE
+        physical_directory(images)
+        name = "P2pKit Sample.app" if identity["platform"] == "macos" else "P2pKit Sample"
+        require([path.name for path in images.iterdir()] == [name], "Missing or ambiguous Desktop app image")
+        image, cli = images / name, root / CLI
+        image_entries, cli_entries = inventory(image), inventory(cli)
+        inspected = desktop_layout(image, cli, identity)
     stage = output / ".packaging"
     stage.mkdir(mode=0o700)
     try:
-        desktop = stage / "desktop"
-        desktop.mkdir()
-        suffix = ".zip" if identity["platform"] == "windows" else ".tar.gz"
-        label = identity["platform"] + "-" + identity["architecture"] + "-" + identity["commit"][:12]
-        artifacts = [archive_image(source, desktop / (kind + "-" + label + suffix), entries) for source, kind, entries in
-                     ((image, "desktop-ui", image_entries), (cli, "desktop-cli", cli_entries))]
-        artifacts.append(desktop_installer(root, desktop, identity))
-        finish_manifest(root, desktop, identity, {"artifacts": artifacts, "layoutInspection": inspected,
-                        "installerInspection": "Native version metadata and byte hashes; not installed or signature-verified"})
-        if identity["platform"] == "linux":
+        if kind != "android":
+            desktop = stage / "desktop"
+            desktop.mkdir()
+            suffix = ".zip" if identity["platform"] == "windows" else ".tar.gz"
+            label = identity["platform"] + "-" + identity["architecture"] + "-" + identity["commit"][:12]
+            artifacts = [archive_image(source, desktop / (kind + "-" + label + suffix), entries) for source, kind, entries in
+                         ((image, "desktop-ui", image_entries), (cli, "desktop-cli", cli_entries))]
+            artifacts.append(desktop_installer(root, desktop, identity))
+            finish_manifest(root, desktop, identity, {"artifacts": artifacts, "layoutInspection": inspected,
+                            "installerInspection": "Native version metadata and byte hashes; not installed or signature-verified"})
+        if kind == "android" or (kind == "all" and identity["platform"] == "linux"):
             android = stage / "android"
             android.mkdir()
             finish_manifest(root, android, identity, android_artifact(root, android, identity))
@@ -602,10 +608,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("prepare", "package"))
     parser.add_argument("--output", required=True)
+    parser.add_argument("--kind", choices=("all", "android", "desktop"), default="all")
     arguments = parser.parse_args()
     try:
         output = output_path(arguments.output)
-        {"prepare": prepare, "package": package}[arguments.command](ROOT, output)
+        {"prepare": prepare, "package": package}[arguments.command](ROOT, output, arguments.kind)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, UnicodeError, subprocess.SubprocessError,
             zipfile.BadZipFile, tarfile.TarError) as error:
         print("Sample app packaging failed: " + type(error).__name__ + ": " + str(error), file=sys.stderr)

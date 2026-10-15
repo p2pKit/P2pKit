@@ -1,0 +1,93 @@
+name: Execute one CI component
+on:
+  workflow_call:
+    inputs:
+      component:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      minutes:
+        required: true
+        type: number
+permissions:
+  contents: read
+  actions: read
+jobs:
+  run:
+    name: Execute component
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.minutes + 10 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      GRADLE_USER_HOME: ${{ runner.temp }}/gradle-home
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - name: Check out exact event source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure Java 21 daemon/runtime
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Configure Java 17 library toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Configure optional verified dependency cache
+        if: ${{ inputs.component != 'source' && inputs.component != 'security' }}
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            caches/*/kotlin-dsl
+            caches/*/scripts
+            caches/*/groovy-dsl
+      - name: Install required platform tools
+        env:
+          COMPONENT: ${{ inputs.component }}
+        run: bash scripts/setup-ci-component.sh "$COMPONENT"
+      - name: Execute actual component and encrypt private evidence
+        id: execution
+        env:
+          COMPONENT: ${{ inputs.component }}
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          python3 -B scripts/ci_evidence.py --component "$COMPONENT" --timeout-seconds "$((MINUTES * 60))" --output-dir "$RUNNER_TEMP/ci-evidence-$COMPONENT" --report-glob '**/build/test-results/**/*.xml' --report-glob 'build/reports/**/*' -- python3 -B scripts/ci_component.py "$COMPONENT"
+      - name: Retain genuine component evidence, including failures
+        if: ${{ always() && steps.execution.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-evidence-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-evidence-${{ inputs.component }}/*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+      - name: Retain exact inspected Android package
+        if: ${{ success() && inputs.component == 'android' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sample-app-android-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-sample-apps/android/*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+      - name: Retain exact inspected desktop package
+        if: ${{ success() && startsWith(inputs.component, 'desktop-') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sample-app-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-sample-apps/desktop/*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

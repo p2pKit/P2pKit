@@ -96,13 +96,9 @@ for module_build in "${module_builds[@]}"; do
         fail "$module_build must consume exactly one compiler-owned class-directory provider"
 done
 
-# Ordinary CI now selects all three fresh Android comparisons through the
-# primary ABI roster, and the real module graph through its FULL supplements.
-# Bind the actual caller and parsed executable composition, not stale YAML text.
-ruby "$ROOT/scripts/check-hosted-test-workflow-policy.rb" "$CI_WORKFLOW" ||
-    fail "CI ordinary FULL caller policy failed"
-python3 -I -B -S "$ROOT/scripts/check-hosted-test-composition.py" --root "$ROOT" ||
-    fail "CI ordinary ABI/supplement executable composition failed"
+# The modular command roster and its negative tests enforce actual Android ABI
+# tasks. The retired recipient/custody workflow structure is not an ABI rule.
+ruby "$ROOT/scripts/check-modular-ci-policy.rb" || fail "Modular CI policy failed"
 
 # An explicit comparison does not prove module check owns it. The full-mode
 # graph probe is a separate, load-bearing command in both complete gates. CI's

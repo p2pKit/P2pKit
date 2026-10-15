@@ -27,10 +27,6 @@ env:
 jobs:
   dependency_context_qualification:
     if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.actor_id == '104788132' && github.triggering_actor == 'Apdelrahman1911' }}
-    concurrency:
-      group: p2pkit-nonphysical-heavy
-      queue: max
-      cancel-in-progress: false
     runs-on: macos-26
     timeout-minutes: 41
     defaults:

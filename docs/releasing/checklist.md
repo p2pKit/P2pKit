@@ -18,13 +18,12 @@ existing audit history into `main` is not release qualification.
    docs/changelog. Keep `LATEST_PUBLISHED_VERSION` at the previous release until
    remote publication is verified.
 2. Confirm a clean worktree and exact ancestry from `origin/main`.
-3. Run all script tests, `git diff --check`, and `scripts/run-release-gate.sh`.
-   Retain its source-bound `build/reports/platform-tests/` execution report and
-   a same-source native Intel `ios-x64` profile result (local or the manual/weekly
-   Intel workflow). The arm64 gate cannot verify the published `iosX64` slice;
+3. Pass the modular `ci.yml` components and exact-source aggregation, plus
+   `git diff --check`. Retain genuine `build/reports/platform-tests/` evidence
+   from FULL and a same-source native Intel `ios-x64` component result. The arm64 gate cannot verify the published `iosX64` slice;
    no Intel execution may be inferred from cross-compilation. See the
    [platform coverage guide](../testing/local.md#platform-execution-evidence).
-4. Run OSV, dependency submission, ABI, strict Dokka, SBOM, publication shape,
+4. Require the component results for OSV, ABI, strict Dokka, SBOM, publication shape,
    isolated consumers, Swift warnings-as-errors, and XCFramework provenance.
 5. Confirm `scripts/check-release-tag.sh v<VERSION_NAME>` and
    `scripts/check-maven-central-version.sh absent` pass.
@@ -49,8 +48,9 @@ the repository, or publish a snapshot.
 
 ## Which build each gate covers
 
-`verify-release` runs the secret-free complete gate on a verification build:
-tests, ABI, Dokka, SBOM, local publication/consumers, and Apple/XCFramework checks.
+`ci.yml` independently executes tests, ABI, Dokka, SBOM, local publication/consumers
+and Apple/XCFramework checks. `verify-release` revalidates those exact-source
+results and the frozen application set; it does not repeat all component builds.
 The approved `publish-release` job separately rebuilds the exact source with
 caches disabled; this signing isolation prevents stale key-specific signatures
 from entering the bundle. The two builds are not claimed to be byte-identical.

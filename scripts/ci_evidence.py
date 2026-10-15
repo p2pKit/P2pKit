@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+"""Small hosted-job evidence runner; no cache admission or initial trust protocol.
+
+Trust the reviewed workflow/host and the independent recipient pins supplied by
+Actions configuration. Capture command output privately, retire its owned process
+domain, bundle closed results, and encrypt with the pinned PUBLIC key only.
+Only manifest.json and evidence.tar.gz.gpg belong in the upload directory.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import threading
+import time
+import uuid
+
+sys.dont_write_bytecode = True
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import audit_processes
+# Reuse only the existing public armor and GPG colon-listing validators. No
+# recipient activation dates, historical custody, native authority, or exporter.
+from hosted_evidence import _public_armor, _key_identity
+
+SCHEMA = 1
+MAX_LOG_BYTES = 64 * 1024 * 1024
+MAX_BUNDLE_BYTES = 512 * 1024 * 1024
+MAX_REPORTS = 10000
+MAX_JSON_BYTES = 1024 * 1024
+CODES = frozenset({"PASS", "INPUT", "SOURCE_CHANGED", "SPAWN", "COMMAND_FAILED", "TIMEOUT",
+                   "CANCELLED", "OUTPUT_LIMIT", "OUTPUT_IO", "CLEANUP", "REPORTS", "RECIPIENT",
+                   "ENCRYPTION", "MANIFEST"})
+TASK_NAMES = frozenset({
+    "wrapper", "layout", "links", "release-metadata", "workflow-contract", "workflow-controls",
+    "platform-contract", "version-encoding", "signed-bundle-test",
+    "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py",
+    "application-release-version-test.py", "sample-artifact-identity-test.py",
+    "package-sample-apps-test.py", "release-application-set-test.py", "publish-sample-release-test.py",
+    "run-platform-tests-test.py", "integrity-policy",
+    "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
+    "build-plugin-floors", "jvm-tests", "android-tests-and-apk", "desktop-tests-and-installer",
+    "native-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
+    "isolated-consumers", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
+    "prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop", "gradle-stop", "component-setup"})
+
+
+class EvidenceError(RuntimeError):
+    def __init__(self, code):
+        super().__init__(code if code in CODES else "INPUT")
+        self.code = code if code in CODES else "INPUT"
+
+
+def require(condition, code="INPUT"):
+    if not condition:
+        raise EvidenceError(code)
+
+
+def encoded(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+
+
+def utc():
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def digest_file(path):
+    digest, size = hashlib.sha256(), 0
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+            size += len(block)
+    return {"sha256": digest.hexdigest(), "bytes": size}
+
+
+def write_private(path, raw):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            fd = None
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def read_json(path, maximum=MAX_JSON_BYTES):
+    with Path(path).open("rb") as stream:
+        raw = stream.read(maximum + 1)
+    require(len(raw) <= maximum)
+    return json.loads(raw)
+
+
+class Capture:
+    """One bounded private sink and one original pipe owner, on every OS."""
+    def __init__(self, pipe, path, limit):
+        self.pipe, self.path, self.limit = pipe, path, limit
+        self.count, self.eof, self.closed, self.error = 0, False, False, None
+        self.thread = threading.Thread(target=self._copy, daemon=True)
+
+    def _copy(self):
+        try:
+            with self.path.open("xb", buffering=0) as output:
+                if os.name == "posix":
+                    os.chmod(self.path, 0o600)
+                while True:
+                    block = self.pipe.read(65536)
+                    if not block:
+                        self.eof = True
+                        break
+                    permitted = max(0, self.limit - self.count)
+                    if len(block) > permitted:
+                        self.error = "OUTPUT_LIMIT"
+                    kept = block[:permitted]
+                    if kept:
+                        view = memoryview(kept)
+                        while view:
+                            written = output.write(view)
+                            if not written:
+                                raise OSError("private sink did not advance")
+                            self.count += written
+                            view = view[written:]
+                    # Continue draining until the controller retires the child;
+                    # never grow memory/disk beyond this stream's bound.
+                output.flush()
+                os.fsync(output.fileno())
+        except BaseException:
+            self.error = self.error or "OUTPUT_IO"
+        finally:
+            try:
+                self.pipe.close()
+                self.closed = True
+            except BaseException:
+                self.error = self.error or "CLEANUP"
+
+
+def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
+                log_limit=MAX_LOG_BYTES, cleanup_seconds=15.0):
+    """Actual command + unchanged maintained POSIX/Windows ownership backend.
+
+    Ordinary hosted-runner trust: POSIX marker-inheriting descendants, Windows
+    kernel Job Object. This is not containment of a malicious runner/child that
+    erases its ownership markers. No process-name kill or shell interpolation.
+    """
+    require(type(timeout) in (int, float) and 0 < timeout <= 21600)
+    require(type(log_limit) is int and 0 < log_limit <= MAX_LOG_BYTES)
+    private = Path(private)
+    private.mkdir(mode=0o700, parents=False, exist_ok=False)
+    job, invocation = uuid.uuid4().hex, uuid.uuid4().hex
+    home = Path(environment.get("GRADLE_USER_HOME", str(private / "gradle-home"))).absolute()
+    home.mkdir(parents=True, exist_ok=True)
+    env = audit_processes.ownership_environment(dict(environment), job, invocation,
+        str(private), str(home), allow_new_context=True)
+    begin = time.monotonic()
+    end = begin + timeout
+    scope, child, captures = None, None, []
+    code, returncode, cleanup_known = "PASS", None, False
+    timed_out = False
+    cancelled = cancelled or (lambda: False)
+    try:
+        scope = audit_processes.make_scope(job, invocation, str(private), str(home))
+        child = scope.spawn(list(argv), str(cwd), env)
+        captures = [Capture(child.stdout, private / "stdout.log", log_limit),
+                    Capture(child.stderr, private / "stderr.log", log_limit)]
+        for capture in captures:
+            capture.thread.start()
+        while True:
+            if cancelled():
+                code = "CANCELLED"
+                break
+            if any(item.error for item in captures):
+                code = next(item.error for item in captures if item.error)
+                break
+            returncode = child.poll()
+            if time.monotonic() >= end:
+                code, timed_out = "TIMEOUT", True
+                break
+            if returncode is not None:
+                code = "PASS" if returncode == 0 else "COMMAND_FAILED"
+                break
+            time.sleep(min(0.1, max(0.0, end - time.monotonic())))
+    except BaseException:
+        code = "SPAWN" if child is None else "CLEANUP"
+    finally:
+        cleanup_end = time.monotonic() + cleanup_seconds
+        # spawn can register a real child before its discovery raises. Retain all
+        # original leaders/pipes BEFORE close clears the POSIX leader registry.
+        leaders = tuple(getattr(scope, "leaders", ())) if scope else ()
+        pipes = tuple(stream for leader in leaders for stream in (leader.stdout, leader.stderr)
+                      if stream is not None)
+        try:
+            if scope is not None:
+                live = scope.drain(grace=3.0, kill_wait=max(1.0, cleanup_seconds - 5.0), deadline=cleanup_end)
+                cleanup_known = not live and not scope.discovery_errors
+                for leader in leaders:
+                    remaining = max(0.01, cleanup_end - time.monotonic())
+                    leader.wait(timeout=remaining)
+                if child is not None:
+                    returncode = child.returncode
+        except BaseException:
+            cleanup_known = False
+        finally:
+            try:
+                if scope is not None:
+                    scope.close()
+            except BaseException:
+                cleanup_known = False
+            for capture in captures:
+                if capture.thread.ident is not None:
+                    capture.thread.join(timeout=max(0.0, cleanup_end - time.monotonic()))
+                if capture.thread.is_alive() or not capture.eof or not capture.closed:
+                    cleanup_known = False
+                if capture.error and code == "PASS":
+                    code = capture.error
+            # Unadopted originals on an exceptional post-spawn path still close.
+            captured = {id(item.pipe) for item in captures if item.thread.ident is not None}
+            for pipe in pipes:
+                if id(pipe) not in captured:
+                    try:
+                        pipe.close()
+                    except BaseException:
+                        cleanup_known = False
+        if not cleanup_known and code == "PASS":
+            code = "CLEANUP"
+    return {"exitCode": returncode, "timedOut": timed_out, "cleanupKnown": cleanup_known,
+            "stage": "COMMAND", "code": code,
+            "elapsedSeconds": round(time.monotonic() - begin, 6)}
+
+
+def git_value(root, *arguments):
+    # Fixed, small source-metadata queries only; the arbitrary actual task uses
+    # run_command. Git output/error is never echoed to Actions.
+    result = subprocess.run(["git", "-C", str(root), *arguments], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+    require(result.returncode == 0 and len(result.stdout) <= MAX_JSON_BYTES, "SOURCE_CHANGED")
+    return result.stdout.decode("utf-8").strip()
+
+
+def source_identity(root):
+    commit, tree = git_value(root, "rev-parse", "HEAD"), git_value(root, "rev-parse", "HEAD^{tree}")
+    require(re.fullmatch(r"[0-9a-f]{40}", commit) and re.fullmatch(r"[0-9a-f]{40}", tree), "SOURCE_CHANGED")
+    require(not git_value(root, "status", "--porcelain=v1", "--untracked-files=no"), "SOURCE_CHANGED")
+    versions = re.findall(r"^VERSION_NAME=(\S+)$", (root / "gradle.properties").read_text(), re.M)
+    require(len(versions) == 1 and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,79}", versions[0]), "SOURCE_CHANGED")
+    return {"commit": commit, "tree": tree, "version": versions[0]}
+
+
+def github_identity(environment, source):
+    def value(name, pattern):
+        result = environment.get(name, "")
+        require(re.fullmatch(pattern, result))
+        return result
+    repository = value("GITHUB_REPOSITORY", r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+    require(value("GITHUB_SHA", r"[0-9a-f]{40}") == source["commit"], "SOURCE_CHANGED")
+    workflow = value("GITHUB_WORKFLOW_REF", r"[^\r\n]{1,512}")
+    prefix = repository + "/"
+    require(workflow.startswith(prefix) and "@" in workflow)
+    workflow_path = workflow[len(prefix):].rsplit("@", 1)[0]
+    require(re.fullmatch(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml", workflow_path))
+    return {"repository": repository, "runId": value("GITHUB_RUN_ID", r"[1-9][0-9]{0,19}"),
+            "runAttempt": value("GITHUB_RUN_ATTEMPT", r"[1-9][0-9]{0,19}"),
+            "workflowPath": workflow_path,
+            "workflowSha": value("GITHUB_WORKFLOW_SHA", r"[0-9a-f]{40}"),
+            "jobId": value("GITHUB_JOB", r"[A-Za-z_][A-Za-z0-9_-]{0,99}")}
+
+
+def collect_reports(root, patterns, destination):
+    destination.mkdir(mode=0o700)
+    selected, total = set(), 0
+    for pattern in patterns:
+        require(not Path(pattern).is_absolute() and ".." not in Path(pattern).parts, "REPORTS")
+        for path in root.glob(pattern):
+            if path.is_dir() and not path.is_symlink():
+                continue
+            relative = path.relative_to(root)
+            require(not any((root.joinpath(*relative.parts[:i])).is_symlink()
+                            for i in range(1, len(relative.parts) + 1)), "REPORTS")
+            info = path.lstat()
+            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, "REPORTS")
+            if relative in selected:
+                continue
+            selected.add(relative)
+            total += info.st_size
+            require(len(selected) <= MAX_REPORTS and total <= MAX_BUNDLE_BYTES, "REPORTS")
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(path, target)
+            if os.name == "posix":
+                os.chmod(target, 0o600)
+            require(path.stat().st_size == info.st_size and target.stat().st_size == info.st_size, "REPORTS")
+
+
+def archive_private(bundle, destination):
+    files, total = [], 0
+    for path in sorted(bundle.rglob("*")):
+        info = path.lstat()
+        require(not path.is_symlink() and (path.is_dir() or stat.S_ISREG(info.st_mode)), "REPORTS")
+        if path.is_dir():
+            continue
+        total += info.st_size
+        require(len(files) < MAX_REPORTS and total <= MAX_BUNDLE_BYTES, "REPORTS")
+        files.append({"path": path.relative_to(bundle).as_posix(), **digest_file(path)})
+    with tarfile.open(destination, "x:gz", format=tarfile.PAX_FORMAT) as archive:
+        for record in files:
+            path = bundle / record["path"]
+            archive.add(path, arcname=record["path"], recursive=False)
+            require(digest_file(path) == {key: record[key] for key in ("sha256", "bytes")}, "REPORTS")
+    if os.name == "posix":
+        os.chmod(destination, 0o600)
+    return files
+
+
+def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint, work, environment):
+    require(re.fullmatch(r"[0-9a-f]{64}", expected_sha or "") and
+            re.fullmatch(r"[A-Fa-f0-9]{40}", expected_fingerprint or ""), "RECIPIENT")
+    require(hashlib.sha256(key_raw).hexdigest() == expected_sha, "RECIPIENT")
+    _public_armor(key_raw)  # Reject secret packets even before a GPG invocation.
+    key_file = work / "recipient.asc"
+    write_private(key_file, key_raw)
+    home = work / "gnupg"
+    home.mkdir(mode=0o700)
+    gpg = shutil.which("gpg", path=environment.get("PATH"))
+    require(gpg is not None, "RECIPIENT")
+    base = [gpg, "--no-options", "--batch", "--no-tty", "--no-autostart", "--pinentry-mode", "error",
+            "--homedir", str(home), "--no-auto-key-retrieve"]
+    environment = {key: value for key, value in environment.items() if key in {
+        "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR",
+        "LANG", "LC_ALL", "PATHEXT"}}
+    # Public key only, no agent/keyserver/private-key lookup. GPG output remains
+    # private. Use the same cross-platform process supervisor as the real task.
+    def invoke(label, arguments, timeout=60):
+        directory = work / label
+        result = run_command([*base, *arguments], cwd=work, environment=environment,
+                             private=directory, timeout=timeout, log_limit=MAX_JSON_BYTES)
+        require(result["code"] == "PASS" and result["exitCode"] == 0 and result["cleanupKnown"], "ENCRYPTION")
+        return (directory / "stdout.log").read_bytes()
+    listing = invoke("key-show", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint",
+                                   "--import-options", "show-only", "--import", str(key_file)])
+    fingerprint, expires_at = _key_identity(listing, expected_fingerprint.upper())
+    invoke("key-import", ["--import", str(key_file)])
+    imported = invoke("key-list", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint", "--list-keys"])
+    require(_key_identity(imported, expected_fingerprint.upper()) == (fingerprint, expires_at), "RECIPIENT")
+    invoke("encrypt", ["--trust-model", "always", "--compress-algo", "none", "--recipient", fingerprint + "!",
+                        "--output", str(output), "--encrypt", str(archive)], timeout=300)
+    require(output.is_file() and 32 < output.stat().st_size <= MAX_BUNDLE_BYTES + 16 * 1024 * 1024, "ENCRYPTION")
+    return {**digest_file(output), "recipientFingerprint": expected_fingerprint.upper()}
+
+
+def tool_identity(tools_file):
+    result = {"python": {"version": platform.python_version(),
+                         "executableSha256": digest_file(Path(sys.executable).resolve())["sha256"]}}
+    if tools_file.exists():
+        supplied = read_json(tools_file)
+        require(type(supplied) is dict and len(supplied) <= 12)
+        for name, item in supplied.items():
+            require(name in {"java", "gradle", "node", "xcode", "android-sdk", "gpg"} and type(item) is dict and
+                    set(item) == {"version", "executableSha256"})
+            require(type(item["version"]) is str and re.fullmatch(r"[A-Za-z0-9 ._+()/-]{1,120}", item["version"]) and
+                    re.fullmatch(r"[0-9a-f]{64}", item["executableSha256"]))
+            result[name] = item
+    return result
+
+
+def component_tasks(root, component):
+    """Optional public diagnostic, never a replacement for actual task outcome.
+
+    Only fixed source-owned task names and integral exit codes leave the private
+    report. Missing/malformed reports remain unavailable, not invented success.
+    """
+    try:
+        report = read_json(root / "build/reports/ci-component" / (component + ".json"), 64 * 1024)
+        require(type(report) is dict and set(report) == {"component", "tasks", "exitCode"} and
+                report["component"] == component and type(report["exitCode"]) is int)
+        rows = report["tasks"]
+        require(type(rows) is list and len(rows) <= 100)
+        for row in rows:
+            require(type(row) is dict and set(row) == {"task", "exitCode"} and
+                    type(row["task"]) is str and row["task"] in TASK_NAMES and
+                    type(row["exitCode"]) is int and -(2**31) <= row["exitCode"] < 2**32)
+        return [{"task": row["task"], "exitCode": row["exitCode"]} for row in rows]
+    except (OSError, ValueError, TypeError, KeyError, EvidenceError):
+        return None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--component", required=True)
+    parser.add_argument("--timeout-seconds", type=float, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, default=Path.cwd())
+    parser.add_argument("--report-glob", action="append", default=[])
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    stage, private, output, previous = "INPUT", None, None, {}
+    cleanup_known = True
+    cancelled = threading.Event()
+    try:
+        require(re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.component))
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        require(command and all(type(item) is str and item and "\0" not in item for item in command))
+        root = args.source_root.resolve()
+        output = args.output_dir.absolute()
+        require(not output.exists() and root not in output.parents, "INPUT")
+        output.mkdir(parents=True, mode=0o700)
+        private = Path(tempfile.mkdtemp(prefix="ci-evidence-private-", dir=os.environ.get("RUNNER_TEMP")))
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous[sig] = signal.signal(sig, lambda _s, _f: cancelled.set())
+        started = utc()
+        stage = "SOURCE"
+        source = source_identity(root)
+        github = github_identity(os.environ, source)
+        environment = dict(os.environ)
+        tools_file = private / "tools.json"
+        environment["CI_EVIDENCE_TOOLS_FILE"] = str(tools_file)
+        stage = "COMMAND"
+        cleanup_known = False
+        outcome = run_command(command, cwd=root, environment=environment, private=private / "command",
+                              timeout=args.timeout_seconds, cancelled=cancelled.is_set)
+        cleanup_known = outcome["cleanupKnown"]
+        require(cleanup_known, "CLEANUP")
+        stage = "SOURCE"
+        require(source_identity(root) == source, "SOURCE_CHANGED")
+        stage = "REPORTS"
+        bundle = private / "bundle"
+        bundle.mkdir(mode=0o700)
+        for name in ("stdout.log", "stderr.log"):
+            shutil.copyfile(private / "command" / name, bundle / name)
+        collect_reports(root, args.report_glob, bundle / "reports")
+        write_private(bundle / "run.json", encoded({"source": source, "github": github, "command": command,
+                                                     "outcome": outcome}))
+        archive = private / "evidence.tar.gz"
+        reports = archive_private(bundle, archive)
+        stage = "RECIPIENT"
+        with (root / ".github/ci-evidence-recipient.asc").open("rb") as public_key:
+            key_raw = public_key.read(64 * 1024 + 1)
+        require(0 < len(key_raw) <= 64 * 1024, "RECIPIENT")
+        ciphertext = encrypt_archive(archive, output / "evidence.tar.gz.gpg", key_raw,
+            os.environ.get("CI_EVIDENCE_RECIPIENT_SHA256", ""),
+            os.environ.get("CI_EVIDENCE_RECIPIENT_FINGERPRINT", ""), private, environment)
+        stage = "MANIFEST"
+        manifest = {"schema": SCHEMA, "component": args.component, "source": source, "github": github,
+            "host": {"platform": platform.system(), "arch": platform.machine(),
+                     "runnerEnvironment": os.environ.get("RUNNER_ENVIRONMENT", "")},
+            "timing": {"startedAt": started, "completedAt": utc()}, "tools": tool_identity(tools_file),
+            "command": {"sha256": hashlib.sha256(encoded(command)).hexdigest()}, "outcome": outcome,
+            "taskResults": component_tasks(root, args.component),
+            "reports": reports, "privateArchive": digest_file(archive), "ciphertext": ciphertext}
+        write_private(output / "manifest.json", encoded(manifest))
+        print("CI_EVIDENCE " + ("PASS" if outcome["code"] == "PASS" else "FAIL") + " " + outcome["code"])
+        return 0 if outcome["code"] == "PASS" else 1
+    except BaseException as error:
+        code = error.code if type(error) is EvidenceError else "INPUT"
+        # Never render an exception, command, private path, GPG diagnostic or env.
+        print("CI_EVIDENCE FAIL " + stage + " " + code, file=sys.stderr)
+        try:
+            if output is not None and output.is_dir():
+                # No partial uploadable public receipt/ciphertext is a success.
+                for name in ("manifest.json", "evidence.tar.gz.gpg"):
+                    (output / name).unlink(missing_ok=True)
+        except BaseException:
+            # An OS cleanup error must not print a private filename/exception or
+            # convert this failure to PASS. Job/API failure still denies intake.
+            print("CI_EVIDENCE CLEANUP UNKNOWN", file=sys.stderr)
+        return 1
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        if private is not None and cleanup_known:
+            shutil.rmtree(private, ignore_errors=True)
+        # Unknown writer retirement retains the private directory for runner
+        # teardown; never erase evidence while a possible original writer lives.
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

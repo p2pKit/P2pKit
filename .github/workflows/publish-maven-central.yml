@@ -26,6 +26,7 @@ jobs:
     outputs:
       sha256: ${{ steps.freeze.outputs.sha256 }}
       artifact_id: ${{ steps.frozen.outputs.artifact-id }}
+      qualification_binding: ${{ steps.freeze.outputs.qualification_binding }}
     steps:
       - name: Check out exact tagged source for secret-free readiness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,6 +37,7 @@ jobs:
         id: freeze
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_QUALIFICATION_BINDING: ${{ vars.RELEASE_QUALIFICATION_BINDING }}
         run: python3 -I -B -S scripts/release_application_set.py freeze
       - name: Retain the immutable public application-set record
         id: frozen
@@ -49,36 +51,15 @@ jobs:
 
   verify-release:
     needs: freeze-applications
-    runs-on: macos-15
-    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Check out exact tagged commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Configure Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          gradle-home-cache-excludes: caches/build-cache-1
-
-      - name: Install pinned XcodeGen
-        run: |
-          xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
-          echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK platforms
-        run: |
-          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
-
-      - name: Validate immutable release identity
+      - name: Validate immutable release identity and coordinate absence
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
@@ -86,43 +67,26 @@ jobs:
           scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag
           scripts/check-release-metadata.sh
           scripts/check-maven-central-version.sh absent
-
-      - name: Verify release tooling
+      - name: Revalidate successful exact-source components without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROZEN_QUALIFICATION_BINDING: ${{ needs.freeze-applications.outputs.qualification_binding }}
         run: |
-          scripts/tests/check-release-tag-test.sh
-          scripts/tests/check-release-identity-test.sh
-          scripts/tests/check-maven-release-environment-test.sh
-          scripts/tests/check-maven-namespace-access-test.sh
-          scripts/tests/check-maven-central-version-test.sh
-          scripts/tests/publish-central-portal-bundle-test.sh
-          scripts/tests/build-central-portal-bundle-test.sh
-          scripts/tests/install-xcodegen-test.sh
-          scripts/tests/release-workflow-test.sh
-
-      - name: Run complete release gate
-        run: scripts/run-release-gate.sh
-
-      - name: Upload verification evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          printf '%s\n' "$FROZEN_QUALIFICATION_BINDING" > "$RUNNER_TEMP/qualification-binding.json"
+          python3 -B scripts/ci_qualification.py verify --source "$GITHUB_SHA" --selection "$RUNNER_TEMP/qualification-binding.json" --output "$RUNNER_TEMP/qualification.json"
+      - name: Upload verified qualification reference
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: maven-central-verification-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            build/reports/release/**
-            build/reports/platform-tests/**
-            build/reports/cyclonedx/bom.*
-            library/p2p-core/api/**
-            library/p2p-transport-lan/api/**
-            library/p2p-network-provisioning-desktop/api/**
-            library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
-          if-no-files-found: warn
+          path: ${{ runner.temp }}/qualification.json
+          if-no-files-found: error
           retention-days: 14
           overwrite: false
 
   publish-release:
     needs: [freeze-applications, verify-release]
-    runs-on: macos-15
-    timeout-minutes: 90
+    runs-on: macos-26
+    timeout-minutes: 150
     environment:
       name: maven-central
       url: https://central.sonatype.com/publishing
@@ -133,6 +97,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Configure Java 21 daemon toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Configure Java 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -142,7 +111,12 @@ jobs:
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          gradle-home-cache-excludes: caches/build-cache-1
+          cache-read-only: true
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            caches/*/kotlin-dsl
+            caches/*/scripts
+            caches/*/groovy-dsl
 
       - name: Install Android SDK platforms
         run: |
@@ -151,6 +125,7 @@ jobs:
       - name: Revalidate frozen applications and exact owner approval
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_QUALIFICATION_BINDING: ${{ vars.RELEASE_QUALIFICATION_BINDING }}
           FROZEN_ARTIFACT: ${{ needs.freeze-applications.outputs.artifact_id }}
           FROZEN_SHA256: ${{ needs.freeze-applications.outputs.sha256 }}
         run: python3 -I -B -S scripts/release_application_set.py revalidate --artifact "$FROZEN_ARTIFACT" --sha256 "$FROZEN_SHA256"
@@ -220,6 +195,7 @@ jobs:
       - name: Revalidate original readiness immediately before irreversible upload
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_QUALIFICATION_BINDING: ${{ vars.RELEASE_QUALIFICATION_BINDING }}
           FROZEN_ARTIFACT: ${{ needs.freeze-applications.outputs.artifact_id }}
           FROZEN_SHA256: ${{ needs.freeze-applications.outputs.sha256 }}
         run: python3 -I -B -S scripts/release_application_set.py revalidate --artifact "$FROZEN_ARTIFACT" --sha256 "$FROZEN_SHA256"
