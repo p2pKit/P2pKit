@@ -19,6 +19,7 @@ import kotlinx.coroutines.withTimeout
 import platform.Network.nw_endpoint_create_bonjour_service
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
@@ -28,6 +29,79 @@ import kotlin.test.assertTrue
 
 /** Real discovery ownership/admission with controllable native calls, not multicast evidence. */
 class IosLanTxtMonitorTest {
+    @Test
+    fun organizationNumericRejectionCannotWithdrawSameGenerationReplacement() = withRig(
+        listOf(TransportSecurityProfile.AuthenticatedV2)
+    ) {
+        val old = owner()
+        dns.references.last().answer(bytes())
+        val stale = assertNotNull(discovery.txtSnapshotForTest(REMOTE.value))
+        owner(previous = old)
+        dns.references.last().answer(bytes(name = "Fresh"))
+        val current = assertNotNull(registry.lease(REMOTE))
+        val before = events.toList()
+        discovery.acceptOrganizationTxtSnapshotForTest(stale.withNumericHost("172.16.1.1"), organizationPolicy)
+        assertSame(current, registry.lease(REMOTE))
+        assertEquals(before, events)
+    }
+
+    @Test
+    fun organizationNumericRejectionCannotWithdrawNewerRevisionOfSameOwner() = withRig(
+        listOf(TransportSecurityProfile.AuthenticatedV2)
+    ) {
+        owner()
+        val reference = dns.references.last()
+        reference.answer(bytes())
+        val stale = assertNotNull(discovery.txtSnapshotForTest(REMOTE.value))
+        dns.onQueue {
+            reference.answer(bytes(), added = false, moreComing = true)
+            reference.answer(bytes(name = "Newer"))
+        }
+        val current = assertNotNull(registry.lease(REMOTE))
+        val before = events.toList()
+        discovery.acceptOrganizationTxtSnapshotForTest(stale.withNumericHost("172.16.1.1"), organizationPolicy)
+        assertSame(current, registry.lease(REMOTE))
+        assertEquals(before, events)
+    }
+
+    @Test
+    fun organizationNumericCurrentRejectionWithdrawsAndAllowedHintStaysUntrusted() = withRig(
+        listOf(TransportSecurityProfile.AuthenticatedV2)
+    ) {
+        owner()
+        dns.references.last().answer(bytes())
+        val current = assertNotNull(discovery.txtSnapshotForTest(REMOTE.value))
+        discovery.acceptOrganizationTxtSnapshotForTest(current.withNumericHost("10.1.2.4"), organizationPolicy)
+        assertNotNull(registry.lease(REMOTE))
+        val peer = assertNotNull(discovery.announceEntryForTest(REMOTE.value)).peer
+        assertEquals("10.1.2.4", peer.transportHints.single().host)
+        assertTrue(peer.authenticationHint is dev.p2pkit.core.transport.PeerAuthenticationHint.UntrustedDiscoveryClaim)
+        discovery.acceptOrganizationTxtSnapshotForTest(current.withNumericHost("172.16.1.1"), organizationPolicy)
+        assertNull(registry.lease(REMOTE))
+        assertEquals(1, events.count { it is PeerEvent.Lost })
+    }
+
+    @Test
+    fun organizationValidationSeamCannotOverrideConfiguredProductionPolicy() = withRig(
+        listOf(TransportSecurityProfile.AuthenticatedV2)
+    ) {
+        owner()
+        dns.references.last().answer(bytes())
+        val snapshot = assertNotNull(discovery.txtSnapshotForTest(REMOTE.value))
+        val otherRegistry = IosEndpointRegistry()
+        val otherData = IosLanDataTransport(context, otherRegistry, policy = organizationPolicy)
+        val configured = IosLanDiscoveryTransport(
+            context, otherRegistry, otherData, FakeIosLanTxtDns(), policy = organizationPolicy
+        )
+        try {
+            assertFailsWith<IllegalStateException> {
+                configured.acceptOrganizationTxtSnapshotForTest(snapshot, organizationPolicy)
+            }
+        } finally {
+            otherData.close()
+        }
+    }
+
     @Test
     fun sameGenerationReplacementRejectsOldRecordsAndOldRemoval() = withRig {
         val old = owner()
@@ -479,8 +553,11 @@ class IosLanTxtMonitorTest {
         ): IosLanTxtMonitor.Owner = assertNotNull(tryOwner(pid, previous))
     }
 
-    private fun withRig(block: suspend Rig.() -> Unit) = runBlocking<Unit> {
-        for (profile in TransportSecurityProfile.entries) {
+    private fun withRig(
+        profiles: List<TransportSecurityProfile> = TransportSecurityProfile.entries,
+        block: suspend Rig.() -> Unit
+    ) = runBlocking<Unit> {
+        for (profile in profiles) {
             val rig = Rig(profile)
             val collector = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
                 rig.discovery.events.collect { rig.events += it }
@@ -513,6 +590,13 @@ class IosLanTxtMonitorTest {
 
     private companion object {
         val REMOTE = PeerId("remote")
+        val organizationPolicy = OrganizationLan(listOf("10.0.0.0/8"), "en0", "10.1.2.3")
+
+        fun IosLanTxtMonitor.Snapshot.withNumericHost(host: String): IosLanTxtMonitor.Snapshot = copy(
+            records = records.map { it.copy(properties = it.properties + mapOf(
+                LanConstants.TXT_NUMERIC_ADDRESS to host, LanConstants.TXT_NUMERIC_PORT to "5432"
+            )) }
+        )
 
         fun paddedRecord(prefix: ByteArray): ByteArray {
             val output = ByteArray(65_535)
@@ -536,6 +620,7 @@ internal class FakeIosLanTxtDns : IosLanTxtDns {
     var scheduleError = 0
     var successWithoutReference = false
     var afterStart: (() -> Unit)? = null
+    var afterSchedule: (() -> Unit)? = null
     var failedStartContextsDisposed = 0
     var holdQueue = false
     private val blocks = ArrayDeque<() -> Unit>()
@@ -545,14 +630,18 @@ internal class FakeIosLanTxtDns : IosLanTxtDns {
     override fun constructFullName(name: String, type: String, domain: String): String =
         "$name.${type.trimEnd('.')}.${domain.trimEnd('.')}."
 
-    override fun start(fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit): IosLanTxtDns.Start {
+    override fun start(
+        fullName: String,
+        scope: IosLanTxtQueryScope,
+        callback: (Int, () -> IosLanTxtAnswer) -> Unit
+    ): IosLanTxtDns.Start {
         check(queueDepth > 0) { "query must start on its native queue" }
         if (startError != 0) {
             failedStartContextsDisposed++
             return IosLanTxtDns.Start(startError, null)
         }
         if (successWithoutReference) return IosLanTxtDns.Start(0, null)
-        val ref = Reference(fullName, callback, scheduleError)
+        val ref = Reference(fullName, scope, callback, scheduleError)
         references += ref
         afterStart?.invoke()
         return IosLanTxtDns.Start(0, ref)
@@ -587,6 +676,7 @@ internal class FakeIosLanTxtDns : IosLanTxtDns {
 
     inner class Reference(
         val fullName: String,
+        val scope: IosLanTxtQueryScope,
         private val callback: (Int, () -> IosLanTxtAnswer) -> Unit,
         private val schedulingError: Int
     ) : IosLanTxtDns.Reference {
@@ -600,6 +690,7 @@ internal class FakeIosLanTxtDns : IosLanTxtDns {
             check(queueDepth > 0)
             check(!deallocated && !disposed)
             operations += "schedule"
+            afterSchedule?.invoke()
             return schedulingError
         }
 

@@ -32,10 +32,7 @@ import platform.darwin.dispatch_async
 import platform.darwin.dispatch_queue_t
 import platform.darwin.kDNSServiceClass_IN
 import platform.darwin.kDNSServiceFlagsAdd
-import platform.darwin.kDNSServiceFlagsIncludeP2P
-import platform.darwin.kDNSServiceFlagsLongLivedQuery
 import platform.darwin.kDNSServiceFlagsMoreComing
-import platform.darwin.kDNSServiceInterfaceIndexAny
 import platform.darwin.kDNSServiceType_TXT
 
 /** Borrowed fields are accessed synchronously, and never at all after a nonzero error. */
@@ -61,7 +58,11 @@ internal interface IosLanTxtDns {
     data class Start(val error: Int, val reference: Reference?)
 
     fun constructFullName(name: String, type: String, domain: String): String?
-    fun start(fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit): Start
+    fun start(
+        fullName: String,
+        scope: IosLanTxtQueryScope = IosLanTxtQueryScope.ordinary,
+        callback: (Int, () -> IosLanTxtAnswer) -> Unit
+    ): Start
     fun enqueue(block: () -> Unit)
 }
 
@@ -71,7 +72,8 @@ internal data class IosLanTxtService(
     val type: String,
     val domain: String,
     val endpoint: nw_endpoint_t,
-    val generation: Int
+    val generation: Int,
+    val queryScope: IosLanTxtQueryScope = IosLanTxtQueryScope.ordinary
 ) {
     internal val key: List<String> get() = listOf(name, type, domain)
 }
@@ -253,7 +255,11 @@ internal class IosLanTxtMonitor(
                 isCurrentLocked(owner)
             }
             if (!mayStart) return
-            val start = dns.start(fullName) { error, fields -> receive(owner, error, fields) }
+            if (!owner.service.queryScope.isCurrent()) {
+                fail(owner)
+                return
+            }
+            val start = dns.start(fullName, owner.service.queryScope) { error, fields -> receive(owner, error, fields) }
             if (start.error != 0 || start.reference == null) {
                 // An error has no valid output reference. Real adapter disposes only its context.
                 fail(owner)
@@ -265,7 +271,11 @@ internal class IosLanTxtMonitor(
                 allocatedReferences++
                 isCurrentLocked(owner)
             }
-            if (!stillCurrent || reference.schedule() != 0) fail(owner)
+            // Keep the returned reference owned even if interface custody changed while opening it.
+            // Neither a successful query creation nor queue attachment authorizes a changed scope.
+            if (!stillCurrent || !owner.service.queryScope.isCurrent() || reference.schedule() != 0 ||
+                !owner.service.queryScope.isCurrent()
+            ) fail(owner)
         } catch (_: Throwable) {
             fail(owner)
         }
@@ -273,7 +283,7 @@ internal class IosLanTxtMonitor(
 
     private fun receive(owner: Owner, error: Int, fields: () -> IosLanTxtAnswer) {
         // In a DNS-SD error callback every field other than error/context is undefined.
-        if (error != 0) {
+        if (error != 0 || !owner.service.queryScope.isCurrent()) {
             fail(owner)
             return
         }
@@ -296,6 +306,10 @@ internal class IosLanTxtMonitor(
                 return
             }
             val decoded = IosBonjour.DecodedRecord(properties.orEmpty(), malformed = properties == null)
+            if (!owner.service.queryScope.isCurrent()) {
+                fail(owner)
+                return
+            }
             var queueGuard = false
             var overflow = false
             val snapshot = locked {
@@ -435,7 +449,12 @@ internal class PlatformIosLanTxtDns(private val queue: dispatch_queue_t) : IosLa
         if (DNSServiceConstructFullName(result, name, type, domain) != 0) null else copyLanDnsString(result)
     }
 
-    override fun start(fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit): IosLanTxtDns.Start {
+    override fun start(
+        fullName: String,
+        scope: IosLanTxtQueryScope,
+        callback: (Int, () -> IosLanTxtAnswer) -> Unit
+    ): IosLanTxtDns.Start {
+        if (!scope.isCurrent()) return IosLanTxtDns.Start(-1, null)
         val context = StableRef.create(IosLanTxtCallbackContext(callback))
         var transferred = false
         var untransferredRef: DNSServiceRef? = null
@@ -445,8 +464,8 @@ internal class PlatformIosLanTxtDns(private val queue: dispatch_queue_t) : IosLa
                 output.value = null
                 val error = DNSServiceQueryRecord(
                     output.ptr,
-                    kDNSServiceFlagsIncludeP2P or kDNSServiceFlagsLongLivedQuery,
-                    kDNSServiceInterfaceIndexAny.toUInt(),
+                    scope.flags,
+                    scope.interfaceIndex,
                     fullName,
                     kDNSServiceType_TXT.toUShort(),
                     kDNSServiceClass_IN.toUShort(),
