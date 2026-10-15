@@ -740,6 +740,48 @@ class EvidenceTests(unittest.TestCase):
                   isinstance(node.args[1], ast.Constant)}
         self.assertEqual(labels, set(E.DEPENDENCY_UPDATE_ERRORS))
 
+    def test_closed_phase_diagnostics_preserve_finite_values_without_report_reads(self):
+        command = self.root / "phase-command"
+        command.mkdir()
+        labels = ("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
+                  "simulator-runtimes", "intel-bootstatus-help", "simulator-devices", "intel-boot",
+                  "intel-bootstatus", "intel-prelaunch", "intel-retire-before", "intel-shutdown", "intel-retire-after")
+        for code in (None, -255, -15, 0, 1, 255):
+            for ending in ("\n", "\r\n", ""):
+                for label in labels:
+                    line = f"INTEL_PHASE_RESULT {label} EXIT " + ("null" if code is None else str(code))
+                    (command / "stdout.log").write_text(line + " TIMEOUT 1 OVERFLOW 0 DRAINED 1" + ending)
+                    with self.subTest(code=code, ending=ending, label=label), \
+                            mock.patch.object(E, "read_json", side_effect=AssertionError("NO_MUTABLE_REPORT_READ")):
+                        result = E.failure_diagnostics(self.root, command, include_reports=False)
+                    self.assertEqual(result["simulatorPhases"], [{"label": label, "exitCode": code,
+                        "timedOut": True, "outputLimitExceeded": False, "ownedGroupDrained": True}])
+
+    def test_closed_phase_diagnostics_reject_malformed_private_suffixes_and_duplicates(self):
+        command = self.root / "phase-negative-command"
+        command.mkdir()
+        good = "INTEL_PHASE_RESULT intel-boot EXIT 1 TIMEOUT 0 OVERFLOW 0 DRAINED 1"
+        mutations = [good + " private-secret", good + " ", "prefix " + good,
+                     good.replace("intel-boot", "private-label"), good.replace("EXIT 1", "EXIT true"),
+                     good.replace("EXIT 1", "EXIT 01"), good.replace("EXIT 1", "EXIT -0"),
+                     good.replace("EXIT 1", "EXIT 256"), good.replace("EXIT 1", "EXIT -256"),
+                     good.replace("EXIT 1", "EXIT 1000000"), good.replace("TIMEOUT 0", "TIMEOUT 2"),
+                     good.replace("OVERFLOW 0", "OVERFLOW false"), good.replace("DRAINED 1", "DRAINED true")]
+        for line in mutations:
+            (command / "stdout.log").write_text(line + "\n")
+            with self.subTest(line=line):
+                result = E.failure_diagnostics(self.root, command, include_reports=False)
+                self.assertEqual(result["simulatorPhases"], [])
+                self.assertNotIn("private", json.dumps(result))
+        other = good.replace("intel-boot", "intel-shutdown")
+        for repeated in (good, good.replace("EXIT 1", "EXIT 2")):
+            (command / "stdout.log").write_text(good + "\n" + other + "\n")
+            (command / "stderr.log").write_text(repeated + "\n")
+            for include_reports in (False, True):
+                with self.subTest(repeated=repeated, include_reports=include_reports):
+                    result = E.failure_diagnostics(self.root, command, include_reports=include_reports)
+                    self.assertEqual([row["label"] for row in result["simulatorPhases"]], ["intel-shutdown"])
+
     def test_public_failure_diagnostics_keep_identifiers_not_private_messages(self):
         command = self.root / "command"
         command.mkdir()

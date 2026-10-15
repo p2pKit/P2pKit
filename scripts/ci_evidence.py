@@ -896,6 +896,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     """
     categories, tasks, publication_lines, platform_lines = set(), set(), [], []
     dependency_exits, duplicate_dependency_steps = {}, set()
+    phase_observations, duplicate_phases = {}, set()
     modules = {"p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
                "p2p-network-provisioning-desktop", "p2p-sample-android", "p2p-sample-desktop",
                "p2p-sample-desktop-ui", "p2p-sample-diagnostics", "sample-kmp-shared", "p2p-sample-rpc", "buildSrc"}
@@ -952,6 +953,19 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 location = re.fullmatch(rb"PLATFORM_CHECK_LINES ([0-9]{1,5}(?:,[0-9]{1,5}){0,15})\s*", line)
                 if location:
                     platform_lines = [int(value) for value in location[1].split(b",")]
+                phase = re.fullmatch(
+                    rb"INTEL_PHASE_RESULT ([a-z-]{1,40}) EXIT (null|0|-?[1-9][0-9]{0,2}) "
+                    rb"TIMEOUT ([01]) OVERFLOW ([01]) DRAINED ([01])\r?\n?", line)
+                if phase:
+                    label = phase[1].decode("ascii")
+                    value = None if phase[2] == b"null" else int(phase[2])
+                    if label in phase_labels and (value is None or -255 <= value <= 255):
+                        if label in phase_observations:
+                            duplicate_phases.add(label)
+                        else:
+                            phase_observations[label] = {"label": label, "exitCode": value,
+                                "timedOut": phase[3] == b"1", "outputLimitExceeded": phase[4] == b"1",
+                                "ownedGroupDrained": phase[5] == b"1"}
                 dependency_error = re.fullmatch(rb"DEPENDENCY_UPDATE_FAILED: ([A-Za-z_]{1,80})\r?\n?", line)
                 if dependency_error:
                     label = dependency_error[1].decode("ascii")
@@ -992,15 +1006,20 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     observed_exits = {key: value for key, value in dependency_exits.items()
                       if key not in duplicate_dependency_steps}
     dependency_fields = {"dependencyUpdateExits": observed_exits} if observed_exits else {}
+    observed_phases = [row for label, row in phase_observations.items() if label not in duplicate_phases]
     if not include_reports:
         # Original capture EOF/join/close is independent from descendant census.
         # After uncertain retirement read ONLY those closed private captures;
         # other reports may still have writers. These labels never qualify a run.
-        return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": [],
+        return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": observed_phases,
                 "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
                 "platformTests": [], "failedSourceTests": [], **dependency_fields}
-    phases = []
-    for path in sorted((root / "build/reports/platform-tests").glob("*/intel-simulator/*/result.json")):
+    phases = list(observed_phases)
+    # Prefer the closed command's observations; do not mix duplicated or
+    # contradictory logs with a second report-derived phase history.
+    phase_paths = [] if phase_observations else sorted(
+        (root / "build/reports/platform-tests").glob("*/intel-simulator/*/result.json"))
+    for path in phase_paths:
         try:
             row = read_json(path, 64 * 1024)
             if type(row) is not dict:

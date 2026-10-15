@@ -775,6 +775,43 @@ class IntelOwnerLifecycleModels(unittest.TestCase):
 
 
 class IntelCommandCaptureModels(unittest.TestCase):
+    def test_phase_diagnostic_only_emits_finite_original_fields(self):
+        for label in GATE.INTEL_PREPARE + GATE.INTEL_RETIRE:
+            for code in (None, -255, -15, 0, 1, 255):
+                row = {"label": label, "exitCode": code, "timedOut": True,
+                       "outputLimitExceeded": False, "ownedGroupDrained": False,
+                       "argv": ["private-command"], "cwd": "private-path", "stderr": "private-payload"}
+                output = io.StringIO()
+                with self.subTest(label=label, code=code), contextlib.redirect_stdout(output):
+                    GATE._intel_report_phase(row)
+                self.assertEqual(output.getvalue(), f"INTEL_PHASE_RESULT {label} EXIT " +
+                    ("null" if code is None else str(code)) + " TIMEOUT 1 OVERFLOW 0 DRAINED 0\n")
+        for key, value in (("label", "private-label"), ("label", ["intel-boot"]),
+                           ("exitCode", True), ("exitCode", "private"), ("exitCode", -256),
+                           ("exitCode", 256), ("timedOut", 0), ("outputLimitExceeded", "private"),
+                           ("ownedGroupDrained", None)):
+            row = {"label": "intel-boot", "exitCode": 1, "timedOut": False,
+                   "outputLimitExceeded": False, "ownedGroupDrained": True, key: value}
+            output = io.StringIO()
+            with self.subTest(key=key, value=value), contextlib.redirect_stdout(output):
+                GATE._intel_report_phase(row)
+            self.assertEqual(output.getvalue(), "")
+
+    def test_failed_phase_capture_emits_original_null_exit_without_exposing_exception(self):
+        with tempfile.TemporaryDirectory(prefix="intel-finite-phase-") as temporary:
+            root, output = Path(temporary).resolve(), io.StringIO()
+            with mock.patch.object(GATE, "ROOT", root), contextlib.redirect_stdout(output), \
+                    mock.patch.object(GATE.subprocess, "Popen", side_effect=OSError("private-launch-error")), \
+                    mock.patch.object(GATE, "terminate_process", return_value=True) as drain, \
+                    self.assertRaisesRegex(OSError, "private-launch-error"):
+                GATE._intel_capture_phase(root, "simulator-first-launch", ["private-not-executed"])
+            drain.assert_called_once_with(None)
+            row = json.loads((root / "simulator-first-launch/result.json").read_bytes())
+            self.assertIsNone(row["exitCode"])
+            self.assertIs(row["ownedGroupDrained"], True)
+            self.assertEqual(output.getvalue(), "INTEL_PHASE_RESULT simulator-first-launch EXIT null "
+                             "TIMEOUT 0 OVERFLOW 0 DRAINED 1\n")
+
     def test_bootstatus_capture_uses_only_its_named_work_budget(self):
         # Only test-local constants are scaled; the real capture and drain run.
         with tempfile.TemporaryDirectory(prefix="intel-bootstatus-budget-") as temporary:

@@ -604,6 +604,19 @@ def _intel_write(path, raw):
         os.fsync(stream.fileno())
 
 
+def _intel_report_phase(row):
+    """Finite original outcome only; no command, path, device or stream content."""
+    label, code = row.get("label"), row.get("exitCode")
+    flags = ("timedOut", "outputLimitExceeded", "ownedGroupDrained")
+    if (label not in INTEL_PREPARE + INTEL_RETIRE or
+            not (code is None or type(code) is int and -255 <= code <= 255) or
+            any(type(row.get(key)) is not bool for key in flags)):
+        return
+    value = "null" if code is None else str(code)
+    print(f"INTEL_PHASE_RESULT {label} EXIT {value} TIMEOUT {int(row['timedOut'])} "
+          f"OVERFLOW {int(row['outputLimitExceeded'])} DRAINED {int(row['ownedGroupDrained'])}", flush=True)
+
+
 def _intel_capture_phase(directory, label, argv):
     """One bounded owned command, retaining originals even on interruption."""
     phase = directory / label
@@ -684,6 +697,7 @@ def _intel_capture_phase(directory, label, argv):
                 raw = simulator.encoded(row)
                 require(len(raw) <= INTEL_JSON_LIMIT, "INTEL_JSON_LIMIT")
                 _intel_write(phase / "result.json", raw)
+                _intel_report_phase(row)
             finally:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)
