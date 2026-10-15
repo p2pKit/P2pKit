@@ -104,6 +104,95 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["code"], "CANCELLED")
         self.assertTrue(result["cleanupKnown"])
 
+    def test_pending_context_records_closed_counts_without_native_calls_or_authority(self):
+        scope = object.__new__(E.audit_processes.DarwinScope)
+        parent = {"pid": 10, "uniqueId": 100, "parentUniqueId": 1,
+                  "startSeconds": 1, "startMicroseconds": 0, "flags": 0}
+        identity = {"pid": 11, "uniqueId": 101, "parentUniqueId": 100,
+                    "startSeconds": 2, "startMicroseconds": 0, "flags": 0}
+        scope.identity_history = {100: parent}
+        scope.known, scope.handles = {}, {}
+        scope.baseline = {scope._key(parent)}
+        scope.diagnostic_roles = {scope._key(identity): "xcodebuild"}
+        record = {"identity": identity, "lastIdentity": identity, "auditSessionExclusion": "NOT_RECORDED",
+                  "lastFailure": "Darwin environment unresolved after bounded observation: private detail"}
+        scope.pending_discoveries = {11: record}
+        scope.discovery_errors = {"PRIVATE_PID_11"}
+        with mock.patch.object(scope, "_identity", side_effect=AssertionError("new native query")), \
+                mock.patch.object(scope, "_audit_session", side_effect=AssertionError("new native query")), \
+                mock.patch.object(scope, "_has_pipe", side_effect=AssertionError("new native query")):
+            actual = E.pending_context_diagnostic(scope)
+        self.assertEqual(actual, {"scope": E.PENDING_CONTEXT_SCOPE, "pendingCount": 1,
+            "roles": {"xcodebuild": 1}, "parentage": {"BASELINE": 1},
+            "sessionExclusions": {"NOT_RECORDED": 1}, "failureKinds": {"ENVIRONMENT": 1}})
+        self.assertEqual(scope.pending_discoveries, {11: record})
+        self.assertEqual(scope.discovery_errors, {"PRIVATE_PID_11"})
+        self.assertEqual(scope.known, {})
+        self.assertEqual(scope.handles, {})
+        self.assertNotIn("private", json.dumps(actual).lower())
+
+    def test_pending_context_finite_causes_and_sessions_do_not_export_input_text(self):
+        causes = [(message, label) for message, label in E.PENDING_FAILURES.items()]
+        causes += [("Darwin " + operation + " unresolved after bounded observation: PRIVATE", label)
+                   for operation, label in E.PENDING_OPERATIONS.items()]
+        causes += [("PRIVATE", "OTHER"), ("x" * 4097, "OTHER"), (False, "OTHER")]
+        for message, expected in causes:
+            scope = mock.Mock(pending_discoveries={1: {"lastFailure": message,
+                                                       "auditSessionExclusion": "PRIVATE"}})
+            scope._pending_context.return_value = {"scope": E.PENDING_CONTEXT_SCOPE,
+                "roles": {"OTHER": 1}, "parentage": {"UNOBSERVED": 1}}
+            actual = E.pending_context_diagnostic(scope)
+            self.assertEqual(actual["failureKinds"], {expected: 1})
+            self.assertEqual(actual["sessionExclusions"], {"NOT_RECORDED": 1})
+            self.assertNotIn("PRIVATE", json.dumps(actual))
+        for session in E.audit_processes.DARWIN_SESSION_EXCLUSIONS:
+            scope.pending_discoveries[1]["auditSessionExclusion"] = session
+            self.assertEqual(E.pending_context_diagnostic(scope)["sessionExclusions"], {session: 1})
+        scope._pending_context.side_effect = RuntimeError("PRIVATE")
+        self.assertIsNone(E.pending_context_diagnostic(scope))
+
+    def test_pending_context_projection_refuses_private_or_inconsistent_records(self):
+        valid = {"scope": E.PENDING_CONTEXT_SCOPE, "pendingCount": 1, "roles": {"java": 1},
+                 "parentage": {"UNOBSERVED": 1}, "sessionExclusions": {"SAME_VALID_SESSION": 1},
+                 "failureKinds": {"PARENT_UNOBSERVED": 1}}
+        base = {"code": "CLEANUP", "exitCode": 1, "cleanupKnown": False, "timedOut": False}
+        self.assertEqual(E.public_outcome({**base, "pendingContext": valid})["pendingContext"], valid)
+        invalid = [{**valid, "pid": 123}, {**valid, "pendingCount": True}, {**valid, "pendingCount": 1025},
+                   {**valid, "scope": "PRIVATE"}]
+        for field in ("roles", "parentage", "sessionExclusions", "failureKinds"):
+            label = next(iter(valid[field]))
+            invalid.extend({**valid, field: counts} for counts in
+                           ({"PRIVATE": 1}, {label: True}, {label: 0}, {label: 1025}, {label: 2}, {}))
+        for value in invalid:
+            with self.subTest(value=value):
+                self.assertNotIn("pendingContext", E.public_outcome({**base, "pendingContext": value}))
+        for pending in ({}, {index: {} for index in range(1025)}, [], None):
+            scope = mock.Mock(pending_discoveries=pending)
+            self.assertIsNone(E.pending_context_diagnostic(scope))
+            scope._pending_context.assert_not_called()
+
+    def test_failed_darwin_drain_retains_context_and_still_closes_scope(self):
+        child = mock.Mock(stdout=io.BytesIO(b""), stderr=io.BytesIO(b""), returncode=1)
+        child.poll.return_value = 1
+        scope = mock.Mock(spec=E.audit_processes.DarwinScope)
+        scope.leaders, scope.discovery_errors = [child], {"PRIVATE"}
+        scope.spawn.return_value = child
+        scope.drain.side_effect = E.audit_processes.OwnershipError(
+            "Unclassified Darwin lifetimes remain; cleanup is not proven")
+        scope.pending_discoveries = {11: {"lastFailure": "Darwin non-reaper original-parent lifetime was not observed",
+                                        "auditSessionExclusion": "SAME_VALID_SESSION"}}
+        scope._pending_context.return_value = {"scope": E.PENDING_CONTEXT_SCOPE,
+            "roles": {"java": 1}, "parentage": {"UNOBSERVED": 1}}
+        with mock.patch.object(E.audit_processes, "make_scope", return_value=scope):
+            actual = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
+                private=self.root / "darwin-context", timeout=5)
+        self.assertFalse(actual["cleanupKnown"])
+        self.assertEqual(actual["code"], "COMMAND_FAILED")
+        self.assertEqual(actual["cleanupReasons"], ["DRAIN_UNCLASSIFIED"])
+        self.assertEqual(actual["pendingContext"]["failureKinds"], {"PARENT_UNOBSERVED": 1})
+        scope.close.assert_called_once()
+        scope._pending_context.assert_called_once()
+
     def test_cleanup_reasons_distinguish_drain_wait_and_close_without_private_text(self):
         cases = (
             ("deadline", "DRAIN_DEADLINE"), ("unknown", "DRAIN_UNCLASSIFIED"),

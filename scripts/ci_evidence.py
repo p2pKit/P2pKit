@@ -49,6 +49,16 @@ CLEANUP_REASONS = frozenset({"SCOPE_UNAVAILABLE", "DRAIN_ERROR", "DRAIN_DEADLINE
     "DRAIN_UNCLASSIFIED", "DRAIN_NOT_QUIET", "DRAIN_SIGNAL_UNRESOLVED", "LIVE_PROCESSES",
     "DISCOVERY_ERRORS", "LEADER_WAIT", "SCOPE_CLOSE", "CAPTURE_ACTIVE", "PIPE_NO_EOF",
     "PIPE_NOT_CLOSED", "ORIGINAL_PIPE_CLOSE"})
+PENDING_CONTEXT_SCOPE = "RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT"
+PENDING_FAILURES = {
+    "Darwin non-reaper original-parent lifetime was not observed": "PARENT_UNOBSERVED",
+    "Darwin traced parentage is not an ownership proof": "TRACED_PARENT",
+}
+PENDING_OPERATIONS = {"environment": "ENVIRONMENT", "identity": "IDENTITY",
+                      "task token": "TASK_TOKEN", "inherited pipe": "INHERITED_PIPE"}
+PENDING_FAILURE_LABELS = frozenset((*PENDING_FAILURES.values(),
+                                  *PENDING_OPERATIONS.values(), "OTHER"))
+
 TASK_NAMES = frozenset({
     "release-tag-controls", "release-identity-controls", "maven-environment-controls",
     "maven-namespace-controls", "maven-coordinate-controls", "maven-upload-controls",
@@ -181,6 +191,7 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
     code, returncode, cleanup_known = "PASS", None, False
     native_error = None
     cleanup_reasons = set()
+    pending_context = None
     timed_out = False
     cancelled = cancelled or (lambda: False)
     try:
@@ -258,6 +269,8 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
         except BaseException:
             cleanup_known = False
         finally:
+            if isinstance(scope, audit_processes.DarwinScope):
+                pending_context = pending_context_diagnostic(scope)
             try:
                 if scope is not None:
                     scope.close()
@@ -291,8 +304,57 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                 item.thread.ident is not None and not item.thread.is_alive() and
                 item.eof and item.closed and item.error is None for item in captures),
             "stage": "COMMAND", "code": code, "nativeError": native_error,
-            "cleanupReasons": sorted(cleanup_reasons),
+            "cleanupReasons": sorted(cleanup_reasons), "pendingContext": pending_context,
             "elapsedSeconds": round(time.monotonic() - begin, 6)}
+
+
+def pending_context_diagnostic(scope):
+    """Bounded recorded counts only; no native call or ownership/exit authority."""
+    try:
+        pending = scope.pending_discoveries
+        if type(pending) is not dict or not 0 < len(pending) <= 1024:
+            return None
+        context = scope._pending_context()
+        result = {**context, "pendingCount": len(pending), "sessionExclusions": {}, "failureKinds": {}}
+        for record in pending.values():
+            if type(record) is not dict:
+                return None
+            session = record.get("auditSessionExclusion")
+            label = session if type(session) is str and session in audit_processes.DARWIN_SESSION_EXCLUSIONS else "NOT_RECORDED"
+            result["sessionExclusions"][label] = result["sessionExclusions"].get(label, 0) + 1
+            message = record.get("lastFailure")
+            kind = "OTHER"
+            if type(message) is str and len(message) <= 4096:
+                kind = PENDING_FAILURES.get(message, "OTHER")
+                for operation, label in PENDING_OPERATIONS.items():
+                    if message.startswith("Darwin " + operation + " unresolved after bounded observation: "):
+                        kind = label
+                        break
+            result["failureKinds"][kind] = result["failureKinds"].get(kind, 0) + 1
+        return public_pending_context(result)
+    except BaseException:
+        # A diagnostic failure must never replace the real cleanup failure or
+        # prevent release of the original scope resources.
+        return None
+
+
+def public_pending_context(value):
+    """Reject private labels, raw lifetime records, booleans and oversized counts."""
+    fields = {"scope", "pendingCount", "roles", "parentage", "sessionExclusions", "failureKinds"}
+    if (type(value) is not dict or set(value) != fields or value["scope"] != PENDING_CONTEXT_SCOPE
+            or type(value["pendingCount"]) is not int or not 0 < value["pendingCount"] <= 1024):
+        return None
+    for field, labels in (("roles", audit_processes.DARWIN_DIAGNOSTIC_ROLES),
+                          ("parentage", audit_processes.DARWIN_DIAGNOSTIC_PARENTAGE),
+                          ("sessionExclusions", audit_processes.DARWIN_SESSION_EXCLUSIONS | {"NOT_RECORDED"}),
+                          ("failureKinds", PENDING_FAILURE_LABELS)):
+        counts = value[field]
+        if (type(counts) is not dict or not set(counts) <= labels or
+                not all(type(count) is int and 0 < count <= 1024 for count in counts.values()) or
+                sum(counts.values()) != value["pendingCount"]):
+            return None
+    return {"scope": PENDING_CONTEXT_SCOPE, "pendingCount": value["pendingCount"],
+            **{field: dict(value[field]) for field in fields - {"scope", "pendingCount"}}}
 
 
 def cleanup_error_reason(error):
@@ -694,6 +756,9 @@ def public_outcome(value):
         result["cleanupReasons"] = sorted(set(reasons))
     if type(value.get("capturesClosed")) is bool:
         result["capturesClosed"] = value["capturesClosed"]
+    pending_context = public_pending_context(value.get("pendingContext"))
+    if pending_context is not None:
+        result["pendingContext"] = pending_context
     return result
 
 
