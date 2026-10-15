@@ -121,4 +121,3 @@ pwp_result pwp_win_delete_record(uint64_t directory, const uint16_t *name, size_
     (void)directory; (void)name; (void)length; (void)expected; (void)count;
     forbidden_storage("pwp_win_delete_record");
 }
-
