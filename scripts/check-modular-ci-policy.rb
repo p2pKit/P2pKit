@@ -41,6 +41,26 @@ module ModularCI
     require!(writer['runs-on'] == 'macos-14' && writer.fetch('steps').any? { |s|
                s['run'] == 'bash scripts/setup-ci-component.sh dependency-update' },
              'Dependency writer must use the explicit reviewed CLI baseline')
+    publisher = load(File.join(root, '.github/workflows/publish-maven-central.yml')).fetch('jobs')
+    recovery = load(File.join(root, '.github/workflows/recover-maven-central.yml')).fetch('jobs')
+    require!(publisher.keys.sort == %w[freeze-applications publish-release verify-release],
+             'Maven success/recovery must retain the existing three-job contract')
+    {publisher.fetch('publish-release') => 'maven-central',
+     recovery.fetch('verify-recovery') => 'maven-central-recovery'}.each do |job, environment|
+      require!(job['runs-on'] == 'macos-14' &&
+               (job['environment'].is_a?(Hash) ? job['environment']['name'] : job['environment']) == environment,
+               'Publication/recovery must retain protected supported CLI execution')
+      steps = job.fetch('steps')
+      setup = steps.index { |step| step['run'] == 'bash scripts/setup-ci-component.sh consumers' &&
+                                  !step['if'] && !step['continue-on-error'] }
+      java = steps.filter_map { |step| step.dig('with', 'java-version').to_s if
+                                step['uses'].to_s.start_with?('actions/setup-java@') }
+      require!(setup && java == %w[21 17], 'Publication/recovery must prepare the reviewed consumer tools')
+      consumer = steps.index { |step| step['run'].to_s.include?('scripts/check-published-consumers.sh') ||
+                                     step['run'].to_s.include?('scripts/maven_recovery.py verify-consumers ') }
+      require!(consumer && setup < consumer && !steps[consumer]['if'] && !steps[consumer]['continue-on-error'],
+               'Complete remote consumers must remain required after supported setup')
+    end
     %w[bundle-diagnostic jmdns-diagnostic].each do |diagnostic|
       require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),
                'Explicit focused diagnostic route missing')

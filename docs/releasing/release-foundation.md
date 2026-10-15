@@ -37,7 +37,14 @@ Foundation or RPC historical result qualifies that new combined commit.
 
 All thirteen components are mandatory for the same source; splitting consumers
 does not omit or weaken their tests. The full dependency-update candidate writer
-also uses the macOS 14 / Xcode 16.2 CLI baseline. This follows the actual successful
+also uses the macOS 14 / Xcode 16.2 CLI baseline. The existing protected Maven
+`publish-release` and read-only `verify-recovery` jobs use this same explicit
+CLI setup, including Java 21 then Java 17, so complete remote consumers do not
+silently return to the failing plain macOS 26 context after irreversible upload.
+The three Maven jobs and original failed-publication recovery contract remain
+unchanged; no extra publication authority or signing credential is introduced.
+Current-source qualification is still required: configuring these hosts alone
+is not publication or recovery execution evidence. This follows the actual successful
 [RPC baseline run](https://github.com/p2pKit/P2pKit/actions/runs/38759538710), not
 qualification of the new combined source. macOS 26 remains the native ARM64, DMG,
 XCFramework and Swift lane, with Intel native execution on macOS 15 Intel.

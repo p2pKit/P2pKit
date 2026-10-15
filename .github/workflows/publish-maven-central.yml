@@ -85,7 +85,8 @@ jobs:
 
   publish-release:
     needs: [freeze-applications, verify-release]
-    runs-on: macos-26
+    # Same temporary CLI baseline as complete consumers; retires 2026-11-02.
+    runs-on: macos-14
     timeout-minutes: 150
     environment:
       name: maven-central
@@ -118,9 +119,9 @@ jobs:
             caches/*/scripts
             caches/*/groovy-dsl
 
-      - name: Install Android SDK platforms
-        run: |
-          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+      - name: Install reviewed publication CLI platform tools
+        # Assert macOS 14 ARM64/Xcode 16.2; prepare both maintained Android SDKs.
+        run: bash scripts/setup-ci-component.sh consumers
 
       - name: Revalidate frozen applications and exact owner approval
         env:

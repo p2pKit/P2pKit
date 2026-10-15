@@ -78,7 +78,8 @@ jobs:
 
   verify-recovery:
     needs: prepare-recovery
-    runs-on: macos-15
+    # Match the reviewed CLI consumer baseline; macos-14 retires 2026-11-02.
+    runs-on: macos-14
     timeout-minutes: 90
     # A separate owner-only, main-only environment, with administrator bypass
     # disabled. No signing or Central credentials are configured or referenced.
@@ -104,13 +105,19 @@ jobs:
           ref: ${{ needs.prepare-recovery.outputs.original_source }}
           path: original
           persist-credentials: false
+      - name: Configure Java 21 daemon toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Configure Java 17 for complete remote consumer fixtures only
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
-      - name: Install Android SDK platform for original remote consumers
-        run: '"$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager "platforms;android-36"'
+      - name: Install reviewed original-consumer CLI platform tools
+        # Runs from trusted controller; original source/remote commands unchanged.
+        run: bash scripts/setup-ci-component.sh consumers
       - name: Verify original public signatures and immutable remote bytes
         env:
           GH_TOKEN: ${{ github.token }}
