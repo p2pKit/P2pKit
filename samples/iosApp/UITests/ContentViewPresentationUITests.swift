@@ -188,12 +188,31 @@ final class ContentViewPresentationUITests: XCTestCase {
     @MainActor
     private func dismissKeyboard(in app: XCUIApplication) {
         dismissKeyboardIntroductionIfPresent(in: app)
+        // A dismissed iOS keyboard can retain an accessibility Keyboard node.
+        // The hosted failure recording showed the keyboard disappear while an
+        // `exists == false` assertion still failed. Require real hittable keys
+        // before the single Done input, then no hittable keys in ANY keyboard;
+        // an always-nonhittable container or a stale firstMatch cannot pass.
+        let keyboardKeys = app.keyboards.keys
+        XCTAssertTrue(
+            keyboardKeys.allElementsBoundByIndex.contains(where: \.isHittable),
+            "A software keyboard key must actually be reachable before Done"
+        )
         let done = app.buttons["Done"]
-        if done.exists {
-            XCTAssertTrue(done.isHittable, "The keyboard toolbar must not be covered by system setup UI")
-            done.tap()
-        }
-        XCTAssertTrue(waitForAbsence(app.keyboards.firstMatch), "Done must actually dismiss the software keyboard")
+        XCTAssertTrue(done.exists, "The production keyboard toolbar must provide Done")
+        XCTAssertTrue(done.isHittable, "The keyboard toolbar must not be covered by system setup UI")
+        done.tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                !keyboardKeys.allElementsBoundByIndex.contains(where: \.isHittable)
+            },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [dismissed], timeout: 5),
+            .completed,
+            "Done must actually dismiss the interactive software keyboard"
+        )
     }
 
     @MainActor
