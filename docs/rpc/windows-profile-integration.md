@@ -230,8 +230,10 @@ checkpoint. An Apple compiler or a passing memory model cannot close those gates
 
 The sample-owned [native custody component](../../samples/p2p-sample-rpc/native/windows-profile/README.md)
 has real Win32 implementation source and bounded JNI entry points, not a Java ACL
-substitute. Its separate custody ABI is **13**, with **23** exports and capability
-mask **`0x43`**. The complete adapter still requires ABI **1** and **`0x7f`**;
+substitute. Its separate custody ABI is **13**, with **23 JNI exports** plus the dormant
+**`pwp_jni_register_once`** export (24 total), and capability mask **`0x43`**.
+The registrar has its own version-1 report, not an additional Java native method or custody capability.
+The complete adapter still requires ABI **1** and **`0x7f`**;
 the partial component must never be passed off as that full contract.
 
 The implemented primitives include pinned root/child custody, explicit private
@@ -420,7 +422,8 @@ entry retains its separate intent-only semantics. Any uncertainty after the succ
 boundary seals the whole operation as `CleanupUnknown`, never harmless missing/false. A memory-only
 seal cannot inspect or reclose the already-retired source; probe verification may reuse its owner slot.
 JNI preserves raw six-word IDs, clears bounded native copies, releases input strings and propagates
-fixed errors without retry, cleanup or reinterpretation. ABI13 retains the ABI12/23-export inventory;
+fixed errors without retry, cleanup or reinterpretation. ABI13 originally retained the ABI12/23-export inventory;
+the later dormant registrar adds a separate 24th export without changing the 23 JNI methods or custody mask.
 PE checks refuse earlier ABI11 images, while numeric ABI/manifest and pinned source/hash checks must
 distinguish ABI12 from ABI13. The complete provider remains ABI1/`0x7f`, not this component.
 
