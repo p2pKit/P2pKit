@@ -163,6 +163,14 @@ cleanup failure, reentry, changed caller observations and duplicate refusal. ASa
 source/controller evidence, **not actual JVM registration, Win32 atomics, NTFS or installed runtime**.
 
 Still required: review and expose the final post-admission entry with exact PE inventory/build pins,
-wire the managed process-lifetime owner and FFM invocation, establish independent initial loading
+connect the dormant managed process-lifetime owner to real exclusive original leases and FFM invocation,
+establish independent initial loading
 authority, then execute actual JNI and installed Host/Client qualification. No Windows capability or
 qualification claim is promoted by compiling or testing this dormant component.
+
+The separate [development-JVM controls](tests/jvm/README.md) now exercise this actual registrar and
+original JNI translation unit with the real compiled custody classes in a development JDK21. The test-only
+Mac executable links an abort-on-entry storage backend, not `profile_win32.c`. Real registration, pure
+ABI/capability calls, continuity after a GC request, duplicate refusal and three pre-registration negative
+cases are checked under `-Xcheck:jni`. This removes the mocked-vtable limitation for those exact operations,
+not the missing productive Windows DLL/FFM/storage/installed-runtime qualification.
