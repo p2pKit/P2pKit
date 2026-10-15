@@ -7,6 +7,11 @@ require 'open3'
 
 ROOT = File.expand_path('../..', __dir__)
 REPORT = 'build/reports/platform-tests/**'
+INTEL_NORMAL = "${{ github.event_name != 'workflow_dispatch' || inputs.diagnostics-only != true }}"
+INTEL_DIAGNOSTIC = "${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics-only == true }}"
+INTEL_DIAGNOSTIC_INPUT = {'inputs' => {'diagnostics-only' => {
+  'description' => 'Read-only Intel Bonjour environment observations; NOT qualification',
+  'type' => 'boolean', 'required' => false, 'default' => false}}}.freeze
 
 def need(value, message)
   raise ArgumentError, message unless value
@@ -47,12 +52,47 @@ def check_platform_policy(v)
   need(intel['permissions'] == {'contents' => 'read', 'actions' => 'read'} && !JSON.generate(intel).include?('secrets.'),
        'Intel workflow must remain read-only and secret-free')
   triggers = intel.fetch('on') { intel.fetch(true) }
-  need(triggers.keys.sort == %w[schedule workflow_dispatch] && triggers['workflow_dispatch'].nil? &&
+  need(triggers.keys.sort == %w[schedule workflow_dispatch] && triggers['workflow_dispatch'] == INTEL_DIAGNOSTIC_INPUT &&
        triggers['schedule'] == [{'cron' => '27 3 * * 1'}], 'Intel manual/weekly coverage changed')
   job = intel.fetch('jobs').fetch('component')
   need(job['uses'] == './.github/workflows/ci-component.yml' &&
        job['with'] == {'component' => 'apple-x64', 'runner' => 'macos-15-intel', 'minutes' => 120, 'job_minutes' => 130} &&
-       !%w[if environment continue-on-error].any? { |key| job.key?(key) }, 'Intel native invocation changed')
+       job['if'] == INTEL_NORMAL &&
+       !%w[environment continue-on-error].any? { |key| job.key?(key) }, 'Intel native invocation changed')
+  need(intel.fetch('jobs').keys.sort == %w[component intel-environment-diagnostics],
+       'Unexpected Intel qualification/diagnostic route')
+  diagnostic = intel.fetch('jobs').fetch('intel-environment-diagnostics')
+  need(diagnostic['if'] == INTEL_DIAGNOSTIC && diagnostic['runs-on'] == 'macos-15-intel' &&
+       diagnostic['timeout-minutes'] == 5 && diagnostic['name'].to_s.include?('NOT QUALIFICATION') &&
+       !%w[environment continue-on-error uses].any? { |key| diagnostic.key?(key) },
+       'Intel diagnostic must remain explicit, native, bounded and non-qualifying')
+  diagnostic_steps = diagnostic.fetch('steps')
+  need(diagnostic_steps.none? { |step| step.key?('continue-on-error') }, 'Ignored diagnostic result')
+  checkout = diagnostic_steps.select { |step| step.fetch('uses', '').start_with?('actions/checkout@') }
+  need(checkout.size == 1 && checkout[0]['uses'] == 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' &&
+       checkout[0].dig('with', 'persist-credentials') == false && !checkout[0].key?('if'),
+       'Diagnostic must check out exact source without credentials')
+  control = 'python3 -I -S -B scripts/tests/intel-bonjour-environment-test.py'
+  observation = 'python3 -I -S -B scripts/diagnose-intel-bonjour-environment.py'
+  commands = diagnostic_steps.select { |step| step.key?('run') }
+  need(commands.map { |step| step['run'] }.sort == [control, observation].sort &&
+       commands.all? { |step| !step.key?('if') && !step.key?('shell') && !step.key?('working-directory') &&
+         step['timeout-minutes'] == (step['run'] == control ? 1 : 2) },
+       'Diagnostic may execute only bounded offline controls and the read-only collector')
+  need(diagnostic_steps.index(checkout[0]) < diagnostic_steps.index(commands.find { |s| s['run'] == control }) &&
+       diagnostic_steps.index(commands.find { |s| s['run'] == control }) <
+       diagnostic_steps.index(commands.find { |s| s['run'] == observation }), 'Diagnostic source/control order changed')
+  artifacts = diagnostic_steps.select { |step| step.fetch('uses', '').start_with?('actions/upload-artifact@') }
+  need(artifacts.size == 1 && artifacts[0]['uses'] == 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' &&
+       artifacts[0]['if'] == '${{ always() }}' && artifacts[0].fetch('with') == {
+         'name' => 'intel-bonjour-diagnostic-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+         'path' => '${{ runner.temp }}/rpc-intel-bonjour-diagnostic.json',
+         'retention-days' => 14, 'overwrite' => false, 'if-no-files-found' => 'error'},
+       'Diagnostic upload must contain only its immutable finite observations, not raw/component evidence')
+  need(diagnostic_steps.index(artifacts[0]) > diagnostic_steps.index(commands.find { |s| s['run'] == observation }),
+       'Diagnostic artifact precedes observation')
+  need(diagnostic_steps.select { |step| step.key?('uses') }.all? { |step| checkout.include?(step) || artifacts.include?(step) },
+       'Diagnostic must not add unreviewed tool/service actions')
   worker = v[:worker].fetch('jobs').fetch('run')
   need(worker['timeout-minutes'] == '${{ inputs.job_minutes }}' &&
        !worker.key?('continue-on-error'), 'Missing bounded command plus cleanup/evidence window')
@@ -141,6 +181,39 @@ mutations = {
   'ignored native matrix' => ->(v) { v[:ci]['jobs']['component']['continue-on-error'] = true },
   'disabled Intel' => ->(v) { v[:intel]['jobs']['component']['if'] = false },
   'wrong Intel reusable route' => ->(v) { v[:intel]['jobs']['component']['with']['component'] = 'apple-arm64' },
+  'Intel diagnostic default replaces tests' => ->(v) {
+    (v[:intel]['on'] || v[:intel][true])['workflow_dispatch']['inputs']['diagnostics-only']['default'] = true
+  },
+  'Intel diagnostic input untyped' => ->(v) {
+    (v[:intel]['on'] || v[:intel][true])['workflow_dispatch']['inputs']['diagnostics-only']['type'] = 'string'
+  },
+  'Intel diagnostic implicit default' => ->(v) {
+    (v[:intel]['on'] || v[:intel][true])['workflow_dispatch']['inputs']['diagnostics-only'].delete('default')
+  },
+  'Intel normal guard inverted' => ->(v) { v[:intel]['jobs']['component']['if'] = INTEL_DIAGNOSTIC },
+  'Intel diagnostic guard inverted' => ->(v) { v[:intel]['jobs']['intel-environment-diagnostics']['if'] = INTEL_NORMAL },
+  'Intel diagnostic ungated' => ->(v) { v[:intel]['jobs']['intel-environment-diagnostics'].delete('if') },
+  'Intel diagnostic wrong host' => ->(v) { v[:intel]['jobs']['intel-environment-diagnostics']['runs-on'] = 'macos-26' },
+  'Intel diagnostic product invocation' => ->(v) {
+    v[:intel]['jobs']['intel-environment-diagnostics']['steps'].find { |s| s['run'].to_s.include?('scripts/diagnose-') }['run'] =
+      'python3 scripts/run-platform-tests.py ios-x64'
+  },
+  'Intel diagnostic mutating command' => ->(v) {
+    v[:intel]['jobs']['intel-environment-diagnostics']['steps'] << {'run' => 'sudo defaults write private true'}
+  },
+  'Intel diagnostic raw upload' => ->(v) {
+    v[:intel]['jobs']['intel-environment-diagnostics']['steps'].find { |s| s.fetch('uses', '').start_with?('actions/upload-artifact@') }['with']['path'] = REPORT
+  },
+  'Intel diagnostic qualification artifact name' => ->(v) {
+    v[:intel]['jobs']['intel-environment-diagnostics']['steps'].find { |s| s.fetch('uses', '').start_with?('actions/upload-artifact@') }['with']['name'] =
+      'ci-evidence-apple-x64-${{ github.run_id }}-${{ github.run_attempt }}'
+  },
+  'Intel diagnostic missing output accepted' => ->(v) {
+    v[:intel]['jobs']['intel-environment-diagnostics']['steps'].find { |s| s.fetch('uses', '').start_with?('actions/upload-artifact@') }['with']['if-no-files-found'] = 'warn'
+  },
+  'Intel diagnostic mutable artifact' => ->(v) {
+    v[:intel]['jobs']['intel-environment-diagnostics']['steps'].find { |s| s.fetch('uses', '').start_with?('actions/upload-artifact@') }['with']['overwrite'] = true
+  },
   'missing Intel schedule' => ->(v) { (v[:intel]['on'] || v[:intel][true]).delete('schedule') },
   'missing worker budget' => ->(v) { v[:worker]['jobs']['run'].delete('timeout-minutes') },
   'ignored execution' => ->(v) { execution(v)['continue-on-error'] = true },
