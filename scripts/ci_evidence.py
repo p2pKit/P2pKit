@@ -4,7 +4,8 @@
 Trust the reviewed workflow/host and the independent recipient pins supplied by
 Actions configuration. Capture command output privately, retire its owned process
 domain, bundle closed results, and encrypt with the pinned PUBLIC key only.
-Only manifest.json and evidence.tar.gz.gpg belong in the upload directory.
+Successful uploads contain manifest.json and evidence.tar.gz.gpg. A failed
+export may retain failure.json instead; it is diagnostic, never qualification.
 """
 from __future__ import annotations
 
@@ -169,6 +170,7 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
     end = begin + timeout
     scope, child, captures = None, None, []
     code, returncode, cleanup_known = "PASS", None, False
+    native_error = None
     timed_out = False
     cancelled = cancelled or (lambda: False)
     try:
@@ -193,8 +195,9 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                 code = "PASS" if returncode == 0 else "COMMAND_FAILED"
                 break
             time.sleep(min(0.1, max(0.0, end - time.monotonic())))
-    except BaseException:
+    except BaseException as error:
         code = "SPAWN" if child is None else "CLEANUP"
+        native_error = native_error_diagnostic(error)
     finally:
         cleanup_end = time.monotonic() + cleanup_seconds
         # spawn can register a real child before its discovery raises. Retain all
@@ -237,7 +240,7 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
         if not cleanup_known and code == "PASS":
             code = "CLEANUP"
     return {"exitCode": returncode, "timedOut": timed_out, "cleanupKnown": cleanup_known,
-            "stage": "COMMAND", "code": code,
+            "stage": "COMMAND", "code": code, "nativeError": native_error,
             "elapsedSeconds": round(time.monotonic() - begin, 6)}
 
 
@@ -346,7 +349,14 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
         directory = work / label
         result = run_command([*base, *arguments], cwd=work, environment=environment,
                              private=directory, timeout=timeout, log_limit=MAX_JSON_BYTES)
-        require(result["code"] == "PASS" and result["exitCode"] == 0 and result["cleanupKnown"], "ENCRYPTION")
+        if not (result["code"] == "PASS" and result["exitCode"] == 0 and result["cleanupKnown"]):
+            error = EvidenceError("ENCRYPTION")
+            # Only this source-owned exception carries a fixed public diagnostic.
+            # Unknown writer retirement must also prevent erasing its private files.
+            error.encryption_diagnostic = {
+                "phase": label, "outcome": public_outcome(result),
+                "categories": gpg_failure_categories(directory) if result["cleanupKnown"] else []}
+            raise error
         return (directory / "stdout.log").read_bytes()
     listing = invoke("key-show", ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint",
                                    "--import-options", "show-only", "--import", str(key_file)])
@@ -433,7 +443,11 @@ def failure_diagnostics(root, command_directory):
         b"could not determine extractor": "OSV_UNSUPPORTED_LOCKFILE",
     }
     for name in ("stdout.log", "stderr.log"):
-        with (Path(command_directory) / name).open("rb") as stream:
+        try:
+            stream = (Path(command_directory) / name).open("rb")
+        except OSError:
+            continue  # A refused spawn may have no original output pipes.
+        with stream:
             for line in stream:
                 # The captures themselves are bounded; cap each parsed line too.
                 if len(line) > 4096:
@@ -464,6 +478,75 @@ def failure_diagnostics(root, command_directory):
     return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32]}
 
 
+def public_outcome(value):
+    """Finite process metadata only; never copy a command or an exception."""
+    if (type(value) is not dict or type(value.get("code")) is not str or value["code"] not in CODES or
+            "exitCode" not in value or
+            not (value.get("exitCode") is None or type(value.get("exitCode")) is int and
+                 -(2**31) <= value["exitCode"] < 2**32) or
+            any(type(value.get(key)) is not bool for key in ("timedOut", "cleanupKnown"))):
+        return None
+    result = {key: value[key] for key in ("code", "exitCode", "timedOut", "cleanupKnown")}
+    if "nativeError" in value:
+        result["nativeError"] = value["nativeError"]
+    return result
+
+
+def native_error_diagnostic(error):
+    """Only native numeric codes or exact source-owned operation names escape."""
+    result = {"kind": "UNKNOWN", "operation": None, "errno": None, "winerror": None}
+    if isinstance(error, OSError):
+        result["kind"] = "OS"
+        for key in ("errno", "winerror"):
+            value = getattr(error, key, None)
+            if type(value) is int and 0 <= value < 2**32:
+                result[key] = value
+    elif type(error) is audit_processes.OwnershipError and len(error.args) == 1 and type(error.args[0]) is str:
+        message = error.args[0]
+        operations = {"CreateJobObjectW", "SetInformationJobObject", "CreatePipe", "SetHandleInformation",
+                      "GetHandleInformation", "CreateProcessW (atomic job assignment)", "Initialize attributes",
+                      "HANDLE_LIST", "JOB_LIST", "pre-resume IsProcessInJob", "GetProcessTimes",
+                      "GetExitCodeProcess", "CloseHandle", "QueryInformationJobObject", "IsProcessInJob",
+                      "OpenProcess owned-job member", "TerminateJobObject", "TerminateJobObject failed launch",
+                      "DuplicateHandle owned input", "DuplicateHandle owned output"}
+        match = re.fullmatch(r"Windows (.{1,64}) failed: error ([0-9]{1,10})", message)
+        if match and match[1] in operations and int(match[2]) < 2**32:
+            result.update(kind="WIN32", operation=match[1], winerror=int(match[2]))
+        else:
+            fixed = {"Unsupported Windows Job Object ABI layout": "WINDOWS_ABI",
+                     "Windows audit ownership requires native 64-bit Python": "WINDOWS_NATIVE_PYTHON",
+                     "Native Windows command requires .exe/.com or explicit interpreter": "WINDOWS_EXECUTABLE_TYPE",
+                     "Command executable does not resolve to an existing file": "EXECUTABLE_UNAVAILABLE"}
+            if message in fixed:
+                result.update(kind="OWNERSHIP", operation=fixed[message])
+    return result
+
+
+def gpg_failure_categories(directory):
+    """Classify closed GPG stderr without publishing any of its text."""
+    tokens = {
+        b"invalid option": "UNSUPPORTED_OPTION",
+        b"permission denied": "ACCESS_DENIED",
+        b"no such file or directory": "FILE_NOT_FOUND",
+        b"can't connect to the keyboxd": "KEYBOXD_UNAVAILABLE",
+        b"keyblock resource": "KEYRING_RESOURCE",
+        b"can't connect to the agent": "AGENT_UNAVAILABLE",
+        b"no gpg-agent running": "AGENT_UNAVAILABLE",
+        b"error spawning": "HELPER_SPAWN",
+        b"no valid openpgp data found": "RECIPIENT_PARSE",
+        b"unusable public key": "RECIPIENT_UNUSABLE",
+        b"encryption failed": "ENCRYPTION_FAILED",
+    }
+    try:
+        with (directory / "stderr.log").open("rb") as stream:
+            raw = stream.read(MAX_JSON_BYTES + 1)
+        if len(raw) > MAX_JSON_BYTES:
+            return []
+        return sorted({category for token, category in tokens.items() if token in raw.lower()})
+    except OSError:
+        return []
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--component", required=True)
@@ -474,6 +557,7 @@ def main(argv=None):
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     stage, private, output, previous = "INPUT", None, None, {}
+    source, github, outcome, root = None, None, None, None
     cleanup_known = True
     cancelled = threading.Event()
     try:
@@ -533,6 +617,10 @@ def main(argv=None):
         return 0 if outcome["code"] == "PASS" else 1
     except BaseException as error:
         code = error.code if type(error) is EvidenceError else "INPUT"
+        encryption = getattr(error, "encryption_diagnostic", None) if type(error) is EvidenceError else None
+        if encryption is not None and (encryption["outcome"] is None or
+                                       not encryption["outcome"]["cleanupKnown"]):
+            cleanup_known = False
         # Never render an exception, command, private path, GPG diagnostic or env.
         print("CI_EVIDENCE FAIL " + stage + " " + code, file=sys.stderr)
         try:
@@ -540,6 +628,16 @@ def main(argv=None):
                 # No partial uploadable public receipt/ciphertext is a success.
                 for name in ("manifest.json", "evidence.tar.gz.gpg"):
                     (output / name).unlink(missing_ok=True)
+                # Explicitly NOT a qualification manifest. The job remains failed;
+                # consumers still require manifest.json plus matching ciphertext.
+                failure = {"schema": SCHEMA, "kind": "CI_EVIDENCE_FAILURE",
+                    "component": args.component if re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.component) else None,
+                    "source": source, "github": github, "stage": stage, "code": code,
+                    "outcome": public_outcome(outcome), "encryptionDiagnostic": encryption,
+                    "taskResults": component_tasks(root, args.component) if source is not None else None,
+                    "failureDiagnostics": failure_diagnostics(root, private / "command")
+                        if source is not None and outcome is not None and outcome["cleanupKnown"] else None}
+                write_private(output / "failure.json", encoded(failure))
         except BaseException:
             # An OS cleanup error must not print a private filename/exception or
             # convert this failure to PASS. Job/API failure still denies intake.

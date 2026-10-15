@@ -261,7 +261,113 @@ class EvidenceTests(unittest.TestCase):
                                  "--source-root", str(self.root / "not-output"), "--", sys.executable, "-c", "pass"])
         self.assertEqual(result, 1)
         self.assertEqual(diagnostic.getvalue(), "CI_EVIDENCE FAIL SOURCE INPUT\n")
-        self.assertEqual(list(output.iterdir()), [])
+        self.assertEqual([path.name for path in output.iterdir()], ["failure.json"])
+        failure = json.loads((output / "failure.json").read_text())
+        self.assertEqual(failure["kind"], "CI_EVIDENCE_FAILURE")
+        self.assertIsNone(failure["source"])
+        self.assertNotIn("PRIVATE", json.dumps(failure))
+
+    def test_gpg_failure_keeps_only_fixed_phase_outcome_and_closed_error_categories(self):
+        key = (SCRIPTS.parent / '.github/ci-evidence-recipient.asc').read_bytes()
+        for failed_phase in ('key-show', 'key-import', 'key-list', 'encrypt'):
+            for cleanup in (True, False):
+                with self.subTest(phase=failed_phase, cleanup=cleanup):
+                    work = self.root / (failed_phase + str(cleanup)); work.mkdir()
+                    calls = []
+                    def invoke(argv, **kwargs):
+                        directory = kwargs['private']; directory.mkdir()
+                        calls.append(directory.name)
+                        (directory / 'stdout.log').write_bytes(b'PRIVATE_LISTING')
+                        (directory / 'stderr.log').write_bytes(b'gpg: Permission denied PRIVATE_PATH\n')
+                        failed = directory.name == failed_phase
+                        return {'code': 'COMMAND_FAILED' if failed else 'PASS', 'exitCode': 2 if failed else 0,
+                                'cleanupKnown': cleanup if failed else True, 'timedOut': False}
+                    with mock.patch.object(E, 'run_command', side_effect=invoke), \
+                            mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
+                            mock.patch.object(E, '_key_identity', return_value=(PUBLIC_FINGERPRINT, 0)):
+                        with self.assertRaises(E.EvidenceError) as caught:
+                            E.encrypt_archive(work / 'archive', work / 'output', key,
+                                hashlib.sha256(key).hexdigest(), PUBLIC_FINGERPRINT, work, dict(os.environ))
+                    diagnostic = caught.exception.encryption_diagnostic
+                    self.assertEqual(diagnostic['phase'], failed_phase)
+                    self.assertEqual(calls[-1], failed_phase)
+                    self.assertEqual(diagnostic['outcome'], {'code': 'COMMAND_FAILED', 'exitCode': 2,
+                                                            'cleanupKnown': cleanup, 'timedOut': False})
+                    self.assertEqual(diagnostic['categories'], ['ACCESS_DENIED'] if cleanup else [])
+                    self.assertNotIn('PRIVATE', json.dumps(diagnostic))
+
+    def test_native_spawn_error_diagnostic_exposes_only_fixed_operation_and_numbers(self):
+        os_error = OSError(13, 'PRIVATE_OS_MESSAGE', 'PRIVATE_PATH')
+        os_error.winerror = 5
+        cases = [(os_error, 'OS', None, 13, 5),
+            (E.audit_processes.OwnershipError('Windows CreateProcessW (atomic job assignment) failed: error 87'),
+             'WIN32', 'CreateProcessW (atomic job assignment)', None, 87),
+            (E.audit_processes.OwnershipError('Unsupported Windows Job Object ABI layout'),
+             'OWNERSHIP', 'WINDOWS_ABI', None, None),
+            (E.audit_processes.OwnershipError('Windows PRIVATE_OPERATION failed: error 87'),
+             'UNKNOWN', None, None, None),
+            (RuntimeError('PRIVATE_UNKNOWN_ERROR'), 'UNKNOWN', None, None, None)]
+        for index, (error, kind, operation, errno, winerror) in enumerate(cases):
+            with self.subTest(index=index), mock.patch.object(E.audit_processes, 'make_scope', side_effect=error):
+                result = E.run_command(['no-command-executed'], cwd=self.root, environment=dict(os.environ),
+                    private=self.root / ('spawn-' + str(index)), timeout=1)
+            self.assertEqual(result['code'], 'SPAWN')
+            self.assertEqual(result['nativeError'], {'kind': kind, 'operation': operation,
+                                                   'errno': errno, 'winerror': winerror})
+            self.assertEqual(E.public_outcome(result)['nativeError'], result['nativeError'])
+            self.assertNotIn('PRIVATE', json.dumps(E.public_outcome(result)))
+
+    def test_encryption_failure_public_record_is_not_qualification_and_keeps_unknown_writers(self):
+        source = {'commit': 'a' * 40, 'tree': 'b' * 40, 'version': '0.7.0-SNAPSHOT'}
+        for cleanup in (True, False):
+            with self.subTest(cleanup=cleanup):
+                root = self.root / ('repo-' + str(cleanup)); root.mkdir()
+                (root / '.github').mkdir()
+                (root / '.github/ci-evidence-recipient.asc').write_bytes(b'public-key-model')
+                output = self.root / ('output-' + str(cleanup))
+                private = self.root / ('private-' + str(cleanup)); private.mkdir()
+                report = root / 'build/reports/ci-component'; report.mkdir(parents=True)
+                (report / 'jvm-windows.json').write_text(json.dumps({'component': 'jvm-windows',
+                    'tasks': [{'task': 'component-setup', 'exitCode': 125}], 'exitCode': 125}))
+                def command(argv, **kwargs):
+                    directory = kwargs['private']; directory.mkdir()
+                    (directory / 'stdout.log').write_bytes(b'PRIVATE_BODY\n')
+                    (directory / 'stderr.log').write_bytes(b'PRIVATE_ERROR\n')
+                    return {'code': 'COMMAND_FAILED', 'exitCode': 125, 'timedOut': False, 'cleanupKnown': True}
+                error = E.EvidenceError('ENCRYPTION')
+                error.encryption_diagnostic = {'phase': 'key-show', 'categories': [], 'outcome':
+                    {'code': 'SPAWN', 'exitCode': None, 'timedOut': False, 'cleanupKnown': cleanup}}
+                captured = io.StringIO()
+                with mock.patch.object(E, 'source_identity', return_value=source), \
+                        mock.patch.object(E, 'github_identity', return_value={'runId': '123', 'runAttempt': '1'}), \
+                        mock.patch.object(E, 'run_command', side_effect=command), \
+                        mock.patch.object(E.tempfile, 'mkdtemp', return_value=str(private)), \
+                        mock.patch.object(E, 'encrypt_archive', side_effect=error), contextlib.redirect_stderr(captured):
+                    result = E.main(['--component', 'jvm-windows', '--timeout-seconds', '5',
+                        '--output-dir', str(output), '--source-root', str(root), '--', 'model-command'])
+                self.assertEqual(result, 1)
+                self.assertEqual([p.name for p in output.iterdir()], ['failure.json'])
+                failure = json.loads((output / 'failure.json').read_text())
+                self.assertEqual(failure['kind'], 'CI_EVIDENCE_FAILURE')
+                self.assertEqual(failure['source'], source)
+                self.assertEqual(failure['taskResults'], [{'task': 'component-setup', 'exitCode': 125}])
+                self.assertEqual(failure['encryptionDiagnostic'], error.encryption_diagnostic)
+                self.assertNotIn('PRIVATE', json.dumps(failure))
+                self.assertNotIn('PRIVATE', captured.getvalue())
+                self.assertEqual(private.exists(), not cleanup)
+                # Exercise the actual existing consumer: even a correctly hashed
+                # immutable archive of this diagnostic cannot qualify a component.
+                import ci_qualification as Q
+                import zipfile
+                archive = self.root / ('failure-' + str(cleanup) + '.zip')
+                with zipfile.ZipFile(archive, 'x') as zipped:
+                    zipped.write(output / 'failure.json', 'failure.json')
+                artifact = {'size_in_bytes': archive.stat().st_size,
+                            'digest': 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()}
+                api = mock.Mock()
+                api.download.side_effect = lambda _artifact, destination: destination.write_bytes(archive.read_bytes())
+                with self.assertRaisesRegex(Q.AdmissionError, '^Unexpected record ZIP members$'):
+                    Q.read_archive(api, artifact, evidence=True)
 
     def test_cleanup_exception_cannot_escape_finite_failure_diagnostic(self):
         diagnostic = io.StringIO()
