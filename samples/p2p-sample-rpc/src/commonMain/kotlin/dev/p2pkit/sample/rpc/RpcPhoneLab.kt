@@ -102,18 +102,63 @@ internal suspend fun retireMobileCapacityPins(trust: RpcTrustStore, pins: Set<Pe
     check(trust.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients).isEmpty())
 }
 
+/**
+ * One facade's terminal ownership ledger, allocated before any operation is admitted. A native reporting
+ * Error remains reachable here, never as public exception text or an unsafe permission to retry. This does
+ * not promise recovery from real VM resource exhaustion; it preserves reportable late failures.
+ */
+internal class PhoneOperationFailureState {
+    private val fatal = MutableStateFlow<Throwable?>(null)
+    private val retirement = MutableStateFlow<Throwable?>(null)
+    val originalFailure: Throwable? get() = fatal.value
+    val retirementFailure: Throwable? get() = retirement.value
+    val terminal = PhoneOperationTerminalFailure(this)
+
+    fun requireHealthy() { if (originalFailure != null) throw terminal }
+    fun retain(failure: Throwable) { fatal.compareAndSet(null, failure) }
+
+    /** Direct and callback APIs share admission and the same sanitized cross-language failure boundary. */
+    suspend fun <T> effect(action: suspend () -> T): T {
+        requireHealthy()
+        return try { action() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { throw failure }
+        catch (failure: Throwable) { retain(failure); throw terminal }
+    }
+
+    /** Failure never skips physical cleanup. Keep its separate original outcome without suppression allocation. */
+    suspend fun retire(cleanup: suspend () -> Unit) {
+        var caught: Throwable? = null
+        try { cleanup() } catch (failure: Throwable) { caught = failure }
+        if (originalFailure != null) {
+            caught?.let { retirement.compareAndSet(null, it) }
+            throw terminal
+        }
+        caught?.let { throw it }
+    }
+}
+
+/** Sanitized @Throws(Exception) boundary; its private owner retains the original Error, not its cause/message. */
+internal class PhoneOperationTerminalFailure(private val owner: PhoneOperationFailureState) :
+    Exception("RPC operation ownership failed; cleanup is required") {
+    val originalFailure: Throwable? get() = owner.originalFailure
+    val retirementFailure: Throwable? get() = owner.retirementFailure
+}
+
 internal fun <T> startPhoneOperation(
     scope: CoroutineScope,
     busy: MutableStateFlow<Boolean>,
     cancelled: () -> T,
     failed: (Exception) -> T,
     onComplete: (T) -> Unit,
+    failures: PhoneOperationFailureState = PhoneOperationFailureState(),
     action: suspend () -> T,
 ): RpcPhoneOperation {
+    failures.requireHealthy()
     check(scope.coroutineContext[Job]?.isActive == true && busy.compareAndSet(false, true))
     val completion = MutableStateFlow<PhoneCompletion<T>?>(null)
     val job = scope.launch {
-        val result = try { action() }
+        val result = try { failures.effect(action) }
         catch (cancellation: CancellationException) { throw cancellation }
         catch (failure: Exception) { failed(failure) }
         completion.value = PhoneCompletion(result)
@@ -140,6 +185,7 @@ public class RpcPhoneLab private constructor(
     private val application: RpcApplicationSession? = null,
 ) {
     private val callBusy = MutableStateFlow(false)
+    private val operationFailures = PhoneOperationFailureState()
     private val controlBusy = MutableStateFlow(false)
     private var mobileRun: PhoneMobileRun? = null
     private var discovery: RpcDiscoveryCoordinator? = null
@@ -181,7 +227,7 @@ public class RpcPhoneLab private constructor(
     }
 
     @Throws(Exception::class)
-    public suspend fun reject(requestId: String) {
+    public suspend fun reject(requestId: String) = operationFailures.effect {
         check(mobileRun == null)
         checkNotNull(host).pairing.reject(requestId)
     }
@@ -204,10 +250,10 @@ public class RpcPhoneLab private constructor(
     }?.mapNotNull { it.peer.fingerprint }?.toSet()?.size ?: 0
 
     @Throws(Exception::class)
-    public suspend fun invitation(): String {
+    public suspend fun invitation(): String = operationFailures.effect {
         check(mobileRun == null) { "Manual pairing is unavailable during a capacity session" }
         val invitation = checkNotNull(host).pairing.createInvitation()
-        return try { invitation.qr } finally { invitation.clear() }
+        return@effect try { invitation.qr } finally { invitation.clear() }
     }
 
     @Throws(Exception::class)
@@ -219,13 +265,13 @@ public class RpcPhoneLab private constructor(
     }
 
     @Throws(Exception::class)
-    public suspend fun approve(requestId: String) {
+    public suspend fun approve(requestId: String) = operationFailures.effect {
         check(mobileRun == null) { "Manual pairing is unavailable during a capacity session" }
         checkNotNull(host).pairing.approve(requestId)
     }
 
     @Throws(Exception::class)
-    public suspend fun revoke(fingerprint: String) {
+    public suspend fun revoke(fingerprint: String) = operationFailures.effect {
         check(mobileRun == null) { "Stop the capacity session before changing its approvals" }
         val nearby = discovery
         if (nearby != null) nearby.forget(fingerprint)
@@ -234,13 +280,13 @@ public class RpcPhoneLab private constructor(
 
     /** Only the private, owner-approved USB coordinator consumes this identity-bearing record. */
     @Throws(Exception::class)
-    public suspend fun mobileReadyRecord(observedArtifactSha256: String): String {
+    public suspend fun mobileReadyRecord(observedArtifactSha256: String): String = operationFailures.effect {
         val run = checkNotNull(mobileRun)
         check(!run.closed.value)
         check(observedArtifactSha256 == run.config.hostArtifactSha256)
         val endpoint = checkNotNull(host).endpoint()
         check(endpoint.address == run.config.settings.localAddress && endpoint.port == run.config.settings.port)
-        return encodeMobileRecord(run.config.binding() + mapOf(
+        return@effect encodeMobileRecord(run.config.binding() + mapOf(
             "fingerprint" to fingerprint, "address" to endpoint.address, "port" to endpoint.port.toString(),
             "compiledSourceMatched" to "true",
             "artifactKind" to if (run.config.hostPlatform == "Android") "android-installed-base-apk"
@@ -263,6 +309,7 @@ public class RpcPhoneLab private constructor(
     /** Successful close AND exact synthetic pin retirement are necessary, not sufficient, qualification evidence. */
     @Throws(Exception::class)
     public fun mobileClosedRecord(controlHealthy: Boolean): String {
+        operationFailures.requireHealthy()
         val run = checkNotNull(mobileRun)
         check(run.closed.value)
         return mobileClosedRecord(run.config, controlHealthy)
@@ -270,7 +317,7 @@ public class RpcPhoneLab private constructor(
 
     /** The invitation must be obtained from the explicitly selected host's trusted LOCAL UI. */
     @Throws(Exception::class)
-    public suspend fun pairAndConnect(qr: String) {
+    public suspend fun pairAndConnect(qr: String) = operationFailures.effect {
         check(discovery == null) { "Nearby mode owns connection selection" }
         val invitation = RpcInvitation.parse(qr)
         val selected = try { checkNotNull(client).pair(invitation) } finally { invitation.clear() }
@@ -279,7 +326,7 @@ public class RpcPhoneLab private constructor(
 
     /** Existing durable approval is still required; changing the address cannot change the trusted pin. */
     @Throws(Exception::class)
-    public suspend fun connect(fingerprint: String, address: String, port: Int) {
+    public suspend fun connect(fingerprint: String, address: String, port: Int) = operationFailures.effect {
         check(discovery == null) { "Nearby mode owns connection selection" }
         checkNotNull(client).connect(RpcSelectedHost(PeerFingerprint.parse(fingerprint), RpcEndpoint(address, port)))
     }
@@ -298,18 +345,19 @@ public class RpcPhoneLab private constructor(
         startPhoneOperation(scope, controlBusy, { "Cancelled" }, { failure ->
             if (failure is RpcFailure) "${failure.kind}/${failure.phase}/${failure.executionEvidence}"
             else "LocalOrProtocolFailure"
-        }, onComplete) { action(); null }
+        }, onComplete, operationFailures) { action(); null }
 
     /** Fixed shared example inputs; typed callers may also use RpcApplicationSession directly. */
     @Throws(Exception::class)
     public fun beginExample(example: RpcApplicationExample, onComplete: (String?) -> Unit): RpcPhoneOperation {
+        operationFailures.requireHealthy()
         val app = checkNotNull(application)
         val peer = checkNotNull(client)
         check(mobileRun == null)
         return startPhoneOperation(scope, callBusy, { "Cancelled" }, { failure ->
             if (failure is RpcFailure) "${failure.kind}/${failure.phase}/${failure.executionEvidence}"
             else "LocalOrProtocolFailure"
-        }, onComplete) {
+        }, onComplete, operationFailures) {
             when (example) {
                 RpcApplicationExample.GetUser -> app.getUser(peer, 123)
                 RpcApplicationExample.ListItems -> app.listItems(peer, 0, 20)
@@ -324,13 +372,14 @@ public class RpcPhoneLab private constructor(
     /** Editable typed requests use the same bounded call slot, codecs, procedure policy and history as presets. */
     @Throws(Exception::class)
     public fun beginRequest(input: RpcApplicationInput, onComplete: (String?) -> Unit): RpcPhoneOperation {
+        operationFailures.requireHealthy()
         val app = checkNotNull(application)
         val peer = checkNotNull(client)
         check(mobileRun == null)
         return startPhoneOperation(scope, callBusy, { "Cancelled" }, { failure ->
             if (failure is RpcFailure) "${failure.kind}/${failure.phase}/${failure.executionEvidence}"
             else "LocalOrProtocolFailure"
-        }, onComplete) {
+        }, onComplete, operationFailures) {
             when (input.procedure) {
                 RpcApplicationProcedure.GetUser -> app.getUser(peer, input.userId)
                 RpcApplicationProcedure.ListItems -> app.listItems(peer, input.offset, input.limit)
@@ -343,6 +392,7 @@ public class RpcPhoneLab private constructor(
     /** Callback is NOT a UI-thread callback. The native UI must marshal it to its own main actor. */
     @Throws(Exception::class)
     public fun echo(large: Boolean, onComplete: (RpcPhoneCallResult) -> Unit): RpcPhoneOperation {
+        operationFailures.requireHealthy()
         val peer = checkNotNull(client)
         val started = TimeSource.Monotonic.markNow()
         val expected = if (large) 20 else 1
@@ -356,7 +406,7 @@ public class RpcPhoneLab private constructor(
         }, { failure ->
             if (failure is RpcFailure) result(failure.kind.name, failure.executionEvidence.name)
             else result("LocalOrProtocolFailure", if (entered) "MayHaveExecuted" else "NotSent")
-        }, onComplete) {
+        }, onComplete, operationFailures) {
             entered = true
             val payload = if (large) "a".repeat(RpcCapacityContract.MAXIMUM_BODY_BYTES - 2)
                 else RpcCapacityContract.payload
@@ -378,20 +428,22 @@ public class RpcPhoneLab private constructor(
     @Throws(Exception::class)
     public suspend fun close() {
         withContext(NonCancellable) {
-            host?.let { application?.history?.observeHost(it.requests.value) }
-            try {
-                try { discovery?.close() } finally {
-                    host?.close()
-                    client?.close()
+            operationFailures.retire {
+                host?.let { application?.history?.observeHost(it.requests.value) }
+                try {
+                    try { discovery?.close() } finally {
+                        host?.close()
+                        client?.close()
+                    }
+                } finally {
+                    scope.coroutineContext[Job]?.cancelAndJoin()
+                    host?.let { application?.history?.retireHost(it.requests.value.hostIncarnation) }
                 }
-            } finally {
-                scope.coroutineContext[Job]?.cancelAndJoin()
-                host?.let { application?.history?.retireHost(it.requests.value.hostIncarnation) }
-            }
-            mobileRun?.let { run ->
-                if (!run.closed.value) {
-                    retireMobileCapacityPins(run.trust, run.config.pins)
-                    run.closed.value = true
+                mobileRun?.let { run ->
+                    if (!run.closed.value) {
+                        retireMobileCapacityPins(run.trust, run.config.pins)
+                        run.closed.value = true
+                    }
                 }
             }
         }
