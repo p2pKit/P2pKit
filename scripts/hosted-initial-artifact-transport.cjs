@@ -28,7 +28,50 @@ let used = false;
 // credentials, URLs, request/response objects or potentially live input handles.
 const quarantine = [];
 
-class TransportError extends Error {}
+// Diagnostic identity is private: never inspect a caught error's properties or prototype.
+const diagnosticErrors = new WeakMap();
+const diagnosticCodes = new Set([
+    'ALREADY_FAILED', 'ARTIFACT_ID',
+    'ARTIFACT_NAME', 'BLOB_QUERY', 'BLOB_URL',
+    'CANCELLED', 'CLOSED_DATA_FIELDS', 'CLOSE_DEADLINE',
+    'DUPLICATE_RESPONSE', 'DUPLICATE_SOCKET', 'HTTP_ABORTED',
+    'HTTP_INCOMPLETE_CLOSE', 'HTTP_STATUS', 'HTTP_TRUNCATED',
+    'INCOMPLETE', 'INPUT_BUFFER_BOUND', 'INPUT_CHUNK',
+    'INPUT_CLOSE_REQUIRED', 'INPUT_OVERRUN', 'INPUT_PREMATURE_CLOSE',
+    'INPUT_SHORT', 'INVALID_INPUT', 'NODE24_REQUIRED',
+    'ONE_INVOCATION', 'OPERATION_FAILED', 'ORIGINAL_ABSOLUTE_FENCES',
+    'ORIGINAL_BYTE_STREAM', 'ORIGINAL_HTTP_REQUEST', 'ORIGINAL_HTTP_RESPONSE',
+    'ORIGINAL_TLS_SOCKET', 'PLAIN_FIELDS', 'REQUEST_BINDING',
+    'REQUEST_COUNT', 'RESPONSE_BODY_BOUND', 'RESULTS_SCOPE',
+    'RESULTS_URL', 'RETENTION_REQUIRES_14_DAYS', 'RUNTIME_TOKEN_SHAPE',
+    'SERVICE_RESPONSE', 'SERVICE_RESPONSE_DUPLICATE', 'SOCKET_ERROR_CLOSE',
+    'START_DEADLINE', 'TRANSACTIONAL_MD5', 'UTC_CLOCK',
+    'WORK_DEADLINE', 'ZIP_SIZE'
+].map(code => 'INITIAL_ARTIFACT_' + code));
+let failureDiagnostic = null, diagnosticTaken = false, diagnosticStage = 'ADMISSION', diagnosticRequest = null;
+class TransportError extends Error {
+    constructor(message) {
+        super(message);
+        if (typeof message === 'string' && diagnosticCodes.has(message)) diagnosticErrors.set(this, message);
+    }
+}
+function rememberFailure(error) {
+    if (failureDiagnostic !== null) return;
+    try {
+        const kind = diagnosticRequest === null ? null : diagnosticRequest.kind,
+            status = diagnosticRequest === null ? null : diagnosticRequest.status;
+        failureDiagnostic = Object.freeze(Object.assign(Object.create(null), {schema: 1,
+            selection: 'FIRST_TRANSPORT_FAIL', stage: diagnosticStage,
+            code: diagnosticErrors.get(error) || 'UNKNOWN',
+            requestKind: ['create', 'block', 'blocklist', 'finalize'].includes(kind) ? kind : null,
+            httpStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null}));
+    } catch (_) { /* Unavailable diagnostics must not interrupt original retirement. */ }
+}
+function getFailureDiagnostic() {
+    if (failureDiagnostic === null || diagnosticTaken) return null;
+    diagnosticTaken = true;
+    return failureDiagnostic;
+}
 function need(value, code) {
     if (!value) throw new TransportError('INITIAL_ARTIFACT_' + code);
 }
@@ -98,6 +141,7 @@ function blobUrl(value) {
 function uploadOnce(supplied) {
     let options, stream, signal, service, endpoint, ids, enteredNs;
     try {
+        diagnosticStage = 'ADMISSION';
         need(!used, 'ONE_INVOCATION'); used = true;
         enteredNs = process.hrtime.bigint();
         options = fields(supplied, ['stream', 'artifactName', 'expectedZipBytes', 'requestSha256',
@@ -126,7 +170,8 @@ function uploadOnce(supplied) {
         ids = backendIds(service.ACTIONS_RUNTIME_TOKEN);
     } catch (error) {
         // URL/parser/native-brand exceptions may contain private inputs.
-        throw error instanceof TransportError ? error : new TransportError('INITIAL_ARTIFACT_INVALID_INPUT');
+        rememberFailure(error);
+        throw diagnosticErrors.has(error) ? error : new TransportError('INITIAL_ARTIFACT_INVALID_INPUT');
     }
 
     return new Promise(resolve => {
@@ -154,6 +199,7 @@ function uploadOnce(supplied) {
         function finish(success) {
             if (settled) return;
             if (success) {
+                diagnosticStage = 'CLOSE';
                 try { close(); need(knownClosed() && finishedWork && artifactId !== null, 'INCOMPLETE'); }
                 catch (error) { fail(error); return; }
             }
@@ -189,7 +235,8 @@ function uploadOnce(supplied) {
         }
         function fail(error) {
             if (settled) return;
-            if (failed === null) failed = error instanceof TransportError ? error.message : 'INITIAL_ARTIFACT_OPERATION_FAILED';
+            rememberFailure(error);
+            if (failed === null) failed = diagnosticErrors.get(error) || 'INITIAL_ARTIFACT_OPERATION_FAILED';
             if (retained.errors.length < 8) retained.errors.push(error);
             stream.removeListener('readable', readReady);
             destroy(stream);
@@ -278,6 +325,7 @@ function uploadOnce(supplied) {
             if (!finishedWork) fail(new TransportError('INITIAL_ARTIFACT_WORK_DEADLINE'));
         });
         closeTimer = timerAt(options.closeEndNs, () => {
+            diagnosticStage = 'CLOSE';
             fail(new TransportError('INITIAL_ARTIFACT_CLOSE_DEADLINE')); finish(false);
         });
 
@@ -285,6 +333,7 @@ function uploadOnce(supplied) {
             return new Promise((accept, reject) => {
                 waiters.add(reject);
                 guarded(() => {
+                    diagnosticStage = {create: 'CREATE', block: 'BLOCK', blocklist: 'BLOCKLIST', finalize: 'FINALIZE'}[kind];
                     const startNs = work();
                     if (kind === 'create') need(startNs < options.startByNs, 'START_DEADLINE');
                     need(rows.length < MAX_REQUESTS, 'REQUEST_COUNT');
@@ -292,7 +341,7 @@ function uploadOnce(supplied) {
                         request: null, response: null, socket: null, requestClosed: false,
                         responseClosed: false, socketClosed: false, finished: false, sent: false,
                         ended: false, valid: false, parsed: null, parts: []};
-                    rows.push(row);
+                    rows.push(row); diagnosticRequest = row;
                     function progress() {
                         if (failed !== null) { if (knownClosed()) finish(false); return; }
                         guarded(() => {
@@ -300,7 +349,9 @@ function uploadOnce(supplied) {
                             if (row.requestClosed && row.responseClosed && row.socketClosed) {
                                 close();
                                 need(row.finished && row.sent && row.ended && row.valid, 'HTTP_INCOMPLETE_CLOSE');
-                                waiters.delete(reject); accept(row.parsed);
+                                waiters.delete(reject);
+                                if (diagnosticRequest === row) diagnosticRequest = null;
+                                accept(row.parsed);
                             }
                         });
                     }
@@ -361,6 +412,7 @@ function uploadOnce(supplied) {
                     'Content-Type': 'application/json', Accept: 'application/json'}, 200, raw => response(raw, kind));
         }
         async function run() {
+            diagnosticStage = 'CREATE';
             work();
             const utc = Date.now(); need(Number.isSafeInteger(utc) && utc > 0, 'UTC_CLOCK');
             createInvokedAt = new Date(utc).toISOString();
@@ -369,6 +421,7 @@ function uploadOnce(supplied) {
                 mime_type: 'application/zip', expires_at: requestedExpiresAt});
             work(); const blob = blobUrl(signed), blocks = [], hash = createHash('sha256');
             while (true) {
+                diagnosticStage = 'INPUT';
                 const block = await nextBlock(); work();
                 if (block === null) break;
                 const id = Buffer.from(String(blocks.length).padStart(6, '0'), 'ascii').toString('base64');
@@ -403,4 +456,4 @@ function uploadOnce(supplied) {
     });
 }
 
-module.exports = Object.freeze({uploadOnce});
+module.exports = Object.freeze({uploadOnce, getFailureDiagnostic});

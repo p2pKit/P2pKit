@@ -5,6 +5,7 @@
 // Existing activation HOLDs and independent hosted qualification still apply.
 const {spawn, ChildProcess} = require('node:child_process');
 const {Readable, Writable} = require('node:stream');
+const {isProxy} = require('node:util').types;
 const fs = require('node:fs');
 const paths = require('node:path');
 const {setTimeout, clearTimeout} = require('node:timers');
@@ -72,6 +73,39 @@ const diagnosticCodes = new Set([
     'ORIGINAL_RETENTION_SETTING', 'ORIGINAL_RETURN_CHANGED', 'ORIGINAL_RETURN_HANDLE_CHANGED',
     'ORIGINAL_TIMER', 'PARTIAL_ANCESTORS', 'RETENTION_REQUIRES_14_DAYS'
 ].map(code => 'INITIAL_ARTIFACT_ACTION_' + code));
+// Closed transport-owned diagnostic grammar, not arbitrary exception metadata.
+const transportDiagnosticCodes = new Set([
+    'ALREADY_FAILED', 'ARTIFACT_ID',
+    'ARTIFACT_NAME', 'BLOB_QUERY', 'BLOB_URL',
+    'CANCELLED', 'CLOSED_DATA_FIELDS', 'CLOSE_DEADLINE',
+    'DUPLICATE_RESPONSE', 'DUPLICATE_SOCKET', 'HTTP_ABORTED',
+    'HTTP_INCOMPLETE_CLOSE', 'HTTP_STATUS', 'HTTP_TRUNCATED',
+    'INCOMPLETE', 'INPUT_BUFFER_BOUND', 'INPUT_CHUNK',
+    'INPUT_CLOSE_REQUIRED', 'INPUT_OVERRUN', 'INPUT_PREMATURE_CLOSE',
+    'INPUT_SHORT', 'INVALID_INPUT', 'NODE24_REQUIRED',
+    'ONE_INVOCATION', 'OPERATION_FAILED', 'ORIGINAL_ABSOLUTE_FENCES',
+    'ORIGINAL_BYTE_STREAM', 'ORIGINAL_HTTP_REQUEST', 'ORIGINAL_HTTP_RESPONSE',
+    'ORIGINAL_TLS_SOCKET', 'PLAIN_FIELDS', 'REQUEST_BINDING',
+    'REQUEST_COUNT', 'RESPONSE_BODY_BOUND', 'RESULTS_SCOPE',
+    'RESULTS_URL', 'RETENTION_REQUIRES_14_DAYS', 'RUNTIME_TOKEN_SHAPE',
+    'SERVICE_RESPONSE', 'SERVICE_RESPONSE_DUPLICATE', 'SOCKET_ERROR_CLOSE',
+    'START_DEADLINE', 'TRANSACTIONAL_MD5', 'UTC_CLOCK',
+    'WORK_DEADLINE', 'ZIP_SIZE'
+].map(code => 'INITIAL_ARTIFACT_' + code));
+function transportDiagnostic(value) {
+    if (value === null || typeof value !== 'object' || isProxy(value) || Object.getPrototypeOf(value) !== null) return null;
+    const names = ['schema', 'selection', 'stage', 'code', 'requestKind', 'httpStatus'],
+        descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Reflect.ownKeys(value).length !== names.length || !names.every(name =>
+        Object.hasOwn(descriptors, name) && Object.hasOwn(descriptors[name], 'value') && descriptors[name].enumerable)) return null;
+    const row = Object.assign(Object.create(null), Object.fromEntries(names.map(name => [name, descriptors[name].value])));
+    if (row.schema !== 1 || row.selection !== 'FIRST_TRANSPORT_FAIL' ||
+        !['ADMISSION', 'CREATE', 'INPUT', 'BLOCK', 'BLOCKLIST', 'FINALIZE', 'CLOSE'].includes(row.stage) ||
+        !(row.code === 'UNKNOWN' || typeof row.code === 'string' && transportDiagnosticCodes.has(row.code)) ||
+        !(row.requestKind === null || ['create', 'block', 'blocklist', 'finalize'].includes(row.requestKind)) ||
+        !(row.httpStatus === null || Number.isInteger(row.httpStatus) && row.httpStatus >= 100 && row.httpStatus <= 599)) return null;
+    return Object.freeze(row);
+}
 class ActionError extends Error {
     constructor(message) {
         super(message);
@@ -475,8 +509,13 @@ async function mainFixed(route) {
                 expectedZipBytes: readyValue.zipBytes, requestSha256: D.sha(readyRaw), ...bound, signal, service,
                 maxRetentionDays});
             completions.push(retained.transport);
-            const transportValue = pin(await retained.transport), readerValue = pin(await reader.completion),
-                finalRaw = pinBytes(reader.finalFrame(), RECORD);
+            const transportReturn = await retained.transport;
+            phase = 'TRANSPORT_RESULT';
+            const transportValue = pin(transportReturn);
+            phase = 'READER_COMPLETION';
+            const readerValue = pin(await reader.completion);
+            phase = 'READER_FINAL_FRAME';
+            const finalRaw = pinBytes(reader.finalFrame(), RECORD);
             checkpoint(bounds.workEndNs);
             phase = 'FINISH_INPUT';
             inputRaw = pinBytes(D.finishInput({readyRaw, finalRaw, readerValue, transportValue, beforeValue, originals},
@@ -532,6 +571,13 @@ async function mainFixed(route) {
         // incomplete. Waiting here neither creates a new deadline nor calls a
         // retry/replacement helper. UNKNOWN handles remain in quarantine.
         await Promise.allSettled(completions);
+        try {
+            const row = transportDiagnostic(Transport.getFailureDiagnostic());
+            if (row !== null) {
+                const line = 'INITIAL_ARTIFACT_TRANSPORT_DIAGNOSTIC ' + JSON.stringify(row) + '\n';
+                if (line.length <= 1024) process.stderr.write(line);
+            }
+        } catch (_) { /* Retain original controller diagnostic, refusal marker and finally cleanup. */ }
         try {
             if (diagnostic !== null) {
                 const line = 'INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ' + JSON.stringify(diagnostic) + '\n';

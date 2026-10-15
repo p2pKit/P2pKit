@@ -15,7 +15,8 @@ const DIAGNOSTIC_PHASES = new Set([
     'ADMISSION', 'ENVIRONMENT', 'UPLOAD_ADMISSION',
     'READER_READY', 'READER_BIND', 'BEFORE_OBSERVER',
     'BEFORE_VALIDATE', 'BEFORE_JOB',
-    'UPLOAD_TRANSPORT', 'FINISH_INPUT', 'FINITE_FINISH',
+    'UPLOAD_TRANSPORT', 'TRANSPORT_RESULT', 'READER_COMPLETION', 'READER_FINAL_FRAME',
+    'FINISH_INPUT', 'FINITE_FINISH',
     'AFTER_READY', 'AFTER_OBSERVER', 'FINITE_COMPLETION',
     'RESULT', 'OUTPUT'
 ]);
@@ -44,6 +45,7 @@ function diagnostics(errors) {
     const found = [];
     for (const text of errors) {
         if (text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n') continue;
+        if (text.startsWith('INITIAL_ARTIFACT_TRANSPORT_DIAGNOSTIC ')) { transportRows([text]); continue; }
         const prefix = 'INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ';
         assert.equal(typeof text, 'string'); assert(text.length <= 1024);
         assert(text.startsWith(prefix) && text.endsWith('\n'));
@@ -104,7 +106,7 @@ function model(mode = 'upload', config = {}) {
             return {startByNs: f.bounds.startByNs + (config.wrongBind ? 1n : 0n),
                 workEndNs: f.bounds.workEndNs, closeEndNs: f.bounds.closeEndNs};
         }, completion: readerCompletion, cancel() { calls.push('reader-cancel'); settleReader(); },
-        finalFrame() { assert(readerReturned); calls.push('reader-F'); return f.finalRaw; }};
+        finalFrame() { assert(readerReturned); calls.push('reader-F'); hook('readerFinalFrame'); return f.finalRaw; }};
     function observer(stage, supplied) {
         calls.push(stage); options[stage] = supplied;
         assert.equal(stage, upload ? 'before' : 'after'); assert.equal(supplied.jobId, '123');
@@ -123,6 +125,7 @@ function model(mode = 'upload', config = {}) {
         }};
     }
     function transport(supplied) {
+        hook('transportStart', supplied);
         calls.push('Create'); options.transport = supplied;
         assert.equal(supplied.stream, stream); assert.equal(demand, 0);
         assert.equal(stream.readableDidRead, false); assert.equal(stream.listenerCount('data'), 0);
@@ -168,7 +171,7 @@ function model(mode = 'upload', config = {}) {
             if (!upload) { calls.push('after-R'); child.stdout.push(packet('R', f.afterReadyRaw)); }
         });
         return child;
-    }}, 'node:stream': {Readable, Writable}, 'node:path': path,
+    }}, 'node:stream': {Readable, Writable}, 'node:path': path, 'node:util': require('node:util'),
     'node:fs': {appendFileSync(output, text, settings) {
         calls.push('outputs'); assert.equal(output, '/model/output'); assert.equal(settings.encoding, 'utf8');
         assert(calls.includes('finite-child-close')); outputs.push(text); hook('append', text);
@@ -181,11 +184,14 @@ function model(mode = 'upload', config = {}) {
         supplied.signal.addEventListener('abort', settleReader, {once: true}); return reader;
     }}, './hosted-initial-artifact-observer.cjs': {beforeOnce: supplied => observer('before', supplied),
         afterOnce: supplied => observer('after', supplied)},
-    './hosted-initial-artifact-transport.cjs': {uploadOnce: transport}};
+    './hosted-initial-artifact-transport.cjs': {uploadOnce: transport, getFailureDiagnostic() {
+        calls.push('transport-diagnostic');
+        return config.transportDiagnostic ? config.transportDiagnostic(api) : null;
+    }}};
     // Same realm avoids bypassing DATA prototype rules. No arbitrary import,
     // real process/fs/network backend or test seam enters the production module.
     const factory = vm.runInThisContext('(function(require,module,__dirname,process,Date){\n' + source +
-        '\nreturn {ActionError, diagnosticErrors, diagnosticCodes};\n})',
+        '\nreturn {ActionError, diagnosticErrors, diagnosticCodes, transportDiagnostic, transportDiagnosticCodes};\n})',
         {filename: 'offline-new-artifact-controller.cjs', timeout: 1000});
     const diagnosticModel = factory(name => { assert(Object.hasOwn(imports, name)); return imports[name]; }, module,
         '/model/p2pkit/scripts', processModel, {now: () => nowMs});
@@ -478,6 +484,89 @@ test('private constructor registers exact literal codes only without changing pu
     notAccepted(current); assert.equal(accessed, 0);
     assert.equal(diagnostics(current.errors).code, 'INITIAL_ARTIFACT_ACTION_FINITE_ORIGINAL_EXIT');
     assert.equal(diagnostics(current.errors).phase, 'READER_BIND');
+});
+
+function transportRows(errors) {
+    const prefix = 'INITIAL_ARTIFACT_TRANSPORT_DIAGNOSTIC ';
+    const codes = new Set([...source.match(/const transportDiagnosticCodes = new Set\(\[([\s\S]*?)\]\./)[1]
+        .matchAll(/'([A-Z0-9_]+)'/g)].map(row => 'INITIAL_ARTIFACT_' + row[1]));
+    return errors.filter(text => text.startsWith(prefix)).map(text => {
+        assert(text.length <= 1024 && text.endsWith('\n'));
+        const row = JSON.parse(text.slice(prefix.length));
+        assert.deepEqual(Object.keys(row), ['schema', 'selection', 'stage', 'code', 'requestKind', 'httpStatus']);
+        assert.equal(row.schema, 1); assert.equal(row.selection, 'FIRST_TRANSPORT_FAIL');
+        assert(['ADMISSION', 'CREATE', 'INPUT', 'BLOCK', 'BLOCKLIST', 'FINALIZE', 'CLOSE'].includes(row.stage));
+        assert(row.code === 'UNKNOWN' || codes.has(row.code));
+        assert(row.requestKind === null || ['create', 'block', 'blocklist', 'finalize'].includes(row.requestKind));
+        assert(row.httpStatus === null || Number.isInteger(row.httpStatus) && row.httpStatus >= 100 && row.httpStatus <= 599);
+        return row;
+    });
+}
+function finiteTransport(overrides = {}) {
+    return Object.freeze(Object.assign(Object.create(null), {schema: 1, selection: 'FIRST_TRANSPORT_FAIL',
+        stage: 'CREATE', code: 'INITIAL_ARTIFACT_HTTP_STATUS', requestKind: 'create', httpStatus: 403}, overrides));
+}
+test('transport diagnostic is separate finite output only after original settled ownership', async () => {
+    const m = await model('upload', {transportStart() { throw new Error('PRIVATE_FAILURE'); },
+        transportDiagnostic(m) { assert(m.calls.includes('reader-close')); return finiteTransport(); }}).run();
+    notAccepted(m); assert.deepEqual(transportRows(m.errors), [{...finiteTransport()}]);
+    assert.equal(diagnostics(m.errors).phase, 'UPLOAD_TRANSPORT'); assert.equal(diagnostics(m.errors).code, 'UNKNOWN');
+    assert.equal(m.calls.filter(name => name === 'transport-diagnostic').length, 1);
+    assert.equal(m.demand, 0); assert.equal(m.timers.size, 0); assert(!m.errors.join('').includes('PRIVATE'));
+});
+test('transport diagnostic rejects malformed and Proxy rows without property getters', async () => {
+    let accessed = 0;
+    const proxy = new Proxy({}, {get() { accessed++; throw new Error('PRIVATE_GET'); },
+        getPrototypeOf() { accessed++; throw new Error('PRIVATE_PROTOTYPE'); }, ownKeys() { accessed++; throw new Error('PRIVATE_KEYS'); }});
+    const getter = Object.assign(Object.create(null), {...finiteTransport()});
+    Object.defineProperty(getter, 'code', {enumerable: true, get() { accessed++; throw new Error('PRIVATE_CODE'); }});
+    const extra = Object.assign(Object.create(null), {...finiteTransport()}, {[Symbol('PRIVATE')]: true});
+    for (const row of [proxy, getter, extra, {}, 'PRIVATE', null, finiteTransport({code: 'PRIVATE'}),
+        finiteTransport({schema: true}), finiteTransport({stage: 'PRIVATE'}), finiteTransport({httpStatus: true}),
+        finiteTransport({requestKind: 'PRIVATE'}), finiteTransport({httpStatus: 600})]) {
+        const m = await model('upload', {transportStart() { throw new Error('PRIVATE_FAILURE'); }, transportDiagnostic() { return row; }}).run();
+        notAccepted(m); assert.equal(transportRows(m.errors).length, 0); assert.equal(m.timers.size, 0);
+    }
+    assert.equal(accessed, 0);
+});
+test('transport diagnostic accessor or write failure cannot skip original marker or cleanup', async () => {
+    for (const kind of ['accessor', 'write']) {
+        const m = await model('upload', {transportStart() { throw new Error('PRIVATE_FAILURE'); },
+            transportDiagnostic() { if (kind === 'accessor') throw new Error('PRIVATE_ACCESS'); return finiteTransport(); },
+            stderrWrite(text) { if (kind === 'write' && text.startsWith('INITIAL_ARTIFACT_TRANSPORT_DIAGNOSTIC ')) throw new Error('PRIVATE_WRITE'); }}).run();
+        notAccepted(m); assert.equal(transportRows(m.errors).length, 0); assert.equal(m.timers.size, 0);
+        for (const name of ['SIGINT', 'SIGTERM']) assert.equal(m.signals.listenerCount(name), 0);
+    }
+    const previous = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON'); let accessed = 0, m;
+    const row = finiteTransport();
+    try {
+        m = await model('upload', {transportStart() {
+            Object.defineProperty(Object.prototype, 'toJSON', {configurable: true, value() { accessed++; throw new Error('PRIVATE_JSON'); }});
+            throw new Error('PRIVATE_FAILURE'); }, transportDiagnostic() { return row; }}).run();
+    } finally {
+        if (previous) Object.defineProperty(Object.prototype, 'toJSON', previous); else delete Object.prototype.toJSON;
+    }
+    notAccepted(m); assert.equal(transportRows(m.errors).length, 1); assert.equal(accessed, 0);
+});
+test('post-transport return reader completion and final frame have distinct controller phases', async () => {
+    for (const [phase, config] of [
+        ['TRANSPORT_RESULT', {transportReturn(m) { m.f.transportClosed = {...m.f.transportClosed, invalid: undefined}; }}],
+        ['READER_COMPLETION', {transportReturn(m) { m.f.readerClosed = {...m.f.readerClosed, invalid: undefined}; }}],
+        ['READER_FINAL_FRAME', {readerFinalFrame() { throw new Error('PRIVATE_READER_FINAL'); }}]
+    ]) {
+        const m = await model('upload', config).run(); notAccepted(m);
+        assert.equal(diagnostics(m.errors).phase, phase); assert.equal(transportRows(m.errors).length, 0);
+        assert(m.calls.includes('reader-close')); assert.equal(m.timers.size, 0);
+    }
+});
+test('controller transport whitelist equals actual transport own code roster', async () => {
+    const transport = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-transport.cjs'), 'utf8');
+    const literals = [...transport.match(/const diagnosticCodes = new Set\(\[([\s\S]*?)\]\./)[1]
+        .matchAll(/'([A-Z0-9_]+)'/g)].map(row => 'INITIAL_ARTIFACT_' + row[1]);
+    const m = model(); assert.deepEqual([...m.diagnosticModel.transportDiagnosticCodes].sort(), literals.sort());
+    assert.equal(m.calls.length, 0);
+    const success = await model().run(); assert.equal(success.errors.length, 0);
+    assert(!success.calls.includes('transport-diagnostic'));
 });
 
 (async () => {

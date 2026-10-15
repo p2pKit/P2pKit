@@ -52,7 +52,7 @@ function model(config = {}) {
         if (!config.noSpawn) queueMicrotask(() => child.emit('spawn'));
         return child;
     }}, 'node:stream': {Readable, Writable}, 'node:fs': {appendFileSync() { assert.fail('owner-only model cannot output'); }},
-    'node:path': path, 'node:timers': {setTimeout(callback, ms) {
+    'node:path': path, 'node:util': require('node:util'), 'node:timers': {setTimeout(callback, ms) {
         const id = ++timerId; timers.set(id, {callback, ms}); return id;
     }, clearTimeout(id) { timers.delete(id); }}, './hosted-initial-artifact-action-data.cjs': D,
     './hosted-initial-artifact-productive-action-data.cjs': ProductiveData,

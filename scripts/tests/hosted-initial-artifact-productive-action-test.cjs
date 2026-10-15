@@ -18,7 +18,8 @@ const DIAGNOSTIC_PHASES = new Set([
     'ADMISSION', 'ENVIRONMENT', 'UPLOAD_ADMISSION',
     'READER_READY', 'READER_BIND', 'BEFORE_OBSERVER',
     'BEFORE_VALIDATE', 'BEFORE_JOB',
-    'UPLOAD_TRANSPORT', 'FINISH_INPUT', 'FINITE_FINISH',
+    'UPLOAD_TRANSPORT', 'TRANSPORT_RESULT', 'READER_COMPLETION', 'READER_FINAL_FRAME',
+    'FINISH_INPUT', 'FINITE_FINISH',
     'AFTER_READY', 'AFTER_OBSERVER', 'FINITE_COMPLETION',
     'RESULT', 'OUTPUT'
 ]);
@@ -103,7 +104,7 @@ function shellModel() {
         assert.equal(child, undefined, 'one original model child only');
         child = new ModelChild();
         queueMicrotask(() => child.emit('spawn')); return child;
-    }}, 'node:stream': {Readable, Writable}, 'node:path': path, 'node:crypto': crypto,
+    }}, 'node:stream': {Readable, Writable}, 'node:path': path, 'node:util': require('node:util'), 'node:crypto': crypto,
     'node:timers': {setTimeout(callback, milliseconds) {
         const id = ++serial; timers.set(id, {callback, end: now + BigInt(milliseconds) * 1000000n}); return id;
     }, clearTimeout(id) { timers.delete(id); }}};
@@ -175,7 +176,7 @@ function actionModel() {
             legacyReaderCalls.push(args); assert.fail('No legacy route fallback'); }, openProductiveReader: reader},
         './hosted-initial-artifact-observer.cjs': {beforeOnce(...args) { observerCalls.push(args); assert.fail('No real original job'); },
             afterOnce(...args) { observerCalls.push(args); assert.fail('No real original job'); }},
-        './hosted-initial-artifact-transport.cjs': {uploadOnce(...args) { transportCalls.push(args); assert.fail('No Create'); }}});
+        './hosted-initial-artifact-transport.cjs': {getFailureDiagnostic() { return null; }, uploadOnce(...args) { transportCalls.push(args); assert.fail('No Create'); }}});
     // Test-local access to the ORIGINAL lexical finite owner with the fixed
     // productive route; production module.exports remains exactly two entries.
     const factory = vm.runInThisContext('(function(require,module,__dirname,process,Date){\n' + actionSource +

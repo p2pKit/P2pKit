@@ -54,6 +54,7 @@ function model(raw = payload, config = {}) {
     }
     const imports = {
         'node:https': {request: (url, options) => {
+            if (Object.hasOwn(config, 'requestError')) throw config.requestError;
             if (config.requestThrows) throw new Error('PRIVATE_MODEL_REQUEST_URL_MUST_NOT_ESCAPE');
             const request = new Request(url, options); calls.push(request);
             if (config.onRequest) config.onRequest(request, api);
@@ -72,7 +73,9 @@ function model(raw = payload, config = {}) {
     }
     const processModel = {versions: {node: '24.20.0'}, hrtime: {bigint: () => now}};
     Object.defineProperty(processModel, 'env', {get() { throw new Error('AMBIENT_ENVIRONMENT_FORBIDDEN'); }});
-    vm.runInNewContext(source, {module, require: name => {
+    const exposedSource = source + (config.inspectDiagnostics ?
+        '\nmodule.testOnly = {TransportError, diagnosticErrors, diagnosticCodes};' : '');
+    vm.runInNewContext(exposedSource, {module, require: name => {
         assert(Object.hasOwn(imports, name), 'closed offline import: ' + name); return imports[name];
     }, process: processModel, Object, Reflect, JSON, Buffer, SharedArrayBuffer, AbortSignal, EventTarget,
     TextDecoder, URL, Error, Date: ClockDate}, {timeout: 1000});
@@ -150,7 +153,8 @@ function model(raw = payload, config = {}) {
             const pending = module.exports.uploadOnce(options);
             pending.then(value => { result = value; resolved = true; });
             return pending;
-        }, uploadOnce: module.exports.uploadOnce};
+        }, uploadOnce: module.exports.uploadOnce, getFailureDiagnostic: module.exports.getFailureDiagnostic,
+        diagnosticModel: module.testOnly};
     return api;
 }
 
@@ -469,6 +473,97 @@ test('close equality after successful finalize response still cannot turn green'
     m.setNow(m.options.closeEndNs);
     final.incoming.emit('close'); final.emit('close'); final.socket.emit('close', false);
     await tick(); failed(m, m.result);
+});
+
+function transportDiagnostic(m, expected) {
+    const row = m.getFailureDiagnostic();
+    assert(row !== null); assert.equal(Object.getPrototypeOf(row), null); assert(Object.isFrozen(row));
+    assert.deepEqual(Object.keys(row), ['schema', 'selection', 'stage', 'code', 'requestKind', 'httpStatus']);
+    assert.deepEqual({...row}, {schema: 1, selection: 'FIRST_TRANSPORT_FAIL', ...expected});
+    assert.equal(m.getFailureDiagnostic(), null);
+    assert(!JSON.stringify(row).includes('PRIVATE'));
+    return row;
+}
+test('finite admission own code is available once with no original request metadata', async () => {
+    const m = model(); assert.equal(m.getFailureDiagnostic(), null);
+    m.options.artifactName = 'PRIVATE_BAD/NAME';
+    assert.throws(() => m.start(), /ARTIFACT_NAME/);
+    transportDiagnostic(m, {stage: 'ADMISSION', code: 'INITIAL_ARTIFACT_ARTIFACT_NAME', requestKind: null, httpStatus: null});
+    assert.equal(m.calls.length, 0); assert.equal(m.producerReads, 0); assert.equal(m.stream.destroyed, false);
+});
+test('finite HTTP refusal snapshots first original status before later abort and mutation', async () => {
+    const m = model(); m.start(); const result = await m.drive(() => ({status: 403}));
+    failed(m, result); m.calls[0].incoming.statusCode = 200; m.control.abort();
+    const row = transportDiagnostic(m, {stage: 'CREATE', code: 'INITIAL_ARTIFACT_HTTP_STATUS', requestKind: 'create', httpStatus: 403});
+    assert.throws(() => { row.httpStatus = 200; }, TypeError);
+    assert.equal(m.calls.length, 1); assert.equal(m.producerReads, 0);
+});
+test('finite foreign errors and Proxies never expose or access exception properties', async () => {
+    let accessed = 0;
+    const getter = {};
+    for (const name of ['message', 'name', 'stack', 'code', 'toJSON']) Object.defineProperty(getter, name, {
+        get() { accessed++; throw new Error('PRIVATE_GETTER'); }});
+    const proxy = new Proxy({}, {get() { accessed++; throw new Error('PRIVATE_PROXY'); },
+        getPrototypeOf() { accessed++; throw new Error('PRIVATE_PROTOTYPE'); },
+        ownKeys() { accessed++; throw new Error('PRIVATE_KEYS'); }});
+    for (const error of [new Error('PRIVATE_NATIVE'), getter, proxy, 'PRIVATE_STRING', null, 17]) {
+        const m = model(payload, {requestError: error}); m.start(); await tick();
+        assert(!m.resolved); m.expire('close'); await tick();
+        const result = m.result; failed(m, result);
+        assert.equal(result.code, 'INITIAL_ARTIFACT_OPERATION_FAILED');
+        transportDiagnostic(m, {stage: 'CREATE', code: 'UNKNOWN', requestKind: 'create', httpStatus: null});
+        assert.equal(m.calls.length, 0);
+    }
+    assert.equal(accessed, 0);
+});
+test('finite parse failure and invalid status have only observed primitive metadata', async () => {
+    const m = model(); m.start(); failed(m, await m.drive(() => ({body: Buffer.from('PRIVATE_NOT_JSON')})));
+    transportDiagnostic(m, {stage: 'CREATE', code: 'UNKNOWN', requestKind: 'create', httpStatus: 200});
+    let accessed = 0;
+    for (const status of [true, '403', 99, 600, {toString() { accessed++; throw new Error('PRIVATE_STATUS'); }}]) {
+        const x = model(); x.start(); const result = await x.drive(() => ({status}));
+        assert.equal(result.transport, 'incomplete'); assert.equal(result.code, 'INITIAL_ARTIFACT_HTTP_STATUS');
+        transportDiagnostic(x, {stage: 'CREATE', code: 'INITIAL_ARTIFACT_HTTP_STATUS', requestKind: 'create', httpStatus: null});
+    }
+    assert.equal(accessed, 0);
+});
+test('finite input failure does not blame previously completed create request', async () => {
+    const stream = new Readable({highWaterMark: 0, read() { this.destroy(new Error('PRIVATE_INPUT')); }});
+    const m = model(payload, {stream}); m.start(); failed(m, await m.drive());
+    transportDiagnostic(m, {stage: 'INPUT', code: 'UNKNOWN', requestKind: null, httpStatus: null});
+    assert.equal(m.calls.length, 1);
+});
+test('finite own error registration survives replaced message and rejects forged prototype', async () => {
+    let accessed = 0;
+    for (const own of [true, false]) {
+        const config = {inspectDiagnostics: true}, m = model(payload, config), {TransportError} = m.diagnosticModel;
+        const error = own ? new TransportError('INITIAL_ARTIFACT_HTTP_STATUS') : Object.create(TransportError.prototype);
+        Object.defineProperty(error, 'message', {get() { accessed++; throw new Error('PRIVATE_MESSAGE'); }});
+        config.requestError = error; m.start(); await tick();
+        assert(!m.resolved); m.expire('close'); await tick();
+        const result = m.result; failed(m, result);
+        assert.equal(result.code, own ? 'INITIAL_ARTIFACT_HTTP_STATUS' : 'INITIAL_ARTIFACT_OPERATION_FAILED');
+        transportDiagnostic(m, {stage: 'CREATE', code: own ? 'INITIAL_ARTIFACT_HTTP_STATUS' : 'UNKNOWN', requestKind: 'create', httpStatus: null});
+    }
+    assert.equal(accessed, 0);
+});
+test('finite successful transport has no diagnostic before or after known close', async () => {
+    const m = model(); assert.equal(m.getFailureDiagnostic(), null); m.start();
+    assert.equal((await m.drive()).transport, 'closed'); assert.equal(m.getFailureDiagnostic(), null);
+});
+test('finite whitelist covers exact source refusal sites and only own constructors', async () => {
+    const m = model(payload, {inspectDiagnostics: true}), {TransportError, diagnosticErrors, diagnosticCodes} = m.diagnosticModel;
+    const literals = new Set([...source.matchAll(/,\s*'([A-Z][A-Z0-9_]+)'\)/g)].map(row => row[1])
+        .filter(code => !code.startsWith('INITIAL_ARTIFACT_')));
+    for (const row of source.matchAll(/new TransportError\('INITIAL_ARTIFACT_([A-Z0-9_]+)'\)/g)) literals.add(row[1]);
+    literals.add('OPERATION_FAILED');
+    assert.deepEqual([...diagnosticCodes].sort(), [...literals].map(code => 'INITIAL_ARTIFACT_' + code).sort());
+    for (const code of diagnosticCodes) {
+        assert.equal(diagnosticErrors.get(new TransportError(code)), code);
+        assert.equal(diagnosticErrors.get(new Error(code)), undefined);
+    }
+    assert.equal(diagnosticErrors.get(new TransportError('PRIVATE_VALUE')), undefined);
+    assert.equal(m.calls.length, 0);
 });
 
 (async () => {
