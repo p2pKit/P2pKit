@@ -50,28 +50,29 @@ public class RpcTrust internal constructor(
     @Throws(Exception::class)
     public suspend fun revoke(fingerprint: PeerFingerprint) {
         withContext(NonCancellable) {
-            var failure = false
+            var failure: Throwable? = null
             lock.withLock {
                 if (!healthy) throw storageFailure()
-                pins.value = pins.value - fingerprint
+                val next = pins.value - fingerprint
+                pins.value = next
                 // A failed transport cleanup must not skip durable revocation. Admission is already
-                // denied; either failure also seals ALL admission until the runtime is recreated.
-                try { onRevoke?.invoke(fingerprint) } catch (_: Exception) { failure = true }
-                try { store.replace(appId, purpose, pins.value.toSet()) } catch (_: Exception) { failure = true }
-                if (failure) {
-                    failed.value = true
-                    pins.value = emptySet()
+                // denied for this peer; any failure seals ALL grants before another callback or suspension.
+                try { onRevoke?.invoke(fingerprint) } catch (caught: Throwable) {
+                    sealAdmission()
+                    failure = caught
+                }
+                // Persist the captured intended mutation, not the empty runtime set after failure sealing.
+                try { store.replace(appId, purpose, next.toSet()) } catch (caught: Throwable) {
+                    sealAdmission()
+                    if (failure == null || (failure is Exception && caught !is Exception)) failure = caught
                 }
             }
-            if (failure) {
-                try { onStorageFailure?.invoke() } catch (_: Exception) { /* Admission remains sealed. */ }
-                throw storageFailure()
-            }
+            failure?.let { failMutation(it) }
         }
     }
 
     internal suspend fun approve(fingerprint: PeerFingerprint) {
-        var failure = false
+        var failure: Throwable? = null
         // Approval is an explicit administrator transaction. Never publish a partially persisted grant.
         withContext(NonCancellable) {
             lock.withLock {
@@ -81,17 +82,31 @@ public class RpcTrust internal constructor(
                 try {
                     store.replace(appId, purpose, next.toSet())
                     pins.value = next
-                } catch (_: Exception) {
-                    failed.value = true
-                    pins.value = emptySet()
-                    failure = true
+                } catch (caught: Throwable) {
+                    sealAdmission()
+                    failure = caught
                 }
             }
-            if (failure) {
-                try { onStorageFailure?.invoke() } catch (_: Exception) { /* Admission remains sealed. */ }
-                throw storageFailure()
-            }
+            failure?.let { failMutation(it) }
         }
+    }
+
+    private fun sealAdmission() {
+        failed.value = true
+        pins.value = emptySet()
+    }
+
+    /** Outside the trust lock: cleanup may re-enter admission, which must already be sealed. */
+    private suspend fun failMutation(failure: Throwable): Nothing {
+        var original = failure
+        try { onStorageFailure?.invoke() } catch (caught: Throwable) {
+            // Preserve the first Error/non-Exception without suppression allocation or translation. JNI
+            // reporting errors can retain resource ownership; a later cleanup error cannot replace them.
+            if (original is Exception && caught !is Exception) original = caught
+        }
+        if (original !is Exception) throw original
+        // Ordinary storage/cleanup exceptions retain the existing sanitized public failure contract.
+        throw storageFailure()
     }
 
     internal companion object {
