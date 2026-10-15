@@ -51,7 +51,7 @@ TASK_NAMES = frozenset({
     "wrapper", "layout", "links", "release-metadata", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
-    "embedded-jmdns-aar-test.py",
+    "embedded-jmdns-aar-test.py", "embedded-jmdns-archive-controls", "intel-bonjour-environment-test.py",
     "application-release-version-test.py", "sample-artifact-identity-test.py",
     "package-sample-apps-test.py", "release-application-set-test.py", "publish-sample-release-test.py",
     "run-platform-tests-test.py", "integrity-policy",

@@ -74,6 +74,7 @@ def commands(component):
                 ('maven-namespace-controls', 'check-maven-namespace-access'),
                 ('maven-coordinate-controls', 'check-maven-central-version'),
                 ('maven-upload-controls', 'publish-central-portal-bundle'))],
+            ('embedded-jmdns-archive-controls', bash + ['scripts/tests/check-embedded-jmdns-aar.sh']),
             ('workflow-contract', ['ruby', 'scripts/check-modular-ci-policy.rb']),
             ('workflow-syntax', ['actionlint', '-shellcheck=', '-pyflakes=',
                 *[str(p.relative_to(ROOT)) for p in sorted((ROOT / '.github/workflows').glob('*.yml'))
@@ -82,7 +83,7 @@ def commands(component):
             ('platform-contract', ['ruby', 'scripts/tests/check-platform-test-policy-test.rb']),
             ('version-encoding', bash + ['scripts/tests/check-application-release-version.sh']),
             *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
-                   'dependency-update-test.py', 'embedded-jmdns-aar-test.py',
+                   'dependency-update-test.py', 'embedded-jmdns-aar-test.py', 'intel-bonjour-environment-test.py',
                    'application-release-version-test.py', 'sample-artifact-identity-test.py',
                    'package-sample-apps-test.py', 'publish-sample-release-test.py',
                    'release-application-set-test.py', 'run-platform-tests-test.py'),
