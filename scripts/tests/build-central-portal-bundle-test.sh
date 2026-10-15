@@ -5,24 +5,48 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK_DIR="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle-test.XXXXXX")"
 PHASE="initialization"
 RELEASE_WORKTREE=""
+GNUPGHOME=""
+gnupg_ready=false
 cleanup() {
-    status=$?
+    local status=$? cleanup_failed=false
+    trap - EXIT
+    trap '' HUP INT TERM
     if [[ $status -ne 0 ]]; then
         echo "FATAL: disposable-key bundle test failed during: $PHASE" >&2
     fi
-    if [[ -n "$RELEASE_WORKTREE" ]]; then
-        git -C "$ROOT" worktree remove --force "$RELEASE_WORKTREE" >/dev/null 2>&1 || true
+    if [[ "$gnupg_ready" == true ]] &&
+        ! gpgconf --homedir "$GNUPGHOME" --kill all >/dev/null 2>&1; then
+        # Never unlink a live agent's owned socket/keyring directory.
+        echo "FATAL: could not stop disposable GPG workers; private directory retained" >&2
+        cleanup_failed=true
+    else
+        if [[ -n "$RELEASE_WORKTREE" ]]; then
+            git -C "$ROOT" worktree remove --force "$RELEASE_WORKTREE" >/dev/null 2>&1 || true
+        fi
+        if ! rm -rf -- "$WORK_DIR"; then
+            cleanup_failed=true
+        fi
     fi
-    rm -rf "$WORK_DIR"
+    if [[ "$status" -eq 0 && "$cleanup_failed" == true ]]; then
+        status=1
+    fi
     exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 OUTPUT="$WORK_DIR/p2pkit-test-central-bundle.zip"
 GNUPGHOME="$WORK_DIR/gnupg"
 PASSWORD="p2pkit-disposable-test-key"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
+command -v gpgconf >/dev/null 2>&1 || {
+    echo "FATAL: gpgconf is required for disposable worker retirement" >&2
+    exit 1
+}
 mkdir -m 700 "$GNUPGHOME"
+gnupg_ready=true
 
 ORIGINAL_SCRIPT="$ROOT/scripts/build-central-portal-bundle.sh"
 bash -n "$ORIGINAL_SCRIPT"
