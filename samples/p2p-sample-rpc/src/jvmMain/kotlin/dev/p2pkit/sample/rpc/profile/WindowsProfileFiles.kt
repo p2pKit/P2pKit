@@ -11,6 +11,7 @@ import kotlin.concurrent.withLock
  */
 internal class WindowsProfileFiles private constructor(
     private val native: WindowsProfileNativeApi,
+    private val handleAcquisitionObservation: HandleAcquisitionObservation?,
     private val beforeHandleRetirement: (() -> Unit)?,
 ) :
     ProtectedProfileSession {
@@ -45,8 +46,20 @@ internal class WindowsProfileFiles private constructor(
         }
     }
 
+    /** Inert fault observation only; neither callback creates native authority or changes admission. */
+    interface HandleAcquisitionObservation {
+        fun beforeCarrierAllocation()
+        fun afterPrimitiveRetention() = Unit
+        fun afterAcquisition()
+    }
+
     private enum class State { Opening, Open, Closing, Closed, Failed }
-    private class Handle(val value: Long) { var failure: Throwable? = null; var released = false }
+    private class Handle {
+        var value = 0L
+        var registered = false
+        var failure: Throwable? = null
+        var released = false
+    }
     private val monitor = ReentrantLock()
     private val changed = monitor.newCondition()
     private var state = State.Opening
@@ -63,7 +76,7 @@ internal class WindowsProfileFiles private constructor(
         state in setOf(State.Closing, State.Closed, State.Failed)
     }
     // Published handles only. Zero does not settle cleanup of unpublished native resources.
-    internal val retainedHandleCount: Int get() = monitor.withLock { handleCount }
+    internal val retainedHandleCount: Int get() = monitor.withLock { handles.count { it?.registered == true } }
     private lateinit var openedRoot: Directory
     override val root: ProtectedProfileDirectory get() = monitor.withLock {
         check(state == State.Open)
@@ -110,15 +123,49 @@ internal class WindowsProfileFiles private constructor(
         }
     }
 
-    private fun own(raw: Long): Handle = monitor.withLock {
-        check(raw > 0 && handles.none { it?.value == raw }) { "Invalid or reused profile handle" }
-        check(handleCount < handles.size) { "Profile native-handle bound reached" }
-        Handle(raw).also { handles[handleCount++] = it }
-    }
-
-    private fun allocate(open: () -> Long): Handle {
-        monitor.withLock { check(handleCount < handles.size) { "Profile native-handle bound reached" } }
-        return own(open()) // Allocation errors must not return an unowned native resource through the ABI.
+    private inline fun allocate(open: (Handle) -> Unit): Handle {
+        val handle = monitor.withLock {
+            check(handleCount < handles.size) { "Profile native-handle bound reached" }
+            handleAcquisitionObservation?.beforeCarrierAllocation()
+            // Reserve a fresh carrier and ledger slot BEFORE native effects. Never recycle an old
+            // Handle object: previously returned directories/leases may still refer to that lifetime.
+            Handle().also { handles[handleCount++] = it }
+        }
+        try {
+            // Each inlined callback stores the native primitive directly in this pre-reserved carrier.
+            // Returning Long through a lambda can box even after inlining, before ownership is retained.
+            open(handle)
+            handleAcquisitionObservation?.afterPrimitiveRetention()
+        } catch (failure: Throwable) {
+            monitor.withLock {
+                if (handle.value == 0L && handleCount > 0 && handles[handleCount - 1] === handle) {
+                    handles[--handleCount] = null
+                } else {
+                    // A post-store reporting failure leaves an unvalidated raw token, not a second
+                    // close authority. Preserve both the provisional carrier and original failure.
+                    handle.failure = failure
+                }
+            }
+            throw failure // Unpublished native resources remain the original provider's responsibility.
+        }
+        monitor.withLock {
+            val raw = handle.value
+            var duplicate = false
+            var index = 0
+            while (index < handleCount - 1) {
+                val existing = handles[index++]
+                if (existing != null && existing.value == raw) duplicate = true
+            }
+            if (raw <= 0 || duplicate) {
+                // An invalid return never creates a second close authority for an existing token.
+                handles[--handleCount] = null
+                error("Invalid or reused profile handle")
+            }
+            handle.registered = true
+        }
+        // Once this reporting boundary runs, the exact returned token is already ledger-owned.
+        handleAcquisitionObservation?.afterAcquisition()
+        return handle
     }
 
     private fun rememberNativeUncertainty(failure: Throwable) = monitor.withLock {
@@ -163,6 +210,8 @@ internal class WindowsProfileFiles private constructor(
         if (handle.released) return
         handle.failure?.let { throw it }
         try {
+            // A returned token retained before failed admission is not yet independent close authority.
+            check(handle.registered) { "Profile handle admission remained uncertain" }
             native.close(handle.value)
             monitor.withLock {
                 val index = handles.indexOfFirst { it === handle }
@@ -299,7 +348,7 @@ internal class WindowsProfileFiles private constructor(
             verify()
             val component = profileComponent(name)
             children[component]?.also { check(!create); it.verify() } ?: run {
-                val child = allocate { native.child(handle.value, component, create) }
+                val child = allocate { acquired -> acquired.value = native.child(handle.value, component, create) }
                 // An invalid child remains owned for session cleanup, but must never enter the directory cache.
                 Directory(child, memberIdentity(native.directoryIdentity(child.value), true))
                     .also { children[component] = it }
@@ -327,7 +376,9 @@ internal class WindowsProfileFiles private constructor(
         }
         override fun lock(name: String, nonBlocking: Boolean): ProtectedProfileLease = operation(handle) {
             verify()
-            val locked = allocate { native.lock(handle.value, profileComponent(name), nonBlocking) }
+            val locked = allocate { acquired ->
+                acquired.value = native.lock(handle.value, profileComponent(name), nonBlocking)
+            }
             object : ProtectedProfileLease {
                 override fun close() {
                     // Close is cleanup, still allowed after an ordinary operation has poisoned admission.
@@ -365,17 +416,20 @@ internal class WindowsProfileFiles private constructor(
         /** Test/qualification seam only. No property, UI or platform path can instantiate a production backend. */
         fun openForValidation(
             native: WindowsProfileNativeApi,
+            handleAcquisitionObservation: HandleAcquisitionObservation? = null,
             beforeHandleRetirement: (() -> Unit)? = null,
         ): WindowsProfileFiles {
-            val session = WindowsProfileFiles(native, beforeHandleRetirement)
+            val session = WindowsProfileFiles(native, handleAcquisitionObservation, beforeHandleRetirement)
             // Allocate the owner carrier before native effects, not while reporting a possible native/JNI OOM.
             // This preserves ownership after a reported Error; it does not promise recovery from VM exhaustion.
             val retained = AcquisitionFailure(session)
             var storageAdmissionStarted = false
             try {
                 check(native.abi() == 1 && native.capabilities() == 0x7fL) { "Incomplete native profile contract" }
-                storageAdmissionStarted = true
-                val root = session.own(native.openRoot())
+                val root = session.allocate { acquired ->
+                    storageAdmissionStarted = true
+                    acquired.value = native.openRoot()
+                }
                 session.openedRoot = session.Directory(root,
                     WindowsProfileIdentity.decode(native.directoryIdentity(root.value), true))
                 session.state = State.Open

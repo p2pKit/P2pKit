@@ -10,12 +10,14 @@ internal object WindowsProfilePeImage {
     const val MAXIMUM_BYTES = 32 * 1024 * 1024
     private const val MAXIMUM_RELOCATION_BLOCKS = 32_768
     private const val MAXIMUM_RELOCATION_SLOTS = 65_536
-    val expectedExports: Set<String> get() = setOf(
+    const val REGISTRATION_EXPORT = "pwp_jni_register_once"
+    val expectedJniExports: Set<String> get() = setOf(
         "abi", "capabilities", "openRoot", "child", "identity", "read", "lockExisting", "createProfileLock", "close",
         "fileIdentity", "exists", "names", "stageRecord", "discardStage", "requestExpectedFileDeletion",
         "createChildDirectory", "createVaultLock", "prepareRecord", "renameCandidate", "syncDirectory", "replaceCandidate",
         "writeRecord", "deleteRecord",
     ).mapTo(linkedSetOf()) { "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_$it" }
+    val expectedExports: Set<String> get() = expectedJniExports + REGISTRATION_EXPORT
 
     /** Original image RVAs, not resolved addresses or authority over the eventual Windows import providers. */
     data class NamedImport(val library: String, val function: String, val lookupRva: Long, val addressRva: Long)

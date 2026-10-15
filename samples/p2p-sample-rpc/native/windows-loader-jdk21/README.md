@@ -2,8 +2,9 @@
 
 **PRODUCTION DISABLED.** This named module contains actual JDK21 preview FFM
 memory preparation and runtime-policy checks. It does not contain a trusted OS
-bootstrap, installed-directory admission, native lookup, DLL load, JNI
-registration, protected profile provider or Windows runtime qualification.
+bootstrap, installed-directory admission, native lookup, DLL load, productive JNI
+registration, protected profile provider or Windows runtime qualification. Dormant
+post-admission registration ownership and FFM call mechanics are described below.
 
 It does not replace the existing Desktop application, installer, version encoding,
 Foundation custody or publication pipeline. The ordinary Java17 compilation and
@@ -42,9 +43,11 @@ missing preview, missing/wrong native-access module, classpath execution and
 broad unnamed native access are negative controls. Missing preview/module/runtime
 may fail in the JVM before `main`; absence of a JSON record is not a PASS.
 
-No restricted operation is attempted as a way to discover permission. In
-particular, there is no `Linker.nativeLinker`, symbol/default/library lookup,
+No restricted operation is attempted as a way to discover permission. The runtime
+policy check performs no `Linker.nativeLinker`, symbol/default/library lookup,
 `System.load`, `System.loadLibrary`, address reinterpretation or Windows OS call.
+The separate dormant invocation component uses `Linker.nativeLinker` only after
+that policy check; this does not supply first-load or address authority.
 The preview native-access flag is a narrowly checked prerequisite, not DLL trust
 or an OS-account privilege grant.
 
@@ -182,8 +185,8 @@ module changes custody ABI13/0x43, provider availability or release gates.
 
 The Java17 sample's
 [`WindowsProfileJniPlan`](../../src/jvmMain/kotlin/dev/p2pkit/sample/rpc/profile/WindowsProfileJniPlan.kt)
-prepares the fixed 23-method registration inventory. It verifies the actual
-declaring class, exact compiled instance-native descriptors/modifiers and original
+prepares the fixed 23-method registration inventory plus a separate registrar-v1 binding. It verifies the actual
+declaring class, exact compiled instance-native descriptors/modifiers and all 24 original
 export-address observations. Bounded private snapshots prevent a verified list
 from being reread as different registration inputs. The result is immutable data,
 not permission to call an address, a registration attempt or native ownership.
@@ -195,18 +198,18 @@ does not establish Foundation's installed runtime provenance. No native method i
 invoked by preparing the plan or inspecting the declaring class.
 
 The native [post-admission registration core](../windows-profile/jni-contract.md#post-admission-registration-core)
-now implements the single-invocation operation, but is not exported or reachable
-from production. The managed lifetime component below is implemented separately;
-its actual native invocation and productive loading remain unimplemented. The design direction is
+now exports the single-invocation operation, but remains unreachable
+from production. The managed lifetime and fixed FFM invocation components below are implemented separately;
+they have no productive caller and loading remains unimplemented. The design direction is
 explicit `RegisterNatives` against original verified function addresses, after
 independent loading authority. Preload plus `System.load` does not pin each Java
-method to that module. JNI references and pending exceptions need a reviewed
-single-native-invocation bridge; a future native registration export requires joint
-review and exact export/build-inventory changes. `RegisterNatives` can partially
+method to that module. JNI references and pending exceptions need the reviewed
+single-native-invocation bridge; its exported interface still requires exact current-source
+MSVC/build pins and a qualified integrated caller. `RegisterNatives` can partially
 succeed: reserve process-lifetime module/class ownership before the attempt, and
 retain it on failure without retry, unregister or unload. Profile Stop must not
 retire cached JNI code. None of these lifetime or runtime guarantees follows from
-the inert plan, and no production registration entry is enabled here.
+the inert plan, and no productive registration caller is enabled here.
 
 ## Registration lifetime component
 
@@ -216,7 +219,7 @@ strongly retaining the original installation/runtime/module owners, declaring cl
 immutable registration plan and invocation frame. These references are **not** installed
 authority or OS handle pins. A future reviewed loader must first establish real authority
 and transfer exclusive originals, not borrowed objects with independent close paths.
-There is no productive caller or native invocation implementation yet.
+There is no productive caller. The fixed dormant invocation implementation below is not wired to a DLL.
 
 Every admitted attempt consumes the slot, even a phase-0 refusal, thrown invocation,
 partial registration or malformed report. Success requires coherent result-0/phase-2
@@ -234,3 +237,34 @@ copy. The owner class must itself belong to the original boot module; delegating
 runtime check to that module cannot admit another singleton. These controls are separate
 from the 14 FFM data models and do not execute native registration or establish physical
 module retention. Test-only classes never enter the packaged adapter JAR.
+
+## Fixed registration FFM invocation
+
+`WindowsJniRegistrationInvocation` implements the internal invocation interface with the exact C signature
+`int32_t(JavaVM*, uintptr_t[23], uint32_t, report32*, uint32_t)`. It accepts already-admitted original entry/VM
+segments and a one-time copied address list. **Those parameters do not grant native execution authority.**
+Before any productive use, the reviewed loader must independently establish the original runtime, entry,
+module/imports and installed custody and transfer exclusive original owners. No such loader caller exists.
+The native registration core has one explicit registrar-v1 export, separate from its unchanged 23 JNI
+methods. The managed byte/address plan requires all 24 exports, but neither creates a callable scoped
+segment nor supplies authority. The production loading refusal is unchanged.
+
+The mechanism requires its original named boot module and one platform thread, native non-global live scoped
+addresses, 64-bit little-endian layouts, positive user-mode addresses and an aligned VM pointer. It performs no
+symbol search, library loading, numeric-pointer construction or global reinterpretation. Its fixed descriptor
+and private confined arena contain disjoint aligned 184-byte input and 32-byte output allocations. Original
+address observations are copied once; the Java input view is read-only. These checks establish data mechanics,
+not Windows system-library/bootstrap trust or correspondence of a pointer to an admitted VM.
+
+Only the exact process owner's reserved invocation can enter. There is one attempt, on its original platform
+thread, one immutable report read after normal return, and no frame retirement during native use. Cleanup
+independently clears each buffer and closes only the invocation arena, retaining separate preallocated failure
+slots and never retrying an uncertain retirement. It never closes the entry/VM scopes or unloads a module.
+
+The diagnostic command exercises **13 fresh-process FFM invocation controls** using a JDK-generated upcall stub
+and an inert allocation in place of a VM pointer. The real downcall/upcall checks argument order, exact counts,
+bounded pointer layouts, source-array isolation, initial zero output, report readback, owner/thread/one-shot
+constraints and frame retirement. The callback never invokes JNI or storage and never lets a Java exception
+escape its native boundary. A test-only reflective read-only-buffer fault verifies retained retirement failure;
+no production fault-injection hook is added. These are host-ABI FFM mechanics, **not Windows ABI/JNI registration,
+DLL loading, protected NTFS, installed application or production authority qualification**.

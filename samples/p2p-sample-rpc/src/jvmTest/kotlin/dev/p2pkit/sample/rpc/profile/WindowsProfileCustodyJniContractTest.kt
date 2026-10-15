@@ -61,8 +61,11 @@ class WindowsProfileCustodyJniContractTest {
     @Test
     fun structuralPeExportPolicyMatchesCompiledJniMethodsButDoesNotEnableTheProvider() {
         val prefix = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_"
-        assertEquals(descriptors.keys.mapTo(linkedSetOf()) { prefix + it }, WindowsProfilePeImage.expectedExports)
-        assertEquals(methods.mapTo(linkedSetOf()) { prefix + it.name }, WindowsProfilePeImage.expectedExports)
+        assertEquals(descriptors.keys.mapTo(linkedSetOf()) { prefix + it }, WindowsProfilePeImage.expectedJniExports)
+        assertEquals(methods.mapTo(linkedSetOf()) { prefix + it.name }, WindowsProfilePeImage.expectedJniExports)
+        assertEquals(WindowsProfilePeImage.expectedJniExports + "pwp_jni_register_once",
+            WindowsProfilePeImage.expectedExports)
+        assertEquals(24, WindowsProfilePeImage.expectedExports.size)
         assertEquals(13, WindowsProfilePeImage.ABI)
         assertFalse(WindowsProfileAvailability.IMPLEMENTED)
         assertFalse(WindowsProfileAvailability.QUALIFIED)

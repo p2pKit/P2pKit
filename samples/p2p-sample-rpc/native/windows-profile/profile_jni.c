@@ -375,7 +375,7 @@ JNIEXPORT void JNICALL JNI_NAME(close)(JNIEnv *env, jobject instance, jlong hand
     fail(env, pwp_win_close((uint64_t)handle));
 }
 
-/* Fixed original-symbol table; native registration is not exported or enabled by this data. */
+/* Fixed original-symbol table, not exported. Its data neither enables nor authorizes registration. */
 const JNINativeMethod pwp_jni_methods[PWP_JNI_METHOD_COUNT] = {
     {"abi", "()I", (void *)JNI_NAME(abi)},
     {"capabilities", "()J", (void *)JNI_NAME(capabilities)},

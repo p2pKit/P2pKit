@@ -58,7 +58,7 @@ def main():
     with zipfile.ZipFile(jar) as archive:
         entries = archive.namelist()
         require(len(entries) == len(set(entries)) and "module-info.class" in entries and
-                not any("ModelTests" in name or "RegistrationOwnerTests" in name or
+                not any("ModelTests" in name or "RegistrationOwnerTests" in name or "RegistrationInvocationTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -130,6 +130,14 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".RegistrationOwnerTests", case], 0,
             "WINDOWS_JNI_OWNER_PASS case=" + re.escape(case) +
             r" scope=PORTABLE_LIFETIME_NOT_NATIVE_REGISTRATION_OR_AUTHORITY\n", "")
+    invocation_cases = ["success", "snapshot", "arguments", "virtual", "thread", "reentrant", "refusal",
+                        "zero-report", "mismatched-result", "report-clear-failure", "closed-entry", "closed-vm",
+                        "other-invocation"]
+    for case in invocation_cases:
+        run("registration-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".RegistrationInvocationTests", case], 0,
+            "WINDOWS_JNI_FFM_INVOCATION_PASS case=" + re.escape(case) +
+            r" scope=JDK_UPCALL_MARSHALING_NOT_WINDOWS_JNI_OR_AUTHORITY\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_PREVIEW_REFUSALS_AND_PORTABLE_MODELS_NOT_OS_JNI_OR_RELEASE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},

@@ -12,8 +12,15 @@ import java.util.Collections
 internal class WindowsProfileJniPlan private constructor(
     val declaringClass: Class<*>,
     val methods: List<Binding>,
+    val registrar: RegistrarBinding,
 ) {
     data class Binding(val name: String, val descriptor: String, val exportName: String, val address: Long)
+    /** Separate post-admission C interface, never an extra Java native method or execution authority. */
+    data class RegistrarBinding(val exportName: String, val address: Long) {
+        val version: Int get() = 1
+        val methodCount: Int get() = 23
+        val reportBytes: Int get() = 32
+    }
 
     /**
      * Maintained application only: incidental FFM caller/FindClass context is not declaring-class identity.
@@ -79,10 +86,10 @@ internal class WindowsProfileJniPlan private constructor(
                     "Windows JNI compiled method contract differs"
                 }
             }
-            require(descriptors.keys.mapTo(linkedSetOf()) { PREFIX + it } == WindowsProfilePeImage.expectedExports)
-            val count = descriptors.size
+            require(descriptors.keys.mapTo(linkedSetOf()) { PREFIX + it } == WindowsProfilePeImage.expectedJniExports)
+            val count = WindowsProfilePeImage.expectedExports.size
             require(image.namedExports.size == count && resolved.size == count) {
-                "Windows JNI export observations are incomplete"
+                "Windows JNI/registrar export observations are incomplete"
             }
             // Bounded private snapshots: validate and consume the SAME values, not a mutable list reread
             // after verification. These data classes contain only immutable strings/numbers.
@@ -95,7 +102,9 @@ internal class WindowsProfileJniPlan private constructor(
             val bindings = descriptors.map { (name, descriptor) ->
                 Binding(name, descriptor, PREFIX + name, byName.getValue(PREFIX + name))
             }
-            return WindowsProfileJniPlan(declaringClass, Collections.unmodifiableList(bindings))
+            val registrar = WindowsProfilePeImage.REGISTRATION_EXPORT
+            return WindowsProfileJniPlan(declaringClass, Collections.unmodifiableList(bindings),
+                RegistrarBinding(registrar, byName.getValue(registrar)))
         }
     }
 }

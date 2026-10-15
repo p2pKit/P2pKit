@@ -58,7 +58,7 @@ static void retain_pending(JNIEnv *env, pwp_jni_registration_report *report) {
     }
 }
 
-int32_t pwp_jni_register_once(JavaVM *expected_vm, const uintptr_t *expected_entry_points,
+PWP_JNI_REGISTRATION_EXPORT int32_t pwp_jni_register_once(JavaVM *expected_vm, const uintptr_t *expected_entry_points,
                             uint32_t entry_count, pwp_jni_registration_report *report, uint32_t report_bytes) {
     if (!report || report_bytes != sizeof(*report)) return PWP_JNI_REGISTER_ARGUMENT;
     *report = (pwp_jni_registration_report){sizeof(*report), 1, 0, PWP_JNI_REGISTER_ARGUMENT, 0, 0, 0, 0};

@@ -23,6 +23,12 @@ class WindowsProfileJniPlanTest {
         }
         assertEquals(compiled, plan.methods.associate { it.name to it.descriptor })
         val exports = image.namedExports.associateBy { it.name }
+        assertEquals("pwp_jni_register_once", plan.registrar.exportName)
+        assertEquals(BASE + exports.getValue(plan.registrar.exportName).functionRva, plan.registrar.address)
+        assertEquals(1, plan.registrar.version)
+        assertEquals(23, plan.registrar.methodCount)
+        assertEquals(32, plan.registrar.reportBytes)
+        assertFalse(plan.methods.any { it.exportName == plan.registrar.exportName })
         for (method in plan.methods) {
             assertEquals(PREFIX + method.name, method.exportName)
             assertEquals(BASE + exports.getValue(method.exportName).functionRva, method.address)
@@ -36,11 +42,13 @@ class WindowsProfileJniPlanTest {
         val normal = prepare(image)
         val reversed = prepare(image, addresses(image).reversed())
         assertEquals(normal.methods, reversed.methods)
+        assertEquals(normal.registrar, reversed.registrar)
         val otherBase = 0x7ff900000000L
         val relocated = WindowsProfileJniPlan.prepare(
             WindowsProfileCustodyJni::class.java, image, otherBase, image.imageBytes, addresses(image, otherBase),
         )
         assertEquals(normal.methods.map { it.copy(address = it.address - BASE + otherBase) }, relocated.methods)
+        assertEquals(normal.registrar.copy(address = normal.registrar.address - BASE + otherBase), relocated.registrar)
     }
 
     @Test fun immutableBindingsDoNotRereadMutableInputLists() {
@@ -49,32 +57,34 @@ class WindowsProfileJniPlanTest {
         val addresses = addresses(image).toMutableList()
         val plan = prepare(image.copy(namedExports = exports), addresses)
         val original = plan.methods.toList()
+        val registrar = plan.registrar
         exports.clear()
         addresses.clear()
         assertEquals(original, plan.methods)
+        assertEquals(registrar, plan.registrar)
         assertFailsWith<UnsupportedOperationException> { (plan.methods as MutableList).clear() }
     }
 
     @Test fun eachBoundedObservationIsReadOnlyOnceBeforeVerification() {
         val image = image()
         val original = addresses(image)
-        val reads = IntArray(23)
-        val exportReads = IntArray(23)
+        val reads = IntArray(24)
+        val exportReads = IntArray(24)
         val changing = object : AbstractList<WindowsProfileExportAddresses.ResolvedExport>() {
-            override val size = 23
+            override val size = 24
             override fun get(index: Int) = original[index].also {
                 check(++reads[index] == 1) { "Resolution reread after verification" }
             }
         }
         val changingExports = object : AbstractList<WindowsProfilePeImage.NamedExport>() {
-            override val size = 23
+            override val size = 24
             override fun get(index: Int) = image.namedExports[index].also {
                 check(++exportReads[index] == 1) { "Pinned binding reread after verification" }
             }
         }
         assertEquals(prepare(image).methods, prepare(image.copy(namedExports = changingExports), changing).methods)
-        assertEquals(List(23) { 1 }, reads.toList())
-        assertEquals(List(23) { 1 }, exportReads.toList())
+        assertEquals(List(24) { 1 }, reads.toList())
+        assertEquals(List(24) { 1 }, exportReads.toList())
     }
 
     @Test fun incompleteDuplicateUnknownAndWrongFunctionBindingsRefuse() {
@@ -87,6 +97,28 @@ class WindowsProfileJniPlanTest {
             original.toMutableList().apply { this[0] = first().copy(address = first().address + 1) },
         )
         for (candidate in variants) assertFailsWith<IllegalArgumentException> { prepare(image, candidate) }
+    }
+
+    @Test fun registrarMustHaveItsOwnExactOriginalNameAndAddressBeforeAnyBindingIsReturned() {
+        val image = image()
+        val original = addresses(image)
+        val registrar = original.single { it.name == "pwp_jni_register_once" }
+        val method = original.first { it.name != registrar.name }
+        val variants = listOf(
+            original.filterNot { it.name == registrar.name },
+            original.map { if (it == registrar) it.copy(name = "pwp_jni_register_other") else it },
+            original.map { if (it == registrar) it.copy(address = registrar.address + 1) else it },
+            original.map {
+                when (it.name) {
+                    registrar.name -> it.copy(address = method.address)
+                    method.name -> it.copy(address = registrar.address)
+                    else -> it
+                }
+            },
+        )
+        for (candidate in variants) assertFailsWith<IllegalArgumentException> { prepare(image, candidate) }
+        val withoutRegistrar = image.copy(namedExports = image.namedExports.filterNot { it.name == registrar.name })
+        assertFailsWith<IllegalArgumentException> { prepare(withoutRegistrar, original) }
     }
 
     @Test fun oversizedInventoriesRefuseBeforeReadingAnyEntry() {

@@ -464,7 +464,7 @@ storage behavior, interrupted transactions or recovery.
 The primitive does not change candidate states into committed records, perform replacement/deletion,
 sync all bootstrap ancestors, introduce recovery, or implement `WindowsProfileNativeApi.write`.
 The partial capability mask remains **`0x43`** and both full-provider availability flags remain false.
-ABI9 introduced this primitive with twenty JNI exports. The current ABI is 13/23 exports;
+ABI9 introduced this primitive with twenty JNI exports. The current custody ABI is 13 with 23 JNI exports plus a separate registrar-v1 export;
 neither ABI checks nor a directory flush
 substitute for the remaining full transaction, secure loader, packaging and runtime qualification work.
 
