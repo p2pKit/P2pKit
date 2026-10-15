@@ -405,19 +405,20 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
         return GATE.assess(report, POLICY, "ios-x64", "x64", TOKEN, **arguments)
 
     def test_bootstatus_phase_ceiling_preserves_other_limits_and_failures(self):
-        self.assertEqual(300, GATE.INTEL_BOOTSTATUS_SECONDS)
+        self.assertEqual(600, GATE.INTEL_BOOTSTATUS_SECONDS)
         self.assertEqual(120, GATE.simulator.SECONDS)
         self.assertEqual((15, 5), (GATE.TERMINATION_GRACE_SECONDS, GATE.TERMINATION_KILL_SECONDS))
         for label in IntelEvidenceFixture.prepare + IntelEvidenceFixture.retire:
-            ceiling = 320 if label == "intel-bootstatus" else 140
-            for duration in (ceiling, ceiling + 1):
+            ceiling = 620 if label == "intel-bootstatus" else 140
+            durations = (300, ceiling, ceiling + 1) if label == "intel-bootstatus" else (ceiling, ceiling + 1)
+            for duration in durations:
                 fixture = IntelEvidenceFixture()
                 row = fixture.rows[label]
                 row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) +
                                       timedelta(seconds=duration)).isoformat()
                 arguments, _model = fixture.packet()
                 with self.subTest(label=label, duration=duration):
-                    if duration == ceiling:
+                    if duration <= ceiling:
                         actual = GATE._intel_phase(arguments["intel_originals"], label,
                                                    fixture.root, fixture.binding["selected"])
                         self.assertEqual(row["finishedUtc"], actual["finishedUtc"])
@@ -430,7 +431,7 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
             fixture = IntelEvidenceFixture()
             row = fixture.rows["intel-bootstatus"]
             row.update({key: value, "finishedUtc": (datetime.fromisoformat(row["startedUtc"]) +
-                                                    timedelta(seconds=300)).isoformat()})
+                                                    timedelta(seconds=600)).isoformat()})
             arguments, _model = fixture.packet()
             with self.subTest(field=key, value=value), self.assertRaisesRegex(ValueError, "INTEL_PHASE_FAILED"):
                 GATE._intel_phase(arguments["intel_originals"], "intel-bootstatus",
