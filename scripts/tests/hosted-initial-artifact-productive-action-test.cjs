@@ -499,6 +499,20 @@ test('synthetic productive DATA keeps exact66 and unsigned5400/4650 ends for neg
         assert.equal(ready.qualification, 'NOT_ESTABLISHED'); assert.equal(proposal.budgetAcceptance, 'NOT_ADMITTED');
     }
 });
+test('productive early FIRST preserves original S in DATA and shared reader mapping', async () => {
+    for (const delta of [100n * NS, 55n * NS + 1n, 55n * NS, 55n * NS - 1n]) {
+        const f = productiveDataFixture(), first = f.ready.deadline.uploadStartByNs - delta;
+        f.ready.firstRawNs = String(first); f.ready.workEndNs = String(first + 55n * NS);
+        f.ready.closeEndNs = String(first + 60n * NS); bindProductiveData(f);
+        const ready = D.ready(f.readyRaw, f.env, DATA_NOW), bounds = D.localBounds(ready, 100n * NS);
+        assert.equal(bounds.startByNs, 100n * NS + delta); assert.equal(bounds.workEndNs, 155n * NS);
+        assert.equal(bounds.closeEndNs, 160n * NS);
+    }
+    const m = readerModel(); m.bounds.uploadStartByNs = 1200n * NS; m.bounds.uploadEndNs = 1260n * NS;
+    const bounds = await m.bind(); assert.equal(bounds.startByNs, 400n * NS); assert.equal(bounds.workEndNs, 155n * NS);
+    await m.demand('D', m.bytes); await m.demand('F', m.terminal()); await m.s.close();
+    assert.equal((await m.handle.completion).transport, 'closed');
+});
 test('synthetic productive DATA signed coordinates retain exact BigInt tokens without changing native defaults', () => {
     const raw = D.encode({originalJobBasisNs: -9007199254740993n, jobStartBasisNs: -18446744073709551615n}), value = D.record(raw);
     assert.equal(value.originalJobBasisNs, -9007199254740993n); assert.equal(value.jobStartBasisNs, -18446744073709551615n);

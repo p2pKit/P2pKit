@@ -113,18 +113,18 @@ def observer(D, stage, rows, request, *, start, end):
         "originalStepOutcome": "NOT_OBSERVED", "qualification": "NOT_ESTABLISHED"}
 
 
-def fixture(D):
+def fixture(D, *, first=340 * NS):
     import base64
     pending = before(D)
     context = {"originalServiceJob": [9002, "2026-09-26T00:00:00Z", "MODEL_RUNNER_NOT_AUTHORITY", 9003],
         "observed": {"runnerName": "MODEL_RUNNER_NOT_AUTHORITY"}}
     policy = {"notBefore": NOW - 3600, "expiresAt": NOW + 3600}
     match = {"notBefore": NOW - 60, "expiresAt": NOW + 60}
-    ready_raw = D.ready(pending, context, policy=policy, match=match, first_raw=340 * NS,
+    ready_raw = D.ready(pending, context, policy=policy, match=match, first_raw=first,
         before_sha256="8" * 64, carrier_sha256=sha(CARRIER_CLOSE), now=NOW)
     ready = json.loads(ready_raw)
     final = {"schema": 1, "scope": D.FINAL_SCOPE, "beforeSha256": ready["beforeSha256"], "readySha256": sha(ready_raw),
-        "zipBytes": 556, "zipSha256": "6" * 64, "nativeCloseSha256": "7" * 64, "closedNs": str(344 * NS),
+        "zipBytes": 556, "zipSha256": "6" * 64, "nativeCloseSha256": "7" * 64, "closedNs": str(first + 4 * NS),
         "nativeFileRetirement": "KNOWN_NATIVE_CLOSE", "originalReaderOutcome": "PENDING_ENCLOSING_PROCESS_CLOSE",
         "qualification": "NOT_ESTABLISHED"}
     final_raw = wire(final)
@@ -135,7 +135,8 @@ def fixture(D):
         "nativeFileRetirement": "FIXED_HELPER_RETURN_REQUIRES_CALLER_VALIDATION",
         "originalStepOutcome": "NOT_OBSERVED", "qualification": "NOT_ESTABLISHED"}
     rows = [original("job", "9002", job(D, "upload"))]
-    before_closed = observer(D, "before", rows, sha(ready_raw), start=100 * NS, end=106 * NS)
+    before_closed = observer(D, "before", rows, sha(ready_raw), start=100 * NS,
+        end=min(100 * NS + 346 * NS - first, 155 * NS, 115 * NS + 100 * 10 ** 6))
     name = "initial-recipient-custody-9001-2-worker-desktop-linux-x64"
     backend = {"workflow_run_backend_id": "", "workflow_job_run_backend_id": "", "name": name}
     expiry = "2026-10-10T00:00:30.000Z"

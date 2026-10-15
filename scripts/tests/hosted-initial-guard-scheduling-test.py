@@ -132,6 +132,28 @@ def parent_idle_preimage(name, raw):
 _CAPACITY_BASELINES = {'run-hosted-initial-recipient-custody.py': '58f757b25c57f2c34e6d79748776e60d9ba5f71e76a0680219134f2a7f150e84', 'run-hosted-initial-recipient-tail.py': 'dfe41b926cb7cdb80f4626710904a46614507be64f714f0067512eb32e329ae5'}
 _CAPACITY_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1200 * O.NS', b'basis + 1800 * O.NS', 1), (b'0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")', b'0 < maximum <= (1245 if final is True else 900), "BEFORE_MECHANISM_MAXIMUM")', 1)], 'run-hosted-initial-recipient-tail.py': [(b'started + 600 * NS', b'started + 1200 * NS', 3), (b'Separate token-free K600 subcap', b'Separate token-free K1200 subcap', 1), (b'clock.deadline(900, final=True, limit=caps[2])', b'clock.deadline(1245, final=True, limit=caps[2])', 2)]}
 
+# Exact owner-authorized headroom layer; preserve6f9 and every older whole supplier.
+_HEADROOM_BASELINES = {'run-hosted-initial-recipient-custody.py': 'ce007ad8a64b02c1194d5b2db27495250364a93effea97bc48d807d9b0c1e13c', 'run-hosted-initial-recipient-tail.py': '73b2875b140765809a736cede4beeefca0c1dab3ab702b501017a4680b2e278d'}
+_HEADROOM_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1800 * O.NS', b'basis + 3600 * O.NS', 1), (b'(1245 if final is True else 900)', b'(2445 if final is True else 900)', 1)], 'run-hosted-initial-recipient-tail.py': [(b'started + 1200 * NS', b'started + 2400 * NS', 3), (b'Separate token-free K1200 subcap', b'Separate token-free K2400 subcap', 1), (b'clock.deadline(1245, final=True, limit=caps[2])', b'clock.deadline(2445, final=True, limit=caps[2])', 2)]}
+
+
+def headroom_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _HEADROOM_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("OPERATIONAL_CAPACITY_HEADROOM_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _HEADROOM_BASELINES[name]:
+        return raw  # Exact6f9 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_HEADROOM_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("OPERATIONAL_CAPACITY_HEADROOM_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _HEADROOM_BASELINES[name]:
+        raise AssertionError("OPERATIONAL_CAPACITY_HEADROOM_WHOLE_6F9_PREIMAGE")
+    return raw
+
+
 def capacity_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _CAPACITY_BASELINES:
@@ -140,6 +162,7 @@ def capacity_preimage(name, raw):
         raise AssertionError("OPERATIONAL_CAPACITY_BYTES")
     if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
         return raw  # Exact416 input can already have been normalized by another consumer.
+    raw = headroom_preimage(name, raw)
     for before, after, count in reversed(_CAPACITY_DELTAS[name]):
         if raw.count(after) != count:
             raise AssertionError("OPERATIONAL_CAPACITY_EXACT_CONTEXT")
@@ -706,8 +729,8 @@ class GuardSchedulingControls(unittest.TestCase):
                 outcomes.append((result, rig.events))
             self.assertEqual(outcomes[0], outcomes[1])
 
-    def capacity_clock(self, *, raw_work=2000_000_000_000, raw_final=2045_000_000_000,
-                       local_work=2000.0, local_final=2045.0):
+    def capacity_clock(self, *, raw_work=3000_000_000_000, raw_final=3045_000_000_000,
+                       local_work=3000.0, local_final=3045.0):
         # Actual current BeforeClock/deadline/observe/current plus existing finite owner seams.
         rig = Rig("new", "before")
         binding = list(rig.clock._binding)
@@ -720,7 +743,7 @@ class GuardSchedulingControls(unittest.TestCase):
         return rig
 
     def test_capacity_final_only_ceiling_and_existing_900_are_actual(self):
-        for maximum, final in ((900, False), (900, True), (1245, True)):
+        for maximum, final in ((900, False), (900, True), (1245, True), (2445, True)):
             rig = self.capacity_clock()
             native_ends = [rig.owner_states[name].native.local_end for name in ("active", "metadata")]
             result = rig.clock.deadline(maximum, final=final)
@@ -730,7 +753,7 @@ class GuardSchedulingControls(unittest.TestCase):
             self.assertIsNone(rig.anchor.failure)
             self.assertIs(rig.anchor.busy, False)
             self.assertEqual(native_ends, [rig.owner_states[name].native.local_end for name in ("active", "metadata")])
-        for maximum, final in ((1245, False), (math.nextafter(1245.0, math.inf), True),
+        for maximum, final in ((1245, False), (2445, False), (math.nextafter(2445.0, math.inf), True),
                                (math.nextafter(900.0, math.inf), False)):
             rig = self.capacity_clock()
             error = self.raised(lambda: rig.clock.deadline(maximum, final=final))
@@ -745,7 +768,7 @@ class GuardSchedulingControls(unittest.TestCase):
                 raise AssertionError("final truthiness must not run")
         for final in (Hostile(), 1, 0, None, "true"):
             rig = self.capacity_clock()
-            error = self.raised(lambda: rig.clock.deadline(1245, final=final))
+            error = self.raised(lambda: rig.clock.deadline(2445, final=final))
             self.assertEqual(str(error), "BEFORE_MECHANISM_MAXIMUM")
             self.assertEqual(rig.events, [])
             self.assertIs(rig.anchor.busy, False)
@@ -754,25 +777,37 @@ class GuardSchedulingControls(unittest.TestCase):
         for raw_end, local_end, limit in ((12_000_000_000, 2045.0, None),
                 (2045_000_000_000, 7.0, None), (2045_000_000_000, 2045.0, 8_000_000_000)):
             rig = self.capacity_clock(raw_final=raw_end, local_final=local_end)
-            result = rig.clock.deadline(1245, final=True, limit=limit)
+            result = rig.clock.deadline(2445, final=True, limit=limit)
             selected_end = raw_end if limit is None else min(raw_end, limit)
-            expected = min(local_end, math.nextafter(2.0 + min(1245,
+            expected = min(local_end, math.nextafter(2.0 + min(2445,
                 math.nextafter((selected_end - 21) / 1_000_000_000, 0.0)), -math.inf))
             self.assertEqual(result, expected)
-            self.assertLess(result, 1247)
+            self.assertLess(result, 2447)
         for kwargs, reason in (({"local_final": 2.0}, "BEFORE_LOCAL_EXPIRED"),
                 ({"raw_final": 20}, "BEFORE_RAW_EXPIRED_OR_CHANGED")):
             rig = self.capacity_clock(**kwargs)
-            error = self.raised(lambda: rig.clock.deadline(1245, final=True))
+            error = self.raised(lambda: rig.clock.deadline(2445, final=True))
             self.assertEqual(str(error), reason)
             self.assertIs(rig.anchor.failure, error)
-            self.assertIs(self.raised(lambda: rig.clock.deadline(1245, final=True)), error)
+            self.assertIs(self.raised(lambda: rig.clock.deadline(2445, final=True)), error)
 
     def test_capacity_exact_layer_and_original_parent_container_calls(self):
         for name, raw in SOURCES.items():
+            prior = headroom_preimage(name, raw)
+            self.assertEqual(hashlib.sha256(prior).hexdigest(), _HEADROOM_BASELINES[name])
+            self.assertEqual(headroom_preimage(name, prior), prior)
+            for before, after, count in _HEADROOM_DELTAS[name]:
+                self.assertEqual(raw.count(after), count)
+                removed = raw.replace(after, b"", 1)
+                for changed in (removed, raw.replace(after, after * 2, 1), removed + after,
+                                raw.replace(after, before, 1), raw.replace(after, after + b" ", 1), raw + b"\n"):
+                    self.assertNotEqual(changed, raw)
+                    with self.assertRaisesRegex(AssertionError, "OPERATIONAL_CAPACITY_HEADROOM_"):
+                        headroom_preimage(name, changed)
             original = capacity_preimage(name, raw)
             self.assertEqual(hashlib.sha256(original).hexdigest(), _CAPACITY_BASELINES[name])
             self.assertEqual(capacity_preimage(name, original), original)
+            raw = prior  # The old capacity controls retain their original complete6f9 supplier.
             for before, after, count in _CAPACITY_DELTAS[name]:
                 self.assertEqual(raw.count(after), count)
                 removed = raw.replace(after, b"", 1)
@@ -786,14 +821,14 @@ class GuardSchedulingControls(unittest.TestCase):
                       if isinstance(node, ast.FunctionDef) and node.name == "_native_tail")
         calls = [node for node in ast.walk(parent) if isinstance(node, ast.Call)
                  and ast.unparse(node.func) == "clock.deadline" and node.args
-                 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 1245]
+                 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 2445]
         self.assertEqual(len(calls), 2)
         for call in calls:
             self.assertEqual({item.arg: ast.unparse(item.value) for item in call.keywords},
                              {"final": "True", "limit": "caps[2]"})
-        self.assertIn("work == min(started + 1200 * NS, seal_end - 45 * NS)", tail)
+        self.assertIn("work == min(started + 2400 * NS, seal_end - 45 * NS)", tail)
         self.assertIn("final == work + 45 * NS <= seal_end", tail)
-        self.assertIn("min(clock.local_end, clock.deadline(1245, final=True, limit=caps[2]))", tail)
+        self.assertIn("min(clock.local_end, clock.deadline(2445, final=True, limit=caps[2]))", tail)
 
     def test_poll_reader_caps_cleanup_and_callbacks_are_byte_exact(self):
         # Prove the new capacity-only layer before any historical normalization.

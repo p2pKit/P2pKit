@@ -70,7 +70,7 @@ function replaceBody(original, request, value) {
         rawHeaderVectorSha256: sha(Buffer.from(JSON.stringify(original.rawHeaderVector)))});
 }
 function model(mode = 'upload', config = {}) {
-    const m = finiteFixture(mode), f = m.f, upload = mode === 'upload';
+    const m = finiteFixture(mode, config.first), f = m.f, upload = mode === 'upload';
     const calls = [], outputs = [], errors = [], writes = [], timers = new Map(), options = {};
     const module = {exports: {}}, signals = new EventEmitter(), env = {...f.environment,
         INPUT_MODE: mode, INPUT_PYTHON: '/usr/bin/python3', 'INPUT_TOOL-PATH': '/usr/bin:/bin',
@@ -220,6 +220,17 @@ test('UPLOAD original chain validates BEFORE before Create and waits for all clo
     assert.deepEqual(lines, Object.entries(D.outputs(m.m.result)).map(([name, value]) => name + '=' + value));
     assert.equal(m.options.finite.argv[4], 'finish'); assert.equal(m.options.finite.python, '/usr/bin/python3');
     assert.equal(m.timers.size, 0);
+});
+test('early FIRST completes the same original BEFORE Create reader finite and output chain', async () => {
+    const m = await model('upload', {first: 200n * NS}).run();
+    assert.equal(m.exitCode, 0); assert.equal(m.errors.length, 0);
+    assert.equal(m.outputs.length, 1); assert(m.calls.includes('Create'));
+    assert.equal(m.f.bounds.startByNs, 285n * NS); assert.equal(m.f.bounds.workEndNs, 155n * NS);
+});
+test('early FIRST work equality in BEFORE callback blocks Create while original S is still future', async () => {
+    const m = await model('upload', {first: 200n * NS,
+        observerReturn(m) { m.setNow(m.f.bounds.workEndNs); }}).run();
+    notAccepted(m); assert(!m.calls.includes('Create')); assert.equal(m.outputs.length, 0);
 });
 test('AFTER opens exactly one new R/I/F process and public observer, never reader/Create', async () => {
     const m = await model('after').run(); assert.equal(m.exitCode, 0); assert.equal(m.errors.length, 0);

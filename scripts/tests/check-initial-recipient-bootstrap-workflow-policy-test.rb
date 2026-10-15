@@ -24,7 +24,7 @@ P.check_sources(ROOT)
 checks = 2
 # JOB90/produce56 are outer kill ceilings, not native fit or activation claims.
 worker_steps = WORKFLOW.fetch("jobs").fetch("populate").fetch("steps")
-{"initial-recipient-gate" => 30, "populate" => 90}.each do |job, expected|
+{"initial-recipient-gate" => 60, "populate" => 90}.each do |job, expected|
     actual = WORKFLOW.fetch("jobs").fetch(job).fetch("timeout-minutes")
     raise "wrong integer JOB ceiling #{job}" unless actual.instance_of?(Integer) && actual == expected
     checks += 1
@@ -80,11 +80,11 @@ checks += 3
         step["timeout-minutes"] == expected
     checks += 1
 end
-# Gate sealEnd = originalJobBasis+1725; this outer twenty-five-minute kill
-# ceiling does not renew that absolute fence or the gate1800 envelope.
+# Gate sealEnd = originalJobBasis+3525; this outer forty-five-minute kill
+# ceiling does not renew that absolute fence or the gate3600 envelope.
 gate_before = WORKFLOW.fetch("jobs").fetch("initial-recipient-gate").fetch("steps").select { |step| step["id"] == "initial-before" }
 raise "changed integer gate before-upload ceiling" unless gate_before.size == 1 &&
-    gate_before[0]["timeout-minutes"].instance_of?(Integer) && gate_before[0]["timeout-minutes"] == 25
+    gate_before[0]["timeout-minutes"].instance_of?(Integer) && gate_before[0]["timeout-minutes"] == 45
 checks += 1
 mutations = {
     "extra event" => ->(w) { w.fetch(true)["push"] = {} },
@@ -111,7 +111,7 @@ mutations = {
         w["jobs"]["initial-recipient-gate"]["steps"].find { |step| step["id"] == "initial-originals" }["run"] = "echo success\n"
     },
 }
-[6, 9, 10, 11, 19, 20, 21, 29, 31, "10", 10.0, "20", 20.0, "30", 30.0, true, nil].each do |cap|
+[6, 9, 10, 11, 19, 20, 21, 29, 30, 31, 59, 61, "10", 10.0, "20", 20.0, "30", 30.0, "60", 60.0, true, nil].each do |cap|
     mutations["gate JOB cap #{cap.inspect}"] = ->(w) { w["jobs"]["initial-recipient-gate"]["timeout-minutes"] = cap }
 end
 [20, 89, 91, "90", 90.0, true, nil].each do |cap|
@@ -122,7 +122,7 @@ end
         w["jobs"]["populate"]["steps"].find { |step| step["id"] == "produce" }["timeout-minutes"] = cap
     }
 end
-[1, 5, 6, 7, 14, 15, 16, 24, 26, "6", 6.0, "15", 15.0, "25", 25.0, true, nil].each do |cap|
+[1, 5, 6, 7, 14, 15, 16, 24, 25, 26, 44, 46, "6", 6.0, "15", 15.0, "25", 25.0, "45", 45.0, true, nil].each do |cap|
     mutations["gate before-upload outer ceiling #{cap.inspect}"] = ->(w) {
         w["jobs"]["initial-recipient-gate"]["steps"].find { |step| step["id"] == "initial-before" }["timeout-minutes"] = cap
     }

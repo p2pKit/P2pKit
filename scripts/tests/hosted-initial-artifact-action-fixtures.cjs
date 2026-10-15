@@ -19,7 +19,7 @@ function headers(length) {
         'Cache-Control', 'public, max-age=60, s-maxage=60', 'Content-Length', String(length),
         'X-Model-Private', 'MODEL_HEADER_NOT_PUBLIC_OUTPUT'];
 }
-function fixture() {
+function fixture(first = 384n * NS) {
     const environment = {GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'p2pKit/P2pKit', GITHUB_SHA: 'a'.repeat(40),
         GITHUB_REF: 'refs/heads/work/release-foundation-20260926-1WzHcOIr', GITHUB_RUN_ID: '123456', GITHUB_RUN_ATTEMPT: '1',
         GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_SHA: 'a'.repeat(40), GITHUB_WORKSPACE: '/model/p2pkit',
@@ -42,7 +42,7 @@ function fixture() {
         selection: 'desktop-linux-x64', source: {commit: 'a'.repeat(40), tree: 'b'.repeat(40)},
         github: {repository: environment.GITHUB_REPOSITORY, runId: environment.GITHUB_RUN_ID,
             runAttempt: environment.GITHUB_RUN_ATTEMPT, job: environment.GITHUB_JOB, jobId: 123, role: 'linux-x64'},
-        beforeSha256: environment.P2PKIT_INITIAL_BEFORE_SHA256, carrierCloseSha256: 'c'.repeat(64), firstRawNs: String(384n * NS),
+        beforeSha256: environment.P2PKIT_INITIAL_BEFORE_SHA256, carrierCloseSha256: 'c'.repeat(64), firstRawNs: String(first),
         deadline: {initialSealSha256: environment.P2PKIT_INITIAL_SEAL_SHA256, initialSealEndNs: environment.P2PKIT_INITIAL_SEAL_END_NS,
             initialSealClockRole: environment.P2PKIT_INITIAL_SEAL_CLOCK_ROLE,
             initialSealClockDomain: environment.P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN,
@@ -50,11 +50,11 @@ function fixture() {
             initialSealBootSha256: environment.P2PKIT_INITIAL_SEAL_BOOT_SHA256},
         originalWindow: {schema: 1, scope: 'INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1',
             clock: {role: 'linux-x64', domain: environment.P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN, ticksPerSecond: NS},
-            // Fixed original JOB1800 minus180 tail: work280/end460 stay exact at this late start.
-            originalBootDigest: environment.P2PKIT_INITIAL_SEAL_BOOT_SHA256, kind: 'gate', originalJobBasisNs: -1340n * NS,
+            // Fixed original JOB3600 minus180 tail: work280/end460 stay exact at this late start.
+            originalBootDigest: environment.P2PKIT_INITIAL_SEAL_BOOT_SHA256, kind: 'gate', originalJobBasisNs: -3140n * NS,
             jobEndNs: 460n * NS, startNs: 110n * NS, workEndNs: 280n * NS, nativeFinalEndNs: 325n * NS,
             readEndNs: 355n * NS, sealEndNs: 385n * NS, uploadEndNs: 445n * NS, afterEndNs: 460n * NS},
-        workEndNs: String(439n * NS), closeEndNs: String(444n * NS), members, zipBytes,
+        workEndNs: String(first + 55n * NS), closeEndNs: String(first + 60n * NS), members, zipBytes,
         originals: {eventSha256: 'e'.repeat(64), policySha256: 'a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b',
             matchSha256: 'f'.repeat(64)},
         jobOriginal: [123, '2026-09-26T11:59:00Z', environment.RUNNER_NAME, 456], observedAt: NOW / 1000,
@@ -91,11 +91,12 @@ function fixture() {
         code: null, requestSha256: sha(readyRaw), jobId: '123', artifactId: null,
         enteredNs: String(100n * NS + 50000000n), lastObservationNs: String(100n * NS + 210000000n),
         agentDestroyReturned: true, originalResourceCount: 3,
-        requests: [observerRow(beforeOriginals[0], 100n * NS + 100000000n, 100n * NS + 200000000n, bounds.startByNs)],
+        requests: [observerRow(beforeOriginals[0], 100n * NS + 100000000n, 100n * NS + 200000000n,
+            [bounds.startByNs, bounds.workEndNs, 115n * NS + 100000000n].reduce((a, b) => a < b ? a : b))],
         originalStepOutcome: 'NOT_OBSERVED', qualification: 'NOT_ESTABLISHED'};
     const final = {schema: 1, scope: 'INITIAL_ARTIFACT_NATIVE_STREAM_CLOSED_FILES_PENDING_PROCESS_V1',
         beforeSha256: ready.beforeSha256, readySha256: sha(readyRaw), zipBytes, zipSha256: 'a'.repeat(64),
-        nativeCloseSha256: '5'.repeat(64), closedNs: String(388n * NS), nativeFileRetirement: 'KNOWN_NATIVE_CLOSE',
+        nativeCloseSha256: '5'.repeat(64), closedNs: String(first + 4n * NS), nativeFileRetirement: 'KNOWN_NATIVE_CLOSE',
         originalReaderOutcome: 'PENDING_ENCLOSING_PROCESS_CLOSE', qualification: 'NOT_ESTABLISHED'};
     const finalRaw = D.encode(final);
     const readerClosed = {scope: 'INITIAL_ARTIFACT_FIXED_READER_TRANSPORT_ONLY', transport: 'closed', code: null,
@@ -149,8 +150,8 @@ function fixture() {
     return {environment, ready, readyRaw, bounds, final, finalRaw, readerClosed, beforeOriginals, beforeClosed,
         transportClosed, afterReady, afterReadyRaw, afterBounds, afterClosed, afterOriginals, job, input, observerRow};
 }
-function finiteFixture(mode = 'upload') {
-    const f = fixture(), upload = mode === 'upload', r = upload ? f.ready : f.afterReady,
+function finiteFixture(mode = 'upload', first = 384n * NS) {
+    const f = fixture(first), upload = mode === 'upload', r = upload ? f.ready : f.afterReady,
         readyRaw = upload ? f.readyRaw : f.afterReadyRaw, transport = f.transportClosed;
     const artifact = {id: transport.artifactId, name: transport.artifactName, zipBytes: transport.sentBytes,
         zipSha256: transport.observedZipSha256, createInvokedAt: transport.createInvokedAt,
@@ -167,8 +168,8 @@ function finiteFixture(mode = 'upload') {
         Object.assign(f.afterClosed.requests[1], {bodyBytes: row.body.length, bodySha256: sha(row.body),
             rawHeaderVectorSha256: sha(Buffer.from(JSON.stringify(row.rawHeaderVector), 'utf8'))});
     }
-    const times = upload ? {firstRawNs: r.firstRawNs, streamClosedNs: f.final.closedNs, finishFirstRawNs: String(389n * NS),
-        pendingPreparedNs: String(390n * NS), workEndNs: r.workEndNs, closeEndNs: r.closeEndNs,
+    const times = upload ? {firstRawNs: r.firstRawNs, streamClosedNs: f.final.closedNs, finishFirstRawNs: String(first + 5n * NS),
+        pendingPreparedNs: String(first + 6n * NS), workEndNs: r.workEndNs, closeEndNs: r.closeEndNs,
         readerPreSpawnLocalNs: f.readerClosed.preSpawnLocalNs, readerReturnedLocalNs: f.readerClosed.returnedLocalNs,
         beforeEnteredLocalNs: f.beforeClosed.enteredNs, beforeReturnedLocalNs: f.beforeClosed.lastObservationNs,
         transportEnteredLocalNs: transport.enteredNs, transportReturnedLocalNs: transport.returnedObservationNs} :
@@ -201,7 +202,7 @@ function finiteFixture(mode = 'upload') {
         'INITIAL_ARTIFACT_AFTER_CLOSED_PENDING_PROCESS_V1', kind: r.kind, selection: r.selection, source: copy(r.source),
         github: copy(r.github), beforeSha256: r.beforeSha256, readySha256: sha(readyRaw), inputSha256: sha(inputRaw), pending,
         pendingSha256: sha(D.encode(pending)), directoryIdentitySha256: '6'.repeat(64), fileMetadataSha256: '7'.repeat(64),
-        fileOwnerCloseSha256: '8'.repeat(64), closedNs: String((upload ? 391n : 447n) * NS), artifactId: artifact.id,
+        fileOwnerCloseSha256: '8'.repeat(64), closedNs: String(upload ? first + 7n * NS : 447n * NS), artifactId: artifact.id,
         originalHelperOutcome: 'PENDING_ENCLOSING_PROCESS_CLOSE', originalStepOutcome: 'NOT_OBSERVED', qualification: 'NOT_ESTABLISHED'};
     return {f, pending, result, raw: D.encode(result), inputRaw,
         context: {mode, readyRaw, readyValue: r, bounds: upload ? f.bounds : f.afterBounds, inputRaw,

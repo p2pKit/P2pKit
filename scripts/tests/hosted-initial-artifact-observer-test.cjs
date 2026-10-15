@@ -209,10 +209,21 @@ test('accessors, nonplain inputs, non-Node24 and unbranded or already-aborted si
 });
 test('BEFORE keeps original U60, strict startBy/work and unchanged five-second tail', async () => {
     for (const change of [{preSpawnLocalNs: 101n * NS}, {preSpawnLocalNs: 99n * NS},
-        {startByNs: 100n * NS}, {startByNs: 155n * NS}, {workEndNs: 154n * NS},
+        {startByNs: 100n * NS}, {workEndNs: 154n * NS},
         {closeEndNs: 161n * NS, workEndNs: 156n * NS}, {startByNs: 100000000001}, {closeEndNs: -1n}]) {
         const m = model(); assert.throws(() => m.call({...m.options, ...change})); assert.equal(m.requests.length, 0);
     }
+});
+test('future S admits BEFORE but request15 and strict work fence both remain original', async () => {
+    for (const start of [155n * NS - 1n, 155n * NS, 155n * NS + 1n, 200n * NS]) {
+        const m = model(); m.options.startByNs = start; await m.start();
+        assert.equal((await positive(m)).requests[0].endNs, String(115n * NS));
+    }
+    const m = model(); m.options.startByNs = 200n * NS; m.setNow(154n * NS); await m.start();
+    assert([...m.timers.values()].some(row => row.at === 155n * NS));
+    await m.respond(); m.setNow(155n * NS); await m.close(); await failed(m);
+    const n = model(); n.options.startByNs = 200n * NS; n.setNow(155n * NS);
+    assert.throws(() => n.call()); assert.equal(n.requests.length, 0);
 });
 test('AFTER uses the original pre-spawn15 cap, not a renewed observer allowance', async () => {
     for (const change of [{preSpawnLocalNs: 99n * NS}, {preSpawnLocalNs: 101n * NS},

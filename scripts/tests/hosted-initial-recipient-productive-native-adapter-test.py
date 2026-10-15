@@ -186,6 +186,28 @@ _OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 60
 _CAPACITY_BASELINES = {'run-hosted-initial-recipient-custody.py': '58f757b25c57f2c34e6d79748776e60d9ba5f71e76a0680219134f2a7f150e84'}
 _CAPACITY_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1200 * O.NS', b'basis + 1800 * O.NS', 1), (b'0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")', b'0 < maximum <= (1245 if final is True else 900), "BEFORE_MECHANISM_MAXIMUM")', 1)]}
 
+# Exact owner-authorized headroom layer; preserve6f9 and every older whole supplier.
+_HEADROOM_BASELINES = {'run-hosted-initial-recipient-custody.py': 'ce007ad8a64b02c1194d5b2db27495250364a93effea97bc48d807d9b0c1e13c'}
+_HEADROOM_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1800 * O.NS', b'basis + 3600 * O.NS', 1), (b'(1245 if final is True else 900)', b'(2445 if final is True else 900)', 1)]}
+
+
+def headroom_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _HEADROOM_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_HEADROOM_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _HEADROOM_BASELINES[name]:
+        return raw  # Exact6f9 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_HEADROOM_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_HEADROOM_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _HEADROOM_BASELINES[name]:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_HEADROOM_WHOLE_6F9_PREIMAGE")
+    return raw
+
+
 def capacity_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _CAPACITY_BASELINES:
@@ -194,6 +216,7 @@ def capacity_preimage(name, raw):
         raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_BYTES")
     if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
         return raw  # Exact416 input can already have been normalized by another consumer.
+    raw = headroom_preimage(name, raw)
     for before, after, count in reversed(_CAPACITY_DELTAS[name]):
         if raw.count(after) != count:
             raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_EXACT_CONTEXT")

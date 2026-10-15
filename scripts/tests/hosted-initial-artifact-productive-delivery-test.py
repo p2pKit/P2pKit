@@ -406,6 +406,29 @@ class ProductiveDeliveryDataControls(unittest.TestCase):
         start, work, close = D.upload_caps(seed, first)
         self.assertEqual((close - first, close - work), (60 * NS, 5 * NS))
         self.assertEqual(start, seed["uploadStartByNs"])
+        for early in (seed["uploadStartByNs"] - 100 * NS,
+                seed["uploadStartByNs"] - 55 * NS - 1,
+                seed["uploadStartByNs"] - 55 * NS,
+                seed["uploadStartByNs"] - 55 * NS + 1):
+            with self.subTest(early=early):
+                self.assertEqual(D.upload_caps(seed, early),
+                    (seed["uploadStartByNs"], early + 55 * NS, early + 60 * NS))
+                f = self.f
+                ready = D.stream_ready(D.ready(f["pending"], f["context"], policy=f["policy"], match=f["match"],
+                    first_raw=early, before_sha256=D.sha(f["pending_raw"]),
+                    carrier_sha256=f["pending"]["knownCloses"]["carrierCloseSha256"], now=MODEL_EPOCH + 5105))
+                self.assertEqual(D._local_bounds(ready, 100 * NS),
+                    (100 * NS + seed["uploadStartByNs"] - early, 155 * NS, 160 * NS))
+                pending = deepcopy(f["upload"])
+                pending["times"].update(firstRawNs=str(early), streamClosedNs=str(early + 2 * NS),
+                    finishFirstRawNs=str(early + 3 * NS), pendingPreparedNs=str(early + 4 * NS),
+                    workEndNs=str(early + 55 * NS), closeEndNs=str(early + 60 * NS))
+                self.assertIs(D.pending_value(pending, "finish"), pending)
+                changed = deepcopy(pending)
+                changed["times"]["beforeReturnedLocalNs"] = str(5055 * NS)
+                self.assertNotEqual(changed, pending)
+                with self.assertRaises(D.DeliveryError):
+                    D.pending_value(changed, "finish")
         for bad in (seed["uploadStartByNs"], True, -1, O.clocks.UINT64):
             with self.subTest(first=bad), self.assertRaises(Exception):
                 D.upload_caps(seed, bad)

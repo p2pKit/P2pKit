@@ -114,15 +114,15 @@ transitions. These workflow bytes are compatibility inputs: do not qualify H1
 and then change them to make H2 runnable. Changed bound sources require fresh
 compatible qualification, not a rewritten inventory/hash or reuse of stale
 C1/C2. The owner-authorized operational revision gives the initial bootstrap
-gate a thirty-minute job ceiling and its before-upload step a twenty-five-minute
+gate a sixty-minute job ceiling and its before-upload step a forty-five-minute
 kill ceiling. Gate work ends at the original job deadline minus the fixed
 180-second custody/retirement tail; its seal ends 75 seconds before that job
-deadline. K work is capped at 1200 seconds from its original start and at the
+deadline. K work is capped at 2400 seconds from its original start and at the
 inherited seal deadline minus its unchanged 45-second retirement reserve.
 Later entry or child FIRST cannot renew any stored absolute endpoint. Worker
 job/work limits remain 90 minutes/240 seconds; initializer120, pre-export
 crypto210, authority45, security freshness and all ownership/read checks remain
-unchanged. Parent final-only container requests are capped at 1245 seconds and still
+unchanged. Parent final-only container requests are capped at 2445 seconds and still
 clipped by the original K final/seal endpoints. Nonfinal and child mechanism
 limits remain 900 seconds. Local-clock and independent mechanism limits may
 shorten execution.
@@ -131,6 +131,12 @@ Gate-local query receipts are not claimed as uploaded custody; required
 productive/ordinary encrypted evidence still follows the existing fourteen-day
 Actions policy. Neither local models nor historical preview artifacts discharge
 any of these activation requirements.
+
+Upload retains two independent upper bounds: the original latest-Create deadline
+and the work end derived from actual FIRST (at most sixty seconds including the
+five-second close reserve). An early completed before-upload step need not wait
+until the original deadline; BEFORE must finish and Create must start before both bounds.
+Neither bound, the original job window, nor the authorization is renewed.
 
 ## Identity and normal future procedure
 

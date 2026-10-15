@@ -78,6 +78,25 @@ class FiniteDataControls(unittest.TestCase):
         self.assertEqual(actual[2:5], tuple(value[name] for name in ("readerClosed", "beforeClosed", "transportClosed")))
         self.assertEqual(actual[5]["steps"]["upload"]["number"], 5)
 
+    def test_complete_early_ready_finish_and_pending_keep_independent_start_and_work(self):
+        for first in (10 * NS, 291 * NS - 1, 291 * NS, 291 * NS + 1):
+            with self.subTest(first=first):
+                m = F.fixture(D, first=first)
+                control = parsed(m["control"])
+                observed = D.finish_observations(control, now=NOW)
+                self.assertEqual(D._local_bounds(m["ready"], 100 * NS),
+                    (100 * NS + 346 * NS - first, 155 * NS, 160 * NS))
+                raw = D.upload_pending(m["pending"], m["context"], policy=m["policy"], match=m["match"],
+                    control=control, observed=observed, finish_first=first + 5 * NS, prepared=first + 6 * NS, now=NOW)
+                value = D.parse_delivery(raw, "finish")
+                self.assertEqual(value["deadline"], m["pending"]["deadline"])
+                self.assertEqual(value["times"]["workEndNs"], str(first + 55 * NS))
+                for field in ("enteredNs", "lastObservationNs"):
+                    self.reject(m["control"], lambda v, field=field: v["beforeClosed"].__setitem__(field, str(155 * NS)), finish)
+                self.reject(m["control"], lambda v: v["transportClosed"].__setitem__("enteredNs", str(155 * NS)), finish)
+                self.reject(value, lambda v: v["times"].__setitem__("beforeReturnedLocalNs", str(155 * NS)),
+                    lambda v: D.pending_value(v, "finish"))
+
     def test_complete_input_bound_includes_five_byte_header_and_rejects_noncanonical_json(self):
         raw = F.wire(self.model["control"])
         self.assertEqual(D.INPUT_BYTES + 5, 2 * 1024 * 1024)

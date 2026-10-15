@@ -379,7 +379,7 @@ function openFixedReader(supplied, route) {
             const mappedEnd = preSpawnNs + row.uploadEndNs - row.firstRawNs;
             closeEndNs = mappedEnd < closeEndNs ? mappedEnd : closeEndNs;
             workEndNs = closeEndNs - 5n * NS;
-            need(lastNs < startByNs && startByNs < workEndNs && workEndNs < closeEndNs &&
+            need(lastNs < startByNs && lastNs < workEndNs && workEndNs < closeEndNs &&
                 closeEndNs <= preSpawnNs + 60n * NS, 'ORIGINAL_DIRECTED_MAPPING');
             bounds = row; released = true;
             armTimer(); observe(true);

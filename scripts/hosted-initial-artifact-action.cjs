@@ -450,7 +450,7 @@ async function mainFixed(route) {
             readyRaw = pinBytes(readyReturn.raw, RECORD);
             readyValue = pin(D.ready(readyRaw, env, Date.now()), RECORD); validity = readyValue;
             bounds = D.localBounds(readyValue, readyReturn.preSpawnLocalNs);
-            endNs = bounds.closeEndNs; arm(); checkpoint(bounds.startByNs);
+            endNs = bounds.closeEndNs; arm(); checkpoint(min(bounds.startByNs, bounds.workEndNs));
             phase = 'READER_BIND';
             const bound = pin(reader.bind({readySha256: D.sha(readyRaw), beforeSha256: readyValue.beforeSha256,
                 firstRawNs: D.decimal(readyValue.firstRawNs), [route.startField]: D.integer(readyValue[route.boundsField][route.startField]),
@@ -458,7 +458,7 @@ async function mainFixed(route) {
             D.fields(bound, ['startByNs', 'workEndNs', 'closeEndNs']);
             need(bound.startByNs === bounds.startByNs && bound.workEndNs === bounds.workEndNs &&
                 bound.closeEndNs === bounds.closeEndNs, 'ORIGINAL_READER_MAPPING');
-            checkpoint(bounds.startByNs);
+            checkpoint(min(bounds.startByNs, bounds.workEndNs));
             phase = 'BEFORE_OBSERVER';
             retained.observer = Observer.beforeOnce({jobId: String(readyValue.github.jobId), requestSha256: D.sha(readyRaw),
                 preSpawnLocalNs: bounds.preSpawnLocalNs, ...bound, signal});
@@ -467,7 +467,7 @@ async function mainFixed(route) {
             const beforeValue = pin(await before.completion), originals = pinRows(before.originals());
             D.observerClosed(beforeValue, originals, readyValue, bounds, 'before', D.sha(readyRaw), Date.now());
             D.serviceJob(readyValue, originals[0].body, originals[0].rawHeaderVector, env, 'upload', Date.now());
-            checkpoint(bounds.startByNs); // COMPLETE original job/Step semantics BEFORE Create.
+            checkpoint(min(bounds.startByNs, bounds.workEndNs)); // COMPLETE original job/Step semantics BEFORE Create.
             phase = 'UPLOAD_TRANSPORT';
             retained.transport = Transport.uploadOnce({stream: reader.stream, artifactName: D.artifactName(readyValue),
                 expectedZipBytes: readyValue.zipBytes, requestSha256: D.sha(readyRaw), ...bound, signal, service,

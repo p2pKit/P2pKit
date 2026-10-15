@@ -109,10 +109,10 @@ function observeOnce(stage, supplied) {
         need(uint64(options.preSpawnLocalNs) && options.preSpawnLocalNs <= enteredNs, 'ORIGINAL_BASIS');
         if (stage === 'before') {
             need([options.startByNs, options.workEndNs, options.closeEndNs].every(uint64) &&
-                enteredNs < options.startByNs && options.startByNs < options.workEndNs &&
+                enteredNs < options.startByNs && enteredNs < options.workEndNs &&
                 options.workEndNs === options.closeEndNs - 5n * NS &&
                 options.closeEndNs <= options.preSpawnLocalNs + 60n * NS, 'BEFORE_ORIGINAL_FENCES');
-            phaseEndNs = options.startByNs; closeEndNs = options.closeEndNs;
+            phaseEndNs = minimum(options.startByNs, options.workEndNs); closeEndNs = options.closeEndNs;
         } else {
             need(uint64(options.endNs) && enteredNs < options.endNs &&
                 options.endNs <= options.preSpawnLocalNs + 15n * NS, 'AFTER_ORIGINAL_FENCES');

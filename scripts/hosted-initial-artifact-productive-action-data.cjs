@@ -305,7 +305,7 @@ function ready(raw, environment, nowMs) {
         value.originalStepOutcome === 'NOT_OBSERVED' && value.qualification === 'NOT_ESTABLISHED', 'READY_SCOPE');
     const ends = identity(value, environment, value.kind), first = decimal(value.firstRawNs),
         close = minimum(first + 60n * NS, ends.upload), work = close - 5n * NS;
-    need(first < ends.start && ends.start < work && work < close && close <= UINT64 &&
+    need(first < ends.start && first < work && work < close && close <= UINT64 &&
         decimal(value.workEndNs) === work && decimal(value.closeEndNs) === close, 'READY_CAPS');
     digest(value.carrierCloseSha256); members(value.members, value.zipBytes);
     const originals = fields(value.originals, ['eventSha256', 'policySha256', 'matchSha256']);
@@ -447,7 +447,7 @@ function localBounds(readyValue, preSpawnLocalNs) {
         seal = integer(readyValue.deadline.uploadStartByNs), upload = integer(readyValue.deadline.uploadEndNs),
         start = integer(pre + seal - first), close = minimum(integer(pre + 60n * NS), integer(pre + upload - first)),
         work = close - 5n * NS;
-    need(pre < start && start < work && work < close &&
+    need(pre < start && pre < work && work < close &&
         decimal(readyValue.workEndNs) === first + work - pre &&
         decimal(readyValue.closeEndNs) === first + close - pre, 'DIRECTED_LOCAL_BOUNDS');
     return Object.freeze({preSpawnLocalNs: pre, startByNs: start, workEndNs: work, closeEndNs: close});
@@ -492,7 +492,7 @@ function observerClosed(supplied, originals, readyValue, bounds, stage, requestS
         artifactId = stage === 'after' ? readyValue.artifactId : null,
         actual = originalRows(originals, stage, jobId, artifactId, nowMs),
         requests = array(row.requests, actual.length, actual.length),
-        phaseEnd = stage === 'before' ? bounds.startByNs : bounds.endNs;
+        phaseEnd = stage === 'before' ? minimum(bounds.startByNs, bounds.workEndNs) : bounds.endNs;
     need(row.scope === 'INITIAL_ARTIFACT_PUBLIC_TERMINAL_TRANSPORT_ONLY_V1' && row.stage === stage &&
         row.transport === 'closed' && row.code === null && row.requestSha256 === digest(requestSha256) &&
         row.jobId === jobId && row.artifactId === artifactId && row.agentDestroyReturned === true &&
@@ -529,7 +529,7 @@ function transportClosed(supplied, readyValue, bounds, readerValue, beforeValue,
     decimal(row.artifactId, 1n, INT64);
     const entered = decimal(row.enteredNs), returned = decimal(row.returnedObservationNs),
         created = utc(row.createInvokedAt, true), expiry = utc(row.requestedExpiresAt, true);
-    need(decimal(beforeValue.lastObservationNs) <= entered && entered < bounds.startByNs && entered <= returned &&
+    need(decimal(beforeValue.lastObservationNs) <= entered && entered < bounds.startByNs && entered < bounds.workEndNs && entered <= returned &&
         entered <= decimal(readerValue.returnedLocalNs) && decimal(readerValue.returnedLocalNs) <= returned && returned < bounds.closeEndNs &&
         created <= count(nowMs, 1, 253402300799000) && expiry - created === 14 * 86400000, 'TRANSPORT_ORIGINAL_BOUNDS');
     const blocks = Math.ceil(count(zipBytes, 1, ZIP_LIMIT) / BLOCK), requests = array(row.requests, blocks + 3, blocks + 3);
@@ -675,7 +675,7 @@ function pendingShape(value, mode) {
             observations.transportRequestCount <= 67, 'PENDING_COMPLETE_REQUEST_COUNT');
         const first = decimal(times.firstRawNs), seal = integer(value.deadline.uploadStartByNs),
             close = minimum(integer(first + 60n * NS), integer(value.deadline.uploadEndNs)), work = close - 5n * NS;
-        need(first < seal && seal < work && decimal(times.workEndNs) === work && decimal(times.closeEndNs) === close &&
+        need(first < seal && first < work && decimal(times.workEndNs) === work && decimal(times.closeEndNs) === close &&
             first <= decimal(times.streamClosedNs) && decimal(times.streamClosedNs) <= decimal(times.finishFirstRawNs) &&
             decimal(times.finishFirstRawNs) <= decimal(times.pendingPreparedNs) && decimal(times.pendingPreparedNs) < work,
         'PENDING_U_ORIGINAL_RAW');
@@ -683,7 +683,7 @@ function pendingShape(value, mode) {
             beforeReturn = decimal(times.beforeReturnedLocalNs), transportEnter = decimal(times.transportEnteredLocalNs),
             readerReturn = decimal(times.readerReturnedLocalNs), transportReturn = decimal(times.transportReturnedLocalNs);
         need(pre <= beforeEnter && beforeEnter <= beforeReturn && beforeReturn <= transportEnter &&
-            transportEnter <= readerReturn && readerReturn <= transportReturn && beforeReturn < pre + seal - first &&
+            transportEnter <= readerReturn && readerReturn <= transportReturn && beforeReturn < pre + minimum(seal, work) - first &&
             readerReturn < pre + work - first && transportReturn < pre + close - first, 'PENDING_U_ORIGINAL_LOCAL');
     } else {
         digest(value.uploadSha256);

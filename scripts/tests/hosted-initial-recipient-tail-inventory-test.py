@@ -86,9 +86,9 @@ class Grammar:
         self.source = {"commit": "c" * 40, "tree": "d" * 40}
         self.clock = {"role": role, "domain": K.O.clocks.DOMAINS[role], "ticksPerSecond": NS}
         self.session = str(ROOT.parent / "NO-DIRECTORY-CREATED-K-GRAMMAR" / "returned")
-        self.work = (520 if kind == "gate" else 360) * NS  # Gate basis-1100+1620; worker start120+240.
+        self.work = (520 if kind == "gate" else 360) * NS  # Gate basis-2900+3420; worker start120+240.
         self.frame = {"schema": 1, "scope": K.WINDOW_SCOPE, "kind": kind, "clock": self.clock,
-            "originalBootDigest": "8" * 64, "originalJobBasisNs": (-1100 if kind == "gate" else 100) * NS,
+            "originalBootDigest": "8" * 64, "originalJobBasisNs": (-2900 if kind == "gate" else 100) * NS,
             "jobEndNs": (700 if kind == "gate" else 5500) * NS, "startNs": 120 * NS,
             **{name: self.work + delta * NS for name, delta in (("workEndNs", 0), ("nativeFinalEndNs", 45),
                 ("readEndNs", 75), ("sealEndNs", 105), ("uploadEndNs", 165), ("afterEndNs", 180))}}

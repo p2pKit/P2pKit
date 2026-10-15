@@ -118,7 +118,7 @@ function uploadOnce(supplied) {
         need(Number.isInteger(options.maxRetentionDays) && options.maxRetentionDays >= 14 &&
             options.maxRetentionDays <= 400, 'RETENTION_REQUIRES_14_DAYS');
         need([options.startByNs, options.workEndNs, options.closeEndNs].every(value => typeof value === 'bigint') &&
-            enteredNs < options.startByNs && options.startByNs < options.workEndNs &&
+            enteredNs < options.startByNs && enteredNs < options.workEndNs &&
             options.workEndNs === options.closeEndNs - 5n * NS &&
             options.closeEndNs - enteredNs <= 60n * NS, 'ORIGINAL_ABSOLUTE_FENCES');
         service = fields(options.service, ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL']);

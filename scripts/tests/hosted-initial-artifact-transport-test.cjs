@@ -214,6 +214,17 @@ test('exact create/block/list/finalize, wire fields, UTC14, original hash and in
     assert.equal(m.timers.size, 0); safeResult(result);
 });
 
+test('future S admits Create but original work remains an independent invocation and send bound', async () => {
+    for (const start of [155n * NS - 1n, 155n * NS, 155n * NS + 1n, 200n * NS]) {
+        const m = model(); m.options.startByNs = start; m.start();
+        assert.equal((await m.drive()).transport, 'closed'); assert.equal(m.calls.length, 4);
+    }
+    const m = model(); m.options.startByNs = 200n * NS; m.setNow(155n * NS);
+    assert.throws(() => m.start()); assert.equal(m.calls.length, 0); assert.equal(m.producerReads, 0);
+    const n = model(payload, {onRequest: (_row, api) => api.setNow(api.options.workEndNs)});
+    n.options.startByNs = 200n * NS; n.start(); await n.drive(); failed(n, n.result);
+    assert.equal(n.calls.length, 1); assert.equal(n.calls[0].body, undefined);
+});
 test('lowerCamel protobuf response spellings remain exact alternatives', async () => {
     const m = model(); m.start(); const result = await m.drive(row => row.kind === 'create' ?
         {body: Buffer.from(JSON.stringify({ok: true, signedUploadUrl: SAS}))} : row.kind === 'finalize' ?

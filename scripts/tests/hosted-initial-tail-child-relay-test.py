@@ -83,6 +83,28 @@ def parent_idle_preimage(name, raw):
 _CAPACITY_BASELINES = {'run-hosted-initial-recipient-tail.py': 'dfe41b926cb7cdb80f4626710904a46614507be64f714f0067512eb32e329ae5'}
 _CAPACITY_DELTAS = {'run-hosted-initial-recipient-tail.py': [(b'started + 600 * NS', b'started + 1200 * NS', 3), (b'Separate token-free K600 subcap', b'Separate token-free K1200 subcap', 1), (b'clock.deadline(900, final=True, limit=caps[2])', b'clock.deadline(1245, final=True, limit=caps[2])', 2)]}
 
+# Exact owner-authorized headroom layer; preserve6f9 and every older whole supplier.
+_HEADROOM_BASELINES = {'run-hosted-initial-recipient-tail.py': '73b2875b140765809a736cede4beeefca0c1dab3ab702b501017a4680b2e278d'}
+_HEADROOM_DELTAS = {'run-hosted-initial-recipient-tail.py': [(b'started + 1200 * NS', b'started + 2400 * NS', 3), (b'Separate token-free K1200 subcap', b'Separate token-free K2400 subcap', 1), (b'clock.deadline(1245, final=True, limit=caps[2])', b'clock.deadline(2445, final=True, limit=caps[2])', 2)]}
+
+
+def headroom_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _HEADROOM_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_HEADROOM_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _HEADROOM_BASELINES[name]:
+        return raw  # Exact6f9 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_HEADROOM_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_HEADROOM_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _HEADROOM_BASELINES[name]:
+        raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_HEADROOM_WHOLE_6F9_PREIMAGE")
+    return raw
+
+
 def capacity_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _CAPACITY_BASELINES:
@@ -91,6 +113,7 @@ def capacity_preimage(name, raw):
         raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_BYTES")
     if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
         return raw  # Exact416 input can already have been normalized by another consumer.
+    raw = headroom_preimage(name, raw)
     for before, after, count in reversed(_CAPACITY_DELTAS[name]):
         if raw.count(after) != count:
             raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_EXACT_CONTEXT")
@@ -993,7 +1016,7 @@ class DataControls(unittest.TestCase):
         self.assertIn('owner.error("k-native-child-return", owner_anchor.failure, unknown=True)', source)
         self.assertIn('if owner_anchor.failure is not None:\n            raise owner_anchor.failure', source)
         self.assertIn('require(captures["stderr"] == b"", "NATIVE_STDERR_NOT_EMPTY")', source)
-        self.assertIn('work == min(started + 1200 * NS, seal_end - 45 * NS)', source)
+        self.assertIn('work == min(started + 2400 * NS, seal_end - 45 * NS)', source)
         self.assertIn('remaining > required, "NATIVE_VALIDATION_FINISH_CANNOT_FIT"', source)
         self.assertIn('grace = min(5, remaining)', source)
         self.assertIn('kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end', source)
@@ -1153,7 +1176,7 @@ class ParentIdleWaitControls(unittest.TestCase):
             _PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1), old)
         self.assertIn(b'remaining = max(0, capture_end - time.monotonic())', raw)
         self.assertIn(b'kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end', raw)
-        self.assertIn(b'work == min(started + 1200 * NS, seal_end - 45 * NS)', raw)
+        self.assertIn(b'work == min(started + 2400 * NS, seal_end - 45 * NS)', raw)
 
 
 if __name__ == "__main__":

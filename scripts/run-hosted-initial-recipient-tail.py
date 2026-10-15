@@ -102,9 +102,9 @@ def _caps(seed, values):
     require(type(values) is tuple and len(values) == 3 and
         all(type(value) is int and 0 < value <= O.clocks.UINT64 for value in values), "CAPS")
     started, work, final = values
-    # Separate token-free K1200 subcap; unchanged45 retirement is reserved
+    # Separate token-free K2400 subcap; unchanged45 retirement is reserved
     # INSIDE the inherited sealEnd, never appended to it or to child FIRST.
-    require(started < work and work == min(started + 1200 * NS, seal_end - 45 * NS) and
+    require(started < work and work == min(started + 2400 * NS, seal_end - 45 * NS) and
         final == work + 45 * NS <= seal_end, "ORIGINAL_NATIVE_CAPS")
     return values
 
@@ -2023,8 +2023,8 @@ def _native_tail(parent):
     inputs = _input_values(parent)
     started = parent.now()
     seal_end = continuity.seal_deadline_data(clock.seed)[1]
-    caps = _caps(clock.seed, (started, min(started + 1200 * NS, seal_end - 45 * NS),
-        min(started + 1200 * NS, seal_end - 45 * NS) + 45 * NS))
+    caps = _caps(clock.seed, (started, min(started + 2400 * NS, seal_end - 45 * NS),
+        min(started + 2400 * NS, seal_end - 45 * NS) + 45 * NS))
     _prelaunch_budget(parent, caps)
     owner = scope = out = err = child = None
     failure = None
@@ -2032,7 +2032,7 @@ def _native_tail(parent):
     native_known = False
     diagnostic = cost = None
     try:
-        owner = C._CustodyOwner(min(clock.local_end, clock.deadline(1245, final=True, limit=caps[2])), clock,
+        owner = C._CustodyOwner(min(clock.local_end, clock.deadline(2445, final=True, limit=caps[2])), clock,
             first=clock.reading, cancelled=clock.cancelled)
         saved[3]["native"] = owner  # FIRST returned handle, never a resurrected B owner.
         owner_anchor, dictionary = owner._anchor(), owner.__dict__
@@ -2077,7 +2077,7 @@ def _native_tail(parent):
             require(owner.write(private, name, raw) == raw, "NATIVE_CONTEXT_INPUT_READBACK")
             parent.now(limit=caps[1])
             N._check_history(input_graph)
-        capture_end = min(owner.local_end, clock.deadline(1245, final=True, limit=caps[2]))
+        capture_end = min(owner.local_end, clock.deadline(2445, final=True, limit=caps[2]))
         invocation = uuid.uuid4().hex
         environment = native.processes.ownership_environment(native.recipient_environment(private.path), context["job"],
             invocation, str(private.path), str(private.path / "control-home"), allow_new_context=True)

@@ -149,6 +149,17 @@ test('directed RAW to pre-spawn LOCAL mapping never equates distinct epochs', as
     assert.equal(ends.closeEndNs, 160n * NS); assert.equal(m.writes.length, 0);
     m.handle.cancel(); await failed(m);
 });
+test('future original S stays separate from work through bind stream and known closes', async () => {
+    for (const seal of [955n * NS - 1n, 955n * NS, 955n * NS + 1n, 1200n * NS]) {
+        const m = model(); m.bounds.sealEndNs = seal; m.bounds.uploadEndNs = seal + 60n * NS;
+        const ends = await m.bind(); assert.equal(ends.startByNs, 100n * NS + seal - 900n * NS);
+        assert.equal(ends.workEndNs, 155n * NS); assert.equal(ends.closeEndNs, 160n * NS);
+        await dataThenFinal(m); await m.close(); assert.equal((await m.handle.completion).transport, 'closed');
+    }
+    const m = model(); m.bounds.sealEndNs = 1200n * NS; m.bounds.uploadEndNs = 1260n * NS;
+    await m.ready(); m.setNow(155n * NS); assert.throws(() => m.handle.bind(m.bounds));
+    assert.equal(m.writes.length, 0); await failed(m);
+});
 test('one N one chunk, no demand while the downstream consumer is paused', async () => {
     const m = model(); await m.bind();
     assert.deepEqual(await m.demand(m.raw), m.raw);
@@ -240,7 +251,7 @@ test('changed READY binding refuses before any N', async () => {
     assert.equal(m.writes.length, 0); await failed(m);
 });
 test('early source end, overdue seal and enlarged source interval cannot invent time', async () => {
-    for (const change of [{sealEndNs: 900n * NS}, {sealEndNs: 955n * NS},
+    for (const change of [{sealEndNs: 900n * NS},
         {sealEndNs: 961n * NS}, {uploadEndNs: 900n * NS}, {firstRawNs: -1n}, {firstRawNs: 900000000000}]) {
         const m = model(); await m.ready();
         assert.throws(() => m.handle.bind({...m.bounds, ...change}));

@@ -286,8 +286,12 @@ class DeliveryDataControls(unittest.TestCase):
     def test_upload_has_one_original_sixty_second_cap_and_close_reserve(self):
         self.assertEqual(self.call(D.upload_caps, seed(), 340 * NS), (346 * NS, 395 * NS, 400 * NS))
 
-    def test_upload_refuses_early_empty_interval_and_exact_seal_boundary(self):
-        for first in (0, 291 * NS, 346 * NS, 347 * NS):
+    def test_upload_accepts_early_first_without_moving_original_seal_and_refuses_equality(self):
+        for first in (0, NS, 291 * NS - 1, 291 * NS, 291 * NS + 1, 345 * NS):
+            with self.subTest(first=first):
+                self.assertEqual(self.call(D.upload_caps, seed(), first),
+                    (346 * NS, first + 55 * NS, first + 60 * NS))
+        for first in (346 * NS, 347 * NS):
             self.reject(D.upload_caps, seed(), first)
 
     def test_upload_rejects_noninteger_or_changed_seed(self):

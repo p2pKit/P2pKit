@@ -100,7 +100,7 @@ def upload_caps(seed, first):
     start = deadline["uploadStartByNs"]
     close = min(integer(first + 60 * NS), deadline["uploadEndNs"], deadline["returnEndNs"])
     work = close - 5 * NS
-    require(first < start < work < close, "UPLOAD_ORIGINAL_INTERVAL")
+    require(first < start and first < work < close, "UPLOAD_ORIGINAL_INTERVAL")
     return start, work, close
 
 
@@ -616,7 +616,7 @@ def _local_bounds(ready_value, pre):
     start = integer(pre + window["uploadStartByNs"] - first)
     close = min(integer(pre + 60 * NS), integer(pre + window["uploadEndNs"] - first))
     work = close - 5 * NS
-    require(pre < start < work < close, "ORIGINAL_LOCAL_MAPPING")
+    require(pre < start and pre < work < close, "ORIGINAL_LOCAL_MAPPING")
     return start, work, close
 
 
@@ -699,7 +699,7 @@ def _transport_closed(value, ready_value, ready_raw, final, reader, before, boun
     create, expiry = _millis(value["createInvokedAt"]), _millis(value["requestedExpiresAt"])
     require(create // 1000 <= now and expiry - create == 14 * 86400000, "TRANSPORT_ORIGINAL_REQUEST_EXPIRY")
     entered, returned = decimal(value["enteredNs"]), decimal(value["returnedObservationNs"])
-    require(decimal(before["lastObservationNs"]) <= entered < bounds[0] and
+    require(decimal(before["lastObservationNs"]) <= entered < bounds[0] and entered < bounds[1] and
         entered <= decimal(reader["returnedLocalNs"]) <= returned < bounds[2], "TRANSPORT_ORIGINAL_RETURN")
     blocks = (size + 8 * 1024 * 1024 - 1) // (8 * 1024 * 1024)
     rows = value["requests"]
@@ -738,7 +738,7 @@ def finish_observations(control, *, now):
     reader, before, transport = (value[name] for name in ("readerClosed", "beforeClosed", "transportClosed"))
     bounds = _reader_closed(reader, ready_raw, final_raw, original, final)
     _observer_closed(before, originals, original, stage="before", request_sha256=sha(ready_raw),
-        phase_end=bounds[0], now=now)
+        phase_end=min(bounds[0], bounds[1]), now=now)
     require(decimal(reader["preSpawnLocalNs"]) <= decimal(before["enteredNs"]), "BEFORE_ORIGINAL_READER_BASIS")
     _transport_closed(transport, original, ready_raw, final, reader, before, bounds, now)
     context = {"originalServiceJob": original["jobOriginal"], "observed": {"runnerName": original["jobOriginal"][2]}}
@@ -811,7 +811,7 @@ def pending_value(value, mode):
         work_local, close_local = (integer(pre + end - parsed["firstRawNs"]) for end in (work, close))
         require(pre <= parsed["beforeEnteredLocalNs"] <= parsed["beforeReturnedLocalNs"] <=
             parsed["transportEnteredLocalNs"] <= parsed["readerReturnedLocalNs"] <= parsed["transportReturnedLocalNs"] and
-            parsed["beforeReturnedLocalNs"] < start_local and parsed["readerReturnedLocalNs"] < work_local and
+            parsed["beforeReturnedLocalNs"] < min(start_local, work_local) and parsed["readerReturnedLocalNs"] < work_local and
             parsed["transportReturnedLocalNs"] < close_local and type(observations["transportRequestCount"]) is int and
             observations["transportRequestCount"] == 3 + (value["artifact"]["zipBytes"] + 8 * 1024 * 1024 - 1) //
                 (8 * 1024 * 1024), "PENDING_U_ORIGINAL_LOCAL_OR_REQUESTS")

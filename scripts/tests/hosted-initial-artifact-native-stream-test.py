@@ -56,7 +56,7 @@ def seed():
 
 
 @contextmanager
-def clock_model(cancelled=lambda: None):
+def clock_model(cancelled=lambda: None, *, first_ns=340 * NS):
     global GUARDED
     with ExitStack() as stack:
         attempts, environment, actual_environment = {}, {"MODEL": "only"}, {"MODEL": "only"}
@@ -67,11 +67,11 @@ def clock_model(cancelled=lambda: None):
         stack.enter_context(patch.object(U.os, "environ", actual_environment))
         stack.enter_context(patch.object(U.time, "monotonic", return_value=101.0))
         stack.enter_context(patch.object(U.time, "time", return_value=1000.0))
-        stack.enter_context(patch.object(U.O.clocks, "checked_now", return_value=341 * NS))
+        stack.enter_context(patch.object(U.O.clocks, "checked_now", return_value=first_ns + NS))
         stack.enter_context(patch.object(U.K.continuity, "boot_digest", return_value="2" * 64))
         entry = latch.begin(attempts)
         identity = U.O.clocks.ClockIdentity("linux-x64", "linux.clock_gettime_ns(CLOCK_MONOTONIC_RAW)", NS)
-        first = U.O.clocks.Reading(identity, 340 * NS)
+        first = U.O.clocks.Reading(identity, first_ns)
         original_graph = U.N._history_graph(first)
         previous, GUARDED = GUARDED, True
         try:
@@ -178,6 +178,16 @@ class ClockControls(unittest.TestCase):
             self.assertEqual((clock.first, clock.work, clock.final), (340 * NS, 395 * NS, 400 * NS))
             self.assertLessEqual(clock.local_end, 160.0)
             self.assertEqual(clock.now(), 341 * NS)
+
+    def test_early_first_keeps_original_seal_but_work_equality_is_sticky(self):
+        for first in (NS, 291 * NS - 1, 291 * NS, 291 * NS + 1):
+            with self.subTest(first=first), clock_model(first_ns=first) as (clock, latch, attempts, entry, _env):
+                self.assertEqual(clock._binding[7][:3], (346 * NS, first + 55 * NS, first + 60 * NS))
+                self.assertEqual(clock.now(), first + NS)
+                with patch.object(U.O.clocks, "checked_now", return_value=first + 55 * NS):
+                    self.sticky(clock, latch, attempts, entry, clock.now)
+        with self.assertRaises((ValueError, RuntimeError)), clock_model(first_ns=346 * NS):
+            pass
 
     def test_public_current_is_a_fresh_detached_scalar_snapshot_not_an_anchor(self):
         with clock_model() as (clock, _latch, _attempts, _entry, _env):
