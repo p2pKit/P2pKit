@@ -32,7 +32,22 @@ Foundation or RPC historical result qualifies that new combined commit.
 | apple-x64 | Actual `iosX64` execution, not cross-compilation / macOS Intel |
 | desktop-linux, desktop-windows, desktop-macos | Desktop tests and DEB/MSI/ARM64-DMG packaging |
 | security | Pinned OSV scan, unchanged expiring exceptions / Ubuntu |
-| compatibility | API/ABI, strict Dokka, SBOM, publication/consumers, XCFramework and Swift / macOS ARM64 |
+| compatibility | API/ABI, strict Dokka, SBOM, publication, XCFramework and Swift / macOS 26 ARM64 |
+| consumers | Complete isolated published-coordinate JVM/Android/KMP/iOS consumers / macOS 14 ARM64, Xcode 16.2 |
+
+All thirteen components are mandatory for the same source; splitting consumers
+does not omit or weaken their tests. The full dependency-update candidate writer
+also uses the macOS 14 / Xcode 16.2 CLI baseline. This follows the actual successful
+[RPC baseline run](https://github.com/p2pKit/P2pKit/actions/runs/38759538710), not
+qualification of the new combined source. macOS 26 remains the native ARM64, DMG,
+XCFramework and Swift lane, with Intel native execution on macOS 15 Intel.
+
+**Temporary runner limitation:** GitHub has announced macOS 14 retirement on
+2026-11-02. Replace this baseline with a genuinely qualified supported execution
+context before runner availability ends. This date is not a new authorization
+window or internal timestamp gate. The temporary lane does not claim macOS 26
+JVM multicast/consumer qualification. Exact host/tool mismatches fail; no floating
+runner or Xcode fallback is allowed.
 
 List exact commands without executing them:
 
@@ -112,7 +127,7 @@ cleanup and file hashes. Genuine failed-task evidence is retained too. Missing
 or unreadable evidence is not success. Public diagnostics contain safe task names
 and result codes, never private log text.
 
-`ci_qualification.py` validates all twelve successful component jobs and four
+`ci_qualification.py` validates all thirteen successful component jobs and four
 application producers. It compares exact source/tree/version, host, workflow,
 run/attempt, job completion, original artifact metadata and downloaded digests.
 There is **no fixed job-step count**. Failed overall matrix runs may still supply

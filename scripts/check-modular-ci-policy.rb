@@ -32,6 +32,15 @@ module ModularCI
     jobs = ci.fetch('jobs')
     require!(jobs.keys.sort == %w[complete-gate component plan qualify], 'Missing or extra active CI stage')
     triggers = ci.fetch('on') { ci.fetch(true) }
+    required = %w[source dependencies jvm-linux jvm-windows android apple-arm64 apple-x64
+                  desktop-linux desktop-windows desktop-macos security compatibility consumers]
+    require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').sort ==
+             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic'].sort,
+             'Missing or extra independently selectable required component')
+    writer = load(File.join(root, '.github/workflows/dependency-update-candidate.yml')).fetch('jobs').fetch('generate')
+    require!(writer['runs-on'] == 'macos-14' && writer.fetch('steps').any? { |s|
+               s['run'] == 'bash scripts/setup-ci-component.sh dependency-update' },
+             'Dependency writer must use the explicit reviewed CLI baseline')
     %w[bundle-diagnostic jmdns-diagnostic].each do |diagnostic|
       require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),
                'Explicit focused diagnostic route missing')

@@ -28,7 +28,8 @@ permissions:
 jobs:
   generate:
     if: ${{ github.repository == 'p2pKit/P2pKit' }}
-    runs-on: macos-26
+    # Temporary supported CLI baseline; macos-14 retires 2026-11-02.
+    runs-on: macos-14
     timeout-minutes: 210
     defaults:
       run:
@@ -76,7 +77,7 @@ jobs:
           java-version: '17'
       - name: Install reviewed platform tools
         working-directory: controller
-        run: bash scripts/setup-ci-component.sh dependencies
+        run: bash scripts/setup-ci-component.sh dependency-update
       - name: Run the maintained full generator and encrypt original diagnostics
         id: generate
         working-directory: controller

@@ -29,11 +29,13 @@ COMPONENTS = {
     "apple-x64": ("Darwin", "x86_64"), "desktop-linux": ("Linux", "x86_64"),
     "desktop-windows": ("Windows", "AMD64"), "desktop-macos": ("Darwin", "arm64"),
     "security": ("Linux", "x86_64"), "compatibility": ("Darwin", "arm64"),
+    "consumers": ("Darwin", "arm64"),
 }
 RUNNERS = {component: ("windows-2025" if host[0] == "Windows" else
                       "macos-15-intel" if host == ("Darwin", "x86_64") else
                       "macos-26" if host[0] == "Darwin" else "ubuntu-24.04")
            for component, host in COMPONENTS.items()}
+RUNNERS["consumers"] = "macos-14"
 APPLICATIONS = {
     "android": ("android", "apk-abis-not-inspected", "sample-app-android"),
     "linux": ("desktop-linux", "x64", "sample-app-desktop-linux"),
@@ -204,6 +206,11 @@ def manifest_identity(manifest, source, component, run, job, artifact):
          timestamp(timing.get("completedAt")) <= timestamp(artifact["created_at"]), "Evidence timing differs")
     need(type(manifest.get("tools")) is dict and manifest["tools"] and
          HASH.fullmatch(manifest.get("command", {}).get("sha256", "")), "Missing actual tools/command identity")
+    if component == "consumers":
+        xcode = manifest["tools"].get("xcode")
+        need(type(xcode) is dict and xcode.get("version") == "16.2" and
+             type(xcode.get("executableSha256")) is str and HASH.fullmatch(xcode["executableSha256"]),
+             "Consumer baseline requires recorded Xcode 16.2 identity")
     for key in ("privateArchive", "ciphertext"):
         row = manifest.get(key, {})
         need(HASH.fullmatch(row.get("sha256", "")) and type(row.get("bytes")) is int and
@@ -367,7 +374,7 @@ def main():
         else:
             need(args.source == os.environ.get("GITHUB_SHA"), "Aggregator hosted source differs")
         api = policy.Api(os.environ.get("GH_TOKEN", ""))
-        # Twelve independently encrypted results plus four public application bundles.
+        # Thirteen independently encrypted results plus four public application bundles.
         policy.TRANSFER_LIMIT = (len(COMPONENTS) + 4) * ARTIFACT_LIMIT
         if args.operation == "verify":
             binding = None if args.selection is None else parsed(args.selection.read_bytes())

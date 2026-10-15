@@ -36,6 +36,14 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', "inputs.component != 'bundle-diagnostic' && (github.event_name",
             '(github.event_name')
   end
+  def test_complete_consumers_remain_independently_required
+    altered('.github/workflows/ci.yml', ', consumers,', ',')
+  end
+  def test_writer_cannot_select_floating_or_native_toolchain_baseline
+    altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-14', 'runs-on: macos-latest')
+    altered('.github/workflows/dependency-update-candidate.yml', 'setup-ci-component.sh dependency-update',
+            'setup-ci-component.sh dependencies')
+  end
   def test_component_failure_not_masked
     altered('.github/workflows/ci-component.yml', 'id: execution', "id: execution\n        continue-on-error: true")
   end

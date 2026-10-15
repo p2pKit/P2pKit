@@ -28,6 +28,8 @@ COMPONENTS = {
     'desktop-macos': ('macos-26', 75),
     'security': ('ubuntu-24.04', 30),
     'compatibility': ('macos-26', 180),
+    # Temporary supported CLI baseline; macos-14 retires 2026-11-02.
+    'consumers': ('macos-14', 120),
 }
 # Explicit focused diagnostics are not release components or aggregate inputs.
 DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30)}
@@ -137,6 +139,8 @@ def commands(component):
                  'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])]
     if component == 'bundle-diagnostic':
         return [('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh'])]
+    if component == 'consumers':
+        return [('isolated-consumers', bash + ['scripts/check-published-consumers.sh'])]
     if component == 'compatibility':
         modules = MODULES + (['p2p-rpc'] if (ROOT / 'library/p2p-rpc').is_dir() else [])
         abi = [':' + m + ':checkKotlinAbi' for m in modules]
@@ -147,7 +151,6 @@ def commands(component):
                 ('sbom', bash + ['scripts/check-sbom.sh']),
                 ('publication-shape', bash + ['scripts/check-publish-artifacts.sh']),
                 ('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh']),
-                ('isolated-consumers', bash + ['scripts/check-published-consumers.sh']),
                 ('xcframework', gradle + [':p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance']),
                 ('minimum-apple-os', bash + ['scripts/check-xcframework-minimum-os.sh']),
                 ('swift-ui', bash + ['scripts/run-ios-ui-tests.sh'])]
@@ -170,7 +173,7 @@ def record_tools(component):
     if component not in ('source', 'security'):
         probes.append(('gradle', str(ROOT / ('gradlew.bat' if os.name == 'nt' else 'gradlew')),
                        [*FLAGS, '--version'], r'(?m)^Gradle ([0-9A-Za-z.+-]+)$'))
-    if component in ('apple-arm64', 'apple-x64', 'desktop-macos', 'compatibility', *DIAGNOSTICS):
+    if component in ('apple-arm64', 'apple-x64', 'desktop-macos', 'compatibility', 'consumers', *DIAGNOSTICS):
         probes.append(('xcode', shutil.which('xcodebuild'), ['-version'], r'(?m)^Xcode ([0-9.]+)$'))
     for name, executable, args, pattern in probes:
         if executable is None:
@@ -184,6 +187,8 @@ def record_tools(component):
         match = re.search(pattern, version_output)
         if match is None or not re.fullmatch(r'[A-Za-z0-9 ._+()/-]{1,120}', match[1]):
             raise RuntimeError('Cannot identify required tool: ' + name)
+        if component == 'consumers' and name == 'xcode' and match[1] != '16.2':
+            raise RuntimeError('Consumer baseline requires Xcode 16.2')
         with tool.open('rb') as stream:
             digest = hashlib.sha256()
             for block in iter(lambda: stream.read(1024 * 1024), b''):
