@@ -413,7 +413,7 @@ class EvidenceTests(unittest.TestCase):
                 output = case / "output"
                 outcome = {"code": "COMMAND_FAILED", "exitCode": 9, "cleanupKnown": False,
                            "capturesClosed": True, "timedOut": False}
-                def diagnostic(_root, _private, _output, _env):
+                def diagnostic(_root, _private, _output, _env, **_kwargs):
                     self.assertTrue((output / "failure.json").exists())
                     (private / "partial-ciphertext").write_bytes(b"PRIVATE_PARTIAL_CIPHER")
                     if problem == "encryption":
@@ -494,7 +494,7 @@ class EvidenceTests(unittest.TestCase):
                 output = case / "output"
                 outcome = {"code": "COMMAND_FAILED", "exitCode": 1, "cleanupKnown": False,
                            "capturesClosed": True, "timedOut": False}
-                def encrypted(*_args):
+                def encrypted(*_args, **_kwargs):
                     (output / "evidence.tar.gz.gpg").write_bytes(b"SYNTHETIC_CIPHER")
                     return {"kind": "CLOSED_CAPTURES_ONLY_NOT_QUALIFICATION"}
                 original_replace = E.os.replace
@@ -996,6 +996,169 @@ class EvidenceTests(unittest.TestCase):
                     self.assertIn(b"\r\n", actual)
                     self.assertNotEqual(hashlib.sha256(actual).digest(), hashlib.sha256(original).digest())
 
+    def test_public_gpg_boundary_rejects_other_operations_before_spawn(self):
+        good = [str(self.root / "gpg"), *E._PUBLIC_GPG_OPTIONS, "--with-colons", "--with-fingerprint",
+                "--with-subkey-fingerprint", "--list-keys"]
+        cases = [good + ["--decrypt"], ["gpg", *good[1:]],
+                 [arg for arg in good if arg != "--no-autostart"],
+                 [arg if arg != "--list-keys" else "--sign" for arg in good],
+                 good[:1 + len(E._PUBLIC_GPG_OPTIONS)] + ["--import", "recipient.asc"],
+                 good[:1 + len(E._PUBLIC_GPG_OPTIONS)] + ["--exec-path", "/untrusted"],
+                 good[:1 + len(E._PUBLIC_GPG_OPTIONS)] + ["--trust-model", "always", "--compress-algo", "none",
+                     "--recipient", "A" * 40 + "!", "--output", "--bad-option", "--encrypt", "input"]]
+        with mock.patch.object(E.subprocess, "Popen") as spawned, mock.patch.object(E, "run_command") as generic:
+            for argv in cases:
+                with self.subTest(argv=argv), self.assertRaises(E.EvidenceError):
+                    E._run_public_gpg(argv, cwd=self.root, environment={}, private=self.root / "absent", timeout=60)
+            for timeout in (59, 300):
+                with self.subTest(timeout=timeout), self.assertRaises(E.EvidenceError):
+                    E._run_public_gpg(good, cwd=self.root, environment={}, private=self.root / "absent", timeout=timeout)
+        spawned.assert_not_called(); generic.assert_not_called()
+        self.assertFalse((self.root / "absent").exists())
+
+    def test_public_gpg_nondarwin_keeps_existing_supervisor(self):
+        argv = [str(self.root / "gpg"), *E._PUBLIC_GPG_OPTIONS, "--with-colons", "--with-fingerprint",
+                "--with-subkey-fingerprint", "--list-keys"]
+        cancelled = lambda: False
+        for system in ("Linux", "Windows"):
+            with self.subTest(system=system), mock.patch.object(E.platform, "system", return_value=system), \
+                    mock.patch.object(E, "run_command", return_value={"unchanged": True}) as generic, \
+                    mock.patch.object(E.subprocess, "Popen") as direct:
+                self.assertEqual(E._run_public_gpg(argv, cwd=self.root, environment={}, private=self.root / "none",
+                    timeout=60, cancelled=cancelled), {"unchanged": True})
+                self.assertIs(generic.call_args.kwargs["cancelled"], cancelled)
+                direct.assert_not_called()
+
+    def test_darwin_public_gpg_original_child_and_closed_pipe_lifecycle(self):
+        argv = [str(self.root / "gpg"), *E._PUBLIC_GPG_OPTIONS, "--with-colons", "--with-fingerprint",
+                "--with-subkey-fingerprint", "--list-keys"]
+        cases = ("success", "command-failure", "timeout-term", "timeout-kill", "cancel-before", "cancel-after",
+                 "wait-failure", "no-eof", "not-closed", "active", "output-limit", "spawn-failure", "start-failure",
+                 "late-poll", "cancel-during-join")
+        for case in cases:
+            with self.subTest(case=case):
+                private = self.root / case
+                child = mock.Mock()
+                child.stdout, child.stderr = io.BytesIO(), io.BytesIO()
+                state = {"returncode": 0 if case in {"success", "no-eof", "not-closed", "active", "output-limit", "wait-failure", "late-poll", "cancel-during-join"}
+                         else 2 if case == "command-failure" else None}
+                observation = {"late": False, "joined": False}
+                def poll():
+                    if case == "late-poll":
+                        observation["late"] = True
+                    return state["returncode"]
+                child.poll.side_effect = poll
+                def terminate():
+                    self.assertIsNone(state["returncode"])
+                    if case != "timeout-kill":
+                        state["returncode"] = -15
+                def kill():
+                    self.assertIsNone(state["returncode"])
+                    state["returncode"] = -9
+                def wait(**_kwargs):
+                    if case == "wait-failure":
+                        raise OSError("PRIVATE_WAIT_FAILURE")
+                    if state["returncode"] is None:
+                        raise subprocess.TimeoutExpired("PRIVATE_COMMAND", 3)
+                    return state["returncode"]
+                child.terminate.side_effect = terminate
+                child.kill.side_effect = kill
+                child.wait.side_effect = wait
+                captures = []
+                def capture(pipe, _path, limit):
+                    self.assertEqual(limit, E.MAX_JSON_BYTES)
+                    item = mock.Mock(pipe=pipe, eof=case != "no-eof", closed=case != "not-closed", error=None)
+                    item.thread.ident = None
+                    item.thread.is_alive.return_value = case == "active"
+                    def start():
+                        if case == "start-failure":
+                            raise RuntimeError("PRIVATE_START_FAILURE")
+                        item.thread.ident = 123
+                    item.thread.start.side_effect = start
+                    item.thread.join.side_effect = lambda **_kwargs: observation.update(joined=True)
+                    if case == "output-limit":
+                        item.error = "OUTPUT_LIMIT"
+                    captures.append(item)
+                    return item
+                ticks = iter(range(0, 1000, 31))
+                clock = (lambda: next(ticks)) if case.startswith("timeout") else \
+                    (lambda: 61.0 if observation["late"] else 0.0)
+                cancel_calls = []
+                def cancelled():
+                    cancel_calls.append(True)
+                    return (case == "cancel-before" or (case == "cancel-after" and len(cancel_calls) >= 2) or
+                            (case == "cancel-during-join" and observation["joined"]))
+                with mock.patch.object(E.platform, "system", return_value="Darwin"), \
+                        mock.patch.object(E.subprocess, "Popen", return_value=child) as spawn, \
+                        mock.patch.object(E, "Capture", side_effect=capture), \
+                        mock.patch.object(E.time, "monotonic", side_effect=clock), mock.patch.object(E.time, "sleep"), \
+                        mock.patch.object(E.audit_processes, "make_scope", side_effect=AssertionError("NO_CENSUS")), \
+                        mock.patch.object(E.os, "kill", side_effect=AssertionError("NO_BARE_PID_SIGNAL")), \
+                        mock.patch.object(E.os, "killpg", create=True, side_effect=AssertionError("NO_GROUP_SIGNAL")):
+                    if case == "spawn-failure":
+                        spawn.side_effect = OSError("PRIVATE_SPAWN")
+                    result = E._run_public_gpg(argv, cwd=self.root, environment={}, private=private,
+                                              timeout=60, cancelled=cancelled)
+                expected = {"success": "PASS", "command-failure": "COMMAND_FAILED", "timeout-term": "TIMEOUT",
+                            "timeout-kill": "TIMEOUT", "cancel-before": "CANCELLED", "cancel-after": "CANCELLED",
+                            "output-limit": "OUTPUT_LIMIT", "spawn-failure": "SPAWN", "late-poll": "TIMEOUT",
+                            "cancel-during-join": "CANCELLED"}.get(case, "CLEANUP")
+                self.assertEqual(result["code"], expected)
+                self.assertEqual(result["timedOut"], case.startswith("timeout") or case == "late-poll")
+                self.assertEqual(result["cleanupKnown"], case in {
+                    "success", "command-failure", "timeout-term", "timeout-kill", "cancel-after", "late-poll", "cancel-during-join"})
+                self.assertIsNone(result["pendingContext"])
+                if case == "cancel-before":
+                    spawn.assert_not_called()
+                elif case != "spawn-failure":
+                    self.assertTrue(spawn.call_args.kwargs["close_fds"])
+                    self.assertTrue(spawn.call_args.kwargs["start_new_session"])
+                    self.assertIs(spawn.call_args.kwargs["stdin"], subprocess.DEVNULL)
+                    child.wait.assert_called()
+                if case in {"success", "command-failure", "no-eof", "not-closed", "active", "output-limit", "late-poll", "cancel-during-join"}:
+                    child.terminate.assert_not_called(); child.kill.assert_not_called()
+                if case == "timeout-kill":
+                    child.terminate.assert_called_once(); child.kill.assert_called_once()
+                else:
+                    child.kill.assert_not_called()
+                child.stdout.close(); child.stderr.close()
+
+    def test_failure_archive_cancellation_is_forwarded_without_upgrading_original_failure(self):
+        repo = self.root / "repo"; repo.mkdir()
+        private = self.root / "private"; private.mkdir()
+        output = self.root / "output"
+        outcome = {"code": "COMMAND_FAILED", "exitCode": 9, "cleanupKnown": False,
+                   "capturesClosed": True, "timedOut": False}
+        handlers = {}
+        def signal_handler(sig, handler):
+            if callable(handler):
+                handlers[sig] = handler
+            return signal.SIG_DFL
+        def diagnostic(_root, _private, _output, _env, *, cancelled):
+            self.assertTrue((output / "failure.json").exists())
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+            self.assertTrue(cancelled())
+            error = E.EvidenceError("ENCRYPTION")
+            error.encryption_diagnostic = {"phase": "key-show", "outcome": {"code": "CANCELLED", "exitCode": -15,
+                "timedOut": False, "cleanupKnown": True, "capturesClosed": True}, "categories": []}
+            raise error
+        with mock.patch.object(E, "source_identity", return_value={"commit": "a" * 40}), \
+                mock.patch.object(E, "github_identity", return_value={}), \
+                mock.patch.object(E, "run_command", return_value=outcome), \
+                mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                mock.patch.object(E.signal, "signal", side_effect=signal_handler), \
+                mock.patch.object(E, "encrypt_closed_failure_captures", side_effect=diagnostic), \
+                mock.patch.object(E, "failure_diagnostics", return_value={}), contextlib.redirect_stderr(io.StringIO()):
+            result = E.main(["--component", "bundle-diagnostic", "--timeout-seconds", "5", "--output-dir", str(output),
+                             "--source-root", str(repo), "--", "synthetic"])
+        failure = json.loads((output / "failure.json").read_text())
+        self.assertEqual(result, 1)
+        self.assertEqual(failure["outcome"], outcome)
+        self.assertEqual(failure["code"], "CLEANUP")
+        self.assertEqual(failure["closedCaptureFailure"]["encryptionDiagnostic"]["outcome"]["code"], "CANCELLED")
+        self.assertEqual({p.name for p in output.iterdir()}, {"failure.json"})
+        self.assertTrue(private.is_dir())
+
     def test_gpg_uses_cwd_relative_paths_for_native_and_msys_interoperation(self):
         work = self.root / 'private work'; work.mkdir()
         source = self.root / 'input archive.tar.gz'; source.write_bytes(b'public fixture')
@@ -1030,7 +1193,7 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(argv[argv.index('--recipient') + 1], encryption_fingerprint + '!')
                 output.write_bytes(b'public-ciphertext-model' * 4)
             return {'code': 'PASS', 'exitCode': 0, 'timedOut': False, 'cleanupKnown': True}
-        with mock.patch.object(E, 'run_command', side_effect=invoke), \
+        with mock.patch.object(E, '_run_public_gpg', side_effect=invoke), \
                 mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
                 mock.patch.object(E, '_key_identity', return_value=(encryption_fingerprint, 1821484800)):
             E.encrypt_archive(source, output, key, hashlib.sha256(key).hexdigest(),
@@ -1040,7 +1203,7 @@ class EvidenceTests(unittest.TestCase):
         other = self.root / 'different-drive-model'; other.mkdir()
         with mock.patch.object(E.os.path, 'relpath', side_effect=ValueError('PRIVATE_DRIVE')), \
                 mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
-                mock.patch.object(E, 'run_command') as unused:
+                mock.patch.object(E, '_run_public_gpg') as unused:
             with self.assertRaises(E.EvidenceError) as caught:
                 E.encrypt_archive(source, output, key, hashlib.sha256(key).hexdigest(),
                                   PUBLIC_FINGERPRINT, other, dict(os.environ))
@@ -1059,7 +1222,7 @@ class EvidenceTests(unittest.TestCase):
                     kwargs['private'].mkdir()
                     (kwargs['private'] / 'stdout.log').write_bytes(b'PUBLIC_LISTING_MODEL')
                     return {'code': 'PASS', 'exitCode': 0, 'cleanupKnown': True}
-                with mock.patch.object(E, 'run_command', side_effect=invoke), \
+                with mock.patch.object(E, '_run_public_gpg', side_effect=invoke), \
                         mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
                         mock.patch.object(E, '_key_identity', side_effect=[(chosen, 1821484800), selected]) as identity:
                     with self.assertRaises(E.EvidenceError) as caught:
@@ -1074,13 +1237,35 @@ class EvidenceTests(unittest.TestCase):
         key = (SCRIPTS.parent / '.github/ci-evidence-recipient.asc').read_bytes()
         ring = self.root / 'recipient.gpg'
         ring.write_bytes(b'EXISTING_PUBLIC_FIXTURE')
-        with mock.patch.object(E, 'run_command') as unused:
+        with mock.patch.object(E, '_run_public_gpg') as unused:
             with self.assertRaises(FileExistsError):
                 E.encrypt_archive(self.root / 'archive', self.root / 'cipher', key, hashlib.sha256(key).hexdigest(),
                                   PUBLIC_FINGERPRINT, self.root, dict(os.environ))
         unused.assert_not_called()
         self.assertEqual(ring.read_bytes(), b'EXISTING_PUBLIC_FIXTURE')
         self.assertFalse((self.root / 'cipher').exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "portable direct-child exercise uses the Linux public GPG tool")
+    def test_actual_public_encryption_direct_child_boundary_on_linux_not_native_darwin(self):
+        # Select the Darwin direct-child path but execute genuine Linux public
+        # GPG/Capture/Popen/wait. This is not native macOS qualification.
+        key = (SCRIPTS.parent / ".github/ci-evidence-recipient.asc").read_bytes()
+        work = self.root / "direct-public-gpg"; work.mkdir()
+        archive = self.root / "public-synthetic.tar.gz"
+        archive.write_bytes(b"PUBLIC_SYNTHETIC_DIRECT_CHILD" * 100)
+        cipher = self.root / "public-synthetic.tar.gz.gpg"
+        with mock.patch.object(E.platform, "system", return_value="Darwin"), \
+                mock.patch.object(E.audit_processes, "make_scope", side_effect=AssertionError("NO_GLOBAL_CENSUS")):
+            result = E.encrypt_archive(archive, cipher, key, hashlib.sha256(key).hexdigest(),
+                                       PUBLIC_FINGERPRINT, work, dict(os.environ))
+        self.assertEqual(result["sha256"], E.digest_file(cipher)["sha256"])
+        self.assertEqual(result["recipientFingerprint"], PUBLIC_FINGERPRINT)
+        self.assertGreater(result["bytes"], 32)
+        for phase in ("key-show", "key-list", "encrypt"):
+            self.assertTrue((work / phase / "stdout.log").is_file())
+            self.assertTrue((work / phase / "stderr.log").is_file())
+        secrets = work / "gnupg/private-keys-v1.d"
+        self.assertFalse(list(secrets.iterdir()) if secrets.exists() else [])
 
     def test_actual_public_key_encrypts_without_private_key_or_agent(self):
         key = (SCRIPTS.parent / ".github/ci-evidence-recipient.asc").read_bytes()
@@ -1179,7 +1364,7 @@ class EvidenceTests(unittest.TestCase):
                         failed = directory.name == failed_phase
                         return {'code': 'COMMAND_FAILED' if failed else 'PASS', 'exitCode': 2 if failed else 0,
                                 'cleanupKnown': cleanup if failed else True, 'timedOut': False}
-                    with mock.patch.object(E, 'run_command', side_effect=invoke), \
+                    with mock.patch.object(E, '_run_public_gpg', side_effect=invoke), \
                             mock.patch.object(E.shutil, 'which', return_value='/public/gpg'), \
                             mock.patch.object(E, '_key_identity', return_value=(PUBLIC_FINGERPRINT, 0)):
                         with self.assertRaises(E.EvidenceError) as caught:

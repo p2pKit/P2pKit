@@ -504,7 +504,129 @@ def archive_private(bundle, destination):
     return files
 
 
-def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint, work, environment):
+# Only these public, agent-free GPG operations may use direct Darwin ownership.
+_PUBLIC_GPG_OPTIONS = ["--no-options", "--batch", "--no-tty", "--no-autostart", "--pinentry-mode", "error",
+    "--homedir", "gnupg", "--no-auto-key-retrieve", "--no-auto-key-import", "--auto-key-locate", "clear",
+    "--disable-dirmngr", "--no-random-seed-file", "--no-default-keyring", "--keyring", "./recipient.gpg"]
+
+
+def _run_public_gpg(argv, *, cwd, environment, private, timeout, cancelled=None, log_limit=MAX_JSON_BYTES):
+    """Fixed public GPG only, not a general command-supervisor opt-out.
+
+    On Darwin trust the reviewed host GPG implementation plus the options that
+    disable configuration, agents, key retrieval and network helpers. Observe
+    the original child and both bounded pipes, NOT all new same-user processes
+    on the host. This does not contain a malicious GPG that secretly detaches
+    helpers and closes their pipes. Arbitrary test/build commands still use the
+    unchanged descendant ownership backend; Windows retains its Job Object.
+    """
+    require(type(argv) is list and argv and all(type(arg) is str and arg and "\0" not in arg for arg in argv))
+    require(os.path.isabs(argv[0]) and argv[1:1 + len(_PUBLIC_GPG_OPTIONS)] == _PUBLIC_GPG_OPTIONS)
+    operation = argv[1 + len(_PUBLIC_GPG_OPTIONS):]
+    listing = ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint"]
+    public_listing = operation in (listing + ["--import-options", "show-only", "--import", "recipient.asc"],
+                                   listing + ["--list-keys"])
+    encryption = (len(operation) == 10 and operation[:5] ==
+        ["--trust-model", "always", "--compress-algo", "none", "--recipient"] and
+        re.fullmatch(r"[A-F0-9]{40}!", operation[5]) and operation[6] == "--output" and
+        operation[8] == "--encrypt" and all(not value.startswith("-") and not os.path.isabs(value)
+                                          for value in (operation[7], operation[9])))
+    require((public_listing and timeout == 60) or (encryption and timeout == 300))
+    require(type(log_limit) is int and 0 < log_limit <= MAX_JSON_BYTES)
+    if platform.system() != "Darwin":
+        return run_command(argv, cwd=cwd, environment=environment, private=private,
+                           timeout=timeout, cancelled=cancelled, log_limit=log_limit)
+    private = Path(private)
+    private.mkdir(mode=0o700, parents=False, exist_ok=False)
+    begin = time.monotonic()
+    child, captures = None, []
+    code, returncode, timed_out = "PASS", None, False
+    cleanup_known, reasons = False, set()
+    cancelled = cancelled or (lambda: False)
+    try:
+        if cancelled():
+            code = "CANCELLED"
+        else:
+            child = subprocess.Popen(argv, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, start_new_session=True)
+            captures = [Capture(child.stdout, private / "stdout.log", log_limit),
+                        Capture(child.stderr, private / "stderr.log", log_limit)]
+            for capture in captures:
+                capture.thread.start()
+            while True:
+                if cancelled():
+                    code = "CANCELLED"
+                    break
+                if any(item.error for item in captures):
+                    code = next(item.error for item in captures if item.error)
+                    break
+                if time.monotonic() >= begin + timeout:
+                    code, timed_out = "TIMEOUT", True
+                    break
+                returncode = child.poll()
+                if time.monotonic() >= begin + timeout:
+                    code, timed_out = "TIMEOUT", True
+                    break
+                if returncode is not None:
+                    code = "PASS" if returncode == 0 else "COMMAND_FAILED"
+                    break
+                time.sleep(min(0.1, max(0.0, begin + timeout - time.monotonic())))
+    except BaseException:
+        code = "SPAWN" if child is None else "CLEANUP"
+    finally:
+        cleanup_end = time.monotonic() + 15.0
+        if child is not None:
+            try:
+                # Popen retains the original child; never signal a recycled
+                # bare PID/group or anything after its terminal reaping.
+                if child.poll() is None:
+                    child.terminate()
+                    try:
+                        child.wait(timeout=min(3.0, max(0.01, cleanup_end - time.monotonic())))
+                    except subprocess.TimeoutExpired:
+                        if child.poll() is None:
+                            child.kill()
+                returncode = child.wait(timeout=max(0.01, cleanup_end - time.monotonic()))
+                cleanup_known = returncode is not None
+            except BaseException:
+                reasons.add("LEADER_WAIT")
+            captured = {id(item.pipe) for item in captures if item.thread.ident is not None}
+            for pipe in (child.stdout, child.stderr):
+                if pipe is not None and id(pipe) not in captured:
+                    try:
+                        pipe.close()
+                    except BaseException:
+                        reasons.add("ORIGINAL_PIPE_CLOSE")
+        else:
+            reasons.add("SCOPE_UNAVAILABLE")
+        for capture in captures:
+            if capture.thread.ident is not None:
+                try:
+                    capture.thread.join(timeout=max(0.0, cleanup_end - time.monotonic()))
+                except BaseException:
+                    reasons.add("CAPTURE_ACTIVE")
+            for failed, reason in ((capture.thread.is_alive(), "CAPTURE_ACTIVE"),
+                                   (not capture.eof, "PIPE_NO_EOF"), (not capture.closed, "PIPE_NOT_CLOSED")):
+                if failed:
+                    reasons.add(reason)
+            if capture.error:
+                cleanup_known = False
+                if code == "PASS":
+                    code = capture.error
+        captures_closed = len(captures) == 2 and all(item.thread.ident is not None and
+            not item.thread.is_alive() and item.eof and item.closed and item.error is None for item in captures)
+        cleanup_known = cleanup_known and captures_closed and not reasons
+        if not cleanup_known and code == "PASS":
+            code = "CLEANUP"
+        if code == "PASS" and cancelled():
+            code = "CANCELLED"
+    return {"exitCode": returncode, "timedOut": timed_out, "cleanupKnown": cleanup_known,
+            "capturesClosed": captures_closed, "stage": "COMMAND", "code": code,
+            "cleanupReasons": sorted(reasons), "pendingContext": None,
+            "elapsedSeconds": round(time.monotonic() - begin, 6)}
+
+
+def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint, work, environment, *, cancelled=None):
     require(re.fullmatch(r"[0-9a-f]{64}", expected_sha or "") and
             re.fullmatch(r"[A-Fa-f0-9]{40}", expected_fingerprint or ""), "RECIPIENT")
     require(hashlib.sha256(key_raw).hexdigest() == expected_sha, "RECIPIENT")
@@ -527,19 +649,16 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
             return os.path.relpath(path, work).replace(os.sep, "/")
         except ValueError:
             raise EvidenceError("ENCRYPTION") from None  # Different Windows drives.
-    base = [gpg, "--no-options", "--batch", "--no-tty", "--no-autostart", "--pinentry-mode", "error",
-            "--homedir", filename(home), "--no-auto-key-retrieve", "--no-auto-key-import",
-            "--auto-key-locate", "clear", "--disable-dirmngr", "--no-random-seed-file",
-            "--no-default-keyring", "--keyring", "./" + filename(keyring)]
+    base = [gpg, *_PUBLIC_GPG_OPTIONS]
     environment = {key: value for key, value in environment.items() if key in {
         "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR",
         "LANG", "LC_ALL", "PATHEXT"}}
     # Public key only, no agent/keyserver/private-key lookup. GPG output remains
-    # private. Use the same cross-platform process supervisor as the real task.
+    # private. Only these fixed public operations use the Darwin direct-child boundary.
     def invoke(label, arguments, timeout=60):
         directory = work / label
-        result = run_command([*base, *arguments], cwd=work, environment=environment,
-                             private=directory, timeout=timeout, log_limit=MAX_JSON_BYTES)
+        result = _run_public_gpg([*base, *arguments], cwd=work, environment=environment,
+                             private=directory, timeout=timeout, log_limit=MAX_JSON_BYTES, cancelled=cancelled)
         if not (result["code"] == "PASS" and result["exitCode"] == 0 and result["cleanupKnown"]):
             error = EvidenceError("ENCRYPTION")
             # Only this source-owned exception carries a fixed public diagnostic.
@@ -560,7 +679,7 @@ def encrypt_archive(archive, output, key_raw, expected_sha, expected_fingerprint
     return {**digest_file(output), "recipientFingerprint": expected_fingerprint.upper()}
 
 
-def encrypt_closed_failure_captures(root, private, output, environment):
+def encrypt_closed_failure_captures(root, private, output, environment, *, cancelled=None):
     """Protect exactly the two independently closed captures, never mutable reports.
 
     The caller has already retained a failed receipt. This archive does not
@@ -591,7 +710,7 @@ def encrypt_closed_failure_captures(root, private, output, environment):
     cipher = work / "evidence.tar.gz.gpg"
     metadata = encrypt_archive(archive, cipher, key_raw,
         environment.get("CI_EVIDENCE_RECIPIENT_SHA256", ""),
-        environment.get("CI_EVIDENCE_RECIPIENT_FINGERPRINT", ""), work, environment)
+        environment.get("CI_EVIDENCE_RECIPIENT_FINGERPRINT", ""), work, environment, cancelled=cancelled)
     target = output / "evidence.tar.gz.gpg"
     shutil.copyfile(cipher, target)
     if os.name == "posix":
@@ -993,7 +1112,7 @@ def main(argv=None):
         require(0 < len(key_raw) <= 64 * 1024, "RECIPIENT")
         ciphertext = encrypt_archive(archive, output / "evidence.tar.gz.gpg", key_raw,
             os.environ.get("CI_EVIDENCE_RECIPIENT_SHA256", ""),
-            os.environ.get("CI_EVIDENCE_RECIPIENT_FINGERPRINT", ""), private, environment)
+            os.environ.get("CI_EVIDENCE_RECIPIENT_FINGERPRINT", ""), private, environment, cancelled=cancelled.is_set)
         stage = "MANIFEST"
         manifest = {"schema": SCHEMA, "component": args.component, "source": source, "github": github,
             "host": {"platform": platform.system(), "arch": platform.machine(),
@@ -1037,7 +1156,7 @@ def main(argv=None):
                         outcome.get("capturesClosed") is True):
                     try:
                         failure["closedCaptureArchive"] = encrypt_closed_failure_captures(
-                            root, private, output, environment)
+                            root, private, output, environment, cancelled=cancelled.is_set)
                         # The original failure survives interruption/encryption
                         # failure. Replace it atomically only with a complete
                         # diagnostic attachment; never create a success manifest.
