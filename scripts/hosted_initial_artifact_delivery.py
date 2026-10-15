@@ -332,11 +332,11 @@ def service_steps(job, date, stage):
         name, number, status, conclusion = (row[key] for key in ("name", "number", "status", "conclusion"))
         require(type(name) is str and 0 < len(name) <= 256 and name not in names and
             not any(ord(char) < 32 or ord(char) == 127 for char in name) and type(status) is str and
-            status in ("queued", "in_progress", "completed"), "STEP_NAME_OR_STATUS")
+            status in ("queued", "pending", "in_progress", "completed"), "STEP_NAME_OR_STATUS")
         previous = integer(number, previous + 1, 2147483647)
         names.add(name)
         start, end = row["started_at"], row["completed_at"]
-        if status == "queued":
+        if status in ("queued", "pending"):
             require(conclusion is None and start is None and end is None, "STEP_QUEUED")
         elif status == "in_progress":
             require(conclusion is None and end is None and began <= B.wire.utc_epoch(start) <= date, "STEP_RUNNING")
@@ -364,8 +364,9 @@ def service_steps(job, date, stage):
         (stage == "upload" or selected["after"]["number"] == selected["upload"]["number"] + 1),
         "STEP_TERMINAL_ADJACENCY")
     current = ordered[-1]["number"]
-    require(all(row["status"] == ("completed" if row["number"] < current else "queued")
-        for row in rows if row["number"] != current), "STEP_UNIQUE_CURRENT_FRONTIER")
+    require(all(row["status"] == "completed" if row["number"] < current else
+        row["status"] in ("queued", "pending") for row in rows if row["number"] != current),
+        "STEP_UNIQUE_CURRENT_FRONTIER")
     return selected
 
 

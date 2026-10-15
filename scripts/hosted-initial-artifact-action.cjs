@@ -465,7 +465,9 @@ async function mainFixed(route) {
             const before = retained.observer; pinHandle(before, ['completion', 'cancel', 'originals']);
             completions.push(before.completion);
             const beforeValue = pin(await before.completion), originals = pinRows(before.originals());
+            phase = 'BEFORE_VALIDATE';
             D.observerClosed(beforeValue, originals, readyValue, bounds, 'before', D.sha(readyRaw), Date.now());
+            phase = 'BEFORE_JOB';
             D.serviceJob(readyValue, originals[0].body, originals[0].rawHeaderVector, env, 'upload', Date.now());
             checkpoint(min(bounds.startByNs, bounds.workEndNs)); // COMPLETE original job/Step semantics BEFORE Create.
             phase = 'UPLOAD_TRANSPORT';

@@ -17,6 +17,7 @@ const actionSource = fs.readFileSync(path.join(__dirname, '../hosted-initial-art
 const DIAGNOSTIC_PHASES = new Set([
     'ADMISSION', 'ENVIRONMENT', 'UPLOAD_ADMISSION',
     'READER_READY', 'READER_BIND', 'BEFORE_OBSERVER',
+    'BEFORE_VALIDATE', 'BEFORE_JOB',
     'UPLOAD_TRANSPORT', 'FINISH_INPUT', 'FINITE_FINISH',
     'AFTER_READY', 'AFTER_OBSERVER', 'FINITE_COMPLETION',
     'RESULT', 'OUTPUT'

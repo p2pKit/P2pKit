@@ -14,6 +14,7 @@ const source = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-
 const DIAGNOSTIC_PHASES = new Set([
     'ADMISSION', 'ENVIRONMENT', 'UPLOAD_ADMISSION',
     'READER_READY', 'READER_BIND', 'BEFORE_OBSERVER',
+    'BEFORE_VALIDATE', 'BEFORE_JOB',
     'UPLOAD_TRANSPORT', 'FINISH_INPUT', 'FINITE_FINISH',
     'AFTER_READY', 'AFTER_OBSERVER', 'FINITE_COMPLETION',
     'RESULT', 'OUTPUT'
@@ -375,6 +376,24 @@ test('finite diagnostic selects only own admission codes and exact last-entered 
         assert.deepEqual(diagnostics(m.errors), {schema: 1, selection: 'FIRST_CONTROLLER_FAIL', phase,
             code: 'INITIAL_ARTIFACT_ACTION_' + code});
         assert(!m.calls.includes('reader-open')); assert(!m.errors.join('').includes('PRIVATE'));
+    }
+});
+test('before-upload observer, closure and job refusals have distinct finite phases without Create', async () => {
+    const cases = [
+        [{originals() { throw new Error('PRIVATE_ORIGINAL_ERROR'); }}, 'BEFORE_OBSERVER'],
+        [{observerReturn(_m, closed) { closed.transport = 'not-closed'; }}, 'BEFORE_VALIDATE'],
+        [{observerReturn(m, closed, originals) {
+            const job = JSON.parse(originals[0].body.toString('utf8'));
+            job.head_sha = '0'.repeat(40);
+            replaceBody(originals[0], closed.requests[0], job);
+        }}, 'BEFORE_JOB'],
+    ];
+    for (const [config, phase] of cases) {
+        const m = await model('upload', config).run(); notAccepted(m);
+        assert.deepEqual(diagnostics(m.errors), {schema: 1, selection: 'FIRST_CONTROLLER_FAIL', phase, code: 'UNKNOWN'});
+        assert(!m.calls.includes('Create')); assert.equal(m.demand, 0);
+        assert(m.calls.includes('reader-close')); assert.equal(m.timers.size, 0);
+        assert(!m.errors.join('').includes('PRIVATE'));
     }
 });
 test('foreign error data and poisoned inherited toJSON cannot enter diagnostic output', async () => {

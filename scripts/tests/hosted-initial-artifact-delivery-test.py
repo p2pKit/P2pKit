@@ -808,6 +808,103 @@ class DeliveryDataControls(unittest.TestCase):
                 started_at=utc(JOB_START + 12), completed_at=None)
             self.reject(D.service_steps, job, NOW, "upload")
 
+    def pending_service(self, stage, future="pending"):
+        job, context = service(stage)
+        current = 4 if stage == "upload" else 5
+        for row in job["steps"][current + 1:]:
+            row["status"] = future
+        for number, name in ((22, "Synthetic post action"), (23, "Synthetic cleanup")):
+            job["steps"].append({"name": name, "number": number, "status": future,
+                "conclusion": None, "started_at": None, "completed_at": None})
+        return job, context, current
+
+    def reject_pending_change(self, stage, change, future="pending"):
+        job, _context, current = self.pending_service(stage, future)
+        self.call(D.service_steps, job, NOW, stage)
+        changed = clone(job)
+        change(changed, current)
+        self.assertNotEqual(changed, job, "negative must alter the valid synthetic service job")
+        self.reject(D.service_steps, changed, NOW, stage)
+
+    def test_future_queued_pending_and_mixed_null_rows_preserve_exact_frontier_and_input(self):
+        for stage in ("upload", "after"):
+            for future in ("queued", "pending"):
+                job, _context, current = self.pending_service(stage, future)
+                original = clone(job)
+                selected = self.call(D.service_steps, job, NOW, stage)
+                self.assertEqual(tuple(selected), ("export", "collect", "seal", "before", "upload") +
+                    (("after",) if stage == "after" else ()))
+                self.assertEqual(selected[stage], job["steps"][current])
+                self.assertEqual(job, original)
+                job["steps"][current + 1]["status"] = "queued" if future == "pending" else "pending"
+                self.assertEqual(self.call(D.service_steps, job, NOW, stage)[stage]["status"], "in_progress")
+
+    def test_future_pending_or_queued_rows_require_null_fields_and_no_other_active_or_complete_step(self):
+        for stage in ("upload", "after"):
+            for future in ("queued", "pending"):
+                job, _context, current = self.pending_service(stage, future)
+                for index in range(current + 1, len(job["steps"])):
+                    mutations = (
+                        {"started_at": job["started_at"]}, {"completed_at": job["started_at"]},
+                        {"conclusion": "success"}, {"status": "waiting"}, {"status": None},
+                        {"status": "in_progress", "started_at": job["started_at"]},
+                        {"status": "completed", "conclusion": "success", "started_at": job["started_at"],
+                            "completed_at": job["started_at"]})
+                    for update in mutations:
+                        self.reject_pending_change(stage,
+                            lambda value, _current: value["steps"][index].update(update), future)
+                    self.reject_pending_change(stage,
+                        lambda value, _current: value["steps"][index].pop("completed_at"), future)
+
+    def test_pending_allowance_never_applies_to_prior_or_current_or_complete_legacy_stage(self):
+        for stage in ("upload", "after"):
+            job, _context, current = self.pending_service(stage)
+            for index in (0, 3, current):
+                for status in ("queued", "pending"):
+                    self.reject_pending_change(stage, lambda value, _current: value["steps"][index].update(
+                        status=status, conclusion=None, started_at=None, completed_at=None))
+            self.reject_pending_change(stage,
+                lambda value, index: value["steps"][index].update(conclusion="success"))
+            self.reject_pending_change(stage,
+                lambda value, _current: value["steps"][3].update(conclusion="failure"))
+            self.reject(D.service_steps, job, NOW, "complete")
+
+    def test_pending_future_rows_preserve_strict_fields_identity_times_and_adjacency(self):
+        for stage in ("upload", "after"):
+            for change in (
+                lambda value, _current: value["steps"][0].update(number="1"),
+                lambda value, current: value["steps"][current + 1].update(extra=True),
+                lambda value, current: value["steps"][current + 1].update(name=value["steps"][current]["name"]),
+                lambda value, current: value["steps"][current + 1].update(number=value["steps"][current]["number"]),
+                lambda value, current: value["steps"][current].update(started_at="not-UTC"),
+                lambda value, _current: value["steps"][3].update(completed_at=utc(NOW + 1)),
+            ):
+                self.reject_pending_change(stage, change)
+            def gap(value, _current):
+                for row in value["steps"][4:]:
+                    row["number"] += 1
+            self.reject_pending_change(stage, gap)
+        def after_gap(value, _current):
+            for row in value["steps"][5:]:
+                row["number"] += 1
+        self.reject_pending_change("after", after_gap)
+
+    def test_whole_public_service_job_accepts_pending_future_with_original_body_header_and_runner_joins(self):
+        for stage in ("upload", "after"):
+            job, context, _current = self.pending_service(stage)
+            raw = wire(job)
+            result = self.call(D.service_job, pending(), context, raw, headers(raw), stage=stage, now=NOW)
+            self.assertEqual(result["bodySha256"], sha(raw))
+            self.assertEqual(result["steps"][stage]["status"], "in_progress")
+            self.assertEqual(job, json.loads(raw))
+            for name, bad in (("run_attempt", job["run_attempt"] + 1),
+                    ("runner_name", job["runner_name"] + "-other"), ("head_sha", "0" * 40)):
+                changed = clone(job)
+                changed[name] = bad
+                self.assertNotEqual(changed, job)
+                encoded = wire(changed)
+                self.reject(D.service_job, pending(), context, encoded, headers(encoded), stage=stage, now=NOW)
+
     def test_job_binds_whole_original_body_and_exact_runner_source(self):
         job, context = service()
         raw = wire(job)

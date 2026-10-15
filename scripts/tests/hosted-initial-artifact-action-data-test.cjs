@@ -127,6 +127,80 @@ test('after grammar requires U success, A adjacency and a unique current frontie
         value => { value.steps[4].completed_at = '2026-09-26T11:59:21Z'; }])
         rejectsChanged(f.job('after'), mutate, validate);
 });
+// Synthetic U/A service DATA, not a retained upload response or hosted acceptance.
+function pendingService(stage, future = 'pending') {
+    const f = fixture(), job = f.job(stage), current = stage === 'upload' ? 4 : 5;
+    for (let index = current + 1; index < job.steps.length; index++) job.steps[index].status = future;
+    for (const [number, name] of [[22, 'Synthetic post action'], [23, 'Synthetic cleanup']])
+        job.steps.push({name, number, status: future, conclusion: null, started_at: null, completed_at: null});
+    return {f, job, current};
+}
+function rejectPendingChange(stage, change, future = 'pending') {
+    const {job, current} = pendingService(stage, future);
+    rejectsChanged(job, value => change(value, current), value => D.serviceSteps(value, NOW / 1000, stage));
+}
+test('future queued pending and mixed-null spellings preserve exact U/A selected roles and input', () => {
+    for (const stage of ['upload', 'after']) for (const future of ['queued', 'pending']) {
+        const {job, current} = pendingService(stage, future), original = copy(job);
+        const selected = D.serviceSteps(job, NOW / 1000, stage);
+        assert.deepEqual(Object.keys(selected), stage === 'upload' ?
+            ['export', 'collect', 'seal', 'before', 'upload'] : ['export', 'collect', 'seal', 'before', 'upload', 'after']);
+        assert.deepEqual(selected[stage], job.steps[current]);
+        assert.deepEqual(job, original);
+        job.steps[current + 1].status = future === 'pending' ? 'queued' : 'pending';
+        assert.equal(D.serviceSteps(job, NOW / 1000, stage)[stage].status, 'in_progress');
+    }
+});
+test('future spellings require untouched null metadata and never admit another active or complete Step', () => {
+    for (const stage of ['upload', 'after']) for (const future of ['queued', 'pending']) {
+        const {job, current} = pendingService(stage, future);
+        for (let index = current + 1; index < job.steps.length; index++) for (const mutate of [
+            (row, value) => { row.started_at = value.started_at; },
+            (row, value) => { row.completed_at = value.started_at; }, row => { row.conclusion = 'success'; },
+            row => { delete row.completed_at; }, row => { row.status = 'waiting'; }, row => { row.status = null; },
+            (row, value) => { Object.assign(row, {status: 'in_progress', started_at: value.started_at}); },
+            (row, value) => { Object.assign(row, {status: 'completed', conclusion: 'success',
+                started_at: value.started_at, completed_at: value.started_at}); }
+        ]) rejectPendingChange(stage, value => mutate(value.steps[index], value), future);
+    }
+});
+test('pending allowance never applies to earlier or current Steps or creates a complete legacy stage', () => {
+    for (const stage of ['upload', 'after']) {
+        const {current} = pendingService(stage);
+        for (const index of [0, 3, current]) for (const status of ['queued', 'pending'])
+            rejectPendingChange(stage, value => Object.assign(value.steps[index],
+                {status, conclusion: null, started_at: null, completed_at: null}));
+        rejectPendingChange(stage, (value, index) => { value.steps[index].conclusion = 'success'; });
+        rejectPendingChange(stage, value => { value.steps[3].conclusion = 'failure'; });
+        assert.throws(() => D.serviceSteps(pendingService(stage).job, NOW / 1000, 'complete'), D.DataError);
+    }
+});
+test('pending compatibility preserves exact fields names numbers timestamps and B-U-A adjacency', () => {
+    for (const stage of ['upload', 'after']) for (const change of [
+        value => { value.steps[0].number = '1'; }, (value, current) => { value.steps[current + 1].extra = true; },
+        (value, current) => { value.steps[current + 1].name = value.steps[current].name; },
+        (value, current) => { value.steps[current + 1].number = value.steps[current].number; },
+        (value, current) => { value.steps[current].started_at = 'not-UTC'; },
+        value => { value.steps[3].completed_at = '2026-09-26T12:00:01Z'; },
+        value => { for (const row of value.steps.slice(4)) row.number++; }
+    ]) rejectPendingChange(stage, change);
+    rejectPendingChange('after', value => { for (const row of value.steps.slice(5)) row.number++; });
+});
+test('whole original public serviceJob joins accept pending futures without changing body or header identity', () => {
+    for (const stage of ['upload', 'after']) {
+        const {f, job} = pendingService(stage), raw = Buffer.from(JSON.stringify(job)), vector = headers(raw.length);
+        const result = D.serviceJob(f.ready, raw, vector, f.environment, stage, NOW);
+        assert.equal(result.bodySha256, sha(raw));
+        assert.equal(result.rawHeaderVectorSha256, sha(Buffer.from(JSON.stringify(vector), 'utf8')));
+        assert.equal(result.steps[stage].status, 'in_progress');
+        assert.deepEqual(JSON.parse(raw), job);
+        for (const change of [value => { value.run_attempt++; }, value => { value.runner_name += '-other'; },
+            value => { value.head_sha = '0'.repeat(40); }]) rejectsChanged(job, change, value => {
+                const body = Buffer.from(JSON.stringify(value));
+                return D.serviceJob(f.ready, body, headers(body.length), f.environment, stage, NOW);
+            });
+    }
+});
 test('original public header vector hash uses UTF8 JSON without canonical LF', () => {
     const f = fixture(), row = f.beforeOriginals[0], header = D.headerVector(row.rawHeaderVector, row.body.length, NOW);
     assert.equal(header.sha256, sha(Buffer.from(JSON.stringify(row.rawHeaderVector), 'utf8')));
