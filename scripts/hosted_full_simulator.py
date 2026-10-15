@@ -18,7 +18,9 @@ RELATIVE = "evidence/simulator/binding.json"
 SCOPE = "RESERVED_PRIMARY_ORDINARY_FULL_SIMULATOR"
 TYPE = "org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest"
 TASKS = (":p2p-core:iosSimulatorArm64Test", ":p2p-core:iosX64Test",
-         ":p2p-transport-lan:iosSimulatorArm64Test", ":p2p-transport-lan:iosX64Test")
+         ":p2p-transport-lan:iosSimulatorArm64Test", ":p2p-transport-lan:iosX64Test",
+         ":p2p-rpc:iosSimulatorArm64Test", ":p2p-rpc:iosX64Test",
+         ":p2p-sample-rpc:iosSimulatorArm64Test", ":p2p-sample-rpc:iosX64Test")
 HOSTS = {
     "macos-arm64": {"osMajor": "26", "xcode": "Xcode 26.5\nBuild version 17F42\n",
                     "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "version": "26.5"},

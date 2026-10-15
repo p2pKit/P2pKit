@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Policy mutations and fake-Gradle lifecycle tests; these do not execute Kotlin tests."""
 
+import ast
 import contextlib
 import copy
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -59,6 +61,8 @@ def intel_hash(raw):
 
 class IntelEvidenceFixture:
     """Independent supplied originals, not native observations or owner authority."""
+    tasks = (":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test",
+             ":p2p-rpc:iosX64Test", ":p2p-sample-rpc:iosX64Test")
     uuid = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
     runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-2"
     prepare = ("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch", "simulator-runtimes",
@@ -72,7 +76,7 @@ class IntelEvidenceFixture:
     def __init__(self, root="/synthetic/intel-source", token=TOKEN):
         self.root, self.token = root, token
         source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": intel_hash(b"")}
-        tasks = [":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"]
+        tasks = list(self.tasks)
         device = {"name": "iPhone 17", "udid": self.uuid, "state": "Shutdown", "isAvailable": True,
                   "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}
         self.binding = {"schema": 1, "scope": "CALLER_MANAGED_INTEL_SIMULATOR_V1", "profile": "ios-x64",
@@ -132,7 +136,7 @@ class IntelEvidenceFixture:
                     "standalone": False}
         invocation = copy.deepcopy(self.invocation)
         invocation["intelSimulator"] = identity
-        invocation["command"] = [self.root + "/gradlew", ":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test",
+        invocation["command"] = [self.root + "/gradlew", *self.tasks,
             "--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks", "--dependency-verification",
             "strict", "--max-workers=2", "--no-parallel", "--console=plain", "--init-script",
             self.root + "/gradle/platform-test-coverage.init.gradle", "-Pp2pkit.testCoverageRoot=" + self.root,
@@ -143,7 +147,7 @@ class IntelEvidenceFixture:
         retirement["bindingSha256"] = intel_hash(binding_raw)
         retirement["originals"] = references(self.retire)
         properties = {task: {"device": self.uuid, "type": "org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest",
-                             "standalone": False} for task in (":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test")}
+                             "standalone": False} for task in self.tasks}
         model = {**identity, "configured": properties, "inGraph": copy.deepcopy(properties), "unchanged": True}
         return {"intel_binding": binding_raw, "intel_originals": originals, "intel_retirement": intel_encoded(retirement),
                 "intel_invocation": invocation}, model
@@ -432,11 +436,45 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
                 GATE._intel_phase(arguments["intel_originals"], "intel-bootstatus",
                                   fixture.root, fixture.binding["selected"])
 
+    def test_complete_rpc_rosters_match_policy_driver_and_gradle_init(self):
+        modules = (":p2p-core", ":p2p-transport-lan", ":p2p-rpc", ":p2p-sample-rpc")
+        intel = [module + ":iosX64Test" for module in modules]
+        ordinary = [module + suffix for module in modules
+                    for suffix in (":iosSimulatorArm64Test", ":iosX64Test")]
+        self.assertEqual(intel, list(IntelEvidenceFixture.tasks))
+        self.assertEqual(intel, GATE.PROFILES["ios-x64"])
+        self.assertEqual([module + ":iosSimulatorArm64Test" for module in modules], GATE.PROFILES["ios-arm64"])
+        self.assertEqual(ordinary, list(GATE.simulator.TASKS))
+        policy_tasks = {task for entry in POLICY["model"].values() for task in entry["tests"]
+                        if task.endswith((":iosSimulatorArm64Test", ":iosX64Test"))}
+        self.assertEqual(set(ordinary), policy_tasks)
+        init = (ROOT / "gradle/platform-test-coverage.init.gradle").read_text()
+        for name, expected in (("intelTasks", intel), ("expectedSimulators", ordinary)):
+            literals = re.findall(r"def " + name + r" = (\[[^\]]+\])", init)
+            self.assertEqual(len(literals), 1)
+            self.assertEqual(ast.literal_eval(literals[0]), expected)
+
+    def test_rpc_tasks_cannot_be_omitted_reordered_or_fabricated(self):
+        tasks = list(IntelEvidenceFixture.tasks)
+        for changed in (tasks[:2], tasks[:-1], tasks[::-1], tasks + [":other:iosX64Test"]):
+            fixture = IntelEvidenceFixture()
+            fixture.binding["tasks"] = changed
+            with self.subTest(binding=changed), self.assertRaisesRegex(ValueError, "INTEL_BINDING_SCHEMA"):
+                self.assess(fixture)
+        for task in tasks[2:]:
+            for field in ("configured", "inGraph"):
+                with self.subTest(task=task, field=field), self.assertRaisesRegex(ValueError, "INTEL_ACTUAL_TASK_PROPERTIES"):
+                    self.assess(change=lambda _arguments, report: report["intelSimulator"][field].pop(task))
+            def omit_command(arguments, _report):
+                arguments["intel_invocation"]["command"].remove(task)
+            with self.subTest(command=task), self.assertRaisesRegex(ValueError, "INTEL_INVOCATION_JOIN"):
+                self.assess(change=omit_command)
+
     def test_complete_originals_bind_foreign_root_real_properties_and_other_logical_job(self):
         fixture = IntelEvidenceFixture()
         fixture.binding["github"] = {"actions": "true", "repository": "example/project", "runId": "123",
             "runAttempt": "1", "sha": "a" * 40, "ref": "refs/heads/reviewed", "job": "audit_full_macos-x64"}
-        self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"}, self.assess(fixture))
+        self.assertEqual(set(IntelEvidenceFixture.tasks), self.assess(fixture))
         arguments, model = fixture.packet()
         self.assertEqual(36, len(arguments["intel_originals"]))
         self.assertEqual(27, len(json.loads(arguments["intel_binding"])["originals"]))
@@ -1079,6 +1117,30 @@ class OrdinarySimulatorModels(unittest.TestCase):
             else: ordinary["unchanged"] = False
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 GATE.assess(report, POLICY, "full", "arm64", TOKEN, self.binding, self.start, self.prelaunch)
+
+    def test_rpc_ordinary_properties_and_applicable_graph_are_mandatory(self):
+        identity = GATE.simulator.coverage_identity(self.binding, self.start, self.prelaunch)
+        selected = {path: {"device": self.uuid, "type": GATE.simulator.TYPE} for path in GATE.simulator.TASKS}
+        baseline = example_report()
+        baseline["ordinarySimulator"] = {**identity, "configured": selected,
+                                        "inGraph": copy.deepcopy(selected), "unchanged": True}
+        GATE.assess(baseline, POLICY, "full", "arm64", TOKEN, self.binding, self.start, self.prelaunch)
+        for module in (":p2p-rpc", ":p2p-sample-rpc"):
+            for suffix in (":iosSimulatorArm64Test", ":iosX64Test"):
+                task = module + suffix
+                for field, reason in (("configured", "SIMULATOR_KGP_TASK_MODEL_CHANGED"),
+                                      ("inGraph", "SIMULATOR_KGP_GRAPH_CHANGED")):
+                    report = copy.deepcopy(baseline)
+                    report["ordinarySimulator"][field].pop(task)
+                    with self.subTest(task=task, field=field), self.assertRaisesRegex(ValueError, reason):
+                        GATE.assess(report, POLICY, "full", "arm64", TOKEN,
+                                    self.binding, self.start, self.prelaunch)
+            report = copy.deepcopy(baseline)
+            task = module + ":iosSimulatorArm64Test"
+            report["ordinarySimulator"]["inGraph"].pop(task)
+            report["tests"][task]["inGraph"] = False
+            with self.subTest(applicable=task), self.assertRaisesRegex(ValueError, "SIMULATOR_APPLICABLE_GRAPH_MISSING"):
+                GATE.simulator.assess_coverage(report, self.binding, self.start, self.prelaunch)
 
     def test_absent_actual_start_is_rejected_before_gradle(self):
         (self.session / "state/evidence" / self.reserved / "start.json").unlink()
