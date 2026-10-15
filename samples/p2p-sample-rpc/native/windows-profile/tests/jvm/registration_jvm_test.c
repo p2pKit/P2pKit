@@ -1,5 +1,6 @@
 /* Component test only: actual development JDK21 JNI with a statically linked registrar/bridge.
- * No Windows DLL, FFM, OS storage, installed runtime or productive loader is exercised.
+ * Opt-in FFM controls use the actual dormant named-module invocation, never a Windows DLL,
+ * OS storage, installed runtime or productive loader.
  * The driver creates the VM; the unmodified registrar must never create or attach one.
  */
 #include "../../profile_jni_registration.h"
@@ -89,12 +90,44 @@ static void collect(JNIEnv *env) {
     (*env)->DeleteLocalRef(env, system);
 }
 
+static void ffm_registration(JNIEnv *env, JavaVM *vm, const uintptr_t *entries, const char *mode) {
+    jclass adapter = (*env)->FindClass(env, "dev/p2pkit/rpc/windows/loader/RealRegistrationInvocationTest");
+    no_exception(env);
+    REQUIRE(adapter);
+    jmethodID run = (*env)->GetStaticMethodID(env, adapter, "run", "(JJ[JLjava/lang/String;)V");
+    no_exception(env);
+    REQUIRE(run);
+    jlongArray addresses = (*env)->NewLongArray(env, PWP_JNI_METHOD_COUNT);
+    no_exception(env);
+    REQUIRE(addresses);
+    jlong values[PWP_JNI_METHOD_COUNT];
+    for (uint32_t i = 0; i < PWP_JNI_METHOD_COUNT; ++i) values[i] = (jlong)entries[i];
+    (*env)->SetLongArrayRegion(env, addresses, 0, PWP_JNI_METHOD_COUNT, values);
+    no_exception(env);
+    jstring name = (*env)->NewStringUTF(env, mode);
+    no_exception(env);
+    REQUIRE(name);
+    /* Only the test-created VM and statically linked original symbols cross this test-only adapter. */
+    jvalue arguments[4];
+    arguments[0].j = (jlong)(uintptr_t)pwp_jni_register_once;
+    arguments[1].j = (jlong)(uintptr_t)vm;
+    arguments[2].l = addresses;
+    arguments[3].l = name;
+    (*env)->CallStaticVoidMethodA(env, adapter, run, arguments);
+    no_exception(env);
+    (*env)->DeleteLocalRef(env, name);
+    (*env)->DeleteLocalRef(env, addresses);
+    (*env)->DeleteLocalRef(env, adapter);
+}
+
 int main(int argc, char **argv) {
-    REQUIRE(argc == 4 && argv[1][0] == '/' && argv[2][0] == '/');
-    const int success = strcmp(argv[3], "success") == 0;
+    REQUIRE((argc == 4 || argc == 5) && argv[1][0] == '/' && argv[2][0] == '/');
+    const int ffm = strncmp(argv[3], "ffm-", 4) == 0;
+    REQUIRE((ffm && argc == 5 && argv[4][0] == '/') || (!ffm && argc == 4));
+    const int success = strcmp(argv[3], "success") == 0 || strcmp(argv[3], "ffm-success") == 0;
     const int pending = strcmp(argv[3], "pending") == 0;
-    const int address = strcmp(argv[3], "address") == 0;
-    const int missing = strcmp(argv[3], "missing-class") == 0;
+    const int address = strcmp(argv[3], "address") == 0 || strcmp(argv[3], "ffm-address") == 0;
+    const int missing = strcmp(argv[3], "missing-class") == 0 || strcmp(argv[3], "ffm-missing-class") == 0;
     REQUIRE(success || pending || address || missing);
     /* Explicit existing trusted development JDK, NOT a candidate helper or production bootstrap.
      * Keep the loaded development runtime alive through process exit; never dlclose it. */
@@ -109,11 +142,19 @@ int main(int argc, char **argv) {
     char classpath[8192];
     int length = snprintf(classpath, sizeof(classpath), "-Djava.class.path=%s", argv[2]);
     REQUIRE(length > 0 && (size_t)length < sizeof(classpath));
+    char modulepath[8192] = {0};
+    if (ffm) {
+        length = snprintf(modulepath, sizeof(modulepath), "--module-path=%s", argv[4]);
+        REQUIRE(length > 0 && (size_t)length < sizeof(modulepath));
+    }
     JavaVMOption options[] = {
         {classpath, NULL}, {"-Xcheck:jni", NULL}, {"-Xms16m", NULL}, {"-Xmx64m", NULL},
         {"-XX:+UseSerialGC", NULL}, {"-XX:-CreateCoredumpOnCrash", NULL},
+        {"--enable-preview", NULL}, {modulepath, NULL},
+        {"--add-modules=dev.p2pkit.rpc.windows.loader", NULL},
+        {"--enable-native-access=dev.p2pkit.rpc.windows.loader", NULL},
     };
-    JavaVMInitArgs arguments = {PWP_JNI_RUNTIME_VERSION, 6, options, JNI_FALSE};
+    JavaVMInitArgs arguments = {PWP_JNI_RUNTIME_VERSION, ffm ? 10 : 6, options, JNI_FALSE};
     JavaVM *vm = NULL;
     JNIEnv *env = NULL;
     REQUIRE(create_vm(&vm, (void **)&env, &arguments) == JNI_OK && vm && env);
@@ -131,23 +172,34 @@ int main(int argc, char **argv) {
         REQUIRE((*env)->ExceptionCheck(env));
     }
     pwp_jni_registration_report report;
-    int32_t result = pwp_jni_register_once(vm, entries, PWP_JNI_METHOD_COUNT, &report, sizeof(report));
-    no_exception(env);
-    REQUIRE(report.size == sizeof(report) && report.version == 1 && report.result == result);
-    REQUIRE(!report.retention_uncertain);
-    if (success) {
-        REQUIRE(result == PWP_JNI_REGISTER_OK && report.phase == 2 && report.class_retained == 1);
-        REQUIRE(!report.exception_observed && !report.exception_retained);
-        constants(env);
-        collect(env); /* A completed real GC request, not a promise of class unloading. */
-        constants(env);
+    if (ffm) {
+        ffm_registration(env, vm, entries, argv[3]);
+        if (success) {
+            constants(env);
+            collect(env);
+            constants(env);
+        } else if (!missing) {
+            unbound(env);
+        }
     } else {
-        REQUIRE(report.phase == 0 && !report.class_retained);
-        REQUIRE(result == (pending ? PWP_JNI_REGISTER_EXCEPTION :
-            (address ? PWP_JNI_REGISTER_ADDRESS : PWP_JNI_REGISTER_CLASS)));
-        REQUIRE(report.exception_observed == (uint32_t)!address);
-        REQUIRE(report.exception_retained == (uint32_t)!address);
-        if (!missing) unbound(env);
+        int32_t result = pwp_jni_register_once(vm, entries, PWP_JNI_METHOD_COUNT, &report, sizeof(report));
+        no_exception(env);
+        REQUIRE(report.size == sizeof(report) && report.version == 1 && report.result == result);
+        REQUIRE(!report.retention_uncertain);
+        if (success) {
+            REQUIRE(result == PWP_JNI_REGISTER_OK && report.phase == 2 && report.class_retained == 1);
+            REQUIRE(!report.exception_observed && !report.exception_retained);
+            constants(env);
+            collect(env); /* A completed real GC request, not a promise of class unloading. */
+            constants(env);
+        } else {
+            REQUIRE(report.phase == 0 && !report.class_retained);
+            REQUIRE(result == (pending ? PWP_JNI_REGISTER_EXCEPTION :
+                (address ? PWP_JNI_REGISTER_ADDRESS : PWP_JNI_REGISTER_CLASS)));
+            REQUIRE(report.exception_observed == (uint32_t)!address);
+            REQUIRE(report.exception_retained == (uint32_t)!address);
+            if (!missing) unbound(env);
+        }
     }
     for (uint32_t i = 0; i < PWP_JNI_METHOD_COUNT; ++i)
         entries[i] = (uintptr_t)pwp_jni_methods[i].fnPtr;
