@@ -106,6 +106,50 @@ function transportDiagnostic(value) {
         !(row.httpStatus === null || Number.isInteger(row.httpStatus) && row.httpStatus >= 100 && row.httpStatus <= 599)) return null;
     return Object.freeze(row);
 }
+// Observed original completion DATA, not an exception or underlying-cause claim.
+const readerDiagnosticCodes = new Set([
+    'BIND_FAILED', 'BIND_FIELDS', 'BIND_ONCE_BEFORE_DEMAND',
+    'CANCELLED', 'CLOSED_DATA_FIELDS', 'DEMAND_STATE',
+    'DEMAND_WRITE_ONCE', 'DUPLICATE_PIPE_CLOSE', 'ENVIRONMENT',
+    'ENVIRONMENT_CONTEXT', 'ENVIRONMENT_FIELDS', 'FAILED_OR_CANCELLED',
+    'FINAL_ASCII', 'FINAL_BINDING', 'FINAL_CANONICAL',
+    'FINAL_OBSERVED_ZIP', 'FINAL_ONCE', 'FINAL_RAW_FENCE',
+    'FIXED_PYTHON', 'FRAME_HEADER', 'FRAME_LIFETIME',
+    'FRAME_WITHOUT_DEMAND', 'HELPER_DIAGNOSTIC', 'INCOMPLETE_ORIGINAL_CLOSE',
+    'INPUT_CANCELLED', 'INVALID_INPUT', 'KIND',
+    'LOCAL_CLOCK', 'NODE24_REQUIRED', 'NO_KNOWN_RETURN',
+    'NO_READY', 'ONE_INVOCATION', 'OPERATION_FAILED',
+    'ORIGINAL_CHILD_CLOSE', 'ORIGINAL_CHILD_PIPES', 'ORIGINAL_DEADLINE',
+    'ORIGINAL_DIRECTED_MAPPING', 'ORIGINAL_EXIT', 'PARTIAL_ANCESTOR_CONTEXT',
+    'PIPE_FRAME_BOUND', 'PLAIN_FIELDS', 'PREFETCH_OR_TRAILING_FRAME',
+    'READY_FIRST', 'SPAWN_ORDER', 'STDERR_BOUND',
+    'STDERR_END_ONCE', 'STDIN_FINISH', 'STDOUT_PREMATURE_EOF',
+    'TOKEN_FREE_ENVIRONMENT', 'ZIP_OVERRUN'
+].map(code => 'INITIAL_ARTIFACT_READER_' + code));
+function readerDiagnostic(value) {
+    if (value === null || typeof value !== 'object' || isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype) return null;
+    const names = ['scope', 'transport', 'code', 'preSpawnLocalNs', 'returnedLocalNs',
+        'originalChildCloseObserved', 'originalExitZeroObserved', 'stdinFinishObserved', 'stdinEndCallbackObserved',
+        'stdoutEndObserved', 'stderrEndObserved', 'originalPipeCloses', 'stderrBytes', 'readySha256', 'finalSha256',
+        'zipBytes', 'zipSha256', 'nativeFileRetirement', 'originalStepOutcome', 'qualification'];
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Reflect.ownKeys(value).length !== names.length || !names.every(name =>
+        Object.hasOwn(descriptors, name) && Object.hasOwn(descriptors[name], 'value') && descriptors[name].enumerable)) return null;
+    const field = name => descriptors[name].value, closes = field('originalPipeCloses');
+    if (!['INITIAL_ARTIFACT_FIXED_READER_TRANSPORT_ONLY', 'INITIAL_PRODUCTIVE_ARTIFACT_FIXED_READER_TRANSPORT_ONLY'].includes(field('scope')) ||
+        !['closed', 'incomplete'].includes(field('transport')) ||
+        !(field('code') === null || typeof field('code') === 'string' && readerDiagnosticCodes.has(field('code'))) ||
+        closes === null || typeof closes !== 'object' || isProxy(closes) || Object.getPrototypeOf(closes) !== Object.prototype) return null;
+    const flags = ['originalChildCloseObserved', 'originalExitZeroObserved', 'stdinFinishObserved',
+        'stdinEndCallbackObserved', 'stdoutEndObserved', 'stderrEndObserved'];
+    const pipeNames = ['stdin', 'stdout', 'stderr'], pipes = Object.getOwnPropertyDescriptors(closes);
+    if (!flags.every(name => typeof field(name) === 'boolean') || Reflect.ownKeys(closes).length !== pipeNames.length ||
+        !pipeNames.every(name => Object.hasOwn(pipes, name) && Object.hasOwn(pipes[name], 'value') &&
+            pipes[name].enumerable && typeof pipes[name].value === 'boolean')) return null;
+    return Object.freeze(Object.assign(Object.create(null), {schema: 1, selection: 'COMPLETED_READER_SNAPSHOT',
+        transport: field('transport'), code: field('code')}, Object.fromEntries(flags.map(name => [name, field(name)])),
+        {stdinCloseObserved: pipes.stdin.value, stdoutCloseObserved: pipes.stdout.value, stderrCloseObserved: pipes.stderr.value}));
+}
 class ActionError extends Error {
     constructor(message) {
         super(message);
@@ -351,7 +395,7 @@ async function mainFixed(route) {
     const control = new AbortController(), signal = control.signal, pins = [], bytePins = [], completions = [];
     let failed = null, quarantined = false, lastNs = null, endNs = null, timer = null, validity = null, utcFence = null;
     let originalEnvironment = null, signalsInstalled = false;
-    let phase = 'ADMISSION', diagnostic = null;
+    let phase = 'ADMISSION', diagnostic = null, completedReaderDiagnostic = null;
     const signals = ['SIGINT', 'SIGTERM', ...(windows ? ['SIGBREAK'] : [])];
     function fail(error) {
         process.exitCode = 125;
@@ -514,6 +558,7 @@ async function mainFixed(route) {
             const transportValue = pin(transportReturn);
             phase = 'READER_COMPLETION';
             const readerValue = pin(await reader.completion);
+            try { completedReaderDiagnostic = readerDiagnostic(readerValue); } catch (_) { /* Diagnostic only. */ }
             phase = 'READER_FINAL_FRAME';
             const finalRaw = pinBytes(reader.finalFrame(), RECORD);
             checkpoint(bounds.workEndNs);
@@ -578,6 +623,12 @@ async function mainFixed(route) {
                 if (line.length <= 1024) process.stderr.write(line);
             }
         } catch (_) { /* Retain original controller diagnostic, refusal marker and finally cleanup. */ }
+        try {
+            if (completedReaderDiagnostic !== null) {
+                const line = 'INITIAL_ARTIFACT_READER_DIAGNOSTIC ' + JSON.stringify(completedReaderDiagnostic) + '\n';
+                if (line.length <= 1024) process.stderr.write(line);
+            }
+        } catch (_) { /* The original marker and cleanup remain mandatory. */ }
         try {
             if (diagnostic !== null) {
                 const line = 'INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ' + JSON.stringify(diagnostic) + '\n';

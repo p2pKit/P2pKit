@@ -46,6 +46,7 @@ function diagnostics(errors) {
     for (const text of errors) {
         if (text === 'INITIAL_ARTIFACT_ACTION_NOT_ACCEPTED\n') continue;
         if (text.startsWith('INITIAL_ARTIFACT_TRANSPORT_DIAGNOSTIC ')) { transportRows([text]); continue; }
+        if (text.startsWith('INITIAL_ARTIFACT_READER_DIAGNOSTIC ')) { readerRows([text]); continue; }
         const prefix = 'INITIAL_ARTIFACT_ACTION_DIAGNOSTIC ';
         assert.equal(typeof text, 'string'); assert(text.length <= 1024);
         assert(text.startsWith(prefix) && text.endsWith('\n'));
@@ -191,7 +192,7 @@ function model(mode = 'upload', config = {}) {
     // Same realm avoids bypassing DATA prototype rules. No arbitrary import,
     // real process/fs/network backend or test seam enters the production module.
     const factory = vm.runInThisContext('(function(require,module,__dirname,process,Date){\n' + source +
-        '\nreturn {ActionError, diagnosticErrors, diagnosticCodes, transportDiagnostic, transportDiagnosticCodes};\n})',
+        '\nreturn {ActionError, diagnosticErrors, diagnosticCodes, transportDiagnostic, transportDiagnosticCodes, readerDiagnostic, readerDiagnosticCodes};\n})',
         {filename: 'offline-new-artifact-controller.cjs', timeout: 1000});
     const diagnosticModel = factory(name => { assert(Object.hasOwn(imports, name)); return imports[name]; }, module,
         '/model/p2pkit/scripts', processModel, {now: () => nowMs});
@@ -567,6 +568,115 @@ test('controller transport whitelist equals actual transport own code roster', a
     assert.equal(m.calls.length, 0);
     const success = await model().run(); assert.equal(success.errors.length, 0);
     assert(!success.calls.includes('transport-diagnostic'));
+});
+
+function readerRows(errors) {
+    const prefix = 'INITIAL_ARTIFACT_READER_DIAGNOSTIC ';
+    const codes = new Set([...source.match(/const readerDiagnosticCodes = new Set\(\[([\s\S]*?)\]\./)[1]
+        .matchAll(/'([A-Z0-9_]+)'/g)].map(row => 'INITIAL_ARTIFACT_READER_' + row[1]));
+    return errors.filter(text => text.startsWith(prefix)).map(text => {
+        assert(text.length <= 1024 && text.endsWith('\n'));
+        const row = JSON.parse(text.slice(prefix.length));
+        assert.deepEqual(Object.keys(row), ['schema', 'selection', 'transport', 'code',
+            'originalChildCloseObserved', 'originalExitZeroObserved', 'stdinFinishObserved', 'stdinEndCallbackObserved',
+            'stdoutEndObserved', 'stderrEndObserved', 'stdinCloseObserved', 'stdoutCloseObserved', 'stderrCloseObserved']);
+        assert.equal(row.schema, 1); assert.equal(row.selection, 'COMPLETED_READER_SNAPSHOT');
+        assert(['closed', 'incomplete'].includes(row.transport)); assert(row.code === null || codes.has(row.code));
+        for (const name of Object.keys(row).slice(4)) assert.equal(typeof row[name], 'boolean');
+        return row;
+    });
+}
+test('reader diagnostic retains original completion before unchanged final frame refusal', async () => {
+    const m = await model('upload', {transportReturn(m) {
+        Object.assign(m.f.readerClosed, {transport: 'incomplete', code: 'INITIAL_ARTIFACT_READER_ORIGINAL_EXIT',
+            originalExitZeroObserved: false, stdoutEndObserved: false});
+        m.f.readerClosed.originalPipeCloses.stderr = false;
+    }, readerFinalFrame(m) {
+        assert(m.calls.includes('reader-close')); assert(m.calls.includes('transport-close'));
+        throw new Error('PRIVATE_NO_KNOWN_RETURN');
+    }, stderrWrite(text) {
+        assert(!text.includes('PRIVATE'));
+    }}).run();
+    notAccepted(m); const rows = readerRows(m.errors); assert.equal(rows.length, 1);
+    assert.equal(rows[0].code, 'INITIAL_ARTIFACT_READER_ORIGINAL_EXIT');
+    assert.equal(rows[0].transport, 'incomplete'); assert.equal(rows[0].originalChildCloseObserved, true);
+    assert.equal(rows[0].originalExitZeroObserved, false); assert.equal(rows[0].stdoutEndObserved, false);
+    assert.equal(rows[0].stdinCloseObserved, true); assert.equal(rows[0].stderrCloseObserved, false);
+    assert.equal(diagnostics(m.errors).phase, 'READER_FINAL_FRAME'); assert.equal(diagnostics(m.errors).code, 'UNKNOWN');
+    assert.equal(m.calls.filter(name => name === 'reader-F').length, 1); assert(!m.calls.includes('finite-spawn'));
+    assert.equal(m.timers.size, 0);
+    const success = await model().run(); assert.equal(success.exitCode, 0); assert.equal(success.errors.length, 0);
+});
+test('reader diagnostic rejects Proxy accessors unknown text and nonboolean close fields', async () => {
+    const m = model(), project = m.diagnosticModel.readerDiagnostic;
+    const fresh = () => ({...m.f.readerClosed, originalPipeCloses: {...m.f.readerClosed.originalPipeCloses}});
+    let accessed = 0;
+    const proxy = new Proxy({}, {get() { accessed++; throw new Error('PRIVATE_GET'); },
+        getPrototypeOf() { accessed++; throw new Error('PRIVATE_PROTO'); }, ownKeys() { accessed++; throw new Error('PRIVATE_KEYS'); }});
+    const accessor = fresh(); Object.defineProperty(accessor, 'code', {enumerable: true,
+        get() { accessed++; throw new Error('PRIVATE_CODE'); }});
+    const nestedAccessor = fresh(); Object.defineProperty(nestedAccessor.originalPipeCloses, 'stderr', {enumerable: true,
+        get() { accessed++; throw new Error('PRIVATE_PIPE'); }});
+    const extra = fresh(); extra[Symbol('PRIVATE')] = true;
+    const missing = fresh(); delete missing.originalExitZeroObserved;
+    const nestedExtra = fresh(); nestedExtra.originalPipeCloses.extra = false;
+    for (const row of [null, 'PRIVATE', {}, proxy, accessor, nestedAccessor, extra, missing, nestedExtra,
+        {...fresh(), originalPipeCloses: proxy}, {...fresh(), code: 'PRIVATE_CODE'}, {...fresh(), code: {}},
+        {...fresh(), code: NaN}, {...fresh(), originalExitZeroObserved: 1}, {...fresh(), transport: 'PRIVATE'},
+        {...fresh(), scope: 'PRIVATE'}, {...fresh(), originalPipeCloses: {stdin: true, stdout: true, stderr: Infinity}}]) {
+        assert.equal(project(row), null);
+    }
+    assert.equal(accessed, 0); assert.equal(m.calls.length, 0);
+    for (const code of ['PRIVATE_TOKEN', 'INITIAL_ARTIFACT_READER_FAKE']) {
+        const refused = await model('upload', {transportReturn(m) { m.f.readerClosed.code = code; },
+            readerFinalFrame() { throw new Error('PRIVATE_FRAME'); }}).run();
+        notAccepted(refused); assert.equal(readerRows(refused.errors).length, 0);
+        assert.equal(diagnostics(refused.errors).phase, 'READER_FINAL_FRAME'); assert(!refused.errors.join('').includes('PRIVATE'));
+    }
+});
+test('reader diagnostic snapshot stays finite after original mutation and inherited serialization poisoning', async () => {
+    const prior = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON'); let accessed = 0, m;
+    try {
+        m = await model('upload', {transportReturn(m) {
+            m.f.readerClosed.code = 'INITIAL_ARTIFACT_READER_STDOUT_PREMATURE_EOF'; m.f.readerClosed.transport = 'incomplete';
+        }, readerFinalFrame(m) {
+            m.f.readerClosed.code = 'PRIVATE_MUTATION'; m.f.readerClosed.originalPipeCloses.stderr = false;
+            Object.defineProperty(Object.prototype, 'toJSON', {configurable: true,
+                value() { accessed++; throw new Error('PRIVATE_JSON'); }});
+            throw new Error('PRIVATE_FRAME');
+        }}).run();
+    } finally {
+        if (prior) Object.defineProperty(Object.prototype, 'toJSON', prior); else delete Object.prototype.toJSON;
+    }
+    notAccepted(m); const row = readerRows(m.errors)[0];
+    assert.equal(row.code, 'INITIAL_ARTIFACT_READER_STDOUT_PREMATURE_EOF'); assert.equal(row.stderrCloseObserved, true);
+    assert.equal(accessed, 0); assert(!m.errors.join('').includes('PRIVATE'));
+    const original = model(), projected = original.diagnosticModel.readerDiagnostic(original.f.readerClosed);
+    assert.equal(Object.getPrototypeOf(projected), null); assert(Object.isFrozen(projected));
+    assert.equal(projected.code, null);
+});
+test('reader diagnostic write failure and missing completion preserve original refusal and cleanup', async () => {
+    const m = await model('upload', {readerFinalFrame() { throw new Error('PRIVATE_FRAME'); }, stderrWrite(text) {
+        if (text.startsWith('INITIAL_ARTIFACT_READER_DIAGNOSTIC ')) throw new Error('PRIVATE_WRITE');
+    }}).run();
+    notAccepted(m); assert.equal(readerRows(m.errors).length, 0); assert.equal(m.timers.size, 0);
+    assert(m.calls.includes('reader-close')); assert(!m.calls.includes('finite-spawn'));
+    for (const name of ['SIGINT', 'SIGTERM']) assert.equal(m.signals.listenerCount(name), 0);
+    const early = await model('upload', {transportStart() { throw new Error('PRIVATE_TRANSPORT'); }}).run();
+    notAccepted(early); assert.equal(readerRows(early.errors).length, 0); assert(early.calls.includes('reader-close'));
+    assert(!early.calls.includes('reader-F')); assert.equal(early.timers.size, 0);
+});
+test('reader diagnostic whitelist equals actual Reader literals without new public exports', async () => {
+    const reader = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-reader.cjs'), 'utf8');
+    const literals = new Set([...reader.matchAll(/\bneed\([\s\S]*?,\s*'([A-Z0-9_]+)'\)/g)]
+        .map(row => 'INITIAL_ARTIFACT_READER_' + row[1]));
+    for (const row of reader.matchAll(/'(INITIAL_ARTIFACT_READER_[A-Z0-9_]+)'/g)) literals.add(row[1]);
+    const m = model(); assert.equal(literals.size, 50);
+    assert.deepEqual([...m.diagnosticModel.readerDiagnosticCodes].sort(), [...literals].sort());
+    for (const code of literals) {
+        const row = m.diagnosticModel.readerDiagnostic({...m.f.readerClosed, code}); assert.equal(row.code, code);
+    }
+    assert.deepEqual(Object.keys(m.module.exports), ['main', 'mainProductive']); assert.equal(m.calls.length, 0);
 });
 
 (async () => {
