@@ -63,7 +63,7 @@ wrappers are focused developer checks; final aggregation selects `ci.yml` result
 
 The plan reports reasonable external wall limits (30–180 minutes per component,
 plus 10 minutes for evidence/upload). No special CPU20, initializer120 or
-before-upload handshakes apply. Real timeouts, test failures, unknown process
+before-upload handshakes apply. Real timeouts, test failures, unknown owned-process
 cleanup and corrupt dependencies still fail. Do not raise a timeout to mask a
 functional deadlock.
 
@@ -81,6 +81,26 @@ manifest. It encrypts logs/reports to the **existing public key** in
 `CI_EVIDENCE_RECIPIENT_SHA256` and `CI_EVIDENCE_RECIPIENT_FINGERPRINT` pin that key.
 CI has no private key or passphrase. The retired policy's authorization dates do
 not govern routine tests; the real cryptographic key expiry still applies.
+
+Routine macOS CI uses the explicit `GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1`
+cleanup boundary. It retains positive inherited markers, pipe capabilities,
+observed original-parent ownership, identity-scoped signaling, original child
+waits and closed capture pipes. A new same-user process with no ownership proof
+and only an unobserved original parent is not part of that observed domain. The
+receipt records a cumulative `outsideDomainObservations` count (capped at one
+million), not a claim that those lifetimes are unrelated or retired. Every later
+census can still establish ownership. Traced ancestry, unreadable environments,
+malformed markers, leaked native rights and uncertain known-child cleanup still
+fail. The strict audit/RPC supervisor itself is unchanged.
+
+This ordinary hosted policy trusts reviewed commands to preserve their ownership
+markers; it is not containment of malicious detached/marker-erasing work. Known
+Gradle/simulator cleanup remains required, while other delegated system services
+belong to their explicit platform lifecycle and the disposable GitHub VM. The
+qualifier requires this exact boundary on fresh macOS receipts; historical
+whole-host failures are not relabeled as successes. Public-only GPG separately
+uses bounded original-child/pipe ownership on Darwin with agent/network helper
+startup disabled; it never upgrades a failed command into qualification.
 
 Standard immutable Actions artifacts retain the manifest/ciphertext for 14 days
 from upload. Public app artifacts are separate and unencrypted. Reports include

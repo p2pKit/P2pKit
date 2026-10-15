@@ -82,7 +82,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(result["cleanupKnown"])
 
     def test_actual_scope_failed_postspawn_still_closes_original_pipes(self):
-        real = E.audit_processes.make_scope
+        real = E._command_scope
         retained = []
         def supplier(*args):
             scope = real(*args)
@@ -93,7 +93,7 @@ class EvidenceTests(unittest.TestCase):
                 raise RuntimeError("PRIVATE_EXCEPTION")
             scope.spawn = failed
             return scope
-        with mock.patch.object(E.audit_processes, "make_scope", supplier):
+        with mock.patch.object(E, "_command_scope", supplier):
             result = self.command("import time; time.sleep(30)")
         self.assertEqual(result["code"], "SPAWN")
         self.assertTrue(result["cleanupKnown"])
@@ -183,7 +183,7 @@ class EvidenceTests(unittest.TestCase):
                                         "auditSessionExclusion": "SAME_VALID_SESSION"}}
         scope._pending_context.return_value = {"scope": E.PENDING_CONTEXT_SCOPE,
             "roles": {"java": 1}, "parentage": {"UNOBSERVED": 1}}
-        with mock.patch.object(E.audit_processes, "make_scope", return_value=scope):
+        with mock.patch.object(E, "_command_scope", return_value=scope):
             actual = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
                 private=self.root / "darwin-context", timeout=5)
         self.assertFalse(actual["cleanupKnown"])
@@ -226,7 +226,7 @@ class EvidenceTests(unittest.TestCase):
                 elif case == "close":
                     scope.close.side_effect = OSError("PRIVATE_CLOSE")
                 public = io.StringIO()
-                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                with mock.patch.object(E, "_command_scope", return_value=scope), \
                         contextlib.redirect_stdout(public), contextlib.redirect_stderr(public):
                     outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
                         private=self.root / case, timeout=5)
@@ -248,7 +248,7 @@ class EvidenceTests(unittest.TestCase):
                 scope.drain.return_value = []
                 capture = mock.Mock(eof=field != "eof", closed=field != "closed", error=None)
                 capture.thread.is_alive.return_value = field == "active"
-                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                with mock.patch.object(E, "_command_scope", return_value=scope), \
                         mock.patch.object(E, "Capture", return_value=capture):
                     outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
                         private=self.root / field, timeout=5)
@@ -344,7 +344,9 @@ class EvidenceTests(unittest.TestCase):
         output = self.root / "output"
         fingerprint = "A" * 40
         cipher_bytes = b"SYNTHETIC_CIPHERTEXT_NOT_REAL_ENCRYPTION"
-        def encrypt(archive, target, key_raw, expected_sha, expected_fingerprint, work, environment):
+        def encrypt(archive, target, key_raw, expected_sha, expected_fingerprint, work, environment, *, cancelled):
+            self.assertTrue(callable(cancelled))
+            self.assertFalse(cancelled())
             initial = json.loads((output / "failure.json").read_text())
             self.assertFalse(initial["outcome"]["cleanupKnown"])
             self.assertNotIn("closedCaptureArchive", initial)
@@ -578,7 +580,7 @@ class EvidenceTests(unittest.TestCase):
                                 error="OUTPUT_IO" if defect == "io-error" else None)
                 bad.thread.ident = None if defect == "unstarted" else 2
                 bad.thread.is_alive.return_value = defect == "active"
-                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                with mock.patch.object(E, "_command_scope", return_value=scope), \
                         mock.patch.object(E, "Capture", side_effect=[good, bad]):
                     result = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
                         private=self.root / defect, timeout=5)
@@ -601,7 +603,7 @@ class EvidenceTests(unittest.TestCase):
             observed.append("final-drain")
             return []
         scope.drain.side_effect = drain
-        with mock.patch.object(E.audit_processes, "make_scope", return_value=scope):
+        with mock.patch.object(E, "_command_scope", return_value=scope):
             outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
                 private=self.root / "observed", timeout=5)
         self.assertEqual(outcome["code"], "PASS")
@@ -614,7 +616,7 @@ class EvidenceTests(unittest.TestCase):
         scope.spawn.return_value = child
         scope.discover.side_effect = E.audit_processes.OwnershipError("PRIVATE_OBSERVATION_ERROR")
         scope.drain.return_value = []
-        with mock.patch.object(E.audit_processes, "make_scope", return_value=scope):
+        with mock.patch.object(E, "_command_scope", return_value=scope):
             outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
                 private=self.root / "discovery-error", timeout=5)
         self.assertEqual(outcome["code"], "CLEANUP")
@@ -641,7 +643,7 @@ class EvidenceTests(unittest.TestCase):
                     else:
                         capture.error = "OUTPUT_LIMIT"
                 scope.discover.side_effect = discover
-                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                with mock.patch.object(E, "_command_scope", return_value=scope), \
                         mock.patch.object(E.time, "monotonic", side_effect=lambda: state["now"]), \
                         mock.patch.object(E, "Capture", return_value=capture):
                     outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
@@ -995,6 +997,122 @@ class EvidenceTests(unittest.TestCase):
                 else:
                     self.assertIn(b"\r\n", actual)
                     self.assertNotEqual(hashlib.sha256(actual).digest(), hashlib.sha256(original).digest())
+
+    def test_hosted_darwin_factory_routes_real_run_command_and_records_boundary(self):
+        env = {**dict(os.environ), "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_REPOSITORY": "p2pKit/P2pKit", "GITHUB_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "a" * 40,
+               "GITHUB_WORKFLOW_REF": "p2pKit/P2pKit/.github/workflows/ci.yml@refs/heads/fixture"}
+        child = mock.Mock(stdout=io.BytesIO(b""), stderr=io.BytesIO(b""), returncode=0)
+        child.poll.return_value = 0; child.wait.return_value = 0
+        selected = []
+        def initialize(scope, *_args):
+            selected.append(scope)
+            scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+            scope.outside_domain_observations = 52
+            scope.spawn = mock.Mock(return_value=child)
+            scope.discover = mock.Mock(return_value=[])
+            scope.drain = mock.Mock(return_value=[])
+            scope.close = mock.Mock()
+        with mock.patch.object(E.platform, "system", return_value="Darwin"), \
+                mock.patch.object(E._HostedDarwinScope, "__init__", initialize), \
+                mock.patch.object(E.audit_processes, "make_scope", side_effect=AssertionError("WRONG_FACTORY")):
+            outcome = E.run_command(["synthetic"], cwd=self.root, environment=env,
+                                    private=self.root / "selected-domain", timeout=5)
+        self.assertEqual(len(selected), 1)
+        self.assertIsInstance(selected[0], E._HostedDarwinScope)
+        self.assertEqual(outcome["code"], "PASS")
+        self.assertTrue(outcome["cleanupKnown"])
+        self.assertTrue(outcome["capturesClosed"])
+        self.assertEqual(outcome["ownershipBoundary"], E.HOSTED_DARWIN_BOUNDARY)
+        self.assertEqual(outcome["outsideDomainObservations"], 52)
+        selected[0].drain.assert_called_once(); selected[0].close.assert_called_once()
+        child.wait.assert_called_once()
+        with mock.patch.object(E.platform, "system", return_value="Darwin"), \
+                mock.patch.object(E.audit_processes, "make_scope", return_value="existing-strict-backend") as original:
+            self.assertEqual(E._command_scope("job", "invocation", "private", "home",
+                {**env, "RUNNER_ENVIRONMENT": "self-hosted"}), "existing-strict-backend")
+        original.assert_called_once_with("job", "invocation", "private", "home")
+
+    def test_hosted_darwin_context_is_fixed_source_workflow_and_host_not_an_optout(self):
+        env = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REPOSITORY": "p2pKit/P2pKit",
+               "GITHUB_WORKFLOW_REF": "p2pKit/P2pKit/.github/workflows/ci.yml@refs/heads/fixture",
+               "GITHUB_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "a" * 40}
+        with mock.patch.object(E.platform, "system", return_value="Darwin"):
+            self.assertTrue(E._hosted_darwin_context(env))
+            self.assertTrue(E._hosted_darwin_context({**env, "GITHUB_WORKFLOW_REF":
+                "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml@refs/heads/fixture"}))
+            for change in ({"GITHUB_ACTIONS": "false"}, {"RUNNER_ENVIRONMENT": "self-hosted"},
+                           {"GITHUB_REPOSITORY": "other/repository"}, {"GITHUB_WORKFLOW_SHA": "b" * 40},
+                           {"GITHUB_SHA": "not-a-sha"}, {"GITHUB_WORKFLOW_REF": "ci.yml"},
+                           {"GITHUB_WORKFLOW_REF": "p2pKit/P2pKit/.github/workflows/ci.yml@"},
+                           {"GITHUB_WORKFLOW_REF": "p2pKit/P2pKit/.github/workflows/other.yml@refs/heads/fixture"}):
+                with self.subTest(change=change):
+                    self.assertFalse(E._hosted_darwin_context({**env, **change}))
+        with mock.patch.object(E.platform, "system", return_value="Linux"):
+            self.assertFalse(E._hosted_darwin_context(env))
+
+    def test_hosted_darwin_domain_retains_positive_proofs_and_revisits_unobserved_parent(self):
+        scope = object.__new__(E._HostedDarwinScope)
+        scope.known, scope.foreign_sessions, scope.outside_domain_observations, scope.controller_session = {}, {}, 0, 17
+        identity = {"pid": 123, "uniqueId": 456, "startSeconds": 1, "startMicroseconds": 2}
+        missing = E.audit_processes.DiscoveryUncertain("Darwin non-reaper original-parent lifetime was not observed")
+        with mock.patch.object(scope, "_ours", return_value=False) as ours, \
+                mock.patch.object(scope, "_has_pipe", return_value=False) as pipe, \
+                mock.patch.object(scope, "_parent_proof", side_effect=missing) as parent, \
+                mock.patch.object(scope, "_audit_session", return_value=17):
+            self.assertIsNone(scope._ownership_proof(identity, {}))
+            self.assertEqual(scope.outside_domain_observations, 1)
+            self.assertEqual(scope.foreign_sessions, {})
+            self.assertEqual(scope.known, {})
+            ours.return_value = True
+            self.assertEqual(scope._ownership_proof(identity, {}), {"kind": "inherited-domain"})
+            ours.return_value = False; pipe.return_value = True
+            self.assertEqual(scope._ownership_proof(identity, {}), {"kind": "inherited-pipe-capability"})
+            pipe.return_value = False; parent.side_effect = None; parent.return_value = {"kind": "kernel-original-parent"}
+            self.assertEqual(scope._ownership_proof(identity, {}), {"kind": "kernel-original-parent"})
+            self.assertEqual(scope.outside_domain_observations, 1)
+            parent.side_effect = missing
+            scope.outside_domain_observations = E.MAX_OUTSIDE_DOMAIN_OBSERVATIONS
+            self.assertIsNone(scope._ownership_proof(identity, {}))
+            self.assertEqual(scope.outside_domain_observations, E.MAX_OUTSIDE_DOMAIN_OBSERVATIONS)
+        for name in ("discover", "spawn", "drain", "_send", "_acquire", "close"):
+            self.assertIs(getattr(E._HostedDarwinScope, name), getattr(E.audit_processes.DarwinScope, name))
+
+    def test_hosted_darwin_domain_does_not_relax_real_observation_or_known_owner_failures(self):
+        for case in ("traced", "environment", "pipe", "known", "unadmitted-session", "rights"):
+            with self.subTest(case=case):
+                scope = object.__new__(E._HostedDarwinScope)
+                scope.known, scope.foreign_sessions, scope.outside_domain_observations, scope.controller_session = {}, {}, 0, 17
+                identity = {"pid": 123, "uniqueId": 456, "startSeconds": 1, "startMicroseconds": 2}
+                missing = E.audit_processes.DiscoveryUncertain("Darwin non-reaper original-parent lifetime was not observed")
+                if case == "rights":
+                    missing._p2pkit_retirement = {"resources": [], "omitted": 1}
+                if case == "known":
+                    scope.known[scope._key(identity)] = identity
+                with mock.patch.object(scope, "_ours", return_value=False) as ours, \
+                        mock.patch.object(scope, "_has_pipe", return_value=False) as pipe, \
+                        mock.patch.object(scope, "_parent_proof", side_effect=missing) as parent, \
+                        mock.patch.object(scope, "_audit_session", return_value=0 if case == "unadmitted-session" else 17):
+                    if case == "traced":
+                        parent.side_effect = E.audit_processes.DiscoveryUncertain("Darwin traced parentage is not an ownership proof")
+                    if case == "environment":
+                        ours.side_effect = E.audit_processes.OwnershipError("Owned invocation marker lacks its ancestor domain bindings")
+                    if case == "pipe":
+                        pipe.side_effect = E.audit_processes.DarwinObservationExhausted("Darwin inherited pipe unresolved")
+                    with self.assertRaises(E.audit_processes.OwnershipError):
+                        scope._ownership_proof(identity, {})
+                self.assertEqual(scope.outside_domain_observations, 0)
+
+    def test_hosted_darwin_boundary_public_projection_has_only_finite_fields(self):
+        outcome = {"code": "PASS", "exitCode": 0, "timedOut": False, "cleanupKnown": True,
+                   "ownershipBoundary": E.HOSTED_DARWIN_BOUNDARY, "outsideDomainObservations": 52}
+        self.assertEqual(E.public_outcome(outcome), outcome)
+        for value in (True, -1, E.MAX_OUTSIDE_DOMAIN_OBSERVATIONS + 1, "PRIVATE_PROCESS"):
+            with self.subTest(value=value):
+                projected = E.public_outcome({**outcome, "outsideDomainObservations": value})
+                self.assertNotIn("outsideDomainObservations", projected)
+                self.assertNotIn("ownershipBoundary", projected)
+        self.assertNotIn("ownershipBoundary", E.public_outcome({**outcome, "ownershipBoundary": "PRIVATE_SCOPE"}))
 
     def test_public_gpg_boundary_rejects_other_operations_before_spawn(self):
         good = [str(self.root / "gpg"), *E._PUBLIC_GPG_OPTIONS, "--with-colons", "--with-fingerprint",
@@ -1390,7 +1508,7 @@ class EvidenceTests(unittest.TestCase):
              'UNKNOWN', None, None, None),
             (RuntimeError('PRIVATE_UNKNOWN_ERROR'), 'UNKNOWN', None, None, None)]
         for index, (error, kind, operation, errno, winerror) in enumerate(cases):
-            with self.subTest(index=index), mock.patch.object(E.audit_processes, 'make_scope', side_effect=error):
+            with self.subTest(index=index), mock.patch.object(E, '_command_scope', side_effect=error):
                 result = E.run_command(['no-command-executed'], cwd=self.root, environment=dict(os.environ),
                     private=self.root / ('spawn-' + str(index)), timeout=1)
             self.assertEqual(result['code'], 'SPAWN')

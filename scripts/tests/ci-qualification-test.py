@@ -76,6 +76,9 @@ class Fixture:
                         "privateArchive": {"sha256": "c" * 64, "bytes": 100}, "reports": [],
                         "ciphertext": {"sha256": hashlib.sha256(cipher).hexdigest(), "bytes": len(cipher),
                                        "recipientFingerprint": "D" * 40}}
+            if platform == "Darwin":
+                manifest["outcome"].update(ownershipBoundary="GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1",
+                                           outsideDomainObservations=0)
             self.manifests[component] = manifest
             self.artifact(5000 + i, f"ci-evidence-{component}-300-1",
                           zip_bytes({"manifest.json": Q.encoded(manifest), "evidence.tar.gz.gpg": cipher}))
@@ -176,6 +179,24 @@ class QualificationTests(unittest.TestCase):
             manifests = copy.deepcopy(self.f.manifests); manifests["source"][group].update(change)
             with self.subTest(group=group, change=change), self.assertRaises(Q.AdmissionError):
                 Q.aggregate(self.api, self.f.selection(), manifests=manifests)
+
+    def test_darwin_boundary_is_required_and_observation_count_is_not_foreign_exit_proof(self):
+        selection = self.f.selection()
+        manifests = copy.deepcopy(self.f.manifests)
+        manifests["desktop-macos"]["outcome"]["outsideDomainObservations"] = 52
+        self.assertEqual(len(Q.aggregate(self.api, selection, manifests=manifests)["components"]), 12)
+        for field, value in (("ownershipBoundary", None), ("ownershipBoundary", "STRICT_OLD_SCOPE"),
+                             ("outsideDomainObservations", None), ("outsideDomainObservations", True),
+                             ("outsideDomainObservations", -1), ("outsideDomainObservations", 1_000_001),
+                             ("cleanupKnown", False), ("code", "CLEANUP"), ("exitCode", 1)):
+            with self.subTest(field=field, value=value):
+                manifests = copy.deepcopy(self.f.manifests)
+                if value is None:
+                    manifests["desktop-macos"]["outcome"].pop(field)
+                else:
+                    manifests["desktop-macos"]["outcome"][field] = value
+                with self.assertRaises(Q.AdmissionError):
+                    Q.aggregate(self.api, selection, manifests=manifests)
 
     def test_application_cannot_be_from_different_attempt_or_component(self):
         for change in ({"runAttempt": 2}, {"runId": 999}, {"artifactId": 5000}, {"platform": "unknown"}):

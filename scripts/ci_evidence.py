@@ -217,9 +217,62 @@ class Capture:
                 self.error = self.error or "CLEANUP"
 
 
+HOSTED_DARWIN_BOUNDARY = "GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1"
+MAX_OUTSIDE_DOMAIN_OBSERVATIONS = 1_000_000
+
+
+class _HostedDarwinScope(audit_processes.DarwinScope):
+    """Routine reviewed hosted tasks, not a whole-host nonownership proof.
+
+    Keep every positive marker/pipe/original-parent proof and every known-child
+    lifetime/opaque-token cleanup check. A new process with no such proof and
+    only an unobserved non-reaper parent is outside the observed owned domain;
+    it is NOT declared foreign, exited, or safe to signal. A later census still
+    revisits it. Delegated host services belong to their explicit platform
+    lifecycle and the disposable GitHub VM, not arbitrary process-name kills.
+    """
+    def __init__(self, *args):
+        self.outside_domain_observations = 0
+        super().__init__(*args)
+
+    def _ownership_proof(self, identity, environment):
+        try:
+            return super()._ownership_proof(identity, environment)
+        except audit_processes.DiscoveryUncertain as error:
+            if (type(error) is not audit_processes.DiscoveryUncertain or
+                    error.args != ("Darwin non-reaper original-parent lifetime was not observed",) or
+                    getattr(error, "audit_session_exclusion", None) != "SAME_VALID_SESSION" or
+                    audit_processes.retirement_details(error) or self._key(identity) in self.known):
+                raise
+            # The inherited implementation has already rejected owned markers,
+            # inherited pipe capability and observed positive parentage. No
+            # structural/traced/environment/known-owner failure reaches here.
+            self.outside_domain_observations = min(MAX_OUTSIDE_DOMAIN_OBSERVATIONS,
+                                                   self.outside_domain_observations + 1)
+            return None
+
+
+def _hosted_darwin_context(environment):
+    # This is a source-owned scope selection, not an authorization token. The
+    # artifact consumer independently checks the real Actions workflow/job/host.
+    workflow, separator, ref = environment.get("GITHUB_WORKFLOW_REF", "").partition("@")
+    return (platform.system() == "Darwin" and environment.get("GITHUB_ACTIONS") == "true" and
+        environment.get("RUNNER_ENVIRONMENT") == "github-hosted" and
+        environment.get("GITHUB_REPOSITORY") == "p2pKit/P2pKit" and separator == "@" and bool(ref) and
+        workflow in {"p2pKit/P2pKit/.github/workflows/ci.yml",
+                     "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml"} and
+        re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None and
+        environment.get("GITHUB_WORKFLOW_SHA") == environment.get("GITHUB_SHA"))
+
+
+def _command_scope(job, invocation, private, home, environment):
+    return (_HostedDarwinScope(job, invocation, private, home) if _hosted_darwin_context(environment) else
+            audit_processes.make_scope(job, invocation, private, home))
+
+
 def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                 log_limit=MAX_LOG_BYTES, cleanup_seconds=15.0):
-    """Actual command + unchanged maintained POSIX/Windows ownership backend.
+    """Actual command + native ownership, with the explicit hosted Darwin domain.
 
     Ordinary hosted-runner trust: POSIX marker-inheriting descendants, Windows
     kernel Job Object. This is not containment of a malicious runner/child that
@@ -241,10 +294,11 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
     native_error = None
     cleanup_reasons = set()
     pending_context = None
+    ownership_fields = {}
     timed_out = False
     cancelled = cancelled or (lambda: False)
     try:
-        scope = audit_processes.make_scope(job, invocation, str(private), str(home))
+        scope = _command_scope(job, invocation, str(private), str(home), environment)
         child = scope.spawn(list(argv), str(cwd), env)
         captures = [Capture(child.stdout, private / "stdout.log", log_limit),
                     Capture(child.stderr, private / "stderr.log", log_limit)]
@@ -320,6 +374,9 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
         finally:
             if isinstance(scope, audit_processes.DarwinScope):
                 pending_context = pending_context_diagnostic(scope)
+            if isinstance(scope, _HostedDarwinScope):
+                ownership_fields = {"ownershipBoundary": HOSTED_DARWIN_BOUNDARY,
+                                    "outsideDomainObservations": scope.outside_domain_observations}
             try:
                 if scope is not None:
                     scope.close()
@@ -353,7 +410,7 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                 item.thread.ident is not None and not item.thread.is_alive() and
                 item.eof and item.closed and item.error is None for item in captures),
             "stage": "COMMAND", "code": code, "nativeError": native_error,
-            "cleanupReasons": sorted(cleanup_reasons), "pendingContext": pending_context,
+            "cleanupReasons": sorted(cleanup_reasons), "pendingContext": pending_context, **ownership_fields,
             "elapsedSeconds": round(time.monotonic() - begin, 6)}
 
 
@@ -996,6 +1053,10 @@ def public_outcome(value):
         result["cleanupReasons"] = sorted(set(reasons))
     if type(value.get("capturesClosed")) is bool:
         result["capturesClosed"] = value["capturesClosed"]
+    count = value.get("outsideDomainObservations")
+    if (value.get("ownershipBoundary") == HOSTED_DARWIN_BOUNDARY and type(count) is int and
+            0 <= count <= MAX_OUTSIDE_DOMAIN_OBSERVATIONS):
+        result.update(ownershipBoundary=HOSTED_DARWIN_BOUNDARY, outsideDomainObservations=count)
     pending_context = public_pending_context(value.get("pendingContext"))
     if pending_context is not None:
         result["pendingContext"] = pending_context

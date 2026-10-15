@@ -194,6 +194,11 @@ def manifest_identity(manifest, source, component, run, job, artifact):
     need(type(outcome.get("exitCode")) is int and outcome["exitCode"] == 0 and
          outcome.get("timedOut") is False and outcome.get("cleanupKnown") is True and
          outcome.get("code") == "PASS", "Failed/incomplete component evidence")
+    if host["platform"] == "Darwin":
+        need(outcome.get("ownershipBoundary") == "GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1" and
+             type(outcome.get("outsideDomainObservations")) is int and
+             0 <= outcome["outsideDomainObservations"] <= 1_000_000,
+             "Missing or different routine hosted Darwin ownership boundary")
     timing = manifest.get("timing", {})
     need(timestamp(job["started_at"]) <= timestamp(timing.get("startedAt")) <=
          timestamp(timing.get("completedAt")) <= timestamp(artifact["created_at"]), "Evidence timing differs")
