@@ -287,6 +287,9 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
         if not cleanup_known and code == "PASS":
             code = "CLEANUP"
     return {"exitCode": returncode, "timedOut": timed_out, "cleanupKnown": cleanup_known,
+            "capturesClosed": len(captures) == 2 and all(
+                item.thread.ident is not None and not item.thread.is_alive() and
+                item.eof and item.closed and item.error is None for item in captures),
             "stage": "COMMAND", "code": code, "nativeError": native_error,
             "cleanupReasons": sorted(cleanup_reasons),
             "elapsedSeconds": round(time.monotonic() - begin, 6)}
@@ -552,7 +555,7 @@ def junit_failures(root, source_commit="HEAD"):
     return rows[:32]
 
 
-def failure_diagnostics(root, command_directory, source_commit="HEAD"):
+def failure_diagnostics(root, command_directory, source_commit="HEAD", *, include_reports=True):
     """Public error identifiers only; logs/payloads/paths remain encrypted.
 
     These observations help diagnose a failed command, never qualify it. Scan
@@ -630,6 +633,13 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD"):
                     pieces = task.split(":")
                     if len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names:
                         tasks.add(task)
+    if not include_reports:
+        # Original capture EOF/join/close is independent from descendant census.
+        # After uncertain retirement read ONLY those closed private captures;
+        # other reports may still have writers. These labels never qualify a run.
+        return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": [],
+                "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
+                "platformTests": [], "failedSourceTests": []}
     phases = []
     for path in sorted((root / "build/reports/platform-tests").glob("*/intel-simulator/*/result.json")):
         try:
@@ -682,6 +692,8 @@ def public_outcome(value):
     if (type(reasons) is list and len(reasons) <= len(CLEANUP_REASONS) and
             all(type(reason) is str and reason in CLEANUP_REASONS for reason in reasons)):
         result["cleanupReasons"] = sorted(set(reasons))
+    if type(value.get("capturesClosed")) is bool:
+        result["capturesClosed"] = value["capturesClosed"]
     return result
 
 
@@ -827,9 +839,12 @@ def main(argv=None):
                     "component": args.component if re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.component) else None,
                     "source": source, "github": github, "stage": stage, "code": code,
                     "outcome": public_outcome(outcome), "encryptionDiagnostic": encryption,
-                    "taskResults": component_tasks(root, args.component) if source is not None else None,
-                    "failureDiagnostics": failure_diagnostics(root, private / "command", source["commit"])
-                        if source is not None and outcome is not None and outcome["cleanupKnown"] else None}
+                    "taskResults": component_tasks(root, args.component)
+                        if source is not None and outcome is not None and outcome["cleanupKnown"] else None,
+                    "failureDiagnostics": failure_diagnostics(root, private / "command", source["commit"],
+                        include_reports=outcome["cleanupKnown"])
+                        if source is not None and outcome is not None and
+                        (outcome["cleanupKnown"] or outcome.get("capturesClosed") is True) else None}
                 write_private(output / "failure.json", encoded(failure))
         except BaseException:
             # An OS cleanup error must not print a private filename/exception or

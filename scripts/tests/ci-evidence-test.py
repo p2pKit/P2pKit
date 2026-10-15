@@ -47,6 +47,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["code"], "PASS")
         self.assertEqual(result["exitCode"], 0)
         self.assertTrue(result["cleanupKnown"])
+        self.assertTrue(result["capturesClosed"])
         self.assertFalse(result["timedOut"])
         self.assertEqual(public.getvalue(), "")
         self.assertEqual((self.root / "command/stdout.log").read_bytes(), b"PRIVATE_OUTPUT\n")
@@ -201,6 +202,67 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(private.is_dir())
         encrypt.assert_not_called()
         read_logs.assert_not_called()
+
+    def test_cleanup_failure_can_classify_closed_captures_but_not_mutable_reports(self):
+        repo = self.root / "repo"; repo.mkdir()
+        private = self.root / "private"; private.mkdir()
+        command = private / "command"; command.mkdir()
+        (command / "stdout.log").write_text(
+            "> Task :p2p-core:jvmTest FAILED\nPRIVATE_PAYLOAD\n")
+        (command / "stderr.log").write_text(
+            "FATAL: disposable-key bundle test failed during: signed bundle build\nPRIVATE_SECRET\n")
+        outcome = {"code": "COMMAND_FAILED", "exitCode": 1, "cleanupKnown": False,
+                   "capturesClosed": True, "timedOut": False, "cleanupReasons": ["DRAIN_UNCLASSIFIED"]}
+        output = self.root / "output"
+        source = {"commit": "a" * 40, "tree": "b" * 40, "version": "0.8.0-rc1"}
+        with mock.patch.object(E, "source_identity", return_value=source), \
+                mock.patch.object(E, "github_identity", return_value={"runId": "123", "runAttempt": "1"}), \
+                mock.patch.object(E, "run_command", return_value=outcome), \
+                mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                mock.patch.object(E, "encrypt_archive") as encrypt, \
+                mock.patch.object(E, "junit_failures", side_effect=AssertionError("live report read")), \
+                mock.patch.object(E, "component_tasks", side_effect=AssertionError("live task read")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            result = E.main(["--component", "dependency-update", "--timeout-seconds", "5", "--output-dir", str(output),
+                             "--source-root", str(repo), "--", "synthetic"])
+        self.assertEqual(result, 1)
+        self.assertEqual([p.name for p in output.iterdir()], ["failure.json"])
+        raw = (output / "failure.json").read_text()
+        failure = json.loads(raw)
+        self.assertFalse(failure["outcome"]["cleanupKnown"])
+        self.assertIsNone(failure["taskResults"])
+        self.assertEqual(failure["failureDiagnostics"]["categories"], ["BUNDLE_TEST_SIGNED_BUILD"])
+        self.assertEqual(failure["failureDiagnostics"]["failedGradleTasks"], [":p2p-core:jvmTest"])
+        self.assertEqual(failure["failureDiagnostics"]["failedSourceTests"], [])
+        self.assertNotIn("PRIVATE", raw)
+        self.assertTrue(private.is_dir())
+        encrypt.assert_not_called()
+
+    def test_capture_admission_requires_both_started_eof_closed_joined_error_free_streams(self):
+        for defect in ("unstarted", "active", "no-eof", "open", "io-error"):
+            with self.subTest(defect=defect):
+                child = mock.Mock(returncode=0)
+                child.poll.return_value = 0
+                scope = mock.Mock(leaders=[child], discovery_errors=set())
+                scope.spawn.return_value = child
+                scope.drain.return_value = []
+                good = mock.Mock(eof=True, closed=True, error=None)
+                good.thread.ident = 1
+                good.thread.is_alive.return_value = False
+                bad = mock.Mock(eof=defect != "no-eof", closed=defect != "open",
+                                error="OUTPUT_IO" if defect == "io-error" else None)
+                bad.thread.ident = None if defect == "unstarted" else 2
+                bad.thread.is_alive.return_value = defect == "active"
+                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                        mock.patch.object(E, "Capture", side_effect=[good, bad]):
+                    result = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
+                        private=self.root / defect, timeout=5)
+                self.assertFalse(result["capturesClosed"])
+
+    def test_unknown_capture_boolean_is_not_public_closed_capture_authority(self):
+        base = {"code": "CLEANUP", "exitCode": 1, "cleanupKnown": False, "timedOut": False}
+        for value in (1, "true", {}, None):
+            self.assertNotIn("capturesClosed", E.public_outcome({**base, "capturesClosed": value}))
 
     def test_command_observes_owned_descendants_before_final_drain(self):
         child = mock.Mock(stdout=io.BytesIO(b""), stderr=io.BytesIO(b""), returncode=0)
