@@ -45,6 +45,10 @@ MAX_JSON_BYTES = 1024 * 1024
 CODES = frozenset({"PASS", "INPUT", "SOURCE_CHANGED", "SPAWN", "COMMAND_FAILED", "TIMEOUT",
                    "CANCELLED", "OUTPUT_LIMIT", "OUTPUT_IO", "CLEANUP", "REPORTS", "RECIPIENT",
                    "ENCRYPTION", "MANIFEST"})
+CLEANUP_REASONS = frozenset({"SCOPE_UNAVAILABLE", "DRAIN_ERROR", "DRAIN_DEADLINE",
+    "DRAIN_UNCLASSIFIED", "DRAIN_NOT_QUIET", "DRAIN_SIGNAL_UNRESOLVED", "LIVE_PROCESSES",
+    "DISCOVERY_ERRORS", "LEADER_WAIT", "SCOPE_CLOSE", "CAPTURE_ACTIVE", "PIPE_NO_EOF",
+    "PIPE_NOT_CLOSED", "ORIGINAL_PIPE_CLOSE"})
 TASK_NAMES = frozenset({
     "release-tag-controls", "release-identity-controls", "maven-environment-controls",
     "maven-namespace-controls", "maven-coordinate-controls", "maven-upload-controls",
@@ -176,6 +180,7 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
     scope, child, captures = None, None, []
     code, returncode, cleanup_known = "PASS", None, False
     native_error = None
+    cleanup_reasons = set()
     timed_out = False
     cancelled = cancelled or (lambda: False)
     try:
@@ -185,6 +190,7 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                     Capture(child.stderr, private / "stderr.log", log_limit)]
         for capture in captures:
             capture.thread.start()
+        next_discovery = begin
         while True:
             if cancelled():
                 code = "CANCELLED"
@@ -192,6 +198,22 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
             if any(item.error for item in captures):
                 code = next(item.error for item in captures if item.error)
                 break
+            if time.monotonic() >= end:
+                code, timed_out = "TIMEOUT", True
+                break
+            if time.monotonic() >= next_discovery:
+                # The ownership backend retains live parent/descendant history.
+                # Waiting until final drain loses intermediate parents of tools
+                # that close inherited markers/pipes. Observe during work, at a
+                # bounded cadence (no catch-up loop); drain still proves exit.
+                scope.discover()
+                next_discovery = time.monotonic() + 1.0
+                if cancelled():
+                    code = "CANCELLED"
+                    break
+                if any(item.error for item in captures):
+                    code = next(item.error for item in captures if item.error)
+                    break
             returncode = child.poll()
             if time.monotonic() >= end:
                 code, timed_out = "TIMEOUT", True
@@ -212,13 +234,27 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                       if stream is not None)
         try:
             if scope is not None:
-                live = scope.drain(grace=3.0, kill_wait=max(1.0, cleanup_seconds - 5.0), deadline=cleanup_end)
+                try:
+                    live = scope.drain(grace=3.0, kill_wait=max(1.0, cleanup_seconds - 5.0), deadline=cleanup_end)
+                except BaseException as error:
+                    cleanup_reasons.add(cleanup_error_reason(error))
+                    raise
                 cleanup_known = not live and not scope.discovery_errors
+                if live:
+                    cleanup_reasons.add("LIVE_PROCESSES")
+                if scope.discovery_errors:
+                    cleanup_reasons.add("DISCOVERY_ERRORS")
                 for leader in leaders:
                     remaining = max(0.01, cleanup_end - time.monotonic())
-                    leader.wait(timeout=remaining)
+                    try:
+                        leader.wait(timeout=remaining)
+                    except BaseException:
+                        cleanup_reasons.add("LEADER_WAIT")
+                        raise
                 if child is not None:
                     returncode = child.returncode
+            else:
+                cleanup_reasons.add("SCOPE_UNAVAILABLE")
         except BaseException:
             cleanup_known = False
         finally:
@@ -227,11 +263,16 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                     scope.close()
             except BaseException:
                 cleanup_known = False
+                cleanup_reasons.add("SCOPE_CLOSE")
             for capture in captures:
                 if capture.thread.ident is not None:
                     capture.thread.join(timeout=max(0.0, cleanup_end - time.monotonic()))
-                if capture.thread.is_alive() or not capture.eof or not capture.closed:
-                    cleanup_known = False
+                for failed, reason in ((capture.thread.is_alive(), "CAPTURE_ACTIVE"),
+                                       (not capture.eof, "PIPE_NO_EOF"),
+                                       (not capture.closed, "PIPE_NOT_CLOSED")):
+                    if failed:
+                        cleanup_known = False
+                        cleanup_reasons.add(reason)
                 if capture.error and code == "PASS":
                     code = capture.error
             # Unadopted originals on an exceptional post-spawn path still close.
@@ -242,11 +283,28 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                         pipe.close()
                     except BaseException:
                         cleanup_known = False
+                        cleanup_reasons.add("ORIGINAL_PIPE_CLOSE")
         if not cleanup_known and code == "PASS":
             code = "CLEANUP"
     return {"exitCode": returncode, "timedOut": timed_out, "cleanupKnown": cleanup_known,
             "stage": "COMMAND", "code": code, "nativeError": native_error,
+            "cleanupReasons": sorted(cleanup_reasons),
             "elapsedSeconds": round(time.monotonic() - begin, 6)}
+
+
+def cleanup_error_reason(error):
+    """Map maintained backend failures, never their private text, to fixed labels."""
+    if isinstance(error, audit_processes.DrainDeadlineExceeded):
+        return "DRAIN_DEADLINE"
+    exact = {
+        "Unclassified Darwin lifetimes remain; cleanup is not proven": "DRAIN_UNCLASSIFIED",
+        "Darwin drain did not establish three quiet censuses within its phase bounds": "DRAIN_NOT_QUIET",
+        "Darwin known-token drain remains unresolved within its phase bounds": "DRAIN_SIGNAL_UNRESOLVED",
+    }
+    if (type(error) in (audit_processes.OwnershipError, audit_processes.DarwinObservationExhausted)
+            and len(error.args) == 1 and type(error.args[0]) is str):
+        return exact.get(error.args[0], "DRAIN_ERROR")
+    return "DRAIN_ERROR"
 
 
 def git_value(root, *arguments):
@@ -620,6 +678,10 @@ def public_outcome(value):
     result = {key: value[key] for key in ("code", "exitCode", "timedOut", "cleanupKnown")}
     if "nativeError" in value:
         result["nativeError"] = value["nativeError"]
+    reasons = value.get("cleanupReasons")
+    if (type(reasons) is list and len(reasons) <= len(CLEANUP_REASONS) and
+            all(type(reason) is str and reason in CLEANUP_REASONS for reason in reasons)):
+        result["cleanupReasons"] = sorted(set(reasons))
     return result
 
 

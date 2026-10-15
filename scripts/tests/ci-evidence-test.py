@@ -103,6 +103,167 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["code"], "CANCELLED")
         self.assertTrue(result["cleanupKnown"])
 
+    def test_cleanup_reasons_distinguish_drain_wait_and_close_without_private_text(self):
+        cases = (
+            ("deadline", "DRAIN_DEADLINE"), ("unknown", "DRAIN_UNCLASSIFIED"),
+            ("quiet", "DRAIN_NOT_QUIET"), ("signal", "DRAIN_SIGNAL_UNRESOLVED"),
+            ("other", "DRAIN_ERROR"), ("live", "LIVE_PROCESSES"),
+            ("discovery", "DISCOVERY_ERRORS"), ("wait", "LEADER_WAIT"),
+            ("close", "SCOPE_CLOSE"), ("okay", None),
+        )
+        errors = {
+            "deadline": E.audit_processes.DrainDeadlineExceeded("PRIVATE_DEADLINE"),
+            "unknown": E.audit_processes.OwnershipError("Unclassified Darwin lifetimes remain; cleanup is not proven"),
+            "quiet": E.audit_processes.OwnershipError("Darwin drain did not establish three quiet censuses within its phase bounds"),
+            "signal": E.audit_processes.DarwinObservationExhausted("Darwin known-token drain remains unresolved within its phase bounds"),
+            "other": RuntimeError("PRIVATE_NATIVE_ERROR"),
+        }
+        for case, reason in cases:
+            with self.subTest(case=case):
+                child = mock.Mock(stdout=io.BytesIO(b"PRIVATE_OUTPUT"), stderr=io.BytesIO(b""), returncode=0)
+                child.poll.return_value = 0
+                scope = mock.Mock(leaders=[child], discovery_errors=set())
+                scope.spawn.return_value = child
+                scope.drain.return_value = []
+                if case in errors:
+                    scope.drain.side_effect = errors[case]
+                elif case == "live":
+                    scope.drain.return_value = [{"PRIVATE_PID": 123}]
+                elif case == "discovery":
+                    scope.discovery_errors.add("PRIVATE_DISCOVERY")
+                elif case == "wait":
+                    child.wait.side_effect = subprocess.TimeoutExpired("PRIVATE_COMMAND", 1)
+                elif case == "close":
+                    scope.close.side_effect = OSError("PRIVATE_CLOSE")
+                public = io.StringIO()
+                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                        contextlib.redirect_stdout(public), contextlib.redirect_stderr(public):
+                    outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
+                        private=self.root / case, timeout=5)
+                self.assertEqual(outcome["cleanupKnown"], reason is None)
+                self.assertEqual(outcome["code"], "PASS" if reason is None else "CLEANUP")
+                self.assertEqual(outcome["cleanupReasons"], [] if reason is None else [reason])
+                self.assertNotIn("PRIVATE", json.dumps(E.public_outcome(outcome)))
+                self.assertEqual(public.getvalue(), "")
+                scope.close.assert_called_once()
+                self.assertTrue(child.stdout.closed and child.stderr.closed)
+
+    def test_cleanup_capture_reasons_do_not_accept_open_or_active_pipes(self):
+        for field, reason in (("active", "CAPTURE_ACTIVE"), ("eof", "PIPE_NO_EOF"), ("closed", "PIPE_NOT_CLOSED")):
+            with self.subTest(field=field):
+                child = mock.Mock(returncode=7)
+                child.poll.return_value = 7
+                scope = mock.Mock(leaders=[child], discovery_errors=set())
+                scope.spawn.return_value = child
+                scope.drain.return_value = []
+                capture = mock.Mock(eof=field != "eof", closed=field != "closed", error=None)
+                capture.thread.is_alive.return_value = field == "active"
+                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                        mock.patch.object(E, "Capture", return_value=capture):
+                    outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
+                        private=self.root / field, timeout=5)
+                self.assertFalse(outcome["cleanupKnown"])
+                self.assertEqual(outcome["code"], "COMMAND_FAILED")  # Do not replace original failure.
+                self.assertEqual(outcome["exitCode"], 7)
+                self.assertEqual(outcome["cleanupReasons"], [reason])
+
+    def test_cleanup_reason_projection_rejects_unbounded_or_private_values(self):
+        base = {"code": "CLEANUP", "exitCode": 0, "cleanupKnown": False, "timedOut": False}
+        for reasons in (["PRIVATE_TEXT"], [False], {"DRAIN_ERROR": True}, ["DRAIN_ERROR"] * 100, "DRAIN_ERROR"):
+            with self.subTest(reasons=reasons):
+                self.assertNotIn("cleanupReasons", E.public_outcome({**base, "cleanupReasons": reasons}))
+        self.assertEqual(E.public_outcome({**base, "cleanupReasons": ["DRAIN_ERROR"]})["cleanupReasons"], ["DRAIN_ERROR"])
+        self.assertEqual(E.cleanup_error_reason(RuntimeError("Unclassified Darwin lifetimes remain; cleanup is not proven")),
+                         "DRAIN_ERROR")  # Wrong exception type cannot acquire a specific backend diagnosis.
+
+    def test_main_cleanup_failure_retains_only_safe_receipt_and_never_reads_live_logs(self):
+        private = self.root / "private"; private.mkdir()
+        repo = self.root / "repo"; repo.mkdir()
+        output = self.root / "output"
+        outcome = {"code": "CLEANUP", "exitCode": 0, "cleanupKnown": False, "timedOut": False,
+                   "cleanupReasons": ["DRAIN_UNCLASSIFIED"]}
+        public = io.StringIO()
+        source = {"commit": "a" * 40, "tree": "b" * 40, "version": "0.8.0-rc1"}
+        with mock.patch.object(E, "source_identity", return_value=source), \
+                mock.patch.object(E, "github_identity", return_value={"runId": "123", "runAttempt": "1"}), \
+                mock.patch.object(E, "run_command", return_value=outcome), \
+                mock.patch.object(E.tempfile, "mkdtemp", return_value=str(private)), \
+                mock.patch.object(E, "encrypt_archive") as encrypt, \
+                mock.patch.object(E, "failure_diagnostics") as read_logs, contextlib.redirect_stderr(public):
+            result = E.main(["--component", "dependency-update", "--timeout-seconds", "5", "--output-dir", str(output),
+                             "--source-root", str(repo), "--", "synthetic"])
+        self.assertEqual(result, 1)
+        self.assertEqual(public.getvalue(), "CI_EVIDENCE FAIL COMMAND CLEANUP\n")
+        self.assertEqual([p.name for p in output.iterdir()], ["failure.json"])
+        failure = json.loads((output / "failure.json").read_text())
+        self.assertEqual(failure["outcome"], outcome)
+        self.assertIsNone(failure["failureDiagnostics"])
+        self.assertTrue(private.is_dir())
+        encrypt.assert_not_called()
+        read_logs.assert_not_called()
+
+    def test_command_observes_owned_descendants_before_final_drain(self):
+        child = mock.Mock(stdout=io.BytesIO(b""), stderr=io.BytesIO(b""), returncode=0)
+        child.poll.side_effect = [None, 0]
+        scope = mock.Mock(leaders=[child], discovery_errors=set())
+        scope.spawn.return_value = child
+        observed = []
+        scope.discover.side_effect = lambda: observed.append("during-work")
+        def drain(**kwargs):
+            self.assertEqual(observed, ["during-work"])
+            observed.append("final-drain")
+            return []
+        scope.drain.side_effect = drain
+        with mock.patch.object(E.audit_processes, "make_scope", return_value=scope):
+            outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
+                private=self.root / "observed", timeout=5)
+        self.assertEqual(outcome["code"], "PASS")
+        self.assertTrue(outcome["cleanupKnown"])
+        self.assertEqual(observed, ["during-work", "final-drain"])
+
+    def test_work_discovery_error_stays_failed_even_after_successful_drain(self):
+        child = mock.Mock(stdout=io.BytesIO(b""), stderr=io.BytesIO(b""), returncode=0)
+        scope = mock.Mock(leaders=[child], discovery_errors=set())
+        scope.spawn.return_value = child
+        scope.discover.side_effect = E.audit_processes.OwnershipError("PRIVATE_OBSERVATION_ERROR")
+        scope.drain.return_value = []
+        with mock.patch.object(E.audit_processes, "make_scope", return_value=scope):
+            outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
+                private=self.root / "discovery-error", timeout=5)
+        self.assertEqual(outcome["code"], "CLEANUP")
+        self.assertTrue(outcome["cleanupKnown"])
+        scope.drain.assert_called_once()
+        self.assertNotIn("PRIVATE", json.dumps(E.public_outcome(outcome)))
+
+    def test_late_discovery_cannot_hide_timeout_cancel_or_capture_failure(self):
+        for case, expected in (("timeout", "TIMEOUT"), ("cancel", "CANCELLED"), ("capture", "OUTPUT_LIMIT")):
+            with self.subTest(case=case):
+                state = {"now": 0.0, "cancelled": False}
+                child = mock.Mock(returncode=0)
+                child.poll.return_value = 0
+                scope = mock.Mock(leaders=[child], discovery_errors=set())
+                scope.spawn.return_value = child
+                scope.drain.return_value = []
+                capture = mock.Mock(eof=True, closed=True, error=None)
+                capture.thread.is_alive.return_value = False
+                def discover():
+                    if case == "timeout":
+                        state["now"] = 6.0
+                    elif case == "cancel":
+                        state["cancelled"] = True
+                    else:
+                        capture.error = "OUTPUT_LIMIT"
+                scope.discover.side_effect = discover
+                with mock.patch.object(E.audit_processes, "make_scope", return_value=scope), \
+                        mock.patch.object(E.time, "monotonic", side_effect=lambda: state["now"]), \
+                        mock.patch.object(E, "Capture", return_value=capture):
+                    outcome = E.run_command(["synthetic"], cwd=self.root, environment=dict(os.environ),
+                        private=self.root / case, timeout=5, cancelled=lambda: state["cancelled"])
+                self.assertEqual(outcome["code"], expected)
+                self.assertEqual(outcome["timedOut"], case == "timeout")
+                self.assertTrue(outcome["cleanupKnown"])
+                scope.drain.assert_called_once()
+
     def test_reports_archive_hashes_and_rejects_links(self):
         source = self.root / "repo"
         source.mkdir()

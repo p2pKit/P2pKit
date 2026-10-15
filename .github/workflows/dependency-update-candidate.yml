@@ -92,6 +92,7 @@ jobs:
           path: |
             ${{ runner.temp }}/dependency-evidence/manifest.json
             ${{ runner.temp }}/dependency-evidence/evidence.tar.gz.gpg
+            ${{ runner.temp }}/dependency-evidence/failure.json
           if-no-files-found: error
           retention-days: 14
           overwrite: false

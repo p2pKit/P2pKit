@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import sys
@@ -252,6 +253,36 @@ class UpdateTests(unittest.TestCase):
                     xml().replace(b'</components>', xml().split(b'<components>')[1].split(b'</components>')[0] + b'</components>')):
             with self.subTest(raw=raw[:20]), self.assertRaises(D.UpdateError):
                 D.verification(raw)
+
+
+class WorkflowRetentionTests(unittest.TestCase):
+    def test_failed_generation_retains_only_explicit_safe_evidence_files(self):
+        workflow = (Path(__file__).resolve().parents[2] /
+                    ".github/workflows/dependency-update-candidate.yml").read_text()
+
+        def check(source):
+            blocks = [block for block in source.split("      - name: ")
+                      if block.startswith("Retain encrypted diagnostics including failed generation\n")]
+            self.assertEqual(len(blocks), 1)
+            block = blocks[0]
+            self.assertIn("        if: ${{ always() && steps.generate.outcome != 'skipped' }}\n", block)
+            self.assertIn("        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a\n", block)
+            paths = re.findall(r"^          path: \|\n((?:            [^\n]+\n)+)", block, re.MULTILINE)
+            self.assertEqual(len(paths), 1)
+            self.assertEqual(paths[0].splitlines(), [
+                "            ${{ runner.temp }}/dependency-evidence/" + name
+                for name in ("manifest.json", "evidence.tar.gz.gpg", "failure.json")])
+            for setting in ("if-no-files-found: error", "retention-days: 14", "overwrite: false"):
+                self.assertIn("          " + setting + "\n", block)
+
+        check(workflow)
+        fallback = "            ${{ runner.temp }}/dependency-evidence/failure.json\n"
+        for changed in (workflow.replace(fallback, ""),
+                        workflow.replace(fallback, fallback.replace("failure.json", "*")),
+                        workflow.replace(fallback, fallback.replace("failure.json", "stderr.log")),
+                        workflow.replace("always() && steps.generate.outcome != 'skipped'", "success()")):
+            with self.subTest(mutation=changed != workflow), self.assertRaises(AssertionError):
+                check(changed)
 
 
 class UnchangedCuratorTests(unittest.TestCase):
