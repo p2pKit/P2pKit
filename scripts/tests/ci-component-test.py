@@ -13,6 +13,32 @@ C = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(C)
 
 class ComponentTests(unittest.TestCase):
+    def test_required_tool_version_parsing_accepts_windows_crlf_not_extra_content(self):
+        with tempfile.TemporaryDirectory(prefix='ci-tools-crlf-') as temporary:
+            root = Path(temporary)
+            for name in ('java', 'gpg', 'gradlew'):
+                (root / name).write_bytes(b'public synthetic executable')
+            for newline in (b'\n', b'\r\n'):
+                raw = newline.join((b'Gradle 9.7.0', b'--------------------', b''))
+                # Retain the original demonstrated mismatch, not a Windows claim.
+                self.assertEqual(C.re.search(r'(?m)^Gradle ([0-9A-Za-z.+-]+)$',
+                                             raw.decode()) is None, newline == b'\r\n')
+                versions = [Mock(stdout=b'openjdk version "17.0.20.1"' + newline),
+                            Mock(stdout=b'gpg (GnuPG) 2.5.22' + newline), Mock(stdout=raw)]
+                with patch.object(C, 'ROOT', root), \
+                        patch.object(C.shutil, 'which', side_effect=lambda name: str(root / name)), \
+                        patch.object(C.subprocess, 'run', side_effect=versions), \
+                        patch.dict(C.os.environ, {'CI_EVIDENCE_TOOLS_FILE': str(root / 'tools.json')}):
+                    C.record_tools('jvm-windows')
+                self.assertEqual(json.loads((root / 'tools.json').read_text())['gradle']['version'], '9.7.0')
+            with patch.object(C, 'ROOT', root), \
+                    patch.object(C.shutil, 'which', side_effect=lambda name: str(root / name)), \
+                    patch.object(C.subprocess, 'run', side_effect=[Mock(stdout=b'java version "17"'),
+                        Mock(stdout=b'gpg (GnuPG) 2.5.22'), Mock(stdout=b'Gradle 9.7.0 PRIVATE_SUFFIX\r\n')]), \
+                    patch.dict(C.os.environ, {'CI_EVIDENCE_TOOLS_FILE': str(root / 'tools.json')}):
+                with self.assertRaisesRegex(RuntimeError, '^Cannot identify required tool: gradle$'):
+                    C.record_tools('jvm-windows')
+
     def test_all_is_complete_and_unique(self):
         rows = C.matrix('all')['include']
         self.assertEqual(len(rows), 12)

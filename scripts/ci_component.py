@@ -139,7 +139,10 @@ def record_tools(component):
         tool = Path(executable).resolve(strict=True)
         completed = subprocess.run([str(tool), *args], cwd=ROOT, check=True,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
-        match = re.search(pattern, completed.stdout.decode('utf-8', errors='replace'))
+        # Native Windows tools emit CRLF; normalize line endings only, retaining
+        # the same exact version grammar and required-tool identity checks.
+        version_output = completed.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n')
+        match = re.search(pattern, version_output)
         if match is None or not re.fullmatch(r'[A-Za-z0-9 ._+()/-]{1,120}', match[1]):
             raise RuntimeError('Cannot identify required tool: ' + name)
         with tool.open('rb') as stream:
