@@ -286,6 +286,13 @@ class IosLanLifecycleTest {
             val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
             withTimeout(HANDSHAKE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Connected }
+                // Outgoing handshake completion can precede the responder's lifecycle commit.
+                // This test stops an established session, not a pending incoming setup. Observe
+                // Bob's public committed owner as well, within the existing readiness deadline.
+                val incoming = bob.sessions.first { current ->
+                    current.any { it.peer.id == alice.localPeerId }
+                }.single { it.peer.id == alice.localPeerId }
+                incoming.state.first { it == ConnectionState.Connected }
             }
 
             // Bob exits cleanly and Alice must honor the CLOSE frame without
