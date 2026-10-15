@@ -79,7 +79,7 @@ expected_fingerprint="$(printf '%s' "${MAVEN_SIGNING_KEY_FINGERPRINT:-}" | tr -d
 [[ "$expected_fingerprint" =~ ^[A-F0-9]{40}$|^[A-F0-9]{64}$ ]] ||
     fail "MAVEN_SIGNING_KEY_FINGERPRINT must be a complete 40- or 64-hex fingerprint"
 
-for command in base64 git gpg jq openssl unzip zip; do
+for command in base64 git gpg gpgconf jq openssl unzip zip; do
     command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -101,10 +101,33 @@ for output_file in "$OUTPUT" "$MANIFEST" "$SUMMARY" "$PUBLIC_KEY"; do
 done
 
 REPOSITORY="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle.XXXXXX")"
-trap 'rm -rf "$REPOSITORY"' EXIT
+GNUPGHOME=""
+gnupg_ready=false
+cleanup_bundle() {
+    local status=$? cleanup_failed=false
+    trap - EXIT
+    trap '' HUP INT TERM
+    if [[ "$gnupg_ready" == true ]] &&
+        ! gpgconf --homedir "$GNUPGHOME" --kill all >/dev/null 2>&1; then
+        # Keep this exact socket/keyring directory reachable for retirement.
+        echo "FATAL: could not stop isolated bundle GPG workers; private directory retained" >&2
+        cleanup_failed=true
+    elif ! rm -rf -- "$REPOSITORY"; then
+        cleanup_failed=true
+    fi
+    if [[ "$status" -eq 0 && "$cleanup_failed" == true ]]; then
+        status=1
+    fi
+    exit "$status"
+}
+trap cleanup_bundle EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 KEY_FILE="$REPOSITORY/release-key.asc"
 GNUPGHOME="$REPOSITORY/gnupg"
 mkdir -m 700 "$GNUPGHOME"
+gnupg_ready=true
 if [[ -n "$base64_key" ]]; then
     decode_base64_file "$base64_key" "$KEY_FILE"
 else
@@ -113,7 +136,7 @@ fi
 chmod 600 "$KEY_FILE"
 
 actual_fingerprint="$(
-    gpg --batch --show-keys --with-colons "$KEY_FILE" 2>/dev/null |
+    gpg --batch --homedir "$GNUPGHOME" --show-keys --with-colons "$KEY_FILE" 2>/dev/null |
         awk -F: '$1 == "fpr" && fingerprint == "" { fingerprint = toupper($10) }
                  END { if (fingerprint != "") print fingerprint }'
 )"
