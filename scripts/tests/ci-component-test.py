@@ -90,12 +90,31 @@ class ComponentTests(unittest.TestCase):
         names = {x[0] for x in C.commands('compatibility')}
         self.assertTrue({'abi-graph', 'api-abi', 'documentation', 'sbom', 'publication-shape',
                          'isolated-consumers', 'xcframework', 'minimum-apple-os', 'swift-ui'} <= names)
+    def assert_no_publish_or_bootstrap_commands(self, commands):
+        text = str(commands)
+        self.assertNotIn('initial-recipient', text)
+        # Match the production script, not the separate offline -test.sh fixture.
+        # Inspect all arguments, including shell strings and --script= wrappers.
+        self.assertNotRegex(text, r'(?<![\w.-])publish-central-portal-bundle\.sh(?![\w.-])')
+        self.assertNotIn('publishAllPublications', text)
+
     def test_no_publish_or_bootstrap_commands(self):
         for c in C.COMPONENTS:
-            text = str(C.commands(c))
-            self.assertNotIn('initial-recipient', text)
-            self.assertNotIn('publish-central-portal-bundle', text)
-            self.assertNotIn('publishAllPublications', text)
+            self.assert_no_publish_or_bootstrap_commands(C.commands(c))
+
+    def test_publisher_guard_allows_only_fixture_not_wrapped_production(self):
+        self.assert_no_publish_or_bootstrap_commands([
+            ('fixture', ['bash', 'scripts/tests/publish-central-portal-bundle-test.sh'])])
+        for argv in (
+                ['scripts/publish-central-portal-bundle.sh'],
+                ['bash', 'scripts/publish-central-portal-bundle.sh'],
+                ['wrapper', '--script=scripts/publish-central-portal-bundle.sh'],
+                ['wrapper', r'--script=C:\source\scripts\publish-central-portal-bundle.sh'],
+                ['bash', '-c', 'exec scripts/publish-central-portal-bundle.sh "$@"'],
+                ['./gradlew', ':p2p-core:publishAllPublicationsToMavenCentralRepository'],
+                ['wrapper', '--script=scripts/initial-recipient-upload.py']):
+            with self.subTest(argv=argv), self.assertRaises(AssertionError):
+                self.assert_no_publish_or_bootstrap_commands([('forbidden', argv)])
 
     def execute_model(self, results, *, component='jvm-linux', tool_error=None):
         with tempfile.TemporaryDirectory(prefix='ci-component-model-') as temp:
