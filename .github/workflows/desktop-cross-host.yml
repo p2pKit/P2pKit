@@ -35,3 +35,4 @@ jobs:
       component: ${{ matrix.component }}
       runner: ${{ matrix.os }}
       minutes: ${{ matrix.minutes }}
+      job_minutes: ${{ matrix.job_minutes }}

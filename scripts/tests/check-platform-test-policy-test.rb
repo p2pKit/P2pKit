@@ -32,7 +32,7 @@ end
 def check_platform_policy(v)
   matrix = v[:matrix].fetch('include').to_h { |row| [row.fetch('component'), row] }
   {'apple-arm64' => ['macos-26', 150, 'full'], 'apple-x64' => ['macos-15-intel', 120, 'ios-x64']}.each do |name, (os, minutes, profile)|
-    need(matrix.fetch(name).values_at('os', 'minutes') == [os, minutes], 'Wrong native platform or operational budget')
+    need(matrix.fetch(name).values_at('os', 'minutes', 'job_minutes') == [os, minutes, minutes + 10], 'Wrong native platform or operational budget')
     commands = v.fetch(name.to_sym)
     need(commands.size == 1 && commands[0][0] == 'native-platform-tests' &&
          File.basename(commands[0][1][0]).start_with?('python') &&
@@ -51,10 +51,10 @@ def check_platform_policy(v)
        triggers['schedule'] == [{'cron' => '27 3 * * 1'}], 'Intel manual/weekly coverage changed')
   job = intel.fetch('jobs').fetch('component')
   need(job['uses'] == './.github/workflows/ci-component.yml' &&
-       job['with'] == {'component' => 'apple-x64', 'runner' => 'macos-15-intel', 'minutes' => 120} &&
+       job['with'] == {'component' => 'apple-x64', 'runner' => 'macos-15-intel', 'minutes' => 120, 'job_minutes' => 130} &&
        !%w[if environment continue-on-error].any? { |key| job.key?(key) }, 'Intel native invocation changed')
   worker = v[:worker].fetch('jobs').fetch('run')
-  need(worker['timeout-minutes'] == '${{ inputs.minutes + 10 }}' &&
+  need(worker['timeout-minutes'] == '${{ inputs.job_minutes }}' &&
        !worker.key?('continue-on-error'), 'Missing bounded command plus cleanup/evidence window')
   run = execution(v)
   need(run && !%w[if continue-on-error shell working-directory].any? { |key| run.key?(key) },

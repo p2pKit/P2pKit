@@ -14,3 +14,4 @@ jobs:
       component: source
       runner: ubuntu-24.04
       minutes: 30
+      job_minutes: 40

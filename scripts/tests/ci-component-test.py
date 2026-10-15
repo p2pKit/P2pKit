@@ -17,6 +17,14 @@ class ComponentTests(unittest.TestCase):
         rows = C.matrix('all')['include']
         self.assertEqual(len(rows), 12)
         self.assertEqual({x['component'] for x in rows}, set(C.COMPONENTS))
+    def test_work_budget_has_explicit_job_upload_headroom(self):
+        for row in C.matrix('all')['include']:
+            self.assertEqual(row['job_minutes'], row['minutes'] + 10)
+    def test_source_uses_actual_workflow_expression_linter(self):
+        command = next(argv for name, argv in C.commands('source') if name == 'workflow-syntax')
+        self.assertEqual(command[0], 'actionlint')
+        self.assertIn('.github/workflows/ci-component.yml', command)
+        self.assertIn('.github/workflows/publish-maven-central.yml', command)
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])
     def test_unknown_duplicate_empty_refused(self):

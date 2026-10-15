@@ -2,6 +2,15 @@
 # Tool setup only; no private tests/logs or source mutation.
 set -euo pipefail
 component="$1"
+if [[ "$component" == source ]]; then
+  dir="$RUNNER_TEMP/p2pkit-actionlint"
+  mkdir -m 700 "$dir"
+  curl --fail --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 120 \
+    --output "$dir/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+  echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $dir/actionlint.tar.gz" | sha256sum --check
+  tar -xzf "$dir/actionlint.tar.gz" -C "$dir" actionlint
+  echo "$dir" >> "$GITHUB_PATH"
+fi
 if [[ "${RUNNER_OS:-}" == macOS ]]; then
   # Retain the reviewed native image/Xcode line, not a floating toolchain.
   if [[ "${RUNNER_ARCH:-}" == ARM64 ]]; then xcode=/Applications/Xcode_26.5.app/Contents/Developer

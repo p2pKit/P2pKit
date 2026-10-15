@@ -11,6 +11,9 @@ on:
       minutes:
         required: true
         type: number
+      job_minutes:
+        required: true
+        type: number
 permissions:
   contents: read
   actions: read
@@ -18,13 +21,12 @@ jobs:
   run:
     name: Execute component
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: ${{ inputs.minutes + 10 }}
+    timeout-minutes: ${{ inputs.job_minutes }}
     defaults:
       run:
         shell: bash
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      GRADLE_USER_HOME: ${{ runner.temp }}/gradle-home
       CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
       CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
     steps:
@@ -33,6 +35,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Select this job's optional Gradle cache directory
+        run: echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-home" >> "$GITHUB_ENV"
       - name: Configure Java 21 daemon/runtime
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:

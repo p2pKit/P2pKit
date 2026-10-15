@@ -48,6 +48,7 @@ jobs:
       component: ${{ matrix.component }}
       runner: ${{ matrix.os }}
       minutes: ${{ matrix.minutes }}
+      job_minutes: ${{ matrix.job_minutes }}
   qualify:
     name: Qualify release components
     needs: [plan, component]

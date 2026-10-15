@@ -39,7 +39,7 @@ def matrix(selected):
     names = list(COMPONENTS) if selected == 'all' else selected.split(',')
     if not names or len(names) != len(set(names)) or any(x not in COMPONENTS for x in names):
         raise ValueError('Unknown or duplicate component')
-    return {'include': [{'component': x, 'os': COMPONENTS[x][0], 'minutes': COMPONENTS[x][1]} for x in names]}
+    return {'include': [{'component': x, 'os': COMPONENTS[x][0], 'minutes': COMPONENTS[x][1], 'job_minutes': COMPONENTS[x][1] + 10} for x in names]}
 
 
 def commands(component):
@@ -54,10 +54,14 @@ def commands(component):
             ('links', bash + ['scripts/tests/check-markdown-links.sh']),
             ('release-metadata', bash + ['scripts/check-release-metadata.sh']),
             ('workflow-contract', ['ruby', 'scripts/check-modular-ci-policy.rb']),
+            ('workflow-syntax', ['actionlint', '-shellcheck=', '-pyflakes=',
+                *[str(p.relative_to(ROOT)) for p in sorted((ROOT / '.github/workflows').glob('*.yml'))
+                  if not p.name.startswith('audit-')]]),
             ('workflow-controls', ['ruby', 'scripts/tests/check-modular-ci-policy-test.rb']),
             ('platform-contract', ['ruby', 'scripts/tests/check-platform-test-policy-test.rb']),
             ('version-encoding', bash + ['scripts/tests/check-application-release-version.sh']),
             *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
+                   'dependency-update-test.py',
                    'application-release-version-test.py', 'sample-artifact-identity-test.py',
                    'package-sample-apps-test.py', 'publish-sample-release-test.py',
                    'release-application-set-test.py', 'run-platform-tests-test.py'),

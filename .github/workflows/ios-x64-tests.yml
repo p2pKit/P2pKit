@@ -14,3 +14,4 @@ jobs:
       component: apple-x64
       runner: macos-15-intel
       minutes: 120
+      job_minutes: 130
