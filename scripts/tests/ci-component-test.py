@@ -86,7 +86,7 @@ class ComponentTests(unittest.TestCase):
                 (root / 'library/p2p-rpc').mkdir(parents=True)
                 (root / 'samples/p2p-sample-rpc').mkdir(parents=True)
                 for component in ('jvm-linux', 'jvm-windows'):
-                    tasks = C.commands(component)[0][1]
+                    tasks = dict(C.commands(component))['jvm-tests']
                     self.assertEqual(tasks.count(':p2p-rpc:jvmTest'), 1)
                     self.assertEqual(tasks.count(':p2p-sample-rpc:jvmTest'), 1)
                     self.assertNotIn('--tests', tasks)
@@ -94,6 +94,42 @@ class ComponentTests(unittest.TestCase):
                 self.assertEqual(tasks.count(':p2p-rpc:testAndroidHostTest'), 1)
                 self.assertEqual(tasks.count(':p2p-sample-rpc:testAndroidHostTest'), 1)
                 self.assertNotIn('--tests', tasks)
+
+    def test_additional_host_supervisor_route_has_exact_seven_genuine_cases(self):
+        import ast
+        evidence = ast.parse((ROOT / 'scripts/tests/ci-evidence-test.py').read_text())
+        methods = {node.name for cls in evidence.body if isinstance(cls, ast.ClassDef) and cls.name == 'EvidenceTests'
+                   for node in cls.body if isinstance(node, ast.FunctionDef)}
+        expected = ('test_real_success_captures_both_private_streams_and_known_close',
+                    'test_real_nonzero_is_preserved_and_not_relabelled_pass',
+                    'test_real_timeout_retires_original_child',
+                    'test_real_leader_exit_does_not_leave_child_writing',
+                    'test_real_output_limit_is_enforced_during_capture',
+                    'test_actual_scope_failed_postspawn_still_closes_original_pipes',
+                    'test_real_cancellation_is_not_pass')
+        self.assertTrue(set(expected) <= methods)
+        self.assertEqual(C.SUPERVISOR_TESTS, tuple('EvidenceTests.' + name for name in expected))
+        for component in C.COMPONENTS:
+            selected = [(name, argv) for name, argv in C.commands(component) if name == 'supervisor-controls']
+            self.assertEqual(len(selected), int(component in ('jvm-windows', 'desktop-macos')))
+            if selected:
+                self.assertEqual(C.commands(component)[0], selected[0])
+                self.assertEqual(selected[0][1], [C.sys.executable, '-B', 'scripts/tests/ci-evidence-test.py',
+                                                 '-v', *C.SUPERVISOR_TESTS])
+
+    def test_windows_installer_retains_existing_rpc_preview_adapter_only_when_present(self):
+        flag = '-Pp2pkit.rpc.windows.previewAdapter=true'
+        with tempfile.TemporaryDirectory(prefix='ci-rpc-package-') as temporary:
+            root = Path(temporary)
+            with patch.object(C, 'ROOT', root):
+                for present in (False, True):
+                    if present:
+                        (root / 'samples/p2p-sample-rpc').mkdir(parents=True)
+                    for component in ('desktop-linux', 'desktop-windows', 'desktop-macos'):
+                        argv = dict(C.commands(component))['desktop-tests-and-installer']
+                        self.assertEqual(argv.count(flag), int(present and component == 'desktop-windows'))
+                        self.assertIn(':p2p-sample-desktop-ui:createDistributable', argv)
+                        self.assertNotIn('--tests', argv)
 
     def test_native_platform_acceptance_preserved(self):
         self.assertIn('full', C.commands('apple-arm64')[0][1])
@@ -113,7 +149,8 @@ class ComponentTests(unittest.TestCase):
         for c in C.COMPONENTS:
             text = str(C.commands(c))
             self.assertNotIn('initial-recipient', text)
-            self.assertNotIn('publish-central-portal-bundle', text)
+            self.assertFalse(any(Path(arg).name == 'publish-central-portal-bundle.sh'
+                                 for _, argv in C.commands(c) for arg in argv))
             self.assertNotIn('publishAllPublications', text)
 
     def execute_model(self, results, *, component='jvm-linux', tool_error=None):

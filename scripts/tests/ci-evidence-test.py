@@ -41,7 +41,9 @@ class EvidenceTests(unittest.TestCase):
     def test_real_success_captures_both_private_streams_and_known_close(self):
         public = io.StringIO()
         with contextlib.redirect_stdout(public), contextlib.redirect_stderr(public):
-            result = self.command("import sys; print('PRIVATE_OUTPUT'); print('PRIVATE_ERROR',file=sys.stderr)")
+            # Exact binary fixture bytes on Windows too; print() adds CRLF there.
+            result = self.command("import sys; sys.stdout.buffer.write(b'PRIVATE_OUTPUT\\n'); "
+                                  "sys.stderr.buffer.write(b'PRIVATE_ERROR\\n')")
         self.assertEqual(result["code"], "PASS")
         self.assertEqual(result["exitCode"], 0)
         self.assertTrue(result["cleanupKnown"])

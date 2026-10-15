@@ -54,7 +54,7 @@ TASK_NAMES = frozenset({
     "package-sample-apps-test.py", "release-application-set-test.py", "publish-sample-release-test.py",
     "run-platform-tests-test.py", "integrity-policy",
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
-    "build-plugin-floors", "jvm-tests", "android-tests-and-apk", "desktop-tests-and-installer",
+    "build-plugin-floors", "jvm-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
     "isolated-consumers", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
     "prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop", "gradle-stop", "component-setup"})

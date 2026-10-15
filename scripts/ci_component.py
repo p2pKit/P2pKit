@@ -35,6 +35,19 @@ MODULES = ['p2p-core', 'p2p-transport-lan', 'p2p-network-provisioning-android',
            'p2p-network-provisioning-desktop']
 
 
+# Genuine small native-process cases on each additional host; no old audit
+# executor/custody campaign or product/RPC-provider qualification is implied.
+SUPERVISOR_TESTS = (
+    'EvidenceTests.test_real_success_captures_both_private_streams_and_known_close',
+    'EvidenceTests.test_real_nonzero_is_preserved_and_not_relabelled_pass',
+    'EvidenceTests.test_real_timeout_retires_original_child',
+    'EvidenceTests.test_real_leader_exit_does_not_leave_child_writing',
+    'EvidenceTests.test_real_output_limit_is_enforced_during_capture',
+    'EvidenceTests.test_actual_scope_failed_postspawn_still_closes_original_pipes',
+    'EvidenceTests.test_real_cancellation_is_not_pass',
+)
+
+
 def matrix(selected):
     names = list(COMPONENTS) if selected == 'all' else selected.split(',')
     if not names or len(names) != len(set(names)) or any(x not in COMPONENTS for x in names):
@@ -47,6 +60,7 @@ def commands(component):
     bash = ['bash']
     gradle = [str(ROOT / 'gradlew.bat') if os.name == 'nt' else './gradlew', *FLAGS]
     tests = lambda *paths: [(p, py + ['scripts/tests/' + p, '-v']) for p in paths]
+    supervisor = ('supervisor-controls', py + ['scripts/tests/ci-evidence-test.py', '-v', *SUPERVISOR_TESTS])
     if component == 'source':
         return [
             ('wrapper', bash + ['scripts/check-gradle-wrapper.sh']),
@@ -85,7 +99,7 @@ def commands(component):
             tasks.append(':p2p-rpc:jvmTest')
         if (ROOT / 'samples/p2p-sample-rpc').is_dir():
             tasks.append(':p2p-sample-rpc:jvmTest')
-        return [('jvm-tests', gradle + tasks)]
+        return ([supervisor] if component == 'jvm-windows' else []) + [('jvm-tests', gradle + tasks)]
     if component == 'android':
         tasks = [':p2p-core:testAndroidHostTest', ':p2p-transport-lan:testAndroidHostTest',
                  ':p2p-network-provisioning-android:testAndroidHostTest', ':p2p-sample-android:testDebugUnitTest',
@@ -98,7 +112,11 @@ def commands(component):
     if component.startswith('desktop-'):
         packaging = {'desktop-linux': 'packageDeb', 'desktop-windows': 'packageMsi',
                      'desktop-macos': 'packageDmg'}[component]
-        return [('desktop-tests-and-installer', gradle + [
+        # Stage the existing experimental JDK21 adapter in the normal MSI.
+        # This build option does not enable the deliberately disabled provider.
+        options = ['-Pp2pkit.rpc.windows.previewAdapter=true'] if component == 'desktop-windows' and \
+            (ROOT / 'samples/p2p-sample-rpc').is_dir() else []
+        return ([supervisor] if component == 'desktop-macos' else []) + [('desktop-tests-and-installer', gradle + options + [
             ':p2p-sample-desktop:check', ':p2p-sample-desktop:installDist', ':p2p-sample-desktop-ui:test',
             ':p2p-sample-desktop-ui:checkRuntime', ':p2p-sample-desktop-ui:hotRunArgfile',
             ':p2p-sample-desktop-ui:createDistributable', ':p2p-sample-desktop-ui:' + packaging])]
