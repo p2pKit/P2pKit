@@ -196,6 +196,58 @@ class ComponentTests(unittest.TestCase):
                 report = json.loads((root / 'build/reports/ci-component' / (component + '.json')).read_text())
                 return code, report, invoked.call_args_list, error
 
+    def test_bundle_diagnostic_explicit_only_and_never_in_required_all(self):
+        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60)})
+        self.assertEqual(len(C.COMPONENTS), 12)
+        self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
+        self.assertEqual({row['component'] for row in C.matrix('all')['include']}, set(C.COMPONENTS))
+        self.assertEqual(C.matrix('bundle-diagnostic'), {'include': [{'component': 'bundle-diagnostic',
+                         'os': 'macos-26', 'minutes': 60, 'job_minutes': 70}]})
+        for invalid in ('bundle-diagnostic,source', 'compatibility,bundle-diagnostic',
+                        'bundle-diagnostic,bundle-diagnostic', 'all,bundle-diagnostic'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                C.matrix(invalid)
+
+    def test_bundle_diagnostic_is_only_existing_disposable_test_and_cli_can_list_without_execution(self):
+        command = [('signed-bundle-test', ['bash', 'scripts/tests/build-central-portal-bundle-test.sh'])]
+        self.assertEqual(C.commands('bundle-diagnostic'), command)
+        self.assertEqual(dict(C.commands('compatibility'))['signed-bundle-test'], command[0][1])
+        self.assert_no_publish_or_bootstrap_commands(command)
+        listed = subprocess.run([C.sys.executable, '-I', '-S', '-B', str(ROOT / 'scripts/ci_component.py'),
+                                 'bundle-diagnostic', '--list-commands'], capture_output=True, check=True, timeout=10)
+        self.assertEqual(json.loads(listed.stdout), [['signed-bundle-test', command[0][1]]])
+        self.assertEqual(listed.stderr, b'')
+
+    def test_bundle_diagnostic_retains_bounded_stop_and_original_failure(self):
+        for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
+                                                           component='bundle-diagnostic')
+            self.assertIsNone(error)
+            self.assertEqual(code, status or stopped)
+            self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
+                                               {'task': 'gradle-stop', 'exitCode': stopped}])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+            self.assertEqual(calls[-1].kwargs['timeout'], 90)
+            self.assertEqual(len(calls), 2)
+
+    def test_bundle_diagnostic_records_actual_selected_xcode_identity(self):
+        with tempfile.TemporaryDirectory(prefix='bundle-tools-model-') as temporary:
+            root = Path(temporary)
+            for name in ('java', 'gpg', 'gradlew', 'xcodebuild'):
+                (root / name).write_bytes(b'public synthetic executable')
+            versions = [Mock(stdout=b'openjdk version "17.0.20.1"'), Mock(stdout=b'gpg (GnuPG) 2.5.22'),
+                        Mock(stdout=b'Gradle 9.7.0\n'), Mock(stdout=b'Xcode 26.5\nBuild version 17F1\n')]
+            with patch.object(C, 'ROOT', root), \
+                    patch.object(C.shutil, 'which', side_effect=lambda name: str(root / name)), \
+                    patch.object(C.subprocess, 'run', side_effect=versions) as invoked, \
+                    patch.dict(C.os.environ, {'CI_EVIDENCE_TOOLS_FILE': str(root / 'tools.json')}):
+                C.record_tools('bundle-diagnostic')
+            recorded = json.loads((root / 'tools.json').read_text())
+            self.assertEqual(set(recorded), {'java', 'gpg', 'gradle', 'xcode'})
+            self.assertEqual(recorded['xcode'], {'version': '26.5',
+                             'executableSha256': C.hashlib.sha256(b'public synthetic executable').hexdigest()})
+            self.assertEqual(invoked.call_args_list[-1].args[0], [str(root / 'xcodebuild'), '-version'])
+
     def test_intel_transaction_wraps_original_native_then_stop_then_restore(self):
         code, report, calls, error = self.execute_model([Mock(returncode=0) for _ in range(4)], component='apple-x64')
         self.assertIsNone(error)

@@ -29,6 +29,9 @@ COMPONENTS = {
     'security': ('ubuntu-24.04', 30),
     'compatibility': ('macos-26', 180),
 }
+# Explicit focused diagnostics are not release components or aggregate inputs.
+DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60)}
+
 FLAGS = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
          '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
 MODULES = ['p2p-core', 'p2p-transport-lan', 'p2p-network-provisioning-android',
@@ -50,9 +53,11 @@ SUPERVISOR_TESTS = (
 
 def matrix(selected):
     names = list(COMPONENTS) if selected == 'all' else selected.split(',')
-    if not names or len(names) != len(set(names)) or any(x not in COMPONENTS for x in names):
+    routes = {**COMPONENTS, **DIAGNOSTICS}
+    if not names or len(names) != len(set(names)) or any(x not in routes for x in names) or \
+            (any(x in DIAGNOSTICS for x in names) and names != ['bundle-diagnostic']):
         raise ValueError('Unknown or duplicate component')
-    return {'include': [{'component': x, 'os': COMPONENTS[x][0], 'minutes': COMPONENTS[x][1], 'job_minutes': COMPONENTS[x][1] + 10} for x in names]}
+    return {'include': [{'component': x, 'os': routes[x][0], 'minutes': routes[x][1], 'job_minutes': routes[x][1] + 10} for x in names]}
 
 
 def commands(component):
@@ -126,6 +131,8 @@ def commands(component):
     if component.startswith('apple-'):
         return [('native-platform-tests', py + ['scripts/run-platform-tests.py',
                  'full' if component == 'apple-arm64' else 'ios-x64'])]
+    if component == 'bundle-diagnostic':
+        return [('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh'])]
     if component == 'compatibility':
         modules = MODULES + (['p2p-rpc'] if (ROOT / 'library/p2p-rpc').is_dir() else [])
         abi = [':' + m + ':checkKotlinAbi' for m in modules]
@@ -159,7 +166,7 @@ def record_tools(component):
     if component not in ('source', 'security'):
         probes.append(('gradle', str(ROOT / ('gradlew.bat' if os.name == 'nt' else 'gradlew')),
                        [*FLAGS, '--version'], r'(?m)^Gradle ([0-9A-Za-z.+-]+)$'))
-    if component in ('apple-arm64', 'apple-x64', 'desktop-macos', 'compatibility'):
+    if component in ('apple-arm64', 'apple-x64', 'desktop-macos', 'compatibility', 'bundle-diagnostic'):
         probes.append(('xcode', shutil.which('xcodebuild'), ['-version'], r'(?m)^Xcode ([0-9.]+)$'))
     for name, executable, args, pattern in probes:
         if executable is None:
@@ -183,7 +190,7 @@ def record_tools(component):
 
 
 def execute(component):
-    if component not in COMPONENTS:
+    if component not in COMPONENTS and component not in DIAGNOSTICS:
         raise ValueError('Unknown component')
     output = ROOT / 'build/reports/ci-component'
     output.mkdir(parents=True, exist_ok=True)
@@ -254,7 +261,7 @@ def execute(component):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('component', nargs='?', choices=list(COMPONENTS))
+    parser.add_argument('component', nargs='?', choices=[*COMPONENTS, *DIAGNOSTICS])
     parser.add_argument('--matrix')
     parser.add_argument('--list-commands', action='store_true')
     args = parser.parse_args()
