@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -22,6 +23,7 @@ import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +35,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -157,9 +160,37 @@ class ReconnectPolicyTest {
         return entered
     }
 
+    /** HELLO completion on Alice is not Bob's lifecycle commit or incoming-session publication. */
+    private suspend fun connectPublishedPair(
+        alice: P2pKit,
+        bob: P2pKit,
+        afterOutgoingConnected: ((P2pSession) -> Unit)? = null
+    ): P2pSession = withTimeout(5_000) {
+        coroutineScope {
+            // incomingSessions has no replay. Own the subscription before triggering either handshake.
+            val incoming = async(start = CoroutineStart.UNDISPATCHED) {
+                bob.incomingSessions.first { it.peer.id == PeerId("alice-id") }
+            }
+            val outgoing = alice.connect(targetPeer())
+            afterOutgoingConnected?.invoke(outgoing)
+            val accepted = incoming.await()
+            assertSame(accepted, bob.sessions.value.single(), "Own the actual responder publication before teardown")
+            assertEquals(ConnectionState.Connected, accepted.state.value)
+            outgoing
+        }
+    }
+
     @Test
-    fun disabledPolicyTransitionsDirectlyToFailed() = runBlocking<Unit> {
+    fun disabledPolicyTransitionsDirectlyToFailed() = disabledPolicy(holdIncomingCommit = false)
+
+    @Test
+    fun disabledPolicyWaitsForIncomingPublicationBeforeFixtureTeardown() = disabledPolicy(holdIncomingCommit = true)
+
+    private fun disabledPolicy(holdIncomingCommit: Boolean) = runBlocking<Unit> {
         val pair = FakeConnectionPair()
+        val incomingAtCommit = CompletableDeferred<Unit>()
+        val releaseIncomingCommit = CompletableDeferred<Unit>()
+        val outgoingConnected = CompletableDeferred<P2pSession>()
         val wireFailure = StatefulTestFailure("simulated wire break")
         var expectedWireDiagnostic: RecordingLogger.Entry? = null
         withTestKit(
@@ -177,29 +208,48 @@ class ReconnectPolicyTest {
         ) { alice ->
             withTestKit(
                 create = { recorder ->
-                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                    incomingKit("Bob", listOf(pair.b), recording = recorder) {
+                        if (holdIncomingCommit) {
+                            incomingAtCommit.complete(Unit)
+                            releaseIncomingCommit.await()
+                        }
+                    }
                 }
             ) { bob ->
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-                // alice.connect returning means the handshake completed on both
-                // sides — no need to observe bob.incomingSessions (it's replay=0
-                // and the emit may have happened before we could subscribe).
-                assertEquals(ConnectionState.Connected, session.state.value)
+                try {
+                    val connecting = async(start = CoroutineStart.UNDISPATCHED) {
+                        connectPublishedPair(alice, bob) { outgoingConnected.complete(it) }
+                    }
+                    if (holdIncomingCommit) {
+                        val outgoing = withTimeout(5_000) {
+                            incomingAtCommit.await()
+                            outgoingConnected.await()
+                        }
+                        assertEquals(ConnectionState.Connected, outgoing.state.value)
+                        assertTrue(bob.sessions.value.isEmpty(), "Responder commit must still be withheld")
+                        assertFalse(connecting.isCompleted, "The fixture must still own incoming publication")
+                    }
+                    releaseIncomingCommit.complete(Unit)
+                    val session = withTimeout(5_000) { connecting.await() }
+                    assertEquals(ConnectionState.Connected, session.state.value)
 
-                expectedWireDiagnostic = RecordingLogger.Entry(
-                    RecordingLogger.Level.WARN,
-                    "Session ${session.id}: routeEvents failed",
-                    wireFailure
-                )
-                pair.a.breakWithException(wireFailure)
+                    expectedWireDiagnostic = RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "Session ${session.id}: routeEvents failed",
+                        wireFailure
+                    )
+                    pair.a.breakWithException(wireFailure)
 
-                val terminal = withTimeout(5_000) {
-                    session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+                    val terminal = withTimeout(5_000) {
+                        session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+                    }
+                    assertEquals(
+                        ConnectionState.Failed, terminal,
+                        "Disabled policy must transition broken sessions to Failed, never via Reconnecting"
+                    )
+                } finally {
+                    releaseIncomingCommit.complete(Unit)
                 }
-                assertEquals(
-                    ConnectionState.Failed, terminal,
-                    "Disabled policy must transition broken sessions to Failed, never via Reconnecting"
-                )
             }
         }
     }
@@ -234,10 +284,7 @@ class ReconnectPolicyTest {
                     incomingKit("Bob", listOf(pair.b), recording = recorder)
                 }
             ) { bob ->
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-                // alice.connect returning means the handshake completed on both
-                // sides — no need to observe bob.incomingSessions (it's replay=0
-                // and the emit may have happened before we could subscribe).
+                val session = connectPublishedPair(alice, bob)
                 assertEquals(ConnectionState.Connected, session.state.value)
 
                 expectedWireDiagnostic = RecordingLogger.Entry(
@@ -391,7 +438,7 @@ class ReconnectPolicyTest {
                     incomingKit("Bob", listOf(pair.b), recording = recorder)
                 }
             ) { bob ->
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                val session = connectPublishedPair(alice, bob)
 
                 expectedWireDiagnostic = RecordingLogger.Entry(
                     RecordingLogger.Level.WARN,
@@ -444,7 +491,7 @@ class ReconnectPolicyTest {
                     incomingKit("Bob", listOf(pair.b), recording = recorder)
                 }
             ) { bob ->
-                val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
+                val session = assertIs<P2pSessionImpl>(connectPublishedPair(alice, bob))
 
                 val reconnectEntered = session.observeReconnectEntry()
                 expectedWireDiagnostic = RecordingLogger.Entry(
@@ -510,7 +557,7 @@ class ReconnectPolicyTest {
                     incomingKit("Bob", listOf(pair.b), recording = recorder)
                 }
             ) { bob ->
-                val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
+                val session = assertIs<P2pSessionImpl>(connectPublishedPair(alice, bob))
 
                 val reconnectEntered = session.observeReconnectEntry()
                 expectedWireDiagnostic = RecordingLogger.Entry(
@@ -574,7 +621,7 @@ class ReconnectPolicyTest {
                     incomingKit("Bob", listOf(pair.b), recording = recorder)
                 }
             ) { bob ->
-                val firstSession = withTimeout(5_000) { alice.connect(targetPeer()) }
+                val firstSession = connectPublishedPair(alice, bob)
 
                 expectedWireDiagnostic = RecordingLogger.Entry(
                     RecordingLogger.Level.WARN,
@@ -627,7 +674,7 @@ class ReconnectPolicyTest {
                     incomingKit("Bob", listOf(pair.b), recording = recorder)
                 }
             ) { bob ->
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                val session = connectPublishedPair(alice, bob)
                 assertEquals(ConnectionState.Connected, session.state.value)
 
                 // Subscribe to the FIRST transition out of Connected before the
