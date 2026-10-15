@@ -53,6 +53,13 @@ def commands(component):
             ('layout', bash + ['scripts/tests/check-repository-layout.sh']),
             ('links', bash + ['scripts/tests/check-markdown-links.sh']),
             ('release-metadata', bash + ['scripts/check-release-metadata.sh']),
+            *[(name, bash + ['scripts/tests/' + script + '-test.sh']) for name, script in (
+                ('release-tag-controls', 'check-release-tag'),
+                ('release-identity-controls', 'check-release-identity'),
+                ('maven-environment-controls', 'check-maven-release-environment'),
+                ('maven-namespace-controls', 'check-maven-namespace-access'),
+                ('maven-coordinate-controls', 'check-maven-central-version'),
+                ('maven-upload-controls', 'publish-central-portal-bundle'))],
             ('workflow-contract', ['ruby', 'scripts/check-modular-ci-policy.rb']),
             ('workflow-syntax', ['actionlint', '-shellcheck=', '-pyflakes=',
                 *[str(p.relative_to(ROOT)) for p in sorted((ROOT / '.github/workflows').glob('*.yml'))
