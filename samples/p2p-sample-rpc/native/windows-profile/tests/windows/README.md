@@ -43,9 +43,13 @@ The stock `run-audit-command.py --timeout` is **not** this end-to-end supervisor
 after process creation, accepts an observed exit before checking that budget, and excludes finalization.
 Reusing `WindowsScope` ownership does not by itself close those deadline gaps or authorize this test.
 
-The only accepted execution argument is `--disposable-custody-smoke`. That flag acknowledges test scope;
-it is **not** evidence of consent, isolation, account identity or a disposable environment. No environment
-variable, caller-supplied path/SID, temporary-root override, profile repair or migration is accepted.
+The accepted source selections are `--disposable-custody-smoke` and the separate
+`--disposable-custody-restart-smoke` cold-fixture control described below. Each requires exactly one
+argument and acknowledges only its test scope; neither is evidence of consent, isolation, account identity
+or a disposable environment. The new argument is a proposal for Foundation's exact-source supervisor
+review, **not an approved execution path**. Both selections use the same preflight and external admission
+requirements. No environment variable, caller-supplied path/SID, timeout override, temporary-root override,
+profile repair or migration is accepted.
 
 Read-only preflight checks:
 
@@ -69,9 +73,10 @@ already admitted; its original native identity is compared in memory. A separate
 retained `P2pKit` tree. For another run, the owner must supply a fresh disposable account/VM or independently
 restore its throwaway snapshot; this harness never removes or resets a prior run.
 
-ABI13 additionally closes and reopens this run's still-empty fixed tree before creating any lock/identity
-records, requiring a fresh native owner and unchanged original root identity. Both bootstrap attempts run
-the actual self → P2pKit → LocalAppData acknowledgment path; later child/new-lock calls include their
+The original `--disposable-custody-smoke` selection additionally closes and reopens this run's still-empty
+fixed tree before creating any lock/identity records, requiring a fresh native owner and unchanged original
+root identity. Both bootstrap attempts run the actual self → P2pKit → LocalAppData acknowledgment path;
+later child/new-lock calls include their
 private original-directory acknowledgment. This is **not** crash/power-loss/flush-fault proof. The broader
 initial write-capable fixed-directory access may produce a real Windows refusal; no sharing/ACL or
 privilege fallback is allowed. Current ABI13 smoke remains **NOT_EXECUTED**.
@@ -232,7 +237,11 @@ is left to that native drain rather than repeated ad-hoc closes. Uncertain clean
 
 ## Test-only bounded ownership and output
 
-A dedicated watchdog starts **before** preflight or any native operation. Its fixed 120-second budget
+A dedicated watchdog starts **before** preflight or any native operation. The original
+`--disposable-custody-smoke` retains its fixed **120,000 ms** budget. The separate
+`--disposable-custody-restart-smoke` uses a fixed **30,000 ms** budget through the same watchdog implementation.
+These are complete per-mode test budgets, not additional budgets for each native operation or reopen.
+Neither changes the application's separate 30,000 ms terminal-exit policy. Each watchdog
 uses monotonic elapsed time, including after wake-up, so delayed timer scheduling cannot accept a late
 success. Deadline/error exits terminate this test process with code125 (or fail-fast fallback), without
 first blocking on stdio. This is **failed test termination with unproven cleanup**, not cancellation of
@@ -265,6 +274,48 @@ Transient identity comparisons remain in memory and their fixed arrays are clear
 There is no promise of physical memory erasure. Source/toolchain/EXE hashes, Windows build/architecture,
 command, exit and bounded console transcript must be collected separately; the harness neither signs
 receipts nor fabricates an independently authorized source/evidence identity.
+
+## Separate cold composite-write and session-reopen control
+
+`--disposable-custody-restart-smoke` selects an additional source-only control in the same executable;
+the original mode and all its controls remain available unchanged. **Execution remains NOT_EXECUTED**;
+source availability and historical build receipts do not qualify this new control. Exact build results
+belong to source-bound receipts. It requires the same
+newly disposable standard-user environment, initial `P2pKit` absence, exact-source authorization and
+independent bounded supervisor through observed exit and finalization described above. No wrapper,
+supervisor or application gate selects or authorizes this new argument.
+
+The separate cold fixture allows a successful first `profile.header` publication through the composed
+write API; the original mode already publishes its immutable header through the low-level candidate
+controls before reaching its composed-write checks. This new sequence performs:
+
+1. Native root bootstrap, new profile lease and create-only composed publication of a 41-byte synthetic
+   header, followed by immediate file identity/readback and exact pending-name absence.
+2. New canonical identity directory and vault lease, then create-only composed publication of one
+   37-byte synthetic record. Immediate identity/readback, pending-name absence and an exact identity
+   inventory require only `vault.lock` and that record. Original vault/identity ownership retires before
+   the exact root inventory requires only `profile.lock`, `profile.header` and `identity`.
+3. Original profile and root retirement, then an orderly native-session reopen in the **same process**.
+   Root, identity, both lock files, header and record must preserve their complete original six-word
+   identities; returned public owner tokens must be newer. Empty lock bytes are read before acquiring
+   their share-none leases. Existing locks/directories are opened explicitly, with no create fallback.
+4. Exact canonical inventories and both absent pending names on reopen, original identity namespace
+   synchronization under both original leases and fresh root/identity readback. The inventory vault lease
+   retires before header readback; record readback uses a newly acquired vault lease after another empty
+   lock read. Unchanged bytes and normal vault/profile/root retirement are required. A failed step transfers
+   all remaining ownership to one native root drain; an already-attempted root close is not retried.
+
+Both file bodies contain fixed `0xa5` test bytes. The header is not application metadata and the record
+is not encrypted application ciphertext, despite its canonical filename. There is no key derivation,
+proof authentication, identity/trust reset, record replacement/deletion, fixture removal or repair in
+this mode. All directories, locks and published or incomplete records are retained. Exact inventories
+reject extra names; they never remove them. A separate invocation refuses this retained tree.
+
+The word `restart` in the source selection means orderly session retirement/reopen only. This does not
+exercise another process, JVM restart, power loss, interruption, lost-acknowledgment recovery, concurrent
+writers or the Windows filesystem's crash/durability guarantees. It supplies no JNI, encrypted-profile,
+RPC, loader, installed-MSI or full-provider qualification. The fixed inner 30,000 ms watchdog does not
+replace the independent outer creation/startup/exit/finalization deadline or Foundation's runtime authority.
 
 ## Explicitly not established by this source or a future v1 smoke pass
 

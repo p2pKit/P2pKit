@@ -834,6 +834,9 @@ pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_a
 int pwp_exact_name_absence(uint32_t status, int null_handle) {
     return status == UINT32_C(0xc0000034) && null_handle == 1; /* STATUS_OBJECT_NAME_NOT_FOUND */
 }
+int pwp_open_observation(uint32_t status, uint32_t io_status, uint64_t information, int valid_handle) {
+    return status == 0 && io_status == 0 && information == 1 && valid_handle == 1; /* FILE_OPENED */
+}
 pwp_result pwp_strict_open_failure(uint32_t status, int null_handle, pwp_result retirement) {
     if (retirement != PWP_OK) return PWP_CLEANUP_UNKNOWN;
     return pwp_exact_name_absence(status, null_handle) ? PWP_NOT_FOUND : PWP_OS;

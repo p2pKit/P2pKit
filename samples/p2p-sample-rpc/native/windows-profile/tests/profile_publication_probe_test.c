@@ -114,6 +114,36 @@ static void classifier_never_turns_errors_or_cleanup_failure_into_absence(void) 
                 assert(pwp_strict_open_failure(statuses[s], nulls[n], results[r]) == expected);
             }
 }
+static void opened_handle_requires_consistent_synchronous_success(void) {
+    const uint32_t statuses[] = {0, 0x103, NAME_MISSING, PATH_MISSING, 0xc0000022, 0xffffffff};
+    const uint64_t information[] = {0, 1, 2, UINT64_MAX};
+    const int valid_handles[] = {-1, 0, 1, 2};
+    for (size_t s = 0; s < sizeof(statuses)/sizeof(statuses[0]); ++s)
+        for (size_t i = 0; i < sizeof(statuses)/sizeof(statuses[0]); ++i)
+            for (size_t n = 0; n < sizeof(information)/sizeof(information[0]); ++n)
+                for (size_t h = 0; h < sizeof(valid_handles)/sizeof(valid_handles[0]); ++h) {
+                    int expected = !statuses[s] && !statuses[i] && information[n] == 1 && valid_handles[h] == 1;
+                    assert(pwp_open_observation(statuses[s], statuses[i], information[n], valid_handles[h]) == expected);
+                }
+}
+static void inconsistent_success_retires_original_without_publication_or_absence(void) {
+    const uint32_t io_statuses[] = {0x103, NAME_MISSING, PATH_MISSING, 0xc0000022, 0xffffffff};
+    for (size_t i = 0; i < sizeof(io_statuses)/sizeof(io_statuses[0]); ++i)
+        for (int fail_close = 0; fail_close <= 1; ++fail_close) {
+            fixture f; initialize(&f); f.fail_probe_close = fail_close;
+            f.probe = own(&f, 0);
+            assert(!pwp_open_observation(0, io_statuses[i], 1, 1));
+            /* As in native FILE_OPEN, the valid late handle is already ledger-owned. Never inspect,
+             * publish, reopen or infer absence from the inconsistent I/O status; retire exactly once. */
+            pwp_result retired = pwp_retire(&f.owner, f.probe, close_original, &f);
+            assert(pwp_strict_open_failure(0, 0, retired) == (fail_close ? PWP_CLEANUP_UNKNOWN : PWP_OS));
+            assert(f.closes[f.probe] == 1 && !f.verifies && !f.renames && !f.flushes);
+            assert(f.candidate.phase == PWP_CANDIDATE_VERIFIED);
+            if (!fail_close) assert(original_grant(&f));
+            drain(&f, fail_close);
+            assert(f.closes[f.probe] == 1);
+        }
+}
 static void exact_missing_enters_both_create_only_controllers_with_original_grants(void) {
     for (int replace = 0; replace <= 1; ++replace) {
         fixture f; initialize(&f);
@@ -154,11 +184,13 @@ static void successful_absence_cannot_substitute_a_new_grant(void) {
     }
 }
 int main(void) {
+    opened_handle_requires_consistent_synchronous_success();
+    inconsistent_success_retires_original_without_publication_or_absence();
     classifier_never_turns_errors_or_cleanup_failure_into_absence();
     exact_missing_enters_both_create_only_controllers_with_original_grants();
     failed_missing_probes_never_enter_either_publication_controller();
     failed_probe_retirement_retains_uncertainty_and_never_retries_close();
     successful_absence_cannot_substitute_a_new_grant();
-    puts("PASS 5 portable strict-publication-probe groups (not Windows runtime)");
+    puts("PASS 7 portable strict-publication-probe groups (not Windows runtime)");
     return 0;
 }
