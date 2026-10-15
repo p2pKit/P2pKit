@@ -60,6 +60,30 @@ PENDING_OPERATIONS = {"environment": "ENVIRONMENT", "identity": "IDENTITY",
 PENDING_FAILURE_LABELS = frozenset((*PENDING_FAILURES.values(),
                                   *PENDING_OPERATIONS.values(), "OTHER"))
 
+# Exact existing source-owned builder failures, never arbitrary log excerpts.
+# These are diagnostic categories only; original command/cleanup failure remains.
+BUNDLE_FATAL_MESSAGES = {
+    "MAVEN signing key is not valid base64": "BUNDLE_KEY_ENCODING",
+    "GROUP/VERSION_NAME is missing from gradle.properties": "BUNDLE_VERSION_MISSING",
+    "Central release bundle cannot use a SNAPSHOT version": "BUNDLE_SNAPSHOT_REFUSED",
+    "configure only one in-memory signing-key representation": "BUNDLE_KEY_REPRESENTATION",
+    "an in-memory signing key is required": "BUNDLE_KEY_MISSING",
+    "ORG_GRADLE_PROJECT_signingInMemoryKeyPassword is required": "BUNDLE_PASSWORD_MISSING",
+    "MAVEN_SIGNING_KEY_FINGERPRINT must be a complete 40- or 64-hex fingerprint": "BUNDLE_FINGERPRINT_FORMAT",
+    "signed original evidence requires clean committed source": "BUNDLE_SOURCE_DIRTY",
+    "could not read a fingerprint from the signing key": "BUNDLE_KEY_READ",
+    "signing key fingerprint does not match MAVEN_SIGNING_KEY_FINGERPRINT": "BUNDLE_FINGERPRINT_MISMATCH",
+    "could not import the release key into the isolated verification keyring": "BUNDLE_KEY_IMPORT",
+    "could not export the public signing certificate": "BUNDLE_PUBLIC_EXPORT",
+    "public signing certificate export is empty": "BUNDLE_PUBLIC_EXPORT_EMPTY",
+    "complete Central publication requires exactly 117 signed files across 21 coordinates": "BUNDLE_SIGNED_INVENTORY",
+    "Central bundle exceeds the 1 GiB upload limit": "BUNDLE_UPLOAD_SIZE",
+    "source changed while producing signed original evidence": "BUNDLE_SOURCE_CHANGED",
+    "bundle builder leaked disposable credential material": "BUNDLE_TEST_SECRET_LEAK",
+    "could not stop disposable GPG workers; private directory retained": "BUNDLE_TEST_GPG_RETIREMENT",
+    "could not stop isolated bundle GPG workers; private directory retained": "BUNDLE_GPG_RETIREMENT",
+}
+
 # Exact maintained adapter errors only; arbitrary exception text never leaves logs.
 DEPENDENCY_UPDATE_ERRORS = frozenset({
     'CANDIDATE_ROSTER_CHANGED', 'CONTROLLER_CHANGED', 'DEPENDENCY_BASE_ALREADY_CHANGED',
@@ -767,6 +791,13 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                         duplicate_dependency_steps.add(label)
                     else:
                         dependency_exits[label] = value
+                if line.startswith(b"FATAL: "):
+                    # Strip only the one actual line terminator; whitespace or
+                    # appended private text cannot turn into an admitted label.
+                    message = line.removesuffix(b"\n").removesuffix(b"\r")[7:]
+                    category = BUNDLE_FATAL_MESSAGES.get(message.decode("ascii", errors="replace"))
+                    if category is not None:
+                        categories.add(category)
                 bundle_phase = re.fullmatch(
                     rb"FATAL: disposable-key bundle test failed during: ([a-z -]{1,80})\r?\n?", line)
                 if bundle_phase:
