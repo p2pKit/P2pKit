@@ -827,7 +827,7 @@ class EvidenceTests(unittest.TestCase):
         log = command / "stderr.log"
         maintained = ((SCRIPTS / "build-central-portal-bundle.sh").read_text() +
                       (SCRIPTS / "tests/build-central-portal-bundle-test.sh").read_text())
-        self.assertEqual(len(E.BUNDLE_FATAL_MESSAGES), 19)
+        self.assertEqual(len(E.BUNDLE_FATAL_MESSAGES), 20)
         for message, category in E.BUNDLE_FATAL_MESSAGES.items():
             self.assertIn(message, maintained)
             for ending in ("\n", "\r\n", ""):
@@ -853,6 +853,15 @@ class EvidenceTests(unittest.TestCase):
                         "1 of 117 publication files lack PGP signatures", "x" * 5000):
             log.write_text("FATAL: " + message + "\n")
             self.assertEqual(E.failure_diagnostics(self.root, command, include_reports=False)["categories"], [])
+
+    def test_current_central_inventory_retains_exact_121_with_tooling_sidecars(self):
+        command = self.root / "current-inventory"
+        command.mkdir()
+        (command / "stderr.log").write_text(
+            "CENTRAL_INVENTORY EXPECTED 121 OBSERVED 121 MISSING 0 EXTRA 0 JAR 0 AAR 0 KLIB 0 POM 0 "
+            "MODULE 0 MAVEN_METADATA 0 RESOLVER_METADATA 0 OTHER 0\n")
+        result = E.failure_diagnostics(self.root, command, include_reports=False)["centralInventory"]
+        self.assertEqual((result["expected"], result["observed"], result["missing"], result["extra"]), (121, 121, 0, 0))
 
     def test_central_signature_counts_report_actual_loop_not_inventory_reconstruction(self):
         command = self.root / "signature-counts"

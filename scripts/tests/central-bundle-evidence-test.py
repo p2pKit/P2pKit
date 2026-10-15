@@ -47,6 +47,11 @@ for coordinate, extension in [*PORTABLE.items(), *[(module + "-" + target, ".kli
             suffixes += ["-cinterop-p2pkit_nw.klib"]
     BASES.update(f"io/github/apdelrahman1911/{coordinate}/{VERSION}/{coordinate}-{VERSION}{suffix}" for suffix in suffixes)
 
+# Independent explicit list; dependency-consumer allowlist stays at 117.
+TOOLING = {f"io/github/apdelrahman1911/{name}/{VERSION}/{name}-{VERSION}-kotlin-tooling-metadata.json"
+           for name in ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android")}
+BASES.update(TOOLING)
+
 
 def packet(tag, body, old=False):
     return (bytes([0x80 | tag << 2 | 2]) if old else bytes([0xC0 | tag, 255])) + struct.pack(">I", len(body)) + body
@@ -82,19 +87,19 @@ class InventoryTests(unittest.TestCase):
         for name in BASES:
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
+            path.write_bytes(b'{"fixture":"synthetic tooling metadata"}' if name in TOOLING else b"fixture")
             for suffix in (".asc", ".md5", ".sha1", ".sha256", ".sha512"):
                 Path(str(path) + suffix).touch()
 
     def test_exact_actual_roster_excludes_all_sidecars(self):
         result = E.inventory_diagnostics(self.repo, VERSION)
-        self.assertEqual((result["expected"], result["observed"], result["missing"], result["extra"]), (117, 117, 0, 0))
+        self.assertEqual((result["expected"], result["observed"], result["missing"], result["extra"]), (121, 121, 0, 0))
         self.assertEqual(sum(result[key] for key in E.INVENTORY_CLASSES), 0)
 
     def test_missing_expected_original_is_counted(self):
         (self.repo / sorted(BASES)[0]).unlink()
         result = E.inventory_diagnostics(self.repo, VERSION)
-        self.assertEqual((result["observed"], result["missing"], result["extra"]), (116, 1, 0))
+        self.assertEqual((result["observed"], result["missing"], result["extra"]), (120, 1, 0))
 
     def test_extra_versions_coordinates_and_private_names_only_project_classes(self):
         parent = self.repo / E.GROUP_PATH / "unexpected-coordinate" / "other-version"
@@ -103,7 +108,7 @@ class InventoryTests(unittest.TestCase):
                      "maven-metadata-local.xml", "_remote.repositories", "PRIVATE.secret"):
             (parent / name).touch()
         result = E.inventory_diagnostics(self.repo, VERSION)
-        self.assertEqual((result["observed"], result["missing"], result["extra"]), (125, 0, 8))
+        self.assertEqual((result["observed"], result["missing"], result["extra"]), (129, 0, 8))
         self.assertEqual({key: result[key] for key in E.INVENTORY_CLASSES}, dict.fromkeys(E.INVENTORY_CLASSES, 1))
         output = io.StringIO()
         with mock.patch("sys.stdout", output):
@@ -115,7 +120,27 @@ class InventoryTests(unittest.TestCase):
         (self.repo / sorted(BASES)[0]).unlink()
         (self.repo / E.GROUP_PATH / "other.jar").touch()
         result = E.inventory_diagnostics(self.repo, VERSION)
-        self.assertEqual((result["observed"], result["missing"], result["extra"]), (117, 1, 1))
+        self.assertEqual((result["observed"], result["missing"], result["extra"]), (121, 1, 1))
+
+    def test_exact_repository_requires_all_four_tooling_sidecars_and_rejects_substitution(self):
+        E.require_repository_inventory(self.repo, VERSION)
+        expected = self.repo / sorted(TOOLING)[0]
+        original = expected.read_bytes()
+        expected.unlink()
+        with self.assertRaisesRegex(ValueError, "exact signed roster"):
+            E.require_repository_inventory(self.repo, VERSION)
+        other = expected.with_name("unexpected-tooling.json")
+        other.write_bytes(original)
+        with self.assertRaisesRegex(ValueError, "exact signed roster"):
+            E.require_repository_inventory(self.repo, VERSION)
+
+    def test_tooling_metadata_is_bounded_json_object_not_arbitrary_bytes(self):
+        expected = self.repo / sorted(TOOLING)[0]
+        for raw in (b"not-json", b"[]", b"{}", b'{"a":1,"a":2}', b'{"a":NaN}', b" " * (E.MAX_METADATA + 1)):
+            with self.subTest(rawBytes=len(raw)):
+                expected.write_bytes(raw)
+                with self.assertRaises((ValueError, UnicodeError)):
+                    E.require_repository_inventory(self.repo, VERSION)
 
     def test_linked_file_or_directory_refused(self):
         parent = self.repo / E.GROUP_PATH
@@ -141,7 +166,8 @@ class EvidenceTests(unittest.TestCase):
         self.public = self.bundle.with_suffix(".public.asc")
         self.files = {}
         for name in BASES:
-            data = b"SYNTHETIC ORIGINAL, NOT A BUILT ARTIFACT: " + name.encode()
+            data = (b'{"fixture":"synthetic tooling metadata"}' if name in TOOLING else
+                    b"SYNTHETIC ORIGINAL, NOT A BUILT ARTIFACT: " + name.encode())
             self.files[name] = data
             self.files[name + ".asc"] = b"SYNTHETIC DETACHED SIGNATURE, NOT CRYPTOGRAPHIC"
             for algorithm in ("md5", "sha1", "sha256", "sha512"):
@@ -170,7 +196,7 @@ class EvidenceTests(unittest.TestCase):
         self.manifest.write_text("".join(hashlib.sha256(data).hexdigest() + "  " + name + "\n" for name, data in sorted(files.items())))
         document = {"schemaVersion": 2, "group": "io.github.apdelrahman1911", "version": VERSION,
                     "signingKeyFingerprint": FINGERPRINT, "bundleFile": self.bundle.name,
-                    "bundleSha256": hashlib.sha256(binary).hexdigest(), "bundleSizeBytes": len(binary), "signedFiles": 117,
+                    "bundleSha256": hashlib.sha256(binary).hexdigest(), "bundleSizeBytes": len(binary), "signedFiles": 121,
                     "sourceSha": SOURCE, "sourceTree": TREE, "manifestSha256": hashlib.sha256(self.manifest.read_bytes()).hexdigest(),
                     "publicKeyFile": self.public.name, "publicKeySha256": hashlib.sha256(public).hexdigest()}
         self.summary.write_text(json.dumps(document))
@@ -204,8 +230,27 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(b"SYNTHETIC DETACHED SIGNATURE, NOT CRYPTOGRAPHIC", Path(arguments[-2]).read_bytes())
         return subprocess.CompletedProcess(arguments, 0, status(SUBKEY))
 
+    def test_retained_bundle_requires_exact_tooling_sidecars_with_original_checksums_and_signatures(self):
+        first = sorted(TOOLING)[0]
+        for replacement in (None, first.replace("-kotlin-tooling-metadata.json", "-other.json")):
+            files = dict(self.files)
+            for suffix in ("", ".asc", ".md5", ".sha1", ".sha256", ".sha512"):
+                data = files.pop(first + suffix)
+                if replacement is not None:
+                    files[replacement + suffix] = data
+            self.write(files)
+            with self.assertRaises(ValueError):
+                self.inspect(verify_signatures=False)
+        files = dict(self.files)
+        files[first] = b"not-json"
+        for algorithm in ("md5", "sha1", "sha256", "sha512"):
+            files[first + "." + algorithm] = hashlib.new(algorithm, files[first]).hexdigest().encode() + b"\n"
+        self.write(files)
+        with self.assertRaises(ValueError):
+            self.inspect(verify_signatures=False)
+
     def test_complete_roster_matches_independent_inherited_mac_gate(self):
-        self.assertEqual(117, len(BASES))
+        self.assertEqual(121, len(BASES))
         self.assertEqual(BASES, E.roster(VERSION))
         script = (ROOT / "scripts/check-publish-artifacts.sh").read_text()
         self.assertEqual(PORTABLE, dict(re.findall(r"^check +(p2p-\S+) +(\.jar|\.aar)$", script, re.MULTILINE)))
@@ -220,14 +265,14 @@ class EvidenceTests(unittest.TestCase):
     def test_historical_four_library_originals_remain_exact_and_cannot_gain_rpc(self):
         historical_version = "0.7.0-rc3"
         historical = {name.replace(VERSION, historical_version): data for name, data in self.files.items()
-                      if "/p2p-rpc" not in name}
+                      if "/p2p-rpc" not in name and "-kotlin-tooling-metadata.json" not in name}
         original_count = sum(not name.endswith((".asc", ".md5", ".sha1", ".sha256", ".sha512"))
                              for name in historical)
         self.assertEqual((84, 504), (original_count, len(historical)))
         for version in ("0.7.0-rc1", "0.7.0-rc3", "0.7.99"):
             self.assertEqual(84, len(E.roster(version)))
         for version in ("0.8.0-alpha1", "0.8.0-rc1", "0.8.0", "1.0.0"):
-            self.assertEqual(117, len(E.roster(version)))
+            self.assertEqual(121, len(E.roster(version)))
         self.write(historical)
         self.replace_summary(version=historical_version, signedFiles=84)
         receipt = E.inspect(self.bundle, self.manifest, self.summary, self.public, SOURCE, TREE,
@@ -252,7 +297,7 @@ class EvidenceTests(unittest.TestCase):
             self.write(files)
             with self.subTest(coordinate=coordinate), self.assertRaises(ValueError):
                 self.inspect(verify_signatures=False)
-        self.write({name: data for name, data in self.files.items() if "/p2p-rpc" not in name})
+        self.write({name: data for name, data in self.files.items() if "/p2p-rpc" not in name and "-kotlin-tooling-metadata.json" not in name})
         self.replace_summary(signedFiles=84)
         with self.assertRaises(ValueError):
             self.inspect(verify_signatures=False)
@@ -263,18 +308,18 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual("UNVERIFIED_SYNTHETIC_STRUCTURE", receipt["scope"])
         self.assertIs(False, receipt["signaturesVerified"])
         self.assertEqual([], receipt["signerFingerprints"])
-        self.assertEqual((21, 117, 702), (receipt["coordinates"], receipt["signedFiles"], receipt["memberCount"]))
+        self.assertEqual((21, 121, 726), (receipt["coordinates"], receipt["signedFiles"], receipt["memberCount"]))
         self.assertEqual(set(self.files), {x["path"] for x in receipt["members"]})
         self.assertEqual(SOURCE, receipt["sourceSha"])
         self.assertEqual(TREE, receipt["sourceTree"])
         self.assertNotIn("PUBLISHED", json.dumps(receipt))
 
-    def test_full_fake_backend_requires_all_117_exact_detached_signatures(self):
+    def test_full_fake_backend_requires_all_121_exact_detached_signatures(self):
         self.gpg_calls = []
         with mock.patch.object(E.shutil, "which", return_value="/synthetic-only/gpg"), \
                 mock.patch.object(E.subprocess, "run", side_effect=self.fake_gpg):
             receipt = self.inspect()
-        self.assertEqual(119, len(self.gpg_calls))
+        self.assertEqual(123, len(self.gpg_calls))  # 121 originals plus public import/list.
         self.assertEqual("VERIFIED_PUBLIC_SIGNATURES", receipt["scope"])
         self.assertIs(True, receipt["signaturesVerified"])
         self.assertEqual([SUBKEY], receipt["signerFingerprints"])
@@ -402,7 +447,7 @@ class EvidenceTests(unittest.TestCase):
         directory = zipfile.ZipInfo("io/github/apdelrahman1911/")
         directory.external_attr = (stat.S_IFDIR | 0o700) << 16
         self.write(entries=[(directory, b"")] + sorted(self.files.items()))
-        self.assertEqual(702, self.inspect(verify_signatures=False)["memberCount"])
+        self.assertEqual(726, self.inspect(verify_signatures=False)["memberCount"])
         self.write(entries=[(directory, b"hidden bytes")] + sorted(self.files.items()))
         with self.assertRaises(ValueError):
             self.inspect(verify_signatures=False)
@@ -504,7 +549,7 @@ class BuilderSourceTests(unittest.TestCase):
         self.assertIn('|| signature_status=$?', source)
         self.assertIn('"$signature_status" -ne 0 || "$signature_fingerprint" != "$expected_fingerprint"', source)
         self.assertNotIn('} || true)', source)
-        self.assertIn('[[ $checked -eq 117 ]]', source)
+        self.assertIn('[[ $checked -eq 121 ]]', source)
         self.assertIn('"$ROOT/scripts/check-publish-artifacts.sh" "$REPOSITORY"', source)
         self.assertIn('git -C "$ROOT" status --porcelain --untracked-files=all', source)
         self.assertIn('source changed while producing signed original evidence', source)

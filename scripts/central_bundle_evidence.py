@@ -40,7 +40,8 @@ VERSION = re.compile(r"(?:0|[1-9][0-9]?)\.(?:0|[1-9][0-9]?)\.(?:0|[1-9][0-9]?)(?
 CHECKSUMS = {"md5": 32, "sha1": 40, "sha256": 64, "sha512": 128}
 # Independent transcription of check-publish-artifacts.sh's complete macOS
 # roster. Historical four-library releases have 15 coordinates/84 originals.
-# The 0.8 RPC release adds 3 portable (5 each) and 3 native (6 each): 117.
+# The 0.8 RPC release has 117 dependency originals plus four KMP root tooling
+# metadata JSON artifacts produced by the pinned Kotlin plugin: 121 signed originals.
 HISTORICAL_COORDINATES = {
     "p2p-core": ".jar", "p2p-core-jvm": ".jar", "p2p-core-android": ".aar",
     "p2p-transport-lan": ".jar", "p2p-transport-lan-jvm": ".jar", "p2p-transport-lan-android": ".aar",
@@ -70,6 +71,17 @@ def coordinates(version):
     return COORDINATES if release >= (0, 8, 0) else HISTORICAL_COORDINATES
 
 
+TOOLING_ROOTS = ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android")
+
+
+def tooling_roster(version):
+    # Historical published originals are immutable; do not add modern sidecars.
+    if coordinates(version) is HISTORICAL_COORDINATES:
+        return set()
+    return {f"{GROUP_PATH}/{name}/{version}/{name}-{version}-kotlin-tooling-metadata.json"
+            for name in TOOLING_ROOTS}
+
+
 def roster(version):
     selected = coordinates(version)
     result = set()
@@ -80,7 +92,8 @@ def roster(version):
             if coordinate.startswith("p2p-transport-lan-"):
                 suffixes.append("-cinterop-p2pkit_nw.klib")
         result.update(f"{GROUP_PATH}/{coordinate}/{version}/{coordinate}-{version}{suffix}" for suffix in suffixes)
-    need((len(selected), len(result)) == ((21, 117) if selected is COORDINATES else (15, 84)),
+    result.update(tooling_roster(version))
+    need((len(selected), len(result)) == ((21, 121) if selected is COORDINATES else (15, 84)),
          "Maintained complete publication roster changed")
     return result
 
@@ -121,6 +134,21 @@ def inventory_diagnostics(repository, version):
         counts[kind] += 1
     return {"expected": len(expected), "observed": len(observed), "missing": len(expected - observed),
             "extra": len(observed - expected), **counts}
+
+
+def validate_tooling_metadata(path):
+    # KGP serializes a JSON object. Do not invent a schema/version requirement;
+    # exact source/version filenames, original bytes and signatures bind it.
+    value = json.loads(bounded_bytes(path, MAX_METADATA), object_pairs_hook=unique_keys,
+                       parse_constant=lambda _: need(False, "Nonfinite tooling metadata"))
+    need(type(value) is dict and value, "Invalid Kotlin tooling metadata object")
+
+
+def require_repository_inventory(repository, version):
+    counts = inventory_diagnostics(repository, version)
+    need(counts["missing"] == counts["extra"] == 0, "Central publication differs from the exact signed roster")
+    for relative in tooling_roster(version):
+        validate_tooling_metadata(Path(repository) / relative)
 
 
 def print_inventory_diagnostics(repository, version):
@@ -274,7 +302,7 @@ def verify_public_signatures(public_key, pairs, expected_fingerprint):
     status, owner approval, or native/build qualification.
     """
     need(public_key_fingerprint(public_key) == expected_fingerprint, "Original public primary fingerprint differs")
-    need(type(pairs) is list and 0 < len(pairs) <= 117, "Invalid detached-signature roster")
+    need(type(pairs) is list and 0 < len(pairs) <= 121, "Invalid detached-signature roster")
     executable = shutil.which("gpg")
     need(executable is not None, "Public GPG verifier is unavailable")
     with tempfile.TemporaryDirectory(prefix="p2pkit-central-public-") as temporary:
@@ -412,7 +440,7 @@ def inspect(bundle, manifest, summary, public_key, source_sha, source_tree, vers
         while block := stream.read(1024 ** 2):
             digest.update(block)
         need(digest.hexdigest() == document["bundleSha256"], "Original bundle hash differs")
-        # A <1GiB, at most 702-file bundle needs neither ZIP64 nor concatenated/multidisk
+        # A <1GiB, at most 726-file bundle needs neither ZIP64 nor concatenated/multidisk
         # archives. Bound its directory before allowing zipfile to parse it.
         stream.seek(-22, os.SEEK_END)
         end = struct.unpack("<4s4H2IH", stream.read(22))
@@ -449,6 +477,8 @@ def inspect(bundle, manifest, summary, public_key, source_sha, source_tree, vers
                 for algorithm in CHECKSUMS:
                     need(small[name + "." + algorithm] == (calculated[name][algorithm] + "\n").encode("ascii"),
                          "Publication checksum sidecar differs")
+            for name in tooling_roster(version):
+                validate_tooling_metadata(paths[name])
             if verify_signatures:
                 pairs = [(paths[name], paths[name + ".asc"]) for name in sorted(base)]
                 signers = verify_public_signatures(public_raw, pairs, fingerprint)

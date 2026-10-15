@@ -76,7 +76,8 @@ BUNDLE_FATAL_MESSAGES = {
     "could not import the release key into the isolated verification keyring": "BUNDLE_KEY_IMPORT",
     "could not export the public signing certificate": "BUNDLE_PUBLIC_EXPORT",
     "public signing certificate export is empty": "BUNDLE_PUBLIC_EXPORT_EMPTY",
-    "complete Central publication requires exactly 117 signed files across 21 coordinates": "BUNDLE_SIGNED_INVENTORY",
+    "complete Central publication requires exactly 121 signed files across 21 coordinates": "BUNDLE_SIGNED_INVENTORY",
+    "Central publication differs from the exact signed roster": "BUNDLE_SIGNED_ROSTER",
     "Central bundle exceeds the 1 GiB upload limit": "BUNDLE_UPLOAD_SIZE",
     "source changed while producing signed original evidence": "BUNDLE_SOURCE_CHANGED",
     "bundle builder leaked disposable credential material": "BUNDLE_TEST_SECRET_LEAK",
@@ -967,7 +968,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                                                         for key in inventory_keys) + rb"\r?\n?", line)
                 if inventory:
                     values = dict(zip(inventory_keys, map(int, inventory.groups())))
-                    if (all(value <= 4096 for value in values.values()) and values["expected"] in (84, 117) and
+                    if (all(value <= 4096 for value in values.values()) and values["expected"] in (84, 117, 121) and
                             values["missing"] <= values["expected"] and
                             values["observed"] == values["expected"] - values["missing"] + values["extra"] and
                             sum(values[key] for key in inventory_keys[4:]) == values["extra"]):

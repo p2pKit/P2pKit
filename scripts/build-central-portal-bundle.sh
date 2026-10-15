@@ -79,7 +79,7 @@ expected_fingerprint="$(printf '%s' "${MAVEN_SIGNING_KEY_FINGERPRINT:-}" | tr -d
 [[ "$expected_fingerprint" =~ ^[A-F0-9]{40}$|^[A-F0-9]{64}$ ]] ||
     fail "MAVEN_SIGNING_KEY_FINGERPRINT must be a complete 40- or 64-hex fingerprint"
 
-for command in base64 git gpg gpgconf jq openssl unzip zip; do
+for command in base64 git gpg gpgconf jq openssl python3 unzip zip; do
     command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -213,7 +213,7 @@ done < <(
         -print0
 )
 
-[[ $checked -eq 117 ]] || {
+[[ $checked -eq 121 ]] || {
     printf 'CENTRAL_SIGNATURE_COUNTS CHECKED %s UNSIGNED %s INVALID %s\n' "$checked" "$unsigned" "$invalid_signature"
     # Failure-only, fixed numeric diagnosis. Never rewrite the expected roster
     # or admit a partial/extra publication in order to make this gate pass.
@@ -226,11 +226,20 @@ try:
 except (OSError, ValueError):
     print("CENTRAL_INVENTORY_UNAVAILABLE")
 PY_INVENTORY
-    fail "complete Central publication requires exactly 117 signed files across 21 coordinates"
+    fail "complete Central publication requires exactly 121 signed files across 21 coordinates"
 }
 [[ $unsigned -eq 0 ]] || fail "$unsigned of $checked publication files lack PGP signatures"
 [[ $invalid_signature -eq 0 ]] ||
     fail "$invalid_signature of $checked publication files have invalid or unexpected signatures"
+
+# The count alone cannot reject an equal-size substitution. Require every exact
+# source-version member, including the four KMP tooling JSON originals.
+python3 -B - "$ROOT/scripts" "$REPOSITORY" "$VERSION" <<'PY_ROSTER' || fail "Central publication differs from the exact signed roster"
+import sys
+sys.path.insert(0, sys.argv[1])
+from central_bundle_evidence import require_repository_inventory
+require_repository_inventory(sys.argv[2], sys.argv[3])
+PY_ROSTER
 
 echo "==> Generating Central-required checksums"
 while IFS= read -r -d '' artifact; do

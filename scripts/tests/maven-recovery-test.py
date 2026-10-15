@@ -129,7 +129,8 @@ class RecoveryTests(unittest.TestCase):
         files = {}
         for original in B.BASES:
             name = original.replace(B.VERSION, VERSION)
-            data = b"SYNTHETIC NON-ARTIFACT " + name.encode()
+            data = (b'{"fixture":"synthetic tooling metadata"}' if name.endswith("-kotlin-tooling-metadata.json")
+                    else b"SYNTHETIC NON-ARTIFACT " + name.encode())
             files[name] = data
             files[name + ".asc"] = b"SYNTHETIC DETACHED SIGNATURE, NOT CRYPTOGRAPHIC"
             for algorithm in ("md5", "sha1", "sha256", "sha512"):
@@ -139,7 +140,7 @@ class RecoveryTests(unittest.TestCase):
         manifest = "".join(hashlib.sha256(raw).hexdigest() + "  " + name + "\n" for name, raw in sorted(files.items())).encode()
         summary = {"schemaVersion": 2, "group": "io.github.apdelrahman1911", "version": VERSION,
                    "signingKeyFingerprint": B.FINGERPRINT, "bundleFile": stem + ".zip", "bundleSha256": hashlib.sha256(binary).hexdigest(),
-                   "bundleSizeBytes": len(binary), "signedFiles": 117, "sourceSha": SOURCE, "sourceTree": TREE,
+                   "bundleSizeBytes": len(binary), "signedFiles": 121, "sourceSha": SOURCE, "sourceTree": TREE,
                    "manifestSha256": hashlib.sha256(manifest).hexdigest(), "publicKeyFile": stem + ".public.asc",
                    "publicKeySha256": hashlib.sha256(B.PUBLIC).hexdigest()}
         return {stem + ".zip": binary, stem + ".manifest.sha256": manifest, stem + ".summary.json": P.encoded(summary),
@@ -395,7 +396,7 @@ class RecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.base) as temporary, mock.patch.object(R.subprocess, "run", side_effect=fake_gpg), \
                 mock.patch.object(B.E.shutil, "which", return_value="/synthetic-not-gpg"):
             deployment, inspection, bundle = R.inspect_originals(self.api, original, Path(temporary), signatures=True)
-            self.assertEqual(117, sum("--verify" in row for row in calls))
+            self.assertEqual(121, sum("--verify" in row for row in calls))
             self.assertTrue(bundle.is_file())
             self.assertEqual("PUBLISHED", deployment["deployment"]["state"])
             self.assertTrue(R.signature_receipt(inspection, R.bundle_identity(inspection))["signaturesVerified"])
