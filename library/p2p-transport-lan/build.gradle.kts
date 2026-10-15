@@ -1,8 +1,11 @@
 import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
+import dev.p2pkit.build.RestoreEmbeddedJmdnsAarTask
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
 import dev.p2pkit.build.WriteXcframeworkProvenanceTask
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.variant.KotlinMultiplatformAndroidComponentsExtension
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.tasks.Jar
@@ -82,6 +85,22 @@ val embeddedJmdnsJar = tasks.register<Jar>("embeddedJmdnsJar") {
 }
 val embeddedJmdnsDependency = files(embeddedJmdnsJar.flatMap { it.archiveFile })
     .builtBy(embeddedJmdnsJar)
+
+// AGP splits a local dependency into a classes-only libs JAR and resources in
+// classes.jar. Restore the declared publication layout without changing the
+// implementation dependency used by project consumers and Android host tests.
+extensions.configure<KotlinMultiplatformAndroidComponentsExtension> {
+    onVariants(selector().all()) { variant ->
+        val restore = tasks.register<RestoreEmbeddedJmdnsAarTask>(
+            "restore${variant.name.replaceFirstChar { it.uppercaseChar() }}EmbeddedJmdnsAar"
+        ) {
+            producerJar.set(embeddedJmdnsJar.flatMap { it.archiveFile })
+        }
+        variant.artifacts.use(restore)
+            .wiredWithFiles({ it.inputAar }, { it.outputAar })
+            .toTransform(SingleArtifact.AAR)
+    }
+}
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
