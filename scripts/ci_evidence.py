@@ -511,6 +511,17 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD"):
     phase_labels = {"simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
                     "simulator-runtimes", "intel-bootstatus-help", "simulator-devices", "intel-boot",
                     "intel-bootstatus", "intel-prelaunch", "intel-retire-before", "intel-shutdown", "intel-retire-after"}
+    bundle_phases = {
+        "initialization": "BUNDLE_TEST_INITIALIZATION",
+        "snapshot rejection": "BUNDLE_TEST_SNAPSHOT_REJECTION",
+        "release fixture checkout": "BUNDLE_TEST_RELEASE_FIXTURE_CHECKOUT",
+        "signature-status parser regression": "BUNDLE_TEST_SIGNATURE_STATUS_PARSER",
+        "missing-key rejection": "BUNDLE_TEST_MISSING_KEY_REJECTION",
+        "disposable key generation": "BUNDLE_TEST_DISPOSABLE_KEY_GENERATION",
+        "disposable key export": "BUNDLE_TEST_DISPOSABLE_KEY_EXPORT",
+        "signed bundle build": "BUNDLE_TEST_SIGNED_BUILD",
+        "bundle verification": "BUNDLE_TEST_VERIFICATION",
+    }
     known = {
         b"Dependency verification failed": "DEPENDENCY_INTEGRITY",
         b"Unresolved reference": "COMPILATION_UNRESOLVED_REFERENCE",
@@ -545,6 +556,12 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD"):
                 location = re.fullmatch(rb"PLATFORM_CHECK_LINES ([0-9]{1,5}(?:,[0-9]{1,5}){0,15})\s*", line)
                 if location:
                     platform_lines = [int(value) for value in location[1].split(b",")]
+                bundle_phase = re.fullmatch(
+                    rb"FATAL: disposable-key bundle test failed during: ([a-z -]{1,80})\r?\n?", line)
+                if bundle_phase:
+                    category = bundle_phases.get(bundle_phase[1].decode("ascii"))
+                    if category is not None:
+                        categories.add(category)
                 for token, category in known.items():
                     if token.lower() in line.lower():
                         categories.add(category)

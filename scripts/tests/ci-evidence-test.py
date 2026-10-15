@@ -165,6 +165,33 @@ class EvidenceTests(unittest.TestCase):
         (phase / "result.json").write_text(json.dumps(row))
         self.assertEqual(E.failure_diagnostics(self.root, command)["simulatorPhases"], [])
 
+    def test_bundle_diagnostic_phases_are_closed_labels_not_private_messages(self):
+        command = self.root / "bundle-command"
+        command.mkdir()
+        log = command / "stderr.log"
+        cases = {
+            "initialization": "BUNDLE_TEST_INITIALIZATION",
+            "snapshot rejection": "BUNDLE_TEST_SNAPSHOT_REJECTION",
+            "release fixture checkout": "BUNDLE_TEST_RELEASE_FIXTURE_CHECKOUT",
+            "signature-status parser regression": "BUNDLE_TEST_SIGNATURE_STATUS_PARSER",
+            "missing-key rejection": "BUNDLE_TEST_MISSING_KEY_REJECTION",
+            "disposable key generation": "BUNDLE_TEST_DISPOSABLE_KEY_GENERATION",
+            "disposable key export": "BUNDLE_TEST_DISPOSABLE_KEY_EXPORT",
+            "signed bundle build": "BUNDLE_TEST_SIGNED_BUILD",
+            "bundle verification": "BUNDLE_TEST_VERIFICATION",
+        }
+        for phase, category in cases.items():
+            with self.subTest(phase=phase):
+                log.write_text("FATAL: disposable-key bundle test failed during: " + phase + "\n")
+                self.assertEqual(E.failure_diagnostics(self.root, command)["categories"], [category])
+        for text in ("private-secret", "signed bundle build private-payload", "/private/key.asc", "a" * 5000):
+            log.write_text("FATAL: disposable-key bundle test failed during: " + text + "\n")
+            result = E.failure_diagnostics(self.root, command)
+            self.assertEqual(result["categories"], [])
+            self.assertNotIn("private", json.dumps(result))
+        log.write_text("FATAL: disposable-key bundle test failed during: signed bundle build\r\n")
+        self.assertEqual(E.failure_diagnostics(self.root, command)["categories"], ["BUNDLE_TEST_SIGNED_BUILD"])
+
     def test_junit_failure_diagnostics_only_reveal_existing_source_identifiers(self):
         source = self.root / "library/p2p-core/src/commonTest/kotlin/dev/p2pkit/ExampleTest.kt"
         source.parent.mkdir(parents=True)
