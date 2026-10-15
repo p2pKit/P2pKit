@@ -177,3 +177,30 @@ initial OS/installation boundary. RPC must later implement the original-handle
 verifier, constrained loading, actual import providers, continuous identical JNI
 registration, complete provider transfer and cleanup. Nothing in this isolated
 module changes custody ABI13/0x43, provider availability or release gates.
+
+## Managed JNI registration data
+
+The Java17 sample's
+[`WindowsProfileJniPlan`](../../src/jvmMain/kotlin/dev/p2pkit/sample/rpc/profile/WindowsProfileJniPlan.kt)
+prepares the fixed 23-method registration inventory. It verifies the actual
+declaring class, exact compiled instance-native descriptors/modifiers and original
+export-address observations. Bounded private snapshots prevent a verified list
+from being reread as different registration inputs. The result is immutable data,
+not permission to call an address, a registration attempt or native ownership.
+
+Its separate application-classloader check requires the actual system-loader
+class identity. A Gradle test loader, matching binary name in another loader or
+incidental FFM `FindClass` context is not a substitute. This relationship check
+does not establish Foundation's installed runtime provenance. No native method is
+invoked by preparing the plan or inspecting the declaring class.
+
+Actual registration remains unimplemented. The reviewed design direction is
+explicit `RegisterNatives` against original verified function addresses, after
+independent loading authority. Preload plus `System.load` does not pin each Java
+method to that module. JNI references and pending exceptions need a reviewed
+single-native-invocation bridge; a future native registration export requires joint
+review and exact export/build-inventory changes. `RegisterNatives` can partially
+succeed: reserve process-lifetime module/class ownership before the attempt, and
+retain it on failure without retry, unregister or unload. Profile Stop must not
+retire cached JNI code. None of these lifetime or runtime guarantees follows from
+the inert plan, and no production registration entry is enabled here.
