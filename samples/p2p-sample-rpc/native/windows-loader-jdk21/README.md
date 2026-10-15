@@ -2,8 +2,9 @@
 
 **PRODUCTION DISABLED.** This named module contains actual JDK21 preview FFM
 memory preparation and runtime-policy checks. It does not contain a trusted OS
-bootstrap, installed-directory admission, native lookup, DLL load, JNI
-registration, protected profile provider or Windows runtime qualification.
+bootstrap, installed-directory admission, native lookup, DLL load, productive JNI
+registration, protected profile provider or Windows runtime qualification. Dormant
+post-admission registration ownership and FFM call mechanics are described below.
 
 It does not replace the existing Desktop application, installer, version encoding,
 Foundation custody or publication pipeline. The ordinary Java17 compilation and
@@ -42,9 +43,11 @@ missing preview, missing/wrong native-access module, classpath execution and
 broad unnamed native access are negative controls. Missing preview/module/runtime
 may fail in the JVM before `main`; absence of a JSON record is not a PASS.
 
-No restricted operation is attempted as a way to discover permission. In
-particular, there is no `Linker.nativeLinker`, symbol/default/library lookup,
+No restricted operation is attempted as a way to discover permission. The runtime
+policy check performs no `Linker.nativeLinker`, symbol/default/library lookup,
 `System.load`, `System.loadLibrary`, address reinterpretation or Windows OS call.
+The separate dormant invocation component uses `Linker.nativeLinker` only after
+that policy check; this does not supply first-load or address authority.
 The preview native-access flag is a narrowly checked prerequisite, not DLL trust
 or an OS-account privilege grant.
 
