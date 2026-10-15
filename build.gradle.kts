@@ -1,14 +1,12 @@
+import com.android.build.gradle.tasks.BundleAar
+import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.core.JsonParser
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
 import dev.p2pkit.build.ApplicationReleaseVersion
 import dev.p2pkit.build.VerifyPublicConstantAbiTask
-import org.gradle.api.publish.PublishingExtension
-import org.gradle.api.publish.maven.MavenPublication
-import org.gradle.api.publish.maven.tasks.AbstractPublishToMaven
-import org.gradle.api.tasks.compile.JavaCompile
-import org.gradle.jvm.tasks.Jar
-import org.gradle.plugins.signing.Sign
-import org.gradle.plugins.signing.SigningExtension
-import org.gradle.api.services.BuildService
-import org.gradle.api.services.BuildServiceParameters
+import kotlinx.validation.KotlinApiBuildTask
+import kotlinx.validation.KotlinApiCompareTask
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.gradle.utils.CyclonedxUtils
 import org.cyclonedx.model.Ancestors
@@ -19,21 +17,23 @@ import org.cyclonedx.model.ExternalReference
 import org.cyclonedx.model.Hash
 import org.cyclonedx.model.Patch
 import org.cyclonedx.model.Pedigree
-import org.cyclonedx.model.Property as CyclonedxProperty
 import org.cyclonedx.parsers.BomParserFactory
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.publish.maven.tasks.AbstractPublishToMaven
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.jvm.tasks.Jar
+import org.gradle.plugins.signing.Sign
+import org.gradle.plugins.signing.SigningExtension
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-import com.android.build.gradle.tasks.BundleAar
-import com.fasterxml.jackson.annotation.JsonInclude
-import com.fasterxml.jackson.core.JsonParser
-import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.ObjectMapper
-import kotlinx.validation.KotlinApiBuildTask
-import kotlinx.validation.KotlinApiCompareTask
-import java.util.Base64
-import java.util.HexFormat
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.Base64
+import java.util.HexFormat
+import org.cyclonedx.model.Property as CyclonedxProperty
 
 // Plugin DSL dependencies resolve before the allprojects rules below exist.
 // Apply the same advisory floors to the root build classpath so build tools
@@ -160,9 +160,10 @@ fun isVersionBelow(requestedVersion: String?, minimumVersion: String): Boolean {
 // Establish Maven coordinates for every module from the single source of truth
 // in gradle.properties (GROUP / VERSION_NAME), producing artifacts at
 // io.github.apdelrahman1911:<module>:<version>.
-// AUDIT-2026-06: `maven-publish` now ships on all four library modules
-// (:p2p-core, :p2p-transport-lan, :p2p-network-provisioning-android,
-// :p2p-network-provisioning-desktop). Module names/descriptions live beside
+// `maven-publish` applies to the four existing libraries and the optional RPC
+// source module (:p2p-core, :p2p-transport-lan, :p2p-rpc,
+// :p2p-network-provisioning-android, :p2p-network-provisioning-desktop).
+// This configuration does not establish publication/readiness. Names/descriptions live beside
 // each publication; shared repository, license, developer, and SCM metadata
 // comes from buildSrc's P2pPomMetadata helper. Signing is wired centrally below.
 val canonicalReleaseVersion = ApplicationReleaseVersion.fromProperties(
@@ -207,13 +208,13 @@ allprojects {
         }
     }
 
-    // The aggregate release SBOM describes the four published libraries, not
+    // The aggregate release SBOM describes the five configured library publications, not
     // sample applications, compiler toolchains, test engines, or build-system
     // internals. Narrow inputs to one runtime graph per published module and
     // disable the direct BOM task everywhere else.
     tasks.withType(CyclonedxDirectTask::class.java).configureEach {
         val releaseConfigurations = when (project.path) {
-            ":p2p-core", ":p2p-transport-lan" -> listOf(
+            ":p2p-core", ":p2p-transport-lan", ":p2p-rpc" -> listOf(
                 "jvmRuntimeClasspath",
                 "iosArm64CompileKlibraries",
                 "iosSimulatorArm64CompileKlibraries",
@@ -240,6 +241,7 @@ allprojects {
 val androidAbiProjects = setOf(
     ":p2p-core",
     ":p2p-transport-lan",
+    ":p2p-rpc",
     ":p2p-network-provisioning-android",
 )
 
@@ -297,7 +299,7 @@ subprojects {
 // Kotlin's JVM dumper omits some ConstantValue fields even on supported public
 // owners (private companions and internal members in public file facades).
 // Inspect compiled fields rather than guessing visibility from Kotlin source.
-val jvmAbiProjects = setOf(":p2p-core", ":p2p-transport-lan", ":p2p-network-provisioning-desktop")
+val jvmAbiProjects = setOf(":p2p-core", ":p2p-transport-lan", ":p2p-rpc", ":p2p-network-provisioning-desktop")
 subprojects {
     if (path !in jvmAbiProjects) return@subprojects
     val desktop = path == ":p2p-network-provisioning-desktop"
@@ -503,7 +505,7 @@ tasks.cyclonedxBom {
     }).withPropertyName("embeddedJmdnsSources").withPathSensitivity(PathSensitivity.RELATIVE)
 
     // The plugin merges resolved Maven graphs, not privately embedded file-JAR
-    // contents. Preserve that graph, join the four-module root, and explicitly
+    // contents. Preserve that graph, join the configured library root, and explicitly
     // describe the owned modified producer rather than impersonating upstream.
     doLast {
         // Diff otherwise emits absent text as null, which is not a valid
@@ -560,6 +562,7 @@ tasks.cyclonedxBom {
                 "patches/416-reverse-domain.patch",
                 "patches/414-service-port.patch",
                 "patches/417-response-continuation.patch",
+                "patches/418-teardown-budget.patch",
             )
         ) {
             "Unexpected embedded JmDNS followup patch order or membership"
@@ -657,6 +660,7 @@ tasks.cyclonedxBom {
         val publishedModules = setOf(
             "p2p-core",
             "p2p-transport-lan",
+            "p2p-rpc",
             "p2p-network-provisioning-android",
             "p2p-network-provisioning-desktop",
         )
@@ -696,7 +700,7 @@ tasks.cyclonedxBom {
 
 // AUDIT-2026-06 / RC-readiness: wire artifact signing + a robust publish→sign
 // task dependency for every module that publishes (those applying
-// `maven-publish`). Centralized here so the four library modules stay identical
+// `maven-publish`). Centralized here so the configured library modules stay identical
 // and only their POM differs.
 //
 // Signing is required when an in-memory PGP key is supplied, or when

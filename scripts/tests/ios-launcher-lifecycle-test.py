@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Exercise the real launcher entry points; only macOS tool boundaries are fake."""
 
+import json
 import os
 import pathlib
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -112,10 +115,120 @@ class LauncherLifecycleTest(unittest.TestCase):
         return process
 
     def finish(self, process, expected=0):
-        output, _ = process.communicate(timeout=10)
+        wait_started = time.monotonic()
+        try:
+            output, _ = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired as error:
+            wait_elapsed_millis = int((time.monotonic() - wait_started) * 1000)
+            # The synthetic checkout is removed by cleanup. Preserve the last
+            # observed phase before that happens, without renewing the deadline,
+            # retrying a launcher, or treating a later exit as a passing result.
+            observed = self.timeout_diagnostics(process, error)
+            observed["waitElapsedMillis"] = wait_elapsed_millis
+            self.fail("Synthetic launcher exceeded the unchanged 10-second deadline: " +
+                      json.dumps(observed, sort_keys=True))
         self.assertEqual(expected, process.returncode, output)
         self.assertNotIn("unbound variable", output)
         return output
+
+    def timeout_diagnostics(self, process, error):
+        """Bounded synthetic-fixture observations, never live ownership proof."""
+        limit = 4096
+
+        def text_tail(value):
+            truncated = isinstance(value, (bytes, str)) and len(value) > limit
+            if isinstance(value, bytes):
+                value = value[-limit:].decode("utf-8", errors="replace")
+            value = value if isinstance(value, str) else ""
+            return {"tail": value[-limit:].replace(str(self.root), "<fixture>"),
+                    "truncated": truncated}
+
+        def read_record(path, directory=None):
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+                with os.fdopen(fd, "rb") as stream:
+                    info = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode):
+                        return {"state": "NOT_REGULAR"}
+                    if directory is not None:
+                        raw = stream.read(65)
+                        value = raw.strip()
+                        return {"state": "RECORDED" if 0 < len(raw) <= 64 and value.isdigit() else "INVALID",
+                                "pid": int(value) if 0 < len(raw) <= 64 and value.isdigit() else None}
+                    stream.seek(max(0, info.st_size - limit))
+                    result = text_tail(stream.read(limit))
+                    result["truncated"] = info.st_size > limit
+                    return {"state": "READ", **result}
+            except OSError as failure:
+                return {"state": "UNAVAILABLE", "errno": failure.errno}
+
+        snapshot = {"scope": "SYNTHETIC_TIMEOUT_OBSERVATION_NOT_OWNERSHIP_PROOF",
+                    "launchOrdinal": next((i + 1 for i, child in enumerate(self.processes)
+                                           if child is process), None),
+                    "launcherReturnCode": process.poll(), "output": text_tail(error.output),
+                    "tools": read_record(self.root / "tools.log")}
+        try:
+            guard = pathlib.Path(str(self.lock) + ".guard").lstat()
+            snapshot["guard"] = {"regular": stat.S_ISREG(guard.st_mode), "inode": guard.st_ino,
+                                 "bytes": guard.st_size, "links": guard.st_nlink}
+        except OSError as failure:
+            snapshot["guard"] = {"state": "UNAVAILABLE", "errno": failure.errno}
+        try:
+            directory = os.open(self.lock, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                snapshot["lock"] = {"state": "DIRECTORY", "owner": read_record("pid", directory),
+                                    "worker": read_record("worker", directory)}
+            finally:
+                os.close(directory)
+        except OSError as failure:
+            snapshot["lock"] = {"state": "UNAVAILABLE", "errno": failure.errno}
+        return snapshot
+
+    def test_timeout_preserves_bounded_phase_and_lock_records_without_retry_or_pass(self):
+        self.seed_lock(12345)
+        (self.lock / "worker").write_text("12346\n")
+        (self.root / "tools.log").write_text("x" * 6000 + "\nxcodebuild synthetic-build\n")
+        error = subprocess.TimeoutExpired(["bash", "scripts/run-ios-app.sh"], 10,
+                                          output=b"x" * 6000 + b"\n[ios-run] Building iOS app...\n")
+        process = mock.Mock()
+        process.communicate.side_effect = error
+        process.poll.return_value = None
+        with mock.patch.object(self, "processes", [object(), process]):
+            with self.assertRaises(AssertionError) as failed:
+                self.finish(process)
+        process.communicate.assert_called_once_with(timeout=10)
+        self.assertIn("unchanged 10-second deadline", str(failed.exception))
+        snapshot = json.loads(str(failed.exception).split(": ", 1)[1])
+        self.assertIn("[ios-run] Building iOS app...", snapshot["output"]["tail"])
+        self.assertTrue(snapshot["output"]["truncated"])
+        self.assertIn("xcodebuild synthetic-build", snapshot["tools"]["tail"])
+        self.assertTrue(snapshot["tools"]["truncated"])
+        self.assertEqual(12345, snapshot["lock"]["owner"]["pid"])
+        self.assertEqual(12346, snapshot["lock"]["worker"]["pid"])
+        self.assertEqual(2, snapshot["launchOrdinal"])
+        self.assertIsNone(snapshot["launcherReturnCode"])
+        self.assertLess(len(str(failed.exception)), 10000)
+        self.assertEqual("12345\n", (self.lock / "pid").read_text())
+        self.assertEqual("12346\n", (self.lock / "worker").read_text())
+
+    def test_timeout_diagnostics_do_not_follow_symlinks_or_block_on_fifo(self):
+        other = self.root / "unrelated"
+        other.write_text("MUST_NOT_READ_UNRELATED_CONTENT")
+        tools = self.root / "tools.log"
+        tools.symlink_to(other)
+        self.build.mkdir()
+        self.lock.symlink_to(self.root, target_is_directory=True)
+        process = mock.Mock()
+        process.poll.return_value = 0  # Even a post-deadline exit cannot erase the timeout.
+        process.communicate.side_effect = subprocess.TimeoutExpired(["synthetic"], 10)
+        with self.assertRaises(AssertionError) as failed:
+            self.finish(process)
+        self.assertNotIn("MUST_NOT_READ_UNRELATED_CONTENT", str(failed.exception))
+        tools.unlink()
+        os.mkfifo(tools)
+        observed = self.timeout_diagnostics(process, subprocess.TimeoutExpired(["synthetic"], 10))
+        self.assertEqual("NOT_REGULAR", observed["tools"]["state"])
+        self.assertTrue(self.lock.is_symlink())
 
     def wait_for_build(self, process):
         deadline = time.monotonic() + 5

@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+"""Offline private phone protocol controls; not USB, native or mobile capacity evidence."""
+import copy
+import os
+from pathlib import Path
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
+import rpc_mobile_capacity as m
+import rpc_mobile_usb as usb
+import rpc_mobile_shell_fixture as shell_fixture
+
+
+def binding(platform='Android'):
+    return dict(schema='1', scope=m.SCOPE, runLabel='mobile-test', runNonce='1' * 64,
+                hostPlatform=platform, hostSourceSha='2' * 40, hostArtifactSha256='3' * 64)
+
+
+def telemetry(platform='Android', sequence=1, uptime=1000):
+    return (binding(platform) | m.RESOURCE_KINDS[platform] | dict(clock='host-run-monotonic') |
+            dict.fromkeys(m.NUMBERS, '0') | dict(sequence=str(sequence), uptimeMillis=str(uptime),
+                                              residentBytes='1048576', nativeThreads='12'))
+
+
+class ProtocolControls(unittest.TestCase):
+    def test_exact_bounded_ascii_roundtrip_and_no_duplicate_or_empty_fields(self):
+        original = binding()
+        self.assertEqual(m.parse(m.encode(original)), original)
+        for raw in (b'', b'\n', b'a=\n', b'a=b\na=c\n', b'a=b\r\n', b'a=\x00\n', b'a=\xff',
+                    b'1a=b', b'a=' + b'b' * m.RECORD_LIMIT, b' a=b', b'a-b=c'):
+            with self.subTest(raw=raw[:32]), self.assertRaises(ValueError):
+                m.parse(raw)
+        for bad in ({'a': 'b\nc=d'}, {'a': True}, {1: 'b'}):
+            with self.assertRaises(ValueError):
+                m.encode(bad)
+
+    def test_source_artifact_platform_and_nonce_are_all_binding_fields(self):
+        for platform in ('Android', 'Ios'):
+            self.assertEqual(m.binding(binding(platform)), binding(platform))
+        for key, value in (('schema', '2'), ('scope', 'public'), ('runLabel', '../test'),
+                           ('hostPlatform', 'Jvm'), ('hostSourceSha', 'main'), ('runNonce', 'guess'),
+                           ('hostArtifactSha256', '4' * 63), ('private', 'do-not-export')):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                m.binding(binding() | {key: value})
+
+    def test_readiness_binds_real_installed_artifact_kind_and_selected_endpoint(self):
+        for platform in ('Android', 'Ios'):
+            p = m.Protocol(binding(platform), '192.168.14.2', 48123)
+            ready = binding(platform) | dict(fingerprint='p2f1-' + 'a' * 52, address='192.168.14.2', port='48123',
+                compiledSourceMatched='true', artifactKind=m.ARTIFACT_KINDS[platform])
+            self.assertEqual(p.ready(ready), ready)
+            for key, bad in (('hostSourceSha', '4' * 40), ('hostArtifactSha256', '4' * 64), ('runNonce', '4' * 64),
+                             ('address', '127.0.0.1'), ('port', '48124'), ('compiledSourceMatched', 'false'),
+                             ('artifactKind', 'caller-supplied'), ('fingerprint', 'p2f1-' + 'a' * 51),
+                             ('fingerprint', True), ('assumedTrust', 'true')):
+                with self.subTest(platform=platform, key=key), self.assertRaises(ValueError):
+                    p.ready(ready | {key: bad})
+
+    def test_telemetry_has_actual_phone_collector_metadata_not_fake_jvm_fields(self):
+        for platform in ('Android', 'Ios'):
+            p = m.Protocol(binding(platform), '192.168.14.2', 48123)
+            row = telemetry(platform)
+            self.assertEqual(p.telemetry(row), {k: int(row[k]) for k in m.NUMBERS})
+            for key, bad in (('jvmThreads', '1'), ('cpuSource', 'jvm'), ('nativeThreads', '0'), ('residentBytes', '0'),
+                             ('clock', 'generator'), ('cpuNanos', '1'), ('hostPlatform', 'Jvm'),
+                             ('queued', '257'), ('connected', '129'), ('running', '129'), ('records', '131073'),
+                             ('payloadBytes', str(64 * 1048576 + 1)), ('completed', '-1'), ('accepted', '01'),
+                             ('cpuNanos', str(2 ** 63)), ('sequence', '3000'), ('sequence', True)):
+                with self.subTest(platform=platform, key=key), self.assertRaises(ValueError):
+                    p.telemetry(row | {key: bad})
+
+    def test_repeated_slot_never_advances_freshness_or_regresses_counters(self):
+        p = m.Protocol(binding(), '192.168.14.2', 48123)
+        row = telemetry() | dict(accepted='1', completed='1', cpuNanos='1000000')
+        p.telemetry(row)
+        self.assertIsNone(p.telemetry(row))
+        for update in (dict(sequence='0'), dict(sequence='1', accepted='2'), dict(sequence='2'),
+                       dict(sequence='2', uptimeMillis='2000', accepted='0'),
+                       dict(sequence='2', uptimeMillis='2000', cpuNanos='0')):
+            with self.assertRaises(ValueError):
+                p.telemetry(row | update)
+        next_row = row | dict(sequence='2', uptimeMillis='2000', accepted='2', completed='2')
+        self.assertEqual(p.telemetry(next_row)['completed'], 2)
+
+    def test_controlled_stop_is_exact_and_interrupted_cleanup_is_never_a_pass(self):
+        p = m.Protocol(binding(), '192.168.14.2', 48123)
+        self.assertEqual(p.stop(), binding() | dict(action='stop'))
+        row = binding() | dict(runtimeClosed='true', clientPinsRemoved='true', controlHealthy='true')
+        p.closed(row)
+        for key, bad in (('runtimeClosed', 'false'), ('clientPinsRemoved', 'false'), ('controlHealthy', 'false'),
+                         ('controlHealthy', True), ('runNonce', '4' * 64), ('assumedCleanup', 'true')):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                p.closed(row | {key: bad})
+
+    def test_post_retention_is_actual_phone_idle_counters_not_process_exit_or_rss_reset(self):
+        p = m.Protocol(binding(), '192.168.14.2', 48123)
+        before = p.telemetry(telemetry() | dict(accepted='20', completed='20', records='20', payloadBytes='40960'))
+        after = p.telemetry(telemetry(sequence=67, uptime=66000) | dict(accepted='20', completed='20'))
+        self.assertEqual(m.retention(before, after)['observedHostMillis'], 65000)
+        for key, bad in (('uptimeMillis', 65999), ('records', 1), ('payloadBytes', 1), ('running', 1),
+                         ('connected', 1), ('queued', 1), ('completed', 21), ('sequence', 1), ('residentBytes', 0)):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                m.retention(before, after | {key: bad})
+        with self.assertRaises(ValueError):
+            m.retention(before | dict(connected=1), after)
+        with self.assertRaises(ValueError):
+            m.retention(before, after | dict(jvmThreads=1))
+
+    def test_android_usb_is_explicit_paired_wired_not_emulator_network_or_automatic(self):
+        serial = 'TEST_ONLY_SERIAL'
+        original = 'List of devices attached\n' + serial + ' device usb:1-2 product:test transport_id:1\n'
+        m.android_usb_inventory(original, serial)
+        for bad in (original.replace(' usb:1-2', ''), original.replace(' device ', ' unauthorized '),
+                    original + original.splitlines()[1] + '\n', original.replace('usb:1-2', 'usb:1-2 usb:2-3'),
+                    original.replace(serial, 'emulator-5554'), original.replace(serial, '192.168.1.2:5555')):
+            with self.assertRaises(ValueError):
+                m.android_usb_inventory(bad, serial)
+        for selected in ('emulator-5554', '192.168.1.2:5555', '../device', ''):
+            with self.assertRaises(ValueError):
+                m.android_usb_inventory(original, selected)
+
+    def test_authorization_wait_observations_never_admit_a_device(self):
+        raw = 'List of devices attached\nTEST_DEVICE unauthorized usb:1-2\n'
+        self.assertEqual(m.android_usb_state(raw, 'TEST_DEVICE'), 'unauthorized')
+        self.assertEqual(m.android_usb_state(raw.replace('unauthorized', 'offline'), 'TEST_DEVICE'), 'offline')
+        self.assertEqual(m.android_usb_state('List of devices attached\n', 'TEST_DEVICE'), 'missing')
+        for observed in (raw, raw.replace('unauthorized', 'offline'), 'List of devices attached\n'):
+            with self.assertRaises(ValueError):
+                m.android_usb_inventory(observed, 'TEST_DEVICE')
+
+    def test_ios_details_cannot_assume_unknown_pairing_transport_or_device_identity(self):
+        value = dict(result=dict(devices=[dict(identifier='TEST_ONLY_DEVICE', connectionProperties=dict(
+            transportType='wired', pairingState='paired'), hardwareProperties=dict(platform='iOS'))]))
+        m.ios_usb_details(value, 'TEST_ONLY_DEVICE')
+        for key, bad in (('transportType', 'network'), ('transportType', 'tunnel'), ('pairingState', 'unpaired')):
+            changed = copy.deepcopy(value)
+            changed['result']['devices'][0]['connectionProperties'][key] = bad
+            with self.assertRaises(ValueError):
+                m.ios_usb_details(changed, 'TEST_ONLY_DEVICE')
+        for bad in ({}, dict(result={}), dict(result=[]), dict(result=dict(device=dict(identifier='OTHER')))):
+            with self.assertRaises(ValueError):
+                m.ios_usb_details(bad, 'TEST_ONLY_DEVICE')
+        with self.assertRaises(ValueError):
+            m.ios_usb_details(dict(result=dict(devices=value['result']['devices'] * 2)), 'TEST_ONLY_DEVICE')
+
+    def test_mac_available_pages_are_not_fabricated_phone_rss_or_linux_balloon_counters(self):
+        raw = ('Mach Virtual Memory Statistics: (page size of 16384 bytes)\n'
+               'Pages free: 10.\nPages inactive: 20.\nPages speculative: 5.\nPages active: 50.\n')
+        self.assertEqual(m.parse_vm_stat(raw, 100 * 16384), 35 * 16384)
+        for bad in (raw.replace('16384', '1024'), raw + 'Pages free: 1.\n', raw.replace('Pages free', 'free')):
+            with self.assertRaises(ValueError):
+                m.parse_vm_stat(bad, 100 * 16384)
+        with self.assertRaises(ValueError):
+            m.parse_vm_stat(raw, 1)
+
+
+class AndroidUsbControls(unittest.TestCase):
+    """Real bounded POSIX fixture files/processes, never ADB, Android, RPC or capacity execution."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='rpc-shell-primitives-')
+        self.addCleanup(temporary.cleanup)
+        self.shell_environment = shell_fixture.install(Path(temporary.name))
+
+    def test_adb_cli_feature_lines_are_not_the_internal_comma_delimited_wire_reply(self):
+        for raw in (b'cmd\nshell_v2\nstat_v2\n', b'shell_v2\ncmd\n', b'shell_v2\n', b'shell_v2'):
+            with self.subTest(raw=raw):
+                self.assertTrue(usb.android_shell_v2_supported(raw))
+
+    def test_shell_v2_feature_admission_rejects_malformed_oversized_or_ambiguous_lists(self):
+        for raw in (b'', b'cmd\n', b'cmd,shell_v2\n', b'shell_v2,cmd\n', b'cmd\nshell_v20\n',
+                    b'cmd\nnot_shell_v2\n', b'shell_v2\nshell_v2\n', b'\nshell_v2\n', b'shell_v2\n\n',
+                    b' shell_v2\n', b'shell_v2 \n', b'shell_v2\x00\n', b'\xff\nshell_v2\n',
+                    b'shell_v2\n' + b'x' * 129 + b'\n', b'shell_v2\n' + b'x' * m.RECORD_LIMIT,
+                    b'shell_v2\n' + b''.join(f'feature_{n}\n'.encode() for n in range(256)),
+                    'shell_v2\n', None, bytearray(b'shell_v2\n')):
+            with self.subTest(raw=str(raw)[:48]):
+                self.assertFalse(usb.android_shell_v2_supported(raw))
+
+    def test_exit_stage_diagnostic_preserves_original_success_failure_and_optional_codes(self):
+        for code in (0, 1, 2, 44, 45):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                script = usb.android_script('test-run', 'prepare').replace(
+                    'rpc_stage=uid\n', f'rpc_stage=uid\nexit {code}\n', 1)
+                result = subprocess.run(['/bin/sh', '-c', script], cwd=temporary, env=self.shell_environment,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(usb.android_shell_failure_stage(result.stderr), 'uid' if code else None)
+
+    def test_actual_bad_directory_mode_is_reported_without_repair_or_changed_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'no_backup').mkdir(mode=0o700)
+            base = root / 'no_backup/rpc-capacity'
+            base.mkdir(mode=0o755)
+            base.chmod(0o755)
+            result = self.run_script(root, 'prepare', data=b'schema=1\n')
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(usb.android_shell_failure_stage(result.stderr), 'directory-mode')
+            self.assertEqual(base.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(list(base.iterdir()), [])
+
+    def test_stage_parser_never_exports_stderr_values_or_unknown_markers(self):
+        self.assertIsNone(usb.android_shell_failure_stage(b'PRIVATE_VALUE without a fixed marker'))
+        for stage in usb.ANDROID_SHELL_STAGES:
+            raw = b'PRIVATE_PATH_OR_VALUE\nP2PKIT_RPC_USB_STAGE=' + stage.encode() + b'\n'
+            self.assertEqual(usb.android_shell_failure_stage(raw), stage)
+        for bad in (b'P2PKIT_RPC_USB_STAGE=PRIVATE\n', b'P2PKIT_RPC_USB_STAGE=uid extra\n',
+                    b'P2PKIT_RPC_USB_STAGE=uid\n' * 5, b'x' * 262145, 'not bytes'):
+            with self.subTest(bad=str(bad)[:40]), self.assertRaises(ValueError):
+                usb.android_shell_failure_stage(bad)
+
+    def run_script(self, directory, operation, name=None, data=b''):
+        raw = shell_fixture.script(usb.android_script('test-run', operation, name), self.shell_environment)
+        return subprocess.run(['/bin/sh', '-c', raw], cwd=directory, env=self.shell_environment,
+            input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+
+    def test_api24_without_stat_dereference_still_validates_real_open_file_metadata(self):
+        unavailable = subprocess.run(['stat', '-Lc', '%d:%i', '/dev/null'], env=self.shell_environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+        self.assertEqual(unavailable.returncode, 1)
+        self.assertTrue(unavailable.stderr.startswith(b'usage: stat [-f] [-c FORMAT] FILE...\n'))
+        self.assertTrue(unavailable.stderr.endswith(b'\nstat: Unknown option Lc\n'))
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            result = self.run_script(base, 'read', 'inbox.txt')
+            self.assertEqual((result.returncode, result.stdout), (0, b'schema=1\n'), result.stderr)
+            self.assertEqual((run / 'inbox.txt').stat().st_mode & 0o777, 0o600)
+
+    def test_portable_stat_fixture_reports_actual_kernel_inode_values(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'record'
+            path.write_bytes(b'actual fixture bytes')
+            path.chmod(0o600)
+            info = path.lstat()
+            expected = ':'.join(map(str, (info.st_dev, info.st_ino, info.st_size, int(info.st_mtime)))) + ':600:' + \
+                str(info.st_uid) + ':' + str(info.st_nlink) + '\n'
+            result = subprocess.run(['stat', '-c', '%d:%i:%s:%Y:%a:%u:%h', str(path)], env=self.shell_environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual((result.returncode, result.stdout.decode(), result.stderr), (0, expected, b''))
+
+    def test_descriptor_metadata_is_pinned_to_open_inode_not_a_reopened_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            script = usb.android_script('test-run', 'read', 'inbox.txt').replace('rpc_stage=read-descriptor\n',
+                'rpc_stage=read-descriptor\n'
+                'mv no_backup/rpc-capacity/test-run/inbox.txt no_backup/rpc-capacity/test-run/held.txt\n'
+                "printf 'forged=2\\n' > no_backup/rpc-capacity/test-run/inbox.txt\n", 1)
+            script = shell_fixture.script(script, self.shell_environment)
+            result = subprocess.run(['/bin/sh', '-c', script], cwd=base, env=self.shell_environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual((result.returncode, result.stdout), (0, b'schema=1\n'), result.stderr)
+            self.assertNotEqual((run / 'held.txt').stat().st_ino, (run / 'inbox.txt').stat().st_ino)
+            self.assertEqual((run / 'inbox.txt').read_bytes(), b'forged=2\n')
+
+    def test_failed_descriptor_process_cannot_be_admitted_from_its_valid_stdout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            self.fixture(base)
+            executable = Path(self.shell_environment['CLASSPATH']).parent / 'fixture-tools/app_process'
+            with executable.open('a') as stream:
+                stream.write('\nraise SystemExit(1)\n')
+            result = self.run_script(base, 'read', 'inbox.txt')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b'')
+
+    def test_package_path_bootstrap_rejects_splits_injection_and_foreign_locations(self):
+        tools = Path(self.shell_environment['CLASSPATH']).parent / 'fixture-tools'
+        programs = {
+            'pm': f'#!{sys.executable}\nimport os\nprint(os.environ["FIXTURE_PACKAGE_PATH"])\n',
+            'run-as': '#!/bin/sh\nexit 73\n',
+        }
+        for name, raw in programs.items():
+            path = tools / name
+            path.write_text(raw)
+            path.chmod(0o700)
+        command = shlex.split(usb.android_shell('test-run', 'prepare')[-1])
+        for path, expected in (
+                ('package:/data/app/dev.p2pkit.sample.android-1/base.apk', 73),
+                ('package:/data/app/~~ABC==/dev.p2pkit.sample.android-XYZ/base.apk', 73),
+                ('package:/data/app/a/base.apk\npackage:/data/app/a/split.apk', 1),
+                ('package:/data/app/../foreign/base.apk', 1), ('package:/data/app/./foreign/base.apk', 1),
+                ('package:/mnt/expand/foreign/base.apk', 1), ('package:/data/app/a;false/base.apk', 1),
+                ('package:/data/app/$(false)/base.apk', 1), ('package:/data/app/a/split.apk', 1)):
+            with self.subTest(path=path):
+                result = subprocess.run(command, env=self.shell_environment | dict(FIXTURE_PACKAGE_PATH=path),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (expected, b'', b''))
+
+    def fixture(self, path):
+        (path / 'no_backup').mkdir(mode=0o700)
+        prepared = self.run_script(path, 'prepare', data=b'schema=1\n')
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        return path / 'no_backup/rpc-capacity/test-run'
+
+    def test_fixed_shell_v2_grammar_preserves_stdin_exit_code_and_exact_script(self):
+        for operation, name in (('prepare', None), ('stop', None), ('read', 'telemetry.txt')):
+            args = usb.android_shell('test-run', operation, name)
+            self.assertEqual(args[:-1], ['shell', '-T', '-e', 'none'])
+            command = shlex.split(args[-1])
+            self.assertEqual(command[:-1], ['sh', '-c'])
+            self.assertIn('apk=$(pm path ' + usb.ANDROID_PACKAGE + ')', command[-1])
+            self.assertIn('export CLASSPATH="$apk"', command[-1])
+            self.assertIn('exec run-as ' + usb.ANDROID_PACKAGE + ' sh -c ' +
+                          shlex.quote(usb.android_script('test-run', operation, name)), command[-1])
+        for label in ('../directory', 'label;false', 'label\nfalse', '', 'A' * 65):
+            with self.assertRaises(ValueError):
+                usb.android_shell(label, 'prepare')
+        for name in ('../inbox.txt', 'not-allowed.txt'):
+            with self.assertRaises(ValueError):
+                usb.android_shell('test-run', 'read', name)
+
+    def test_immutable_private_input_publication_read_missing_and_no_overwrite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            self.assertEqual((run / 'inbox.txt').read_bytes(), b'schema=1\n')
+            self.assertEqual((run / 'inbox.txt').stat().st_mode & 0o777, 0o600)
+            self.assertEqual((run / 'inbox.txt').stat().st_nlink, 1)
+            marker = run / '.complete-inbox.txt'
+            self.assertEqual(marker.read_bytes(), b'')
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(marker.stat().st_nlink, 1)
+            self.assertEqual(self.run_script(base, 'read', 'inbox.txt').stdout, b'schema=1\n')
+            missing = self.run_script(base, 'read', 'ready.txt')
+            self.assertEqual((missing.returncode, missing.stdout), (44, b''))
+            stopped = self.run_script(base, 'stop', data=b'action=stop\n')
+            self.assertEqual(stopped.returncode, 0, stopped.stderr)
+            self.assertNotEqual(self.run_script(base, 'stop', data=b'action=changed\n').returncode, 0)
+            self.assertEqual((run / 'stop.txt').read_bytes(), b'action=stop\n')
+            self.assertFalse(list(run.glob('.usb-*')))
+
+    def test_stop_is_not_visible_until_the_complete_input_has_arrived(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            script = shell_fixture.script(usb.android_script('test-run', 'stop'), self.shell_environment)
+            child = subprocess.Popen(['/bin/sh', '-c', script], cwd=base, env=self.shell_environment,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                child.stdin.write(b'action=')
+                child.stdin.flush()
+                deadline = time.monotonic() + 3
+                while not (run / 'stop.txt').exists() or (run / 'stop.txt').stat().st_size == 0:
+                    self.assertIsNone(child.poll())
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.01)
+                self.assertFalse((run / '.complete-stop.txt').exists())
+                incomplete = self.run_script(base, 'read', 'stop.txt')
+                self.assertEqual((incomplete.returncode, incomplete.stdout), (44, b''))
+            finally:
+                child.stdin.write(b'stop\n')
+                child.stdin.close()
+                child.wait(timeout=5)
+                out, err = child.stdout.read(), child.stderr.read()
+                child.stdout.close()
+                child.stderr.close()
+            self.assertEqual(child.returncode, 0, err)
+            self.assertEqual(out, b'')
+            self.assertEqual((run / 'stop.txt').read_bytes(), b'action=stop\n')
+            self.assertEqual((run / '.complete-stop.txt').read_bytes(), b'')
+
+    def test_bad_file_types_links_modes_and_oversized_inputs_are_not_imported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            self.assertNotEqual(self.run_script(base, 'stop', data=b'x' * 16385).returncode, 0)
+            self.assertEqual((run / 'stop.txt').read_bytes(), b'x' * 16385)  # Failed bytes retained, not reclaimed.
+            self.assertFalse((run / '.complete-stop.txt').exists())
+            self.assertEqual(self.run_script(base, 'read', 'stop.txt').returncode, 44)
+            self.assertNotEqual(self.run_script(base, 'stop', data=b'action=stop\n').returncode, 0)
+            original = run / 'inbox.txt'
+            target = base / 'unrelated'
+            target.write_bytes(b'PRESERVE_FIXTURE')
+            link = run / 'ready.txt'
+            (run / '.complete-ready.txt').touch(mode=0o600)
+            link.symlink_to(target)
+            self.assertNotEqual(self.run_script(base, 'read', 'ready.txt').returncode, 0)
+            self.assertEqual(target.read_bytes(), b'PRESERVE_FIXTURE')
+            link.unlink()
+            os.link(original, link)
+            self.assertNotEqual(self.run_script(base, 'read', 'inbox.txt').returncode, 0)
+            link.unlink()
+            original.chmod(0o640)
+            self.assertNotEqual(self.run_script(base, 'read', 'inbox.txt').returncode, 0)
+
+    def test_sealed_missing_data_bad_markers_and_orphans_remain_invalid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            marker = run / '.complete-stop.txt'
+            marker.touch(mode=0o600)
+            self.assertNotEqual(self.run_script(base, 'read', 'stop.txt').returncode, 0)
+            self.assertNotEqual(self.run_script(base, 'stop', data=b'action=stop\n').returncode, 0)
+            self.assertFalse((run / 'stop.txt').exists())
+            marker.unlink()
+            self.assertEqual(self.run_script(base, 'stop', data=b'action=stop\n').returncode, 0)
+            marker.write_bytes(b'NOT-EMPTY')
+            self.assertNotEqual(self.run_script(base, 'read', 'stop.txt').returncode, 0)
+            marker.write_bytes(b'')
+            marker.chmod(0o640)
+            self.assertNotEqual(self.run_script(base, 'read', 'stop.txt').returncode, 0)
+            marker.unlink()
+            marker.symlink_to(run / '.complete-inbox.txt')
+            self.assertNotEqual(self.run_script(base, 'read', 'stop.txt').returncode, 0)
+            marker.unlink()
+            os.link(run / '.complete-inbox.txt', marker)
+            self.assertNotEqual(self.run_script(base, 'read', 'stop.txt').returncode, 0)
+            marker.unlink()
+            os.mkfifo(marker, 0o600)
+            self.assertNotEqual(self.run_script(base, 'read', 'stop.txt').returncode, 0)
+
+    def test_empty_publication_stays_unsealed_and_cannot_be_retried(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            self.assertNotEqual(self.run_script(base, 'stop', data=b'').returncode, 0)
+            self.assertFalse((run / '.complete-stop.txt').exists())
+            self.assertEqual(self.run_script(base, 'read', 'stop.txt').returncode, 44)
+            self.assertNotEqual(self.run_script(base, 'stop', data=b'action=stop\n').returncode, 0)
+            self.assertEqual((run / 'stop.txt').read_bytes(), b'')
+
+    def test_concurrent_publishers_have_one_winner_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            (base / 'input').write_bytes(b'action=stop\n')
+            inputs = [(base / 'input').open('rb') for _ in range(2)]
+            script = shell_fixture.script(usb.android_script('test-run', 'stop'), self.shell_environment)
+            children = [subprocess.Popen(['/bin/sh', '-c', script], cwd=base, env=self.shell_environment,
+                stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for source in inputs]
+            try:
+                for child in children:
+                    child.wait(timeout=5)
+                self.assertEqual(sum(child.returncode == 0 for child in children), 1)
+            finally:
+                for child in children:
+                    child.stdout.close()
+                    child.stderr.close()
+                for source in inputs:
+                    source.close()
+            self.assertEqual(self.run_script(base, 'read', 'stop.txt').stdout, b'action=stop\n')
+            self.assertEqual((run / 'stop.txt').read_bytes(), b'action=stop\n')
+
+    def test_failed_provision_retains_stop_obligation_and_cannot_repeat_publication(self):
+        control = usb.AndroidUsb(Mock(), Path('/NOT_EXECUTED'), Path('/NOT_EXECUTED/adb'),
+                                 'TEST_DEVICE', 'test-run')
+        control.authorized = True
+        published = []
+        def failed_after_publication(label, arguments, **options):
+            published.append((label, arguments, options['data']))
+            raise RuntimeError('synthetic late failure after sealed input publication')
+        control.adb_command = Mock(side_effect=failed_after_publication)
+        with self.assertRaisesRegex(RuntimeError, 'after sealed'):
+            control.provision(b'schema=1\n')
+        self.assertTrue(control.provisioned, 'Potentially published input still requires exact-run Stop')
+        with self.assertRaises(ValueError):
+            control.provision(b'schema=1\n')
+        self.assertEqual(len(published), 1)
+        control.adb_command = Mock(return_value=(0, b''))
+        stop = m.encode(binding() | dict(action='stop'))
+        control.stop(stop)
+        control.adb_command.assert_called_once_with('android-stop-private',
+            ['-s', 'TEST_DEVICE', *usb.android_shell('test-run', 'stop')], data=stop)
+
+    def test_malformed_provision_cannot_create_a_stop_obligation_or_call_adb(self):
+        control = usb.AndroidUsb(Mock(), Path('/NOT_EXECUTED'), Path('/NOT_EXECUTED/adb'),
+                                 'TEST_DEVICE', 'test-run')
+        control.authorized = True
+        control.adb_command = Mock()
+        with self.assertRaises(ValueError):
+            control.provision(b'')
+        self.assertFalse(control.provisioned)
+        control.adb_command.assert_not_called()
+
+    def test_failed_stop_preserves_uncertain_publication_instead_of_claiming_retirement(self):
+        control = usb.AndroidUsb(Mock(), Path('/NOT_EXECUTED'), Path('/NOT_EXECUTED/adb'),
+                                 'TEST_DEVICE', 'test-run')
+        control.authorized = True
+        control.adb_command = Mock(side_effect=RuntimeError('synthetic command failure'))
+        with self.assertRaises(RuntimeError):
+            control.provision(b'schema=1\n')
+        self.assertTrue(control.provisioned)
+        with self.assertRaises(RuntimeError):
+            control.stop(m.encode(binding() | dict(action='stop')))
+        self.assertTrue(control.provisioned)
+        self.assertFalse(control.closed)
+        self.assertEqual(control.adb_command.call_count, 2)
+
+    def test_new_adb_keys_are_expected_under_only_the_new_home_dot_android(self):
+        with tempfile.TemporaryDirectory(prefix='rpc-usb-') as temporary:
+            directory = Path(temporary)
+            commands = Mock(env={'HOME': '/UNRELATED', 'ANDROID_USER_HOME': '/UNRELATED', 'ADB_VENDOR_KEYS': '/UNRELATED'})
+            control = usb.AndroidUsb(commands, directory, Path('/NOT_EXECUTED/adb'), 'TEST_DEVICE', 'test-run')
+            control.verify = Mock()
+            sock = socket.socket(socket.AF_UNIX)
+            def launch(argv, **options):
+                self.assertEqual(options['env']['HOME'], str(directory / 'adb-home'))
+                self.assertEqual(options['env']['ANDROID_USER_HOME'], str(directory / 'adb-home/.android'))
+                self.assertNotIn('ADB_VENDOR_KEYS', options['env'])
+                self.assertEqual(options['env']['ADB_MDNS_AUTO_CONNECT'], '0')
+                for name in ('adbkey', 'adbkey.pub'):
+                    path = directory / 'adb-home/.android' / name
+                    path.write_bytes(b'OFFLINE-NOT-A-KEY')
+                    path.chmod(0o600)
+                sock.bind(str(directory / 'adb.sock'))
+                return Mock(poll=Mock(return_value=None), wait=Mock(return_value=0))
+            try:
+                with patch.object(usb.subprocess, 'Popen', side_effect=launch):
+                    control.start()
+                self.assertEqual({p.parent for p in control.key_identities}, {directory / 'adb-home/.android'})
+                self.assertFalse(control.authorized)
+                control.verify.assert_not_called()
+                control.server.poll.return_value = 0
+                result = control.close()
+                self.assertTrue(result['testHostKeysRetired'])
+                self.assertFalse(result['deviceUsbAuthorizationRevoked'])
+                self.assertEqual(list(control.home.iterdir()), [])
+            finally:
+                sock.close()
+                if control.log is not None and not control.log.closed:
+                    control.log.close()
+
+    def test_unauthorized_wait_is_before_import_and_cannot_admit_network_or_legacy_shell(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            control = usb.AndroidUsb(Mock(), Path(temporary), Path('/NOT_EXECUTED/adb'), 'TEST_DEVICE', 'test-run')
+            with self.assertRaises(ValueError):
+                control.provision(b'schema=1\n')
+            control.started = True
+            control.adb_command = Mock(side_effect=[(0, b'TEST_DEVICE unauthorized usb:1-2\n'),
+                (0, b'TEST_DEVICE device usb:1-2\n'), (0, b'TEST_DEVICE device usb:1-2\n'),
+                (0, b'cmd\nshell_v2\nstat_v2\n'), (0, b'0\n')])
+            with patch.object(usb.time, 'sleep'):
+                control.await_authorization()
+            self.assertTrue(control.authorized)
+            self.assertEqual(control.adb_command.call_count, 5)
+            control.adb_command = Mock(side_effect=[(0, b'TEST_DEVICE device usb:1-2\n'), (0, b'cmd\n')])
+            with self.assertRaises(ValueError):
+                control.verify()
+
+    def test_partial_start_cleanup_has_defined_state_and_never_deletes_unknown_keys(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            control = usb.AndroidUsb(Mock(), Path(temporary), Path('/NOT_EXECUTED/adb'), 'TEST_DEVICE', 'test-run')
+            self.assertTrue(control.close()['privateServerExited'])
+        with tempfile.TemporaryDirectory() as temporary:
+            control = usb.AndroidUsb(Mock(), Path(temporary), Path('/NOT_EXECUTED/adb'), 'TEST_DEVICE', 'test-run')
+            control.home.mkdir(parents=True)
+            (control.home / 'unknown').write_bytes(b'PRESERVE_FIXTURE')
+            with self.assertRaises(ValueError):
+                control.close()
+            self.assertEqual((control.home / 'unknown').read_bytes(), b'PRESERVE_FIXTURE')
+
+    def test_telemetry_reobservation_shares_one_budget_instead_of_tripling_freshness(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            control = usb.AndroidUsb(Mock(), Path(temporary), Path('/NOT_EXECUTED/adb'), 'TEST_DEVICE', 'test-run')
+            control.provisioned = True
+            control.adb_command = Mock(side_effect=[(45, b''), (0, b'sequence=2\n')])
+            with patch.object(usb.time, 'monotonic', side_effect=[0, 0, 2]):
+                self.assertEqual(control.read('telemetry.txt'), {'sequence': '2'})
+            self.assertEqual([c.kwargs['timeout'] for c in control.adb_command.call_args_list], [4, 2])
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

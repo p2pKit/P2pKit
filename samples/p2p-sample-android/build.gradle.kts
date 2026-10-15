@@ -67,6 +67,9 @@ androidComponents {
 }
 
 dependencies {
+    // RPC is embedded in the existing app's distributed debug variant. The release
+    // variant intentionally keeps its no-RPC adapter; no variant migration is implied.
+    debugImplementation(project(":p2p-sample-rpc"))
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-android"))

@@ -2,6 +2,9 @@ package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.PayloadBudget
+import dev.p2pkit.core.PayloadLease
+import dev.p2pkit.core.reserveOrThrow
 
 /**
  * Collects [Frame]s for the same [MessageId] until all chunks have arrived,
@@ -24,7 +27,8 @@ import dev.p2pkit.core.P2pMessage
 internal class Reassembler(
     private val clock: () -> Long,
     private val reassemblyTimeoutMillis: Long = ProtocolConstants.DEFAULT_REASSEMBLY_TIMEOUT_MS,
-    private val sessionState: ProtocolSessionState? = null
+    private val sessionState: ProtocolSessionState? = null,
+    private val payloadBudget: PayloadBudget? = null
 ) {
 
     private data class Pending(
@@ -35,7 +39,8 @@ internal class Reassembler(
         val chunks: MutableMap<Int, ByteArray>,
         val firstSeenMillis: Long,
         var lastSeenMillis: Long,
-        var bufferedBytes: Long = 0
+        var bufferedBytes: Long = 0,
+        val leases: MutableList<PayloadLease> = mutableListOf()
     )
 
     private val pending: MutableMap<MessageId, Pending> = mutableMapOf()
@@ -47,6 +52,22 @@ internal class Reassembler(
      * [ProtocolConstants.MAX_TOTAL_PENDING_BYTES] (AUDIT-2026-06 fix).
      */
     private var totalPendingBytes: Long = 0
+    private var completedLease: PayloadLease? = null
+
+    fun takeCompletedLease(): PayloadLease? = completedLease.also { completedLease = null }
+
+    fun close() {
+        pending.keys.toList().forEach(::removePending)
+        completedLease?.release()
+        completedLease = null
+    }
+
+    private fun maximumBytes(envelope: Boolean): Long {
+        val restricted = sessionState?.restrictedApplicationBytes
+        if (restricted != null) return restricted.toLong() + if (envelope) 4_096 else 0
+        return if (envelope) ProtocolConstants.MAX_APP_MESSAGE_ENVELOPE_BYTES.toLong()
+        else ProtocolConstants.MAX_PAYLOAD_BYTES
+    }
 
     /**
      * Feed one DATA frame. Returns the completed [P2pMessage] when its final
@@ -68,18 +89,16 @@ internal class Reassembler(
         // MAX_PAYLOAD_BYTES and MAX_FRAME_PAYLOAD_BYTES would bypass the cap
         // the multi-chunk path enforces via bufferedBytes (AUDIT-2026-06 fix).
         if (frame.totalChunks == 1) {
-            val maximum = if (frame.isEnvelope) {
-                ProtocolConstants.MAX_APP_MESSAGE_ENVELOPE_BYTES.toLong()
-            } else {
-                ProtocolConstants.MAX_PAYLOAD_BYTES
-            }
+            val maximum = maximumBytes(frame.isEnvelope)
             if (frame.payload.size.toLong() > maximum) {
                 throw P2pError.ProtocolError(
                     "single-frame message ${frame.payload.size} exceeds " +
                         "maximum $maximum"
                 )
             }
-            return decodePayload(frame.payload, frame.isText, frame.isEnvelope, frame.messageId)
+            return decodeOwned(frame.payload.size) {
+                decodePayload(frame.payload, frame.isText, frame.isEnvelope, frame.messageId)
+            }
         }
 
         // Untrusted-input guards (frame.totalChunks is peer-controlled):
@@ -92,7 +111,9 @@ internal class Reassembler(
             )
         }
         if (frame.messageId !in pending &&
-            pending.size >= ProtocolConstants.MAX_PENDING_REASSEMBLIES
+            pending.size >= (if (sessionState?.restrictedApplicationBytes == null) {
+                ProtocolConstants.MAX_PENDING_REASSEMBLIES
+            } else 8)
         ) {
             throw P2pError.ProtocolError(
                 "Too many concurrent partial messages (${pending.size}); " +
@@ -152,11 +173,7 @@ internal class Reassembler(
         // aggregate allocation.
         state.bufferedBytes += frame.payload.size.toLong()
         totalPendingBytes += frame.payload.size.toLong()
-        val messageMaximum = if (state.isEnvelope) {
-            ProtocolConstants.MAX_APP_MESSAGE_ENVELOPE_BYTES.toLong()
-        } else {
-            ProtocolConstants.MAX_PAYLOAD_BYTES
-        }
+        val messageMaximum = maximumBytes(state.isEnvelope)
         if (state.bufferedBytes > messageMaximum) {
             removePending(frame.messageId)
             throw P2pError.ProtocolError(
@@ -164,7 +181,10 @@ internal class Reassembler(
                     "maximum $messageMaximum"
             )
         }
-        if (totalPendingBytes > ProtocolConstants.MAX_TOTAL_PENDING_BYTES) {
+        val pendingMaximum = if (sessionState?.restrictedApplicationBytes == null) {
+            ProtocolConstants.MAX_TOTAL_PENDING_BYTES
+        } else 4L * 1_048_576
+        if (totalPendingBytes > pendingMaximum) {
             val aggregate = totalPendingBytes
             removePending(frame.messageId)
             throw P2pError.ProtocolError(
@@ -173,22 +193,25 @@ internal class Reassembler(
                     "MAX_TOTAL_PENDING_BYTES (${ProtocolConstants.MAX_TOTAL_PENDING_BYTES})"
             )
         }
+        payloadBudget?.reserveOrThrow(frame.payload.size.toLong() + 256)?.let(state.leases::add)
         state.chunks[frame.chunkIndex] = frame.payload
         state.lastSeenMillis = clock()
 
         if (state.chunks.size != state.totalChunks) return null
 
         val totalSize = state.chunks.values.sumOf { it.size.toLong() }.toInt()
-        val combined = ByteArray(totalSize)
-        var offset = 0
-        for (i in 0 until state.totalChunks) {
-            val piece = state.chunks[i]
-                ?: throw P2pError.ProtocolError("Missing chunk $i for messageId=${frame.messageId}")
-            piece.copyInto(combined, offset)
-            offset += piece.size
+        return decodeOwned(totalSize) {
+            val combined = ByteArray(totalSize)
+            var offset = 0
+            for (i in 0 until state.totalChunks) {
+                val piece = state.chunks[i]
+                    ?: throw P2pError.ProtocolError("Missing chunk $i for messageId=${frame.messageId}")
+                piece.copyInto(combined, offset)
+                offset += piece.size
+            }
+            removePending(frame.messageId)
+            decodePayload(combined, state.isText, state.isEnvelope, frame.messageId)
         }
-        removePending(frame.messageId)
-        return decodePayload(combined, state.isText, state.isEnvelope, frame.messageId)
     }
 
     /** Drop partial messages that have received no chunk for the timeout. */
@@ -208,7 +231,30 @@ internal class Reassembler(
      * equal to the sum of the remaining entries' [Pending.bufferedBytes].
      */
     private fun removePending(id: MessageId) {
-        pending.remove(id)?.let { totalPendingBytes -= it.bufferedBytes }
+        pending.remove(id)?.let {
+            totalPendingBytes -= it.bufferedBytes
+            it.leases.forEach(PayloadLease::release)
+        }
+    }
+
+    private inline fun decodeOwned(bytes: Int, decode: () -> P2pMessage): P2pMessage {
+        // Covers combined input, decoded copies and queue retention before any large allocation.
+        // The event/session queue inherits this conservative allowance until public delivery ends.
+        val lease = payloadBudget?.reserveOrThrow(4L * bytes + 16_384)
+        return try {
+            decode().also {
+                val limit = sessionState?.restrictedApplicationBytes
+                if (limit != null && (it !is P2pMessage.Binary || it.sizeBytes > limit)) {
+                    throw P2pError.ProtocolError("Restricted application message exceeds its binary limit")
+                }
+                if (it is P2pMessage.Binary) lease?.shrinkTo(it.sizeBytes.toLong() + 512)
+                check(completedLease == null)
+                completedLease = lease
+            }
+        } catch (failure: Throwable) {
+            lease?.release()
+            throw failure
+        }
     }
 
     private fun decodePayload(

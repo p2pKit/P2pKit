@@ -869,7 +869,13 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
             return false;
         }
         try {
-            return this._localHost.recoverState();
+            boolean result = this._localHost.recoverState();
+            synchronized (_lifecycle) {
+                // A new host generation gets a new cancellation allowance. Do
+                // not reset it during a failed recovery or a close retry.
+                _lifecycle.goodbyeBudget = null;
+            }
+            return result;
         } finally {
             endProducerMutation();
         }
@@ -2368,6 +2374,7 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
         try {
             // False and exceptional cancellation must also resolve admission.
             if (this.cancelState()) {
+                goodbyeBudget();
                 worker.start();
                 started = true;
             }
@@ -2395,9 +2402,12 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
         try {
             logger.warn("RECOVERING");
             this.purgeTimer();
-            this.unregisterAllServices();
+            if (!cancelForRecovery(goodbyeBudget())) {
+                // Terminal close owns the remaining services/socket after this
+                // mutation hands off. Do not remove those obligations early.
+                return;
+            }
             this.disposeServiceCollectors();
-            _localHost.waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
             this.purgeStateTimer();
 
             List<Throwable> failures = new ArrayList<>();
@@ -2451,6 +2461,38 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
                 }
             }
         }
+    }
+
+    private JmDNSLifecycle.GoodbyeBudget goodbyeBudget() {
+        synchronized (_lifecycle) {
+            if (_lifecycle.goodbyeBudget == null) {
+                _lifecycle.goodbyeBudget = new JmDNSLifecycle.GoodbyeBudget();
+            }
+            return _lifecycle.goodbyeBudget;
+        }
+    }
+
+    private boolean cancelForRecovery(JmDNSLifecycle.GoodbyeBudget goodbye) throws InterruptedException {
+        for (ServiceInfo service : _services.values()) {
+            ((ServiceInfoImpl) service).cancelState();
+        }
+        this.startCanceler();
+        for (Map.Entry<String, ServiceInfo> entry : _services.entrySet()) {
+            ServiceInfoImpl service = (ServiceInfoImpl) entry.getValue();
+            while (!service.isCanceled() && !isTerminalRequested() && goodbye.remainingMillis() > 0L) {
+                // Observe terminal handoff without interrupting owned callbacks
+                // or extending the original cancellation deadline.
+                service.waitForCanceledInterruptibly(Math.min(100L, goodbye.remainingMillis()));
+            }
+            if (isTerminalRequested()) {
+                return false;
+            }
+            _services.remove(entry.getKey(), service);
+        }
+        while (!this.isCanceled() && !isTerminalRequested() && goodbye.remainingMillis() > 0L) {
+            _localHost.waitForCanceledInterruptibly(Math.min(100L, goodbye.remainingMillis()));
+        }
+        return !isTerminalRequested();
     }
 
     /**
@@ -2736,6 +2778,7 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
             // Real cancellation is attempted even when cancelState() returns false.
             // Keep the original socket and state timer usable for actual TTL=0 sends.
             Collection<ServiceInfo> services = new ArrayList<>(_services.values());
+            JmDNSLifecycle.GoodbyeBudget goodbye = goodbyeBudget();
             try {
                 this.cancelState();
             } catch (Throwable failure) {
@@ -2758,7 +2801,7 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
                     for (ServiceInfo service : services) {
                         try {
                             budget.pauseForGoodbyeWait();
-                            ((ServiceInfoImpl) service).waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
+                            ((ServiceInfoImpl) service).waitForCanceledInterruptibly(goodbye.remainingMillis());
                         } catch (InterruptedException failure) {
                             interrupted = true;
                             failures.add(failure);
@@ -2774,7 +2817,7 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
                 if (!interrupted) {
                     try {
                         budget.pauseForGoodbyeWait();
-                        _localHost.waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
+                        _localHost.waitForCanceledInterruptibly(goodbye.remainingMillis());
                     } catch (InterruptedException failure) {
                         interrupted = true;
                         failures.add(failure);

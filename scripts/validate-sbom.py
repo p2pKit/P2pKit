@@ -15,7 +15,7 @@ from typing import Any, NoReturn
 MAX_BYTES = 16 * 1024 * 1024
 NAMESPACE = "http://cyclonedx.org/schema/bom/1.6"
 MODULES = frozenset((
-    "p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android",
+    "p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
     "p2p-network-provisioning-desktop",
 ))
 REQUIRED = MODULES | {
@@ -35,11 +35,12 @@ PATCH_PATH = "patches/410-lifecycle.patch"
 FOLLOWUP_PATCH_PATHS = (
     "patches/415-opt-rcode.patch", "patches/416-reverse-domain.patch", "patches/414-service-port.patch",
     "patches/417-response-continuation.patch",
+    "patches/418-teardown-budget.patch",
 )
 EMBEDDED_IDENTITY = {
-    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.5",
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.5",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.5",
+    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.6",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.6",
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.6",
 }
 UPSTREAM = {
     "mavenCoordinate": "org.jmdns:jmdns:3.6.3", "purl": "pkg:maven/org.jmdns/jmdns@3.6.3",
@@ -562,13 +563,13 @@ def validate(json_path: str, xml_path: str, group: str, version: str,
     components = component_table(values, root_ref, "JSON")
     names = {value.get("name") for value in values}
     published = [value for value in values if value.get("group") == group and value.get("name") in MODULES]
-    if (not REQUIRED <= names or len(published) != 4 or {c["name"] for c in published} != MODULES or
+    if (not REQUIRED <= names or len(published) != len(MODULES) or {c["name"] for c in published} != MODULES or
             any(c.get("version") != version for c in published)):
         invalid("JSON", "required release components are missing or incorrect")
     refs = set(components) | {root_ref}
     dependencies = graph(array(document.get("dependencies"), "JSON", "dependencies"), refs, "JSON")
     if dependencies[root_ref] != {c["bom-ref"] for c in published}:
-        invalid("JSON", "root must link exactly to the four published modules")
+        invalid("JSON", "root must link exactly to all configured library modules")
 
     manifest, manifest_sha256 = load_vendor_manifest(vendor_directory or ROOT / VENDOR_RELATIVE)
     producer_sha256 = file_sha256(producer_path or ROOT / PRODUCER_RELATIVE)
@@ -628,7 +629,7 @@ def main(arguments: list[str]) -> int:
         print(f"FATAL: {error}", file=sys.stderr)
         return 1
     print(f"RESULT: PASS — CycloneDX 1.6 JSON/XML SBOM contains {count} release components, "
-          "a connected four-module root, verified embedded JmDNS provenance, and no build/sample contamination")
+          "a connected five-module root, verified embedded JmDNS provenance, and no build/sample contamination")
     return 0
 
 

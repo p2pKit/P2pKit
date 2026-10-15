@@ -127,7 +127,7 @@ end
 properties = File.read(File.join(ROOT, "gradle.properties"))
 group = properties.match(/^GROUP=(.*)$/)[1].strip
 version = properties.match(/^VERSION_NAME=(.*)$/)[1].strip
-modules = %w[p2p-core p2p-transport-lan p2p-network-provisioning-android p2p-network-provisioning-desktop]
+modules = %w[p2p-core p2p-transport-lan p2p-rpc p2p-network-provisioning-android p2p-network-provisioning-desktop]
 names = modules + %w[kotlinx-coroutines-core jmdns slf4j-api cryptography-provider-jdk-jvm
                      cryptography-provider-cryptokit-iosarm64 cryptography-provider-cryptokit-iossimulatorarm64
                      cryptography-provider-cryptokit-iosx64]

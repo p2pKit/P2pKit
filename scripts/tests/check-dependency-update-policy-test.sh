@@ -175,6 +175,50 @@ sed -i.bak '/activateDependencyLocking/d' "$unlocked_buildscript_fixture/build.g
 expect_failure "unlocked buildscript" "dependency locking is not activated" \
     bash -c "cd '$unlocked_buildscript_fixture' && scripts/check-dependency-verification.sh"
 
+scoped_buildscript_fixture="$(new_fixture scoped-buildscript)"
+mkdir "$WORK/buildscript-cases"
+"$PYTHON3" - "$WORK/buildscript-cases" "$ROOT/build.gradle.kts" <<'PY'
+from pathlib import Path
+import sys
+
+directory, current = map(Path, sys.argv[1:])
+call = "resolutionStrategy.activateDependencyLocking()"
+body = "buildscript { configurations.configureEach { " + call + " } }\n"
+outside = "allprojects { configurations.configureEach { " + call + " } }\n"
+cases = {
+    "pass-current": current.read_text(),
+    "pass-scoped-comments": (
+        '/* buildscript { ignored /* nested */ } */\n'
+        'buildscript { configurations /* ignored */ . configureEach {\n'
+        ' resolutionStrategy . activateDependencyLocking ( )\n'
+        '} }\n' + outside + '\nval example = "' + call + '"\n'
+        'tasks.register("verify") { val cp = buildscript.configurations.getByName("classpath") }\n'),
+    "fail-outside-only": body.replace(call, "") + outside,
+    "fail-commented": body.replace(call, "/* " + call + " */"),
+    "fail-string": body.replace(call, 'val example = "' + call + '"'),
+    "fail-raw-string": body.replace(call, 'val example = """' + call + '"""'),
+    "fail-conditional": body.replace(call, "if (false) { " + call + " }"),
+    "fail-duplicate-call": body.replace(call, call + "; " + call),
+    "fail-duplicate-block": body + body,
+    "fail-nested-block": "allprojects { " + body + " }\n",
+    "fail-conditional-block": "if (false)\n" + body,
+    "fail-unclosed-block": body.rsplit("}", 1)[0],
+    "fail-deactivation": body.replace(call, call + "; resolutionStrategy.deactivateDependencyLocking()"),
+}
+for name, source in cases.items():
+    (directory / (name + ".kts")).write_text(source, encoding="utf-8")
+PY
+for case in "$WORK/buildscript-cases/"*.kts; do
+    cp "$case" "$scoped_buildscript_fixture/build.gradle.kts"
+    label="$(basename "$case" .kts)"
+    if [[ "$label" == pass-* ]]; then
+        (cd "$scoped_buildscript_fixture" && scripts/check-dependency-verification.sh >/dev/null)
+    else
+        expect_failure "scoped buildscript $label" "dependency locking is not activated" \
+            bash -c "cd '$scoped_buildscript_fixture' && scripts/check-dependency-verification.sh"
+    fi
+done
+
 empty_buildscript_lock_fixture="$(new_fixture empty-buildscript-lock)"
 printf 'empty=classpath\n' >"$empty_buildscript_lock_fixture/buildscript-gradle.lockfile"
 expect_failure "empty buildscript lock" "contains no classpath components" \
@@ -619,4 +663,4 @@ grep -Fq -- '- "gradle-wrapper"' "$ROOT/.github/dependabot.yml" ||
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-variant-artifact-test.py"
 "$PYTHON3" "$ROOT/scripts/tests/review-dependency-temporary-directories-test.py"
 
-echo "RESULT: PASS — incomplete updates, stale locks, broad trust, and malformed checksums fail before Gradle execution"
+echo "RESULT: PASS — incomplete updates, stale locks, broad trust, and malformed checksums fail before Gradle execution; 13 scoped buildscript-lock controls"

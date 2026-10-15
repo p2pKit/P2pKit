@@ -50,13 +50,16 @@ scripts/check-publish-artifacts.sh
 scripts/check-published-consumers.sh
 ./gradlew :p2p-core:checkKotlinAbi \
   :p2p-transport-lan:checkKotlinAbi \
+  :p2p-rpc:checkKotlinAbi \
   :p2p-network-provisioning-android:checkKotlinAbi \
   :p2p-network-provisioning-desktop:checkKotlinAbi
 ./gradlew :p2p-core:checkAndroidAbi \
   :p2p-transport-lan:checkAndroidAbi \
+  :p2p-rpc:checkAndroidAbi \
   :p2p-network-provisioning-android:checkAndroidAbi
 ./gradlew :p2p-core:dokkaGeneratePublicationHtml \
   :p2p-transport-lan:dokkaGeneratePublicationHtml \
+  :p2p-rpc:dokkaGeneratePublicationHtml \
   :p2p-network-provisioning-android:dokkaGeneratePublicationHtml \
   :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml
 ```
@@ -65,6 +68,20 @@ The complete macOS gate is `scripts/run-release-gate.sh`. It includes module
 tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
+
+## Optional RPC workstream
+
+The optional `:p2p-rpc` library and `:p2p-sample-rpc` example remain unpublished.
+Earlier source-bound JVM/Android/Apple checks and generated ABI/lock inputs are
+recorded in the [validation checkpoint](../rpc/implementation-status.md) and
+[official Mac27 continuation](../rpc/mac27-continuation-status.md). These scoped
+passes do not establish current full RPC/LAN or physical-device qualification;
+see the **NOT_READY** [Mac-only checkpoint](../rpc/mac-local-closeout-20261003.md).
+Follow the [RPC validation requirements](../rpc/qualification.md) for any
+outstanding or change-affected lane. Regenerate dependency inputs only through
+the complete maintained writer, review all fourteen tracked locks, and verify
+the frozen result; do not fabricate inputs or weaken checks. The historical
+main `org.jmdns` lock correction remains separate.
 
 ## Kit diagnostic teardown
 
@@ -119,7 +136,7 @@ physical-device, hostile-network, independent interoperability and cryptographic
 
 ## Android ABI graph verification
 
-`scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the three Android modules' `check` tasks and
+`scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the four Android library modules' `check` tasks and
 requires their compiler, ABI extraction and comparison tasks in the realized graph. It does not execute those
 tasks or replace a real `check`/ABI comparison. Configure the SDKs below first, and stop Gradle afterward even
 on failure. Full CI and `scripts/run-release-gate.sh` each invoke this unflagged command explicitly once.
@@ -172,6 +189,7 @@ Run the library suites without requesting Apple/Android tasks:
 
 ```bash
 ./gradlew :p2p-core:jvmTest :p2p-transport-lan:jvmTest \
+  :p2p-rpc:jvmTest :p2p-sample-rpc:jvmTest \
   :p2p-network-provisioning-desktop:test --continue --no-build-cache \
   --dependency-verification strict --max-workers=2 --no-parallel --console=plain
 ./gradlew --stop
@@ -186,9 +204,12 @@ manual run and weekly schedule. macOS uses the conservative
 [CI scope policy](../../CONTRIBUTING.md#ci-scope-policy): non-Markdown changes,
 manual dispatches and the weekly backstop request the full gate; no main-merge
 check is inferred from tree equality. Keep `complete-gate`
-required in repository rules: it waits for both JVM hosts and explicitly rejects
-failure, cancellation, or a skipped matrix before running either its lightweight
-or full checks. No new required-check name is needed. The separate Desktop
+required in repository rules: it aggregates both JVM hosts, repository checks,
+and independent iOS, full-platform, and artifact/consumer jobs. Any failed,
+cancelled, or skipped prerequisite fails the aggregate. Repository checks resolve
+scope once against the exact workflow source (the synthetic merge for PRs).
+Each worker validates that source and scope before running; lightweight changes
+omit heavy steps, not dependency-result validation. No new required-check name is needed. The separate Desktop
 matrix remains sample-test/packaging coverage.
 
 Each JVM host uploads XML/HTML reports as
@@ -485,6 +506,15 @@ an authenticated GitHub CLI (`gh`), and Python 3:
 scripts/prepare-dependency-update.sh origin/main
 ```
 
+The complete writer also retires three obsolete Dokka v1 configurations left in
+older library locks (`dokkaHtmlRuntime`, `dokkaJavadocPlugin`, `dokkaJavadocRuntime`).
+After all required check, Dokka v2 and SBOM tasks succeed, Gradle resolves locked,
+empty migration configurations and replaces only those obsolete dependency rows
+with `empty=` entries. An existing configuration with any of those names causes
+an early failure, even when empty. No live graph is cleared or unlocked, and no
+lockfile is hand-edited. Review every tracked lock, including unchanged files;
+source floors alone do not prove that old vulnerable rows have disappeared.
+
 The artifact-review workspace follows `${TMPDIR:-/tmp}`; an unusable selected directory fails rather than silently
 moving downloads to another volume. Its small GPG home is separately created under `${P2PKIT_GPG_TMPDIR:-/tmp}`.
 Both parent directories must already exist. Choose a short GPG root: its physical path, random directory name and
@@ -533,8 +563,19 @@ component's checksum-listed, detached-signed `.module` as a locator. It accepts
 only an unambiguous local file or sibling-version file within the same
 repository, group, and module; metadata is limited to 1 MiB. Both the locator
 and the relocated artifact must independently pass checksum and signature
-verification. Remote URLs, redirects, ambiguous paths, and unsigned locators
-are not supported. This does not expand the unsigned-plugin exception above.
+verification. Remote artifact URLs, ambiguous paths, and unsigned locators
+are not supported.
+
+KMP's logical JAR/KLIB filenames additionally require their exact metadata
+SHA-256 and a local, same-extension filename in the original publication
+directory. A child metadata file referring to a KMP root is not sufficient:
+the reviewer separately authenticates that checksum-listed root from the
+same repository, group and version, then verifies its reciprocal child
+publication and matching variant attributes. Root chains, external URLs,
+cross-module artifact paths and aliasing into another version fail closed.
+Common metadata can use its own authenticated root. This narrowly bounded
+publication relationship does not expand the unsigned-plugin exception above;
+the actual aliased artifact still requires its own detached signature.
 
 Before pushing, inspect the complete lock and metadata diff and run:
 

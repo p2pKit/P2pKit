@@ -57,6 +57,11 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +70,11 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.p2pkit.core.AppId
+import dev.p2pkit.sample.rpc.RpcApplicationSession
+import dev.p2pkit.sample.rpc.desktop.DesktopRpcTerminalExit
+import dev.p2pkit.sample.rpc.desktop.DesktopRpcCloseResult
+import dev.p2pkit.sample.rpc.desktop.RpcDesktopPanel
+import javax.swing.SwingUtilities
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
@@ -126,23 +136,64 @@ import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 
 // =====================================================================
 // Entry point
 // =====================================================================
 
-fun main() {
+fun main(arguments: Array<String>) {
+    try {
+        when (desktopEntryAction(arguments)) {
+            DesktopEntryAction.NativeReadback -> {
+                println(dev.p2pkit.sample.rpc.desktop.RpcDesktopNativeReadback.run())
+                return
+            }
+            DesktopEntryAction.WindowsRuntimeReadback -> {
+                println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback.run())
+                return
+            }
+            DesktopEntryAction.WindowsLoaderReadback -> {
+                println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback.runPreviewAdapter())
+                return
+            }
+            DesktopEntryAction.UserInterface -> Unit
+        }
+    } catch (_: Exception) {
+        System.err.println("Desktop command failed; native admission/cleanup is not qualified.")
+        kotlin.system.exitProcess(1)
+    } catch (_: LinkageError) {
+        System.err.println("Desktop native diagnostic ABI is unavailable; not qualified.")
+        kotlin.system.exitProcess(1)
+    }
     // Keep the library's default-off LAN trace. Operators can explicitly opt
     // in with -Ddev.p2pkit.lan.trace=true; see docs/guides/samples.md.
     application {
+        var closeRequested by remember { mutableStateOf(false) }
+        var terminalRequested by remember { mutableStateOf(false) }
+        val binding = remember { AtomicReference<DesktopTerminalBinding?>() }
+        val windowsTerminal = remember { usesWindowsTerminalExit(System.getProperty("os.name")) }
+        val terminal = remember {
+            DesktopRpcTerminalExit(
+                conceal = { terminalRequested = true; binding.get()?.conceal?.invoke() },
+                retireAllOwners = { checkNotNull(binding.get()) { "Application owners were not admitted" }.retire() },
+            )
+        }
         Window(
-            onCloseRequest = ::exitApplication,
+            onCloseRequest = {
+                if (windowsTerminal) terminal.requestApplicationExit() else closeRequested = true
+            },
+            visible = !terminalRequested,
             state = rememberWindowState(width = 980.dp, height = 760.dp),
             title = "P2pKit Test Harness (Desktop)"
         ) {
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
-                P2pKitSampleApp()
+                P2pKitSampleApp(window, closeRequested, binding) { closed ->
+                    if (closed) exitApplication() else closeRequested = false
+                }
             }
         }
         }
@@ -150,7 +201,12 @@ fun main() {
 }
 
 @Composable
-private fun P2pKitSampleApp() {
+private fun P2pKitSampleApp(
+    window: java.awt.Window,
+    closeRequested: Boolean,
+    terminalRegistration: AtomicReference<DesktopTerminalBinding?>,
+    closeCompleted: (Boolean) -> Unit,
+) {
     // Keep SDK ownership independent of Setup/Room composition lifetimes.
     // `rememberCoroutineScope()` is cancelled as soon as its composition is
     // disposed, which could cancel the in-flight kit.stop() operation launched
@@ -160,40 +216,178 @@ private fun P2pKitSampleApp() {
         CoroutineScope(compositionScope.coroutineContext.minusKey(Job) + SupervisorJob())
     }
     val holder = remember { DesktopP2pState(appScope) }
-    var showDiagnostics by remember { mutableStateOf(false) }
+    var navigationRevision by remember { mutableStateOf(0) }
+    val navigation = remember { DesktopSampleNavigation { navigationRevision++ } }
+    val rpcApplication = remember { RpcApplicationSession() }
+    var rpcPanel by remember { mutableStateOf<RpcDesktopPanel?>(null) }
+    var rpcReservation by remember { mutableStateOf<Any?>(null) }
+    var rpcConstructionFailed by remember { mutableStateOf(false) }
+    var frameCleanup by remember { mutableStateOf<DesktopOnceCleanup?>(null) }
+    fun closeRpc(completed: (Boolean) -> Unit) {
+        val panel = rpcPanel
+        val reservation = rpcReservation
+        if (panel == null) { completed(reservation == null); return }
+        val close = {
+            panel.requestClose { result ->
+                val released = result == DesktopRpcCloseResult.Closed && rpcPanel === panel &&
+                    reservation != null && holder.releaseRpcSection(reservation)
+                if (released) {
+                    rpcPanel = null
+                    rpcReservation = null
+                }
+                completed(released)
+            }
+        }
+        if (SwingUtilities.isEventDispatchThread()) close() else SwingUtilities.invokeLater(close)
+    }
+    fun back(): Boolean = navigation.back(::closeRpc)
+    val terminalBinding = remember {
+        val rpcRetired = CompletableFuture<Boolean>()
+        val cleanup = DesktopTerminalCleanup { action -> SwingUtilities.invokeLater(action) }
+        DesktopTerminalBinding(conceal = {
+            check(SwingUtilities.isEventDispatchThread())
+            navigation.sealForTerminalExit()
+            holder.sealForTerminalExit()
+            window.isVisible = false
+            // Conceal only windows belonging to this application window; no global process/window sweep.
+            fun concealChildren(parent: java.awt.Window) {
+                parent.ownedWindows.forEach { child -> concealChildren(child); child.isVisible = false }
+            }
+            concealChildren(window)
+            val panel = rpcPanel
+            val reservation = rpcReservation
+            if (panel == null) {
+                rpcRetired.complete(reservation == null && !rpcConstructionFailed)
+            } else {
+                panel.requestTerminalClose { result ->
+                    val closed = result == DesktopRpcCloseResult.Closed
+                    val released = when {
+                        !closed -> false
+                        rpcPanel === panel && rpcReservation === reservation && reservation != null -> {
+                            holder.releaseRpcSection(reservation).also { success ->
+                                if (success) { rpcPanel = null; rpcReservation = null }
+                            }
+                        }
+                        // An ordinary Back close may have already released these exact entry owners.
+                        rpcPanel == null && rpcReservation == null -> true
+                        else -> false
+                    }
+                    rpcRetired.complete(released)
+                }
+            }
+        }, retire = {
+            cleanup.retire(listOf(
+                { done -> rpcRetired.whenComplete { clean, failure -> done(failure == null && clean == true) } },
+                { done ->
+                    val retirement = appScope.launch { done(holder.shutdownAndAwait()) }
+                    retirement.invokeOnCompletion { failure -> if (failure != null) done(false) }
+                },
+                { done -> frameCleanup?.close(); done(true) },
+                { done -> holder.retireDiagnostics(); done(true) },
+                { done -> appScope.cancel(); done(true) },
+            ), drainWorkers = {
+                // Includes cancelled runScope/startup/collectors; joining stopJob alone is insufficient.
+                runBlocking { checkNotNull(appScope.coroutineContext[Job]).join() }
+            })
+        })
+    }
+    DisposableEffect(terminalBinding) {
+        check(terminalRegistration.compareAndSet(null, terminalBinding))
+        onDispose { terminalRegistration.compareAndSet(terminalBinding, null) }
+    }
+    LaunchedEffect(closeRequested) {
+        if (closeRequested) navigation.exit(close = { completed ->
+            if (navigation.section == DesktopSampleNavigation.Section.Rpc) {
+                closeRpc(completed)
+            } else {
+                appScope.launch { completed(holder.shutdownAndAwait()) }
+            }
+        }, completed = closeCompleted)
+    }
     DisposableEffect(holder) {
         val frameTraceLease = installDesktopFrameTracing(holder.diagnostics::frame)
+        val frameOwner = DesktopOnceCleanup { frameTraceLease?.release() }
+        frameCleanup = frameOwner
         onDispose {
-            frameTraceLease?.release()
+            frameOwner.close()
             holder.shutdownIfRunning()
             // The stop coroutine above is owned by appScope; cancellation is
             // intentionally deferred to process/window teardown by the host.
         }
     }
 
-    if (showDiagnostics) {
-        DesktopDiagnosticsScreen(
-            diagnostics = holder.diagnostics,
-            activeConnections = {
-                holder.connectedSessions.map { session ->
-                    DesktopDiagnosticConnectionSnapshot(
-                        sessionId = session.id,
-                        peerId = session.peer.id.value,
-                        state = session.state.value.toString()
-                    )
+    // Reading the revision observes the UI-thread-confined policy without coupling its tests to Compose.
+    @Suppress("UNUSED_VARIABLE") val observedNavigationRevision = navigationRevision
+    Column(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+        event.type == KeyEventType.KeyDown && event.key == Key.Escape && back()
+    }) {
+        if (navigation.cleanupFailed && navigation.section != DesktopSampleNavigation.Section.Rpc) {
+            Text("Cleanup is still pending. Review the error and retry Stop before closing.",
+                modifier = Modifier.padding(12.dp))
+        }
+        when (navigation.section) {
+            DesktopSampleNavigation.Section.Diagnostics -> DesktopDiagnosticsScreen(
+                diagnostics = holder.diagnostics,
+                activeConnections = {
+                    holder.connectedSessions.map { session ->
+                        DesktopDiagnosticConnectionSnapshot(
+                            sessionId = session.id,
+                            peerId = session.peer.id.value,
+                            state = session.state.value.toString()
+                        )
+                    }
+                },
+                revision = holder.diagnosticRevision,
+                onBack = { back() },
+            )
+            DesktopSampleNavigation.Section.Rpc -> {
+                if (rpcConstructionFailed) {
+                    Text("RPC could not open. Its section reservation is retained because cleanup is unverified. " +
+                        "No replacement session or automatic restart was attempted.",
+                        modifier = Modifier.padding(12.dp))
+                } else {
+                    rpcPanel?.let { panel ->
+                        DesktopRpcSection(panel, window, navigation.leaving, navigation.cleanupFailed)
+                    }
                 }
-            },
-            revision = holder.diagnosticRevision,
-            onBack = { showDiagnostics = false }
-        )
-    } else {
-        DesktopSampleScreen(holder, holder.isRunning) { showDiagnostics = true }
+            }
+            DesktopSampleNavigation.Section.Samples -> DesktopSampleScreen(
+                holder, holder.isRunning,
+                onOpenDiagnostics = { navigation.open(DesktopSampleNavigation.Section.Diagnostics) },
+                onOpenRpc = {
+                    val reservation = holder.reserveRpcSection()
+                    if (reservation != null) {
+                        if (navigation.open(DesktopSampleNavigation.Section.Rpc)) {
+                            check(SwingUtilities.isEventDispatchThread())
+                            rpcReservation = reservation
+                            rpcConstructionFailed = false
+                            try {
+                                rpcPanel = RpcDesktopPanel(rpcApplication) { back() }
+                            } catch (_: Exception) {
+                                // A partial constructor has no safely closeable handle. Keep admission reserved.
+                                // Do not print potentially private exception details or mask fatal JVM errors.
+                                rpcConstructionFailed = true
+                            }
+                        } else {
+                            holder.releaseRpcSection(reservation) // No RPC entry or resources were created.
+                        }
+                    }
+                },
+                navigationEnabled = !navigation.leaving,
+            )
+        }
     }
 }
 
 /** The warning stays outside either screen's scrollable content and cannot be dismissed. */
 @Composable
-internal fun DesktopSampleScreen(state: DesktopP2pState, isRunning: Boolean, onOpenDiagnostics: () -> Unit) {
+internal fun DesktopSampleScreen(
+    state: DesktopP2pState,
+    isRunning: Boolean,
+    onOpenRpc: () -> Unit = {},
+    navigationEnabled: Boolean = true,
+    onOpenDiagnostics: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(
             color = MaterialTheme.colorScheme.errorContainer,
@@ -212,8 +406,15 @@ internal fun DesktopSampleScreen(state: DesktopP2pState, isRunning: Boolean, onO
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f)
                 )
-                Button(onClick = onOpenDiagnostics) { Text("Diagnostics") }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Button(onClick = onOpenDiagnostics, enabled = navigationEnabled) { Text("Diagnostics") }
+                    Button(onClick = onOpenRpc,
+                        enabled = navigationEnabled && !isRunning && state.canOpenRpc) { Text("RPC") }
+                }
             }
+        }
+        if (isRunning || !state.canOpenRpc) {
+            Text("Stop the room session before opening RPC.", modifier = Modifier.padding(horizontal = 12.dp))
         }
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             if (isRunning) RoomScreen(state) else SetupScreen(state)
@@ -324,9 +525,26 @@ internal class DesktopP2pState(
     var diagnosticRevision: Long by mutableStateOf(0L)
         private set
     val diagnostics = DesktopDiagnosticHarness(diagnosticHome) { diagnosticRevision++ }
+    private val diagnosticsCleanup = DesktopOnceCleanup { diagnostics.shutdown() }
+    internal fun retireDiagnostics() = diagnosticsCleanup.close()
+    internal fun sealForTerminalExit() {
+        sectionAdmission.sealForTerminalExit()
+        // Do not invoke cancellation handlers before concealing the window. stop() owns cancellation;
+        // terminal retirement joins startup and the complete appScope child tree.
+    }
 
     // --- internals ---------------------------------------------------------
 
+    private val sectionAdmission = DesktopSampleRunAdmission()
+    internal val canOpenRpc: Boolean
+        get() = sectionAdmission.ordinaryAllowed && !isRunning && !_isStarting.value &&
+            !_isStopping.value && !_cleanupPending.value && kit == null
+
+    internal fun reserveRpcSection(): Any? = sectionAdmission.reserveRpc(canOpenRpc)
+    internal fun releaseRpcSection(owner: Any): Boolean = sectionAdmission.releaseRpc(owner)
+
+    private var stopJob: Job? = null
+    private var startupJob: Job? = null
     private var kit: P2pKit? = null
     private var runScope: CoroutineScope? = null
     private val advertisingToggleMutex = Mutex()
@@ -376,6 +594,7 @@ internal class DesktopP2pState(
 
     @OptIn(ExplicitSecurityRisk::class)
     fun start() {
+        if (!sectionAdmission.ordinaryAllowed) return
         if (isRunning || _isStarting.value || _isStopping.value) return  // idempotent + re-entry safe
         if (kit != null) {
             _lifecycleError.value = "cleanup is still pending; retrying kit stop before a new start"
@@ -446,7 +665,7 @@ internal class DesktopP2pState(
         scope.launch {
             pollManualConnectionInfo(newKit.networkProvisioning::getManualConnectionInfo)
         }
-        scope.launch {
+        startupJob = scope.launch {
             // Treat advertise/discover as one startup transaction. Cancellation
             // belongs to teardown and must not be reported as a start failure.
             try {
@@ -826,7 +1045,7 @@ internal class DesktopP2pState(
         _isManualDialing.value = false
         // appScope (not runScope) so the stop coroutine survives our
         // runScope.cancel() above.
-        appScope.launch {
+        stopJob = appScope.launch {
             try {
                 offersToReject.forEach { pending ->
                     runCatchingCancellable { pending.offer.reject("sample stopped before consent") }
@@ -1346,9 +1565,20 @@ internal class DesktopP2pState(
         return cleaned.takeUnless { it.isEmpty() || it == "." || it == ".." } ?: "untitled"
     }
 
+    /** Window close awaits the exact owned stop; failures retain ownership and the visible application. */
+    internal suspend fun shutdownAndAwait(): Boolean {
+        stop()
+        stopJob?.join()
+        // stop may return before the cancelled startup finishes its finally/owned cleanup.
+        startupJob?.join()
+        return (kit == null && !_isStarting.value && !_cleanupPending.value).also { closed ->
+            if (closed) retireDiagnostics()
+        }
+    }
+
     /** Called when the whole UI composable disposes, including during startup. */
     fun shutdownIfRunning() {
-        diagnostics.shutdown()
+        retireDiagnostics()
         if (kit != null) stop()
     }
 

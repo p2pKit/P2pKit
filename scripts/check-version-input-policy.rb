@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-# Input consistency, not dependency approval: reviewed pin expectations stay
-# independent in check-kotlin-toolchain-policy-test.sh/release-workflow-test.sh.
+# Version-input consistency and the narrowly reviewed isolated ABI-reader
+# exception. Catalog/floor pins remain independent in the outer policy tests.
 module VersionInputPolicy
     class Violation < StandardError; end
 
@@ -41,6 +41,24 @@ module VersionInputPolicy
         match.captures.map(&:to_i)
     end
 
+    def self.check_legacy_kotlin_abi_entry(entry)
+        # Independent reviewed exception for the ABI readers, never application
+        # or compiler dependencies. RPC resolves the Android reader separately
+        # from kotlinInternalAbiValidation, unlike the older module locksets.
+        allowed = %w[
+            org.jetbrains.kotlin:abi-tools-api:2.3.21=kotlinInternalAbiValidation
+            org.jetbrains.kotlin:abi-tools:2.3.21=kotlinInternalAbiValidation
+            org.jetbrains.kotlin:kotlin-klib-abi-reader:2.3.21=kotlinInternalAbiValidation
+            org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=kotlinInternalAbiValidation
+            org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=androidAbiRuntime
+            org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation
+            org.jetbrains.kotlin:kotlin-stdlib:2.3.21=kotlinInternalAbiValidation
+            org.jetbrains.kotlin:kotlin-stdlib:2.3.21=androidAbiRuntime
+            org.jetbrains.kotlin:kotlin-stdlib:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation
+        ]
+        require_policy(allowed.include?(entry), "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain")
+    end
+
     def self.check_netty_lock(source, minimum)
         floor = stable_netty_version(minimum)
         found_http = false
@@ -68,8 +86,12 @@ if $PROGRAM_NAME == __FILE__
         when "netty"
             raise ArgumentError, "netty requires a lock path and independent minimum" unless ARGV.size == 2
             VersionInputPolicy.check_netty_lock(File.read(ARGV.fetch(0)), ARGV.fetch(1))
+        when "kotlin-abi-entry"
+            raise ArgumentError, "kotlin-abi-entry requires one lock entry" unless ARGV.size == 1
+            VersionInputPolicy.check_legacy_kotlin_abi_entry(ARGV.fetch(0))
         else
-            raise ArgumentError, "usage: check-version-input-policy.rb consumer SCRIPT | netty LOCK MINIMUM"
+            raise ArgumentError, "usage: check-version-input-policy.rb consumer SCRIPT | netty LOCK MINIMUM | " \
+                "kotlin-abi-entry ENTRY"
         end
     rescue VersionInputPolicy::Violation, ArgumentError, SystemCallError => error
         warn "FATAL: #{error.message}"

@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dev.p2pkit.sample.android"
 TEST_PACKAGE = PACKAGE + ".test"
 INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"
+RPC_INSTRUMENTATION = PACKAGE + ".rpclab.RpcLabRuntimeInstrumentation"
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 IMAGE = "system-images;android-37.0;google_apis;x86_64"
 IMAGE_PIN = (6, 0, 0, 2234615040, "629e507fd5b737c2c836b12b52c81cd0e3b12399", "x86_64-37.0_r06.zip")
@@ -50,6 +51,21 @@ AVAILABLE = "LAN access is available. Tap the intended action again."
 LIMIT = 8 * 1024 * 1024
 ZIP_LIMIT = 4 * 1024 * 1024
 EXPORT_DIRECTORY = "cache/test-evidence"
+
+
+def verify_test_apk_manifest(raw):
+    """Admit both explicit runners without changing the maintained API37 test selection."""
+    manifest = xml(raw)
+    ns = "{http://schemas.android.com/apk/res/android}"
+    instruments = manifest.findall("instrumentation")
+    sdk = manifest.findall("uses-sdk")
+    names = [entry.get(ns + "name") for entry in instruments]
+    need(manifest.get("package") == TEST_PACKAGE and len(instruments) == 2 and
+         set(names) == {INSTRUMENTATION, RPC_INSTRUMENTATION} and
+         all(entry.get(ns + "targetPackage") == PACKAGE for entry in instruments) and
+         len(sdk) == 1 and sdk[0].get(ns + "minSdkVersion") == "24" and
+         sdk[0].get(ns + "targetSdkVersion") == "37", "Wrong instrumentation APK")
+    return sorted(names)
 
 
 def instrumentation_result(raw, token, fingerprint):
@@ -109,6 +125,24 @@ def runtime_host_result(lines, alias, control, output_eof, unresolved_clients):
     return {"status": "PASS" if passed else "FAIL", "outputEof": output_eof,
             "cliIncomingReceipts": incoming, "cliOutgoingReceipts": outgoing,
             "cliProblems": problems, "unresolvedControlClients": unresolved_clients}
+
+
+def observe_runtime_exit(child, record):
+    """Observe/reap an exited child, never turn its PID into signaling authority."""
+    if child.poll() is None:
+        record["ownerDrainRequired"] = True
+        raise RuntimeError("Retained runtime child requires enclosing ownership finalization")
+    return child.wait(timeout=5)
+
+
+def private_adb_server_argv(adb, port):
+    """adb's *listen* grammar rejects numeric hostnames; omit the host, not loopback safety.
+
+    Without -a, tcp:PORT binds only loopback. Clients still use the explicit
+    numeric loopback ADB_SERVER_SOCKET. Never substitute a wildcard listener.
+    """
+    need(type(port) is int and 1 <= port <= 65535, "Invalid private adb port")
+    return [str(adb), "-L", f"tcp:{port}", "nodaemon", "server"]
 
 
 def need(condition, message):
@@ -574,15 +608,11 @@ class Smoke:
         tests = list((ROOT / "samples/p2p-sample-android/build/outputs/apk/androidTest/debug").glob("*.apk"))
         need(len(tests) == 1, "Missing/ambiguous test APK")
         test = tests[0]
-        test_manifest = xml(self.command("test-apk-manifest", [str(sdk / "cmdline-tools/latest/bin/apkanalyzer"),
-                            "manifest", "print", str(test)]))
-        instruments = test_manifest.findall("instrumentation")
-        need(test_manifest.get("package") == TEST_PACKAGE and len(instruments) == 1 and
-             instruments[0].get(ns + "name") == INSTRUMENTATION and
-             instruments[0].get(ns + "targetPackage") == PACKAGE and
-             test_manifest.find("uses-sdk").get(ns + "targetSdkVersion") == "37", "Wrong instrumentation APK")
+        instruments = verify_test_apk_manifest(self.command("test-apk-manifest",
+            [str(sdk / "cmdline-tools/latest/bin/apkanalyzer"), "manifest", "print", str(test)]))
         self.write("test-apk.json", {"source": self.context["source"], "sha256": self.runner.file_digest(test),
-                   "relativePath": test.relative_to(ROOT).as_posix(), "bytes": test.stat().st_size})
+                   "relativePath": test.relative_to(ROOT).as_posix(), "bytes": test.stat().st_size,
+                   "instrumentation": instruments})
         distribution = ROOT / "samples/p2p-sample-desktop/build/install/p2p-sample-desktop"
         need((distribution / "lib").is_dir(), "Missing maintained CLI distribution")
         files = []
@@ -630,10 +660,21 @@ class Smoke:
             with socket.socket() as reservation:
                 reservation.bind(("127.0.0.1", port))  # Fail rather than interact with an unrelated emulator.
         self.server_log = (self.evidence / "adb-server.log").open("xb")
-        self.adb_server = subprocess.Popen([str(self.sdk / "platform-tools/adb"), "-L",
-                              f"tcp:127.0.0.1:{self.adb_port}", "nodaemon", "server"],
+        self.adb_server = subprocess.Popen(private_adb_server_argv(self.sdk / "platform-tools/adb", self.adb_port),
                               env=self.env, stdin=subprocess.DEVNULL, stdout=self.server_log, stderr=subprocess.STDOUT)
-        time.sleep(0.5)
+        # Establish the actual foreground listener before an adb client can
+        # auto-start a replacement daemon. This is inside the existing scenario
+        # bound; the emulator's original 180-second boot bound is unchanged.
+        server_deadline = time.monotonic() + 20
+        while True:
+            need(self.adb_server.poll() is None, "Private foreground adb server exited before readiness")
+            try:
+                with socket.create_connection(("127.0.0.1", self.adb_port), timeout=0.5):
+                    need(time.monotonic() < server_deadline, "Private adb listener readiness deadline")
+                    break
+            except OSError:
+                need(time.monotonic() < server_deadline, "Private adb listener readiness deadline")
+                time.sleep(0.1)
         devices = self.adb("initial-adb-devices", "devices").decode().splitlines()
         need(not [line for line in devices if "\t" in line], "Private adb server already has a device")
         self.emulator_log = (self.evidence / "emulator.log").open("xb")
@@ -1126,7 +1167,9 @@ class Smoke:
             summary["witness"] = witness
             summary["status"] = "PASS"  # Provisional until post-quit EOF, receipts and cleanup are admitted below.
         finally:
-            # Only these exact Popen handles are touched. The enclosing executor remains the descendant owner.
+            # Graceful commands use the existing pipes. A Popen/PID is not a
+            # signaling capability: only the enclosing identity-owned executor
+            # may drain a retained child, and that still leaves this test failed.
             peer = processes.get("cli")
             if peer is not None and peer.poll() is None:
                 try:
@@ -1137,16 +1180,7 @@ class Smoke:
                     summary["status"] = "FAIL"
             for label, child in processes.items():
                 try:
-                    if child.poll() is None:
-                        summary["status"] = "FAIL"
-                        summary["processes"][label]["forced"] = True
-                        child.terminate()
-                        try:
-                            child.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            child.kill()
-                            child.wait(timeout=5)
-                    summary["processes"][label]["exitCode"] = child.wait()
+                    summary["processes"][label]["exitCode"] = observe_runtime_exit(child, summary["processes"][label])
                     if child.returncode != 0:
                         summary["status"] = "FAIL"
                     until(lambda: not any(key.data == ("stream", label) for key in selector.get_map().values()),

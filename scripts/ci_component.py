@@ -76,6 +76,8 @@ def commands(component):
         tasks = [':p2p-core:jvmTest', ':p2p-transport-lan:jvmTest', ':p2p-network-provisioning-desktop:test']
         if (ROOT / 'library/p2p-rpc').is_dir():
             tasks.append(':p2p-rpc:jvmTest')
+        if (ROOT / 'samples/p2p-sample-rpc').is_dir():
+            tasks.append(':p2p-sample-rpc:jvmTest')
         return [('jvm-tests', gradle + tasks)]
     if component == 'android':
         tasks = [':p2p-core:testAndroidHostTest', ':p2p-transport-lan:testAndroidHostTest',
@@ -83,6 +85,8 @@ def commands(component):
                  ':p2p-sample-android:assembleDebug']
         if (ROOT / 'library/p2p-rpc').is_dir():
             tasks += [':p2p-rpc:testAndroidHostTest']
+        if (ROOT / 'samples/p2p-sample-rpc').is_dir():
+            tasks.append(':p2p-sample-rpc:testAndroidHostTest')
         return [('android-tests-and-apk', gradle + tasks)]
     if component.startswith('desktop-'):
         packaging = {'desktop-linux': 'packageDeb', 'desktop-windows': 'packageMsi',

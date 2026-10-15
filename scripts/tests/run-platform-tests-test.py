@@ -34,7 +34,7 @@ def example_report(profile="full", arch="arm64"):
     required = GATE.required_tasks(POLICY, profile, arch)
     tasks = {name for entry in POLICY["model"].values() for name in entry["tests"]}
     unavailable = "iosX64Test" if arch == "arm64" else "iosSimulatorArm64Test"
-    return {
+    report = {
         "schema": 1, "token": TOKEN, "buildFailed": False, "dryRun": False,
         "host": {"os": "Mac OS X", "arch": "aarch64" if arch == "arm64" else "x86_64"},
         "model": copy.deepcopy(POLICY["model"]),
@@ -44,6 +44,9 @@ def example_report(profile="full", arch="arm64"):
             "passed": 1 if name in required else 0, "failed": 0, "skipped": 0,
         } for name in tasks},
     }
+    for name in GATE.SEPARATE_QUALIFICATION_TASKS:
+        report["tests"][name].update(outcome="NOT_REQUESTED", inGraph=False)
+    return report
 
 
 def intel_encoded(value):
@@ -166,10 +169,12 @@ class CoveragePolicyTest(unittest.TestCase):
         arm = self.assess(example_report())
         intel = self.assess(example_report(arch="x64"), arch="x64")
         x64_only = self.assess(example_report("ios-x64", "x64"), "ios-x64", "x64")
-        self.assertEqual(14, len(arm))
-        self.assertEqual(14, len(intel))
-        self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"}, x64_only)
-        native_arm = [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test"]
+        self.assertEqual(20, len(arm))
+        self.assertEqual(20, len(intel))
+        self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test",
+                          ":p2p-rpc:iosX64Test", ":p2p-sample-rpc:iosX64Test"}, x64_only)
+        native_arm = [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test",
+                      ":p2p-rpc:iosSimulatorArm64Test", ":p2p-sample-rpc:iosSimulatorArm64Test"]
         self.assertEqual(native_arm, GATE.PROFILES["ios-arm64"])
         arm_only = example_report("ios-arm64", "arm64")
         self.assertEqual(set(native_arm), self.assess(arm_only, "ios-arm64", "arm64"))
@@ -229,6 +234,90 @@ class CoveragePolicyTest(unittest.TestCase):
         report["model"][":p2p-core"]["targets"]["newNative"] = "native"
         with self.assertRaises(ValueError):
             self.assess(report)
+
+    def test_separate_qualification_list_is_exact_and_cannot_exclude_mandatory_tasks(self):
+        expected = [":p2p-transport-lan:macInstalledBundleTest", ":p2p-transport-lan:macTcpNativeTest"]
+        self.assertEqual(expected, POLICY["separateQualificationTasks"])
+        self.assertEqual(expected, sorted(GATE.SEPARATE_QUALIFICATION_TASKS))
+        for arch in ("arm64", "x64"):
+            for task in GATE.required_tasks(POLICY, "full", arch):
+                policy = copy.deepcopy(POLICY)
+                policy["separateQualificationTasks"].append(task)
+                with self.subTest(arch=arch, excluded=task), self.assertRaises(ValueError):
+                    GATE.required_tasks(policy, "full", arch)
+        for replacement in ([], None, expected[:1], expected + [expected[0]], expected[::-1],
+                            expected + [":p2p-transport-lan:newNativeTest"]):
+            policy = copy.deepcopy(POLICY)
+            policy["separateQualificationTasks"] = replacement
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                GATE.required_tasks(policy, "full", "arm64")
+        for change in ("missing", "unknown", "inventory-omission"):
+            policy = copy.deepcopy(POLICY)
+            if change == "missing":
+                del policy["separateQualificationTasks"]
+            elif change == "unknown":
+                policy["excludedTasks"] = [":p2p-core:jvmTest"]
+            else:
+                policy["model"][":p2p-transport-lan"]["tests"].remove(expected[0])
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                GATE.required_tasks(policy, "full", "arm64")
+
+    def test_unknown_and_missing_auxiliary_records_are_not_ignored(self):
+        for task in GATE.SEPARATE_QUALIFICATION_TASKS:
+            report = example_report()
+            del report["tests"][task]
+            with self.subTest(missing=task), self.assertRaises(ValueError):
+                self.assess(report)
+        for add_model in (False, True):
+            report = example_report()
+            task = ":p2p-transport-lan:newNativeTest"
+            report["tests"][task] = copy.deepcopy(report["tests"][":p2p-transport-lan:macTcpNativeTest"])
+            if add_model:
+                report["model"][":p2p-transport-lan"]["tests"].append(task)
+            with self.subTest(unknown_in_model=add_model), self.assertRaises(ValueError):
+                self.assess(report)
+
+    def test_auxiliary_execution_failure_disabled_state_and_counts_cannot_pass(self):
+        for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64"),
+                              ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64")):
+            for task in GATE.SEPARATE_QUALIFICATION_TASKS:
+                changes = [("outcome", value) for value in
+                           ("EXECUTED", "FAILED", "SKIPPED", "UP-TO-DATE", "FROM-CACHE", "NO_SOURCE",
+                            "NOT_COMPLETED", "INVENTED")]
+                changes += [("enabled", False), ("inGraph", True)]
+                changes += [(count, value) for count in ("passed", "failed", "skipped")
+                            for value in (1, -1, True, "0", 0.5)]
+                for key, value in changes:
+                    report = example_report(profile, arch)
+                    report["tests"][task][key] = value
+                    with self.subTest(profile=profile, task=task, field=key, value=value), \
+                            self.assertRaises(ValueError):
+                        self.assess(report, profile, arch)
+                report = example_report(profile, arch)
+                report["tests"][task].update(outcome="EXECUTED", inGraph=True, passed=1)
+                with self.subTest(profile=profile, native_success_is_not_qualification=task), \
+                        self.assertRaises(ValueError):
+                    self.assess(report, profile, arch)
+
+    def test_auxiliary_summary_preserves_separate_scope_and_actual_outcome_without_credit(self):
+        report = example_report()
+        self.assess(report)
+        rows = {row["target"]: row for row in GATE.target_rows(report)}
+        for task in GATE.SEPARATE_QUALIFICATION_TASKS:
+            row = rows[task]
+            self.assertEqual("SEPARATE_QUALIFICATION", row["status"])
+            self.assertEqual("NOT_REQUESTED", row["outcome"])
+            self.assertIs(False, row["qualificationCredit"])
+            self.assertEqual([0, 0, 0], [row[key] for key in ("passed", "failed", "skipped")])
+            self.assertIn("no native/JNI or installed-application qualification credit", row["reason"])
+            altered = copy.deepcopy(report)
+            altered["tests"][task].update(outcome="FAILED", inGraph=True, failed=1)
+            with self.assertRaises(ValueError):
+                self.assess(altered)
+            failed = next(row for row in GATE.target_rows(altered) if row["target"] == task)
+            self.assertEqual("FAILED", failed["outcome"])
+            self.assertEqual(1, failed["failed"])
+            self.assertIs(False, failed["qualificationCredit"])
 
     def test_stale_failed_dry_run_wrong_host_and_malformed_reports_fail(self):
         for key, value in (

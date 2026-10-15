@@ -4,14 +4,18 @@
 No SDK download, adb invocation, emulator, Gradle or product execution. The real
 native process-ownership implementation is reused, not copied or simulated here.
 """
+import ast
 import copy
 import hashlib
 import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest.mock import MagicMock, Mock
 import warnings
 import zipfile
 
@@ -114,7 +118,54 @@ def instrumentation_output(changes=None):
     return ("\n".join(lines) + "\n").encode(), token, pin
 
 
+def test_apk_manifest(names=None):
+    runners = (art.INSTRUMENTATION, art.RPC_INSTRUMENTATION) if names is None else names
+    entries = "".join(f'<instrumentation android:name="{name}" android:targetPackage="{art.PACKAGE}"/>'
+                      for name in runners)
+    return (f'<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{art.TEST_PACKAGE}">'
+            '<uses-sdk android:minSdkVersion="24" android:targetSdkVersion="37"/>' + entries + '</manifest>').encode()
+
+
 class AndroidArtAdmissionTest(unittest.TestCase):
+    def test_source_manifest_reserves_first_entry_for_agp_default_runner_injection(self):
+        # Source tripwire only. Both real APK consumers independently inspect the
+        # binary manifest; this must not stand in for an actual packaging result.
+        sample = SCRIPTS.parent / "samples/p2p-sample-android"
+        source = art.xml((sample / "src/androidTest/AndroidManifest.xml").read_bytes())
+        ns = "{http://schemas.android.com/apk/res/android}"
+        entries = source.findall("instrumentation")
+        self.assertEqual([entry.get(ns + "name") for entry in entries],
+                         [art.INSTRUMENTATION, art.RPC_INSTRUMENTATION])
+        self.assertEqual([entry.get(ns + "targetPackage") for entry in entries], [art.PACKAGE] * 2)
+        configured = re.findall(r'\btestInstrumentationRunner\s*=\s*"([^"]+)"',
+                                (sample / "build.gradle.kts").read_text())
+        self.assertEqual(configured, [art.INSTRUMENTATION])
+
+    def test_test_apk_requires_exact_maintained_and_supplemental_runner_inventory(self):
+        expected = sorted((art.INSTRUMENTATION, art.RPC_INSTRUMENTATION))
+        self.assertEqual(art.verify_test_apk_manifest(test_apk_manifest()), expected)
+        self.assertEqual(art.verify_test_apk_manifest(test_apk_manifest(list(reversed(expected)))), expected)
+        for names in ([], [art.INSTRUMENTATION], [art.RPC_INSTRUMENTATION],
+                      [art.INSTRUMENTATION, art.INSTRUMENTATION],
+                      [art.RPC_INSTRUMENTATION, art.RPC_INSTRUMENTATION],
+                      [art.INSTRUMENTATION, "unrelated.Runner"], expected + ["unrelated.Runner"]):
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                art.verify_test_apk_manifest(test_apk_manifest(names))
+
+    def test_test_apk_refuses_wrong_targets_package_or_sdk(self):
+        good = test_apk_manifest()
+        for bad in (good.replace(art.TEST_PACKAGE.encode(), b"unrelated.test"),
+                    good.replace(b'android:targetPackage="' + art.PACKAGE.encode() + b'"',
+                                 b'android:targetPackage="unrelated.app"', 1),
+                    good.replace(b'android:targetPackage="' + art.PACKAGE.encode() + b'"', b''),
+                    good.replace(b'minSdkVersion="24"', b'minSdkVersion="25"'),
+                    good.replace(b'targetSdkVersion="37"', b'targetSdkVersion="36"'),
+                    good.replace(b'<uses-sdk', b'<wrong-sdk'),
+                    good.replace(b'</manifest>', b'<uses-sdk android:minSdkVersion="24" '
+                                 b'android:targetSdkVersion="37"/></manifest>')):
+            with self.subTest(manifest=bad), self.assertRaises(ValueError):
+                art.verify_test_apk_manifest(bad)
+
     def test_instrumentation_requires_completed_real_scopes_and_matching_delivery(self):
         raw, token, pin = instrumentation_output()
         self.assertEqual(art.instrumentation_result(raw, token, pin)["p2pkitOutcome"], "PASS")
@@ -422,6 +473,95 @@ class AndroidArtAdmissionTest(unittest.TestCase):
         self.assertIsNone(art.foreground_chooser(old.replace("android/com.android.internal.app", "unrelated.app")))
         with self.assertRaises(ValueError):
             art.foreground_chooser(old + "\n" + modern)
+
+
+class RuntimeOwnershipTest(unittest.TestCase):
+    def listener_gate(self, observed, *, alive=True):
+        # Execute ONLY the current source's readiness assignment and loop, with
+        # synthetic time/socket/process objects. No adb, SDK, emulator or socket.
+        tree = ast.parse((SCRIPTS / "run-android-art-smoke.py").read_text())
+        smoke = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Smoke")
+        boot = next(node for node in smoke.body if isinstance(node, ast.FunctionDef) and node.name == "boot")
+        starts = [index for index, node in enumerate(boot.body) if isinstance(node, ast.Assign)
+                  and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                  and node.targets[0].id == "server_deadline"]
+        self.assertEqual(len(starts), 1)
+        start = starts[0]
+        self.assertIsInstance(boot.body[start + 1], ast.While)
+        self.assertIsInstance(boot.body[start + 2], ast.Assign)
+        self.assertEqual(ast.unparse(boot.body[start + 2].targets[0]), "devices")
+        connection = MagicMock()
+        network = SimpleNamespace(create_connection=Mock(return_value=connection))
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[0.0, observed]),
+                                sleep=Mock(side_effect=AssertionError("Successful observation must not retry")))
+        owner = SimpleNamespace(adb_server=Mock(poll=Mock(return_value=None if alive else 1)), adb_port=5588)
+        scope = dict(self=owner, socket=network, time=clock, need=art.need)
+        body = ast.Module(body=boot.body[start:start + 2], type_ignores=[])
+        def execute():
+            exec(compile(body, "<actual-listener-gate-with-pure-fakes>", "exec"), scope)
+        return execute, connection, network, clock, scope
+
+    def test_private_listener_success_must_be_observed_before_original_deadline(self):
+        execute, connection, network, clock, scope = self.listener_gate(19.999)
+        execute()
+        self.assertEqual(scope["server_deadline"], 20.0)
+        network.create_connection.assert_called_once_with(("127.0.0.1", 5588), timeout=0.5)
+        connection.__exit__.assert_called_once_with(None, None, None)
+        clock.sleep.assert_not_called()
+
+    def test_private_listener_success_at_or_after_original_deadline_is_rejected(self):
+        for observed in (20.0, 20.001, 25.0):
+            with self.subTest(observed=observed):
+                execute, connection, network, clock, scope = self.listener_gate(observed)
+                with self.assertRaisesRegex(ValueError, "Private adb listener readiness deadline"):
+                    execute()
+                self.assertEqual(scope["server_deadline"], 20.0)
+                network.create_connection.assert_called_once_with(("127.0.0.1", 5588), timeout=0.5)
+                connection.__exit__.assert_called_once()
+                clock.sleep.assert_not_called()
+
+    def test_private_listener_dead_owner_cannot_be_replaced_by_connecting(self):
+        execute, connection, network, clock, _ = self.listener_gate(1.0, alive=False)
+        with self.assertRaisesRegex(ValueError, "Private foreground adb server exited"):
+            execute()
+        network.create_connection.assert_not_called()
+        connection.__enter__.assert_not_called()
+        clock.sleep.assert_not_called()
+
+    def test_private_adb_listener_uses_supported_loopback_grammar_without_wildcard_flag(self):
+        argv = art.private_adb_server_argv(Path("/owned/sdk/platform-tools/adb"), 5588)
+        self.assertEqual(argv, ["/owned/sdk/platform-tools/adb", "-L", "tcp:5588", "nodaemon", "server"])
+        self.assertNotIn("-a", argv)
+        for port in (0, -1, 65536, True, "5588"):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                art.private_adb_server_argv("/owned/adb", port)
+
+    def test_retained_child_is_failed_and_deferred_without_pid_signaling(self):
+        child = Mock()
+        child.poll.return_value = None
+        record = {}
+        with self.assertRaisesRegex(RuntimeError, "enclosing ownership"):
+            art.observe_runtime_exit(child, record)
+        self.assertEqual(record, {"ownerDrainRequired": True})
+        child.wait.assert_not_called()
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+
+    def test_exit_observation_preserves_nonzero_results_and_bounded_wait_failure(self):
+        for status in (0, 1):
+            child = Mock()
+            child.poll.return_value = child.wait.return_value = status
+            self.assertEqual(art.observe_runtime_exit(child, {}), status)
+            child.wait.assert_called_once_with(timeout=5)
+            child.terminate.assert_not_called()
+            child.kill.assert_not_called()
+        child = Mock()
+        child.poll.return_value = 0
+        child.wait.side_effect = art.subprocess.TimeoutExpired("fixture", 5)
+        with self.assertRaises(art.subprocess.TimeoutExpired):
+            art.observe_runtime_exit(child, {})
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
 
 
 if __name__ == "__main__":

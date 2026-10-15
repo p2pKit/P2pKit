@@ -39,8 +39,10 @@ Before requesting a release-facing review, follow
 ## CI scope policy
 
 Every CI event runs the Linux and Windows library suites. The required
-`complete-gate` rejects failed, cancelled or skipped results from either host,
-then classifies the macOS work conservatively:
+`complete-gate` aggregates those hosts, repository checks, and separate iOS,
+platform, and artifact/consumer jobs; every dependency must succeed. The repository
+job classifies the macOS work once at the exact workflow SHA. Workers validate
+that source and scope even when heavy steps are omitted. Classification remains conservative:
 
 - a non-empty Markdown-only PR/push delta runs link, layout, release-metadata, scope,
   and whitespace checks;

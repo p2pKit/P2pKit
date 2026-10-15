@@ -2,7 +2,7 @@ P2pKit embedded JmDNS modifications
 
 Upstream: org.jmdns:jmdns:3.6.3, tag v3.6.3,
 commit 93b326381940f3fcd250d770a14a36de4c2dfcda.
-Private component revision: 3.6.3-p2pkit.410.5.
+Private component revision: 3.6.3-p2pkit.410.6.
 
 Mechanical integration relocates the complete javax.jmdns production package
 into dev.p2pkit.transport.lan.internal.jmdns. Java source uses LF line endings,
@@ -37,6 +37,15 @@ transaction ID on every overflow continuation. Existing flags, payload capacity,
 TC handling, record ordering and send failures remain unchanged. A protected
 send forwarding method isolates the side effect for socket-free serialization
 regressions; scheduled production tasks retain their original sender.
+
+patches/418-teardown-budget.patch gives host cancellation one monotonic 5000ms
+allowance shared by its services, recovery and terminal close. Recovery observes
+terminal ownership between bounded cancellation waits and hands off without
+losing still-owned resources. A failed send cannot multiply protocol waits per
+service before disposal. The separate resource-drain budget, successful native
+TTL-zero sends, actual resource ownership/disposal proof and interruption rules
+remain required. Public service-unregister semantics and all SDK deadlines are
+unchanged. Socket-free arithmetic checks are not real-resource qualification.
 
 PROVENANCE.json schema 2 preserves lifecyclePatch and lists subsequent patches
 in followupPatches application order. All are zero-context unified patches:

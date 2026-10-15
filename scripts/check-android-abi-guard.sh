@@ -36,9 +36,11 @@ RELEASE_GATE="$ROOT/scripts/run-release-gate.sh"
 TOOLCHAIN_POLICY="$ROOT/scripts/tests/check-kotlin-toolchain-policy-test.sh"
 CORE_BUILD="$ROOT/library/p2p-core/build.gradle.kts"
 LAN_BUILD="$ROOT/library/p2p-transport-lan/build.gradle.kts"
+RPC_BUILD="$ROOT/library/p2p-rpc/build.gradle.kts"
 PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-android/build.gradle.kts"
 CORE_API="$ROOT/library/p2p-core/api/android/p2p-core.api"
 LAN_API="$ROOT/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
+RPC_API="$ROOT/library/p2p-rpc/api/android/p2p-rpc.api"
 PROVISIONING_API="$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api"
 
 for required_file in \
@@ -48,9 +50,11 @@ for required_file in \
     "$TOOLCHAIN_POLICY" \
     "$CORE_BUILD" \
     "$LAN_BUILD" \
+    "$RPC_BUILD" \
     "$PROVISIONING_BUILD" \
     "$CORE_API" \
     "$LAN_API" \
+    "$RPC_API" \
     "$PROVISIONING_API"; do
     [[ -f "$required_file" ]] || fail "Android ABI policy input is missing: $required_file"
 done
@@ -62,12 +66,13 @@ project_block="$(sed -n \
     '/^val androidAbiProjects = setOf($/,/^)/p' \
     "$ROOT_BUILD")"
 [[ -n "$project_block" ]] || fail "the Android ABI project set is missing"
-[[ "$(grep -Ec '^    ":[^"]+",$' <<<"$project_block")" == "3" ]] ||
-    fail "the Android ABI project set must contain exactly the three published Android modules"
+[[ "$(grep -Ec '^    ":[^"]+",$' <<<"$project_block")" == "4" ]] ||
+    fail "the Android ABI project set must contain exactly the four configured Android library modules"
 
 android_abi_projects=(
     ':p2p-core'
     ':p2p-transport-lan'
+    ':p2p-rpc'
     ':p2p-network-provisioning-android'
 )
 for project in "${android_abi_projects[@]}"; do
@@ -88,7 +93,7 @@ if grep -Fq 'classes/kotlin/android/main' "$ROOT_BUILD" ||
     fail "the Android ABI guard reconstructs compiler output ownership"
 fi
 
-module_builds=("$CORE_BUILD" "$LAN_BUILD" "$PROVISIONING_BUILD")
+module_builds=("$CORE_BUILD" "$LAN_BUILD" "$RPC_BUILD" "$PROVISIONING_BUILD")
 for module_build in "${module_builds[@]}"; do
     [[ "$(grep -Fc 'tasks.named<KotlinCompile>("compileAndroidMain")' "$module_build")" == "1" ]] ||
         fail "$module_build must select exactly one typed Android compiler task"
@@ -141,6 +146,9 @@ done
 for signature in "${required_lan[@]}"; do
     grep -Fq "$signature" "$LAN_API" || fail "the LAN Android ABI baseline omits $signature"
 done
+for signature in 'dev/p2pkit/rpc/RpcHost' 'dev/p2pkit/rpc/RpcClient' 'dev/p2pkit/rpc/RpcPlatformAndroidKt'; do
+    grep -Fq "$signature" "$RPC_API" || fail "the RPC Android ABI baseline omits $signature"
+done
 for signature in "${required_provisioning[@]}"; do
     grep -Fq "$signature" "$PROVISIONING_API" ||
         fail "the provisioning Android ABI baseline omits $signature"
@@ -148,13 +156,27 @@ done
 
 # Metadata-aware extraction intentionally omits Kotlin-internal implementation
 # classes even though their JVM bytecode is present in the compiler output.
+# A private constructor called by its companion has a synthetic JVM accessor,
+# which the dumper retains even when its descriptor references internal types.
+# Keep that genuine bridge in the baseline; it does not export those classes.
+# Non-synthetic constructors, methods, fields and class declarations still fail.
+has_internal_api() {
+    local signature="$1"
+    shift
+    awk -v signature="$signature" '
+        index($0, signature) == 0 { next }
+        /^[[:space:]]+public synthetic fun <init> [(].*Lkotlin\/jvm\/internal\/DefaultConstructorMarker;[)]V$/ { next }
+        { found = 1 }
+        END { exit !found }
+    ' "$@"
+}
+
 for internal_signature in \
     'dev/p2pkit/core/AndroidNetworkPathListener' \
     'dev/p2pkit/transport/lan/AndroidLanDataTransport' \
+    'dev/p2pkit/rpc/internal/RpcHostEngine' \
     'dev/p2pkit/provisioning/android/WifiManagerWrapper'; do
-    if grep -Fq "$internal_signature" "$CORE_API" ||
-        grep -Fq "$internal_signature" "$LAN_API" ||
-        grep -Fq "$internal_signature" "$PROVISIONING_API"; then
+    if has_internal_api "$internal_signature" "$CORE_API" "$LAN_API" "$RPC_API" "$PROVISIONING_API"; then
         fail "Android ABI baselines incorrectly freeze internal symbol $internal_signature"
     fi
 done
@@ -169,6 +191,7 @@ if [[ "$STATIC_ONLY" == "false" ]]; then
                 --purpose android-abi-graph -- \
                 :p2p-core:check \
                 :p2p-transport-lan:check \
+                :p2p-rpc:check \
                 :p2p-network-provisioning-android:check \
                 --dependency-verification=strict \
                 --dry-run --console=plain
@@ -179,6 +202,7 @@ if [[ "$STATIC_ONLY" == "false" ]]; then
             ./gradlew \
                 :p2p-core:check \
                 :p2p-transport-lan:check \
+                :p2p-rpc:check \
                 :p2p-network-provisioning-android:check \
                 --dependency-verification=strict \
                 --dry-run --console=plain

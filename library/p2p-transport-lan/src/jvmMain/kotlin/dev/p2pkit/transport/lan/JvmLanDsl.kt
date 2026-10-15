@@ -33,6 +33,35 @@ public fun TransportsBuilder.lan() {
     register(JvmLanTransportFactory)
 }
 
+/** Explicit restricted LAN. DialOnly does not open a listener; no ordinary-LAN fallback. */
+public fun TransportsBuilder.lan(policy: OrganizationLan, role: LanRole) {
+    register(JvmOrganizationLanFactory(policy, role))
+}
+
+private class JvmOrganizationLanFactory(
+    private val policy: OrganizationLan,
+    private val role: LanRole,
+) : TransportFactory {
+    override val descriptor: TransportDescriptor = TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
+
+    override fun build(context: TransportContext): TransportPair {
+        val registration = LanServiceRegistration(
+            context.appId, context.localPeerId, context.deviceName, context.platform,
+            context.securityProfile, context.localFingerprint,
+            advertisedAddress = policy.localAddress.takeIf { context.localFingerprint != null },
+        )
+        val macBinding = MacLanNativeLoader.configuredBinding(policy)
+        return TransportPair(
+            JvmLanDataTransport(registration, policy = policy, role = role,
+                macBinding = macBinding),
+            if (macBinding != null && context.localFingerprint != null) {
+                MacBonjourDiscoveryTransport(registration, policy, role)
+            }
+            else JvmLanDiscoveryTransport(registration, policy = policy, role = role)
+        )
+    }
+}
+
 internal object JvmLanTransportFactory : TransportFactory {
     override val descriptor: TransportDescriptor =
         TransportDescriptor.dataAndDiscovery(TransportKind.LAN)

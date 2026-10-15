@@ -1,4 +1,7 @@
+import com.android.build.gradle.tasks.BundleAar
+import dev.p2pkit.build.EmbeddedJmdnsAar
 import dev.p2pkit.build.GitCommitValueSource
+import java.io.File
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
@@ -28,6 +31,7 @@ val embeddedJmdnsFollowupPatches = listOf(
     "patches/416-reverse-domain.patch",
     "patches/414-service-port.patch",
     "patches/417-response-continuation.patch",
+    "patches/418-teardown-budget.patch",
 )
 val embeddedJmdnsSlf4j = "org.slf4j:slf4j-api:2.0.7"
 val embeddedJmdnsCompileClasspath = configurations.create("embeddedJmdnsCompileClasspath") {
@@ -82,6 +86,19 @@ val embeddedJmdnsJar = tasks.register<Jar>("embeddedJmdnsJar") {
 }
 val embeddedJmdnsDependency = files(embeddedJmdnsJar.flatMap { it.archiveFile })
     .builtBy(embeddedJmdnsJar)
+
+// AGP normally splits file-dependency JAR resources into classes.jar and emits
+// a class-only libs JAR. Preserve the reviewed producer exactly in the public
+// AAR, without changing its classes or duplicating resources. This belongs to
+// the producing task, before Maven/module checksums; the artifact guard remains
+// byte-exact and also checks licenses, private resources and publication shape.
+tasks.withType<BundleAar>().configureEach {
+    val producer = embeddedJmdnsJar.flatMap { it.archiveFile }
+    inputs.file(producer).withPropertyName("completeEmbeddedJmdnsProducer")
+    doLast {
+        EmbeddedJmdnsAar.preserve(archiveFile.get().asFile, producer.get().asFile)
+    }
+}
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
@@ -333,5 +350,116 @@ publishing {
             description.set("P2pKit LAN transport — Bonjour/JmDNS discovery + TCP data over Network.framework/sockets.")
             P2pPomMetadata.configure(this)
         }
+    }
+}
+
+// Scoped TCP/Bonjour macOS adapters. Ordinary compilation stays native-toolchain-free.
+// Only explicit local producer tasks stage JNI.
+val macTcpCommit = providers.of(GitCommitValueSource::class) {
+    parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+}
+val macTcpDirty = providers.of(GitDirtyValueSource::class) {
+    parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    parameters.relevantPaths.set(listOf("."))
+}
+val macTcpStamp = tasks.register("generateMacTcpBuildStamp") {
+    val output = layout.buildDirectory.dir("generated/mac-tcp-stamp")
+    inputs.property("sourceCommit", macTcpCommit)
+    inputs.property("sourceDirty", macTcpDirty)
+    outputs.dir(output)
+    doLast {
+        val commit = macTcpCommit.get()
+        check(commit.matches(Regex("[a-f0-9]{40}")))
+        val file = output.get().file("dev/p2pkit/transport/lan/MacLanBuildStamp.kt").asFile
+        check(file.parentFile.isDirectory || file.parentFile.mkdirs())
+        file.writeText("""
+            package dev.p2pkit.transport.lan
+            internal object MacLanBuildStamp {
+                const val SOURCE_COMMIT: String = "$commit"
+                const val SOURCE_CLEAN: Boolean = ${!macTcpDirty.get()}
+            }
+        """.trimIndent() + "\n")
+    }
+}
+kotlin.sourceSets.named("jvmMain") { kotlin.srcDir(macTcpStamp) }
+val macTcpDirectory = layout.buildDirectory.dir(macTcpCommit.map { "macos-tcp/$it" })
+val macTcpProducerRoot = rootProject.projectDir
+val macTcpProducerScript = rootProject.file("scripts/build-macos-jvm-tcp.py")
+val macTcpJdk = extensions.getByType<JavaToolchainService>().launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(17))
+}
+val stageMacTcp = tasks.register<Exec>("stageMacTcp") {
+    group = "application"
+    description = "Explicit clean-source macOS ARM64 JNI producer for scoped TCP/Bonjour; not a peer qualification."
+    inputs.files(rootProject.file("scripts/build-macos-jvm-tcp.py"),
+        file("src/nativeInterop/macosJvm/p2pkit_lan_socket.c"),
+        file("src/nativeInterop/macosJvm/p2pkit_lan_socket.h"),
+        file("src/nativeInterop/macosJvm/p2pkit_lan_jni.c"),
+        file("src/nativeInterop/macosJvm/p2pkit_bonjour.c"),
+        file("src/nativeInterop/macosJvm/p2pkit_bonjour.h"),
+        file("src/nativeInterop/macosJvm/p2pkit_bonjour_jni.c"))
+    inputs.property("sourceCommit", macTcpCommit)
+    inputs.property("sourceDirty", macTcpDirty)
+    outputs.dir(macTcpDirectory)
+    executable = "python3"
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf("-I", "-B", macTcpProducerScript.absolutePath,
+            "--root", macTcpProducerRoot.absolutePath,
+            "--jdk", macTcpJdk.get().metadata.installationPath.asFile.absolutePath,
+            "--output", macTcpDirectory.get().asFile.absolutePath)
+    })
+    // The producer checks clean source independently before allocating output.
+    // Keep this Exec free of script actions so unchanged stages can remain up-to-date.
+}
+// Opt-in tests load the real stage; no test is silently skipped or auto-selected on unsupported hosts.
+tasks.register<Test>("macTcpNativeTest") {
+    group = "verification"
+    description = "Explicit scoped JNI loopback ownership and readback tests, not physical LAN qualification."
+    dependsOn(stageMacTcp, "jvmTestClasses")
+    val standard = tasks.named<Test>("jvmTest")
+    testClassesDirs = standard.get().testClassesDirs
+    classpath = standard.get().classpath + files(macTcpDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
+    filter {
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanNativeIntegrationTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanArtifactTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacBonjourNativeIntegrationTest")
+    }
+    systemProperty("dev.p2pkit.lan.macos.nativeDir", macTcpDirectory.get().asFile.absolutePath)
+}
+// Explicit native suite is separate from portable check; absence of a native stage is never reported as a pass.
+tasks.named<Test>("jvmTest") {
+    exclude("**/MacLanNativeIntegrationTest.class", "**/MacLanArtifactTest.class",
+        "**/MacBonjourNativeIntegrationTest.class", "**/MacLanInstalledBundleNativeTest.class")
+}
+
+// Explicit signed synthetic bundles, never an installed-app or peer qualification.
+// The caller owns fixture production/retention; missing inputs fail rather than skip.
+tasks.register<Test>("macInstalledBundleTest") {
+    group = "verification"
+    description = "Checks development-bundle signatures, pinned bytes and admission with owned Mac ARM64 fixtures."
+    dependsOn("jvmTestClasses")
+    val standard = tasks.named<Test>("jvmTest")
+    testClassesDirs = standard.get().testClassesDirs
+    classpath = standard.get().classpath
+    filter {
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanInstalledBundleNativeTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanInstalledBundlePolicyTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanVerificationCommandTest")
+    }
+    val fixtures = providers.gradleProperty("p2pkit.macos.bundleFixtures")
+    inputs.property("ownedFixtureDirectory", fixtures.orElse(""))
+    inputs.dir(fixtures.map { file(it) }).optional().withPropertyName("ownedBundleFixtureBytes")
+    doFirst {
+        check(System.getProperty("os.name") == "Mac OS X" &&
+            System.getProperty("os.arch") in setOf("aarch64", "arm64")) {
+            "Signed bundle fixture checks require macOS ARM64"
+        }
+        val directory = File(checkNotNull(fixtures.orNull) {
+            "Owned bundle fixtures must be provided explicitly"
+        })
+        check(directory.isAbsolute && directory.isDirectory && directory.canonicalFile == directory) {
+            "Owned bundle fixture directory must be canonical and present"
+        }
+        systemProperty("dev.p2pkit.test.macos.bundleFixtures", directory.absolutePath)
     }
 }

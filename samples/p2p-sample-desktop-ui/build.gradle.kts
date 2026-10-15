@@ -1,7 +1,16 @@
 import dev.p2pkit.build.ApplicationReleaseVersion
 import dev.p2pkit.build.GenerateSampleReleaseIdentityTask
 import dev.p2pkit.build.GitCommitValueSource
+import dev.p2pkit.build.BuildWindowsProfileTask
+import dev.p2pkit.build.VerifyWindowsProfileSourceTask
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractCheckNativeDistributionRuntime
+import org.jetbrains.compose.desktop.application.tasks.AbstractJLinkTask
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -107,6 +116,7 @@ dependencies {
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-desktop"))
     implementation(project(":p2p-sample-diagnostics"))
+    implementation(project(":p2p-sample-rpc"))
     implementation(libs.kotlinx.coroutines.core)
 
     implementation(composeDesktopRuntime)
@@ -125,6 +135,282 @@ dependencies {
     // This module previously had no test source set; samples are unpublished
     // test harnesses, so this stays out of the published dependency graph.
     testImplementation(kotlin("test"))
+}
+
+// Private Gradle execution and packaged development apps use distinct admission policies.
+// Neither path claims Developer ID/notarization or substitutes a new release pipeline.
+if (detectedDesktopLockTarget == "macos-arm64") {
+    val sourceCommit = providers.of(GitCommitValueSource::class) {
+        parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    }
+    val nativeDirectory = project(":p2p-transport-lan").layout.buildDirectory.dir(
+        sourceCommit.map { "macos-tcp/$it" },
+    )
+    tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+        dependsOn(":p2p-transport-lan:stageMacTcp")
+        classpath(files(nativeDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") }))
+        systemProperty("dev.p2pkit.lan.macos.nativeDir", nativeDirectory.get().asFile.absolutePath)
+    }
+
+    val finalizedDirectory = layout.buildDirectory.dir(sourceCommit.map { "rpc-macos-app-image/$it" })
+    val dmgPackagerJdk = extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+    val finalizedApp = finalizedDirectory.map { it.dir("P2pKit Sample.app") }
+    val finalizationReceipt = finalizedDirectory.map { it.file("native-finalization.json") }
+    val finalizer = rootProject.layout.projectDirectory.file("scripts/stage-rpc-macos-app.py")
+    val originalApp = providers.provider {
+        tasks.named<AbstractJPackageTask>("createDistributable").get().destinationDir.get().dir("P2pKit Sample.app")
+    }
+    val finalizeRpcMacosDevelopmentApp = tasks.register<Exec>("finalizeRpcMacosDevelopmentApp") {
+        group = "distribution"
+        description = "Finalizes an owned development-ad-hoc copy for the existing DMG producer; never publishes."
+        // Declare these before lazy package-task configuration: requesting this task alone must realize its producer.
+        dependsOn("createDistributable", ":p2p-transport-lan:stageMacTcp")
+        inputs.file(finalizer)
+        inputs.dir(nativeDirectory)
+        inputs.dir(originalApp)
+        inputs.property("sourceCommit", sourceCommit)
+        // Gradle may pre-create declared output directories; the helper must create the .app itself.
+        outputs.dir(finalizedDirectory)
+        outputs.file(finalizationReceipt)
+        executable = "python3"
+        argumentProviders.add(CommandLineArgumentProvider {
+            listOf("-I", "-S", "-B", finalizer.asFile.absolutePath,
+                "--root", rootProject.projectDir.absolutePath,
+                "--input-app", originalApp.get().asFile.absolutePath,
+                "--output-app", finalizedApp.get().asFile.absolutePath,
+                "--native-stage", nativeDirectory.get().asFile.absolutePath,
+                "--receipt", finalizationReceipt.get().asFile.absolutePath,
+                "--policy", "development-adhoc-v1")
+        })
+        // Gradle creates the declared output parent; the helper validates it before use.
+    }
+    tasks.withType<AbstractJPackageTask>().configureEach {
+        if (name == "createDistributable") {
+            dependsOn(":p2p-transport-lan:stageMacTcp")
+            files.from(nativeDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
+        }
+    }
+    // Compose sets launcherJvmArgs during its deferred task registration. Append afterward;
+    // an early configureEach addition is overwritten. Do not apply installed policy to Gradle run.
+    afterEvaluate {
+        tasks.named<AbstractJPackageTask>("createDistributable") {
+            launcherJvmArgs.add("-Ddev.p2pkit.lan.macos.installedPolicy=development-adhoc-v1")
+        }
+        tasks.named<AbstractJPackageTask>("packageDmg") {
+            dependsOn(finalizeRpcMacosDevelopmentApp)
+            // JDK 21 installer packaging re-signs an ad-hoc predefined image, invalidating its native pin.
+            // Use the JDK 17 image-preserving installer tool; do not change the application's runtime.
+            javaHome.set(dmgPackagerJdk.map { it.metadata.installationPath.asFile.absolutePath })
+            // Compose also sets this input during registration; bind the finalized parent afterward.
+            // The plugin appends .app for the active JDK, so do not pass finalizedApp here.
+            appImage.set(finalizedDirectory)
+        }
+    }
+}
+
+// The same Desktop app/MSI gains a staged native component, not a separate installer or load policy.
+// Merely including these bytes must not enable the unqualified Windows RPC provider.
+if (detectedDesktopLockTarget == "windows-x64") {
+    // Experimental packaging/readback only. Even when included, the adapter refuses every productive load.
+    // Foundation must still qualify and pin the installed runtime/bootstrap before enabling that path.
+    val previewAdapter = providers.gradleProperty("p2pkit.rpc.windows.previewAdapter").map {
+        it.toBooleanStrict()
+    }.getOrElse(false)
+    val adapterProject = project(":p2p-sample-rpc")
+    val adapterJar = adapterProject.layout.buildDirectory.file(
+        "windows-loader-jdk21/p2pkit-windows-loader-jdk21.jar",
+    )
+    val previewRuntime = extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+    val sourceCommit = providers.of(GitCommitValueSource::class) {
+        parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    }
+    val nativeBuild = layout.buildDirectory.dir(sourceCommit.map { "rpc-windows-profile/$it/compiler" })
+    val appResources = layout.buildDirectory.dir(sourceCommit.map { "rpc-windows-profile/$it/resources" })
+    val parentPinResources = layout.buildDirectory.dir(sourceCommit.map { "rpc-windows-profile/$it/parent-pin" })
+    val nativeJdk = extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+    val verifyRpcWindowsPackagingSource = tasks.register<VerifyWindowsProfileSourceTask>(
+        "verifyRpcWindowsPackagingSource",
+    ) {
+        group = "verification"
+        description = "Always recheck clean native package source, even when generated bytes are up to date."
+        rootDirectory.set(rootProject.layout.projectDirectory)
+        this.sourceCommit.set(sourceCommit)
+    }
+    val buildRpcWindowsProfileNative = tasks.register<BuildWindowsProfileTask>("buildRpcWindowsProfileNative") {
+        group = "distribution"
+        description = "Compile the Windows x64 custody component for the existing app; never load or publish."
+        dependsOn(verifyRpcWindowsPackagingSource)
+        rootDirectory.set(rootProject.layout.projectDirectory)
+        nativeDirectory.set(project(":p2p-sample-rpc").layout.projectDirectory.dir("native/windows-profile"))
+        javaHome.set(nativeJdk.map { it.metadata.installationPath })
+        this.sourceCommit.set(sourceCommit)
+        libraryFile.set(nativeBuild.map { it.file("p2pkit-windows-profile.dll") })
+        compilerReceipt.set(nativeBuild.map { it.file("compiler.properties") })
+    }
+    val stageRpcWindowsProfileNative = tasks.register<JavaExec>("stageRpcWindowsProfileNative") {
+        group = "distribution"
+        description = "Inspect and stage byte-pinned DLL/resources in the existing Desktop distribution."
+        dependsOn(buildRpcWindowsProfileNative)
+        // Production code only: packaging never depends on the sample's test or lab compilation.
+        classpath(configurations.runtimeClasspath)
+        mainClass.set("dev.p2pkit.sample.rpc.profile.WindowsProfilePackageStage")
+        javaLauncher.set(nativeJdk)
+        inputs.files(buildRpcWindowsProfileNative.flatMap { it.libraryFile },
+            buildRpcWindowsProfileNative.flatMap { it.compilerReceipt })
+        outputs.dir(appResources)
+        outputs.dir(parentPinResources)
+        argumentProviders.add(CommandLineArgumentProvider {
+            listOf(buildRpcWindowsProfileNative.get().libraryFile.get().asFile.absolutePath,
+                buildRpcWindowsProfileNative.get().compilerReceipt.get().asFile.absolutePath,
+                appResources.get().dir("windows/rpc-profile/windows-x64").asFile.absolutePath,
+                parentPinResources.get().asFile.absolutePath)
+        })
+    }
+    val rpcWindowsParentPinJar = tasks.register<Jar>("rpcWindowsParentPinJar") {
+        dependsOn(stageRpcWindowsProfileNative)
+        from(parentPinResources) {
+            include("META-INF/p2pkit/windows-profile-parent.properties")
+        }
+        archiveFileName.set("p2pkit-windows-profile-parent-pin.jar")
+        destinationDirectory.set(layout.buildDirectory.dir(sourceCommit.map { "rpc-windows-profile/$it/parent-jar" }))
+    }
+    val rpcWindowsApplicationResources = tasks.register<Sync>("rpcWindowsApplicationResources") {
+        dependsOn(stageRpcWindowsProfileNative)
+        // Do not attach native compilation to Compose's shared prepareAppResources task: run also uses it.
+        // Preserve ordinary application resources and add native bytes only for packaged images.
+        from(tasks.named<Sync>("prepareAppResources").map { it.destinationDir })
+        from(appResources.map { it.dir("windows") })
+        // JDK21 recursively adds every input .jar to app.classpath, including resource subdirectories.
+        // The named preview adapter is staged after image generation, never in this scanned input.
+        into(layout.buildDirectory.dir(sourceCommit.map { "rpc-windows-profile/$it/package-resources" }))
+        duplicatesStrategy = DuplicatesStrategy.FAIL
+    }
+    compose.desktop.application.nativeDistributions {
+        modules("jdk.unsupported") // com.sun.nio.file.ExtendedOpenOption; no ambient/full JDK dependency.
+    }
+    // Compose marks appResourcesDir @Internal: its provider does NOT infer producer dependencies or inputs.
+    // Explicitly bind both for each maintained package task; keep ordinary run/test independent.
+    afterEvaluate {
+        val packageTasks = setOf(
+            "createDistributable", "packageMsi", "packageExe",
+            "createReleaseDistributable", "packageReleaseMsi", "packageReleaseExe",
+        )
+        check(setOf("createDistributable", "packageMsi", "packageExe").all { it in tasks.names }) {
+            "Expected maintained Windows distribution tasks are missing"
+        }
+        if (previewAdapter) {
+            // Selecting jpackage alone does not select the linked application runtime.
+            tasks.withType<AbstractJLinkTask>().configureEach {
+                javaHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+            }
+            tasks.withType<AbstractCheckNativeDistributionRuntime>().configureEach {
+                jdkHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+            }
+        }
+        val imageTasks = setOf("createDistributable", "createReleaseDistributable")
+        packageTasks.filter { it in tasks.names }.forEach { packageTask ->
+            tasks.named<AbstractJPackageTask>(packageTask) {
+                dependsOn(rpcWindowsApplicationResources)
+                inputs.dir(rpcWindowsApplicationResources.map { it.destinationDir })
+                    .withPropertyName("rpcWindowsApplicationResources")
+                    .withPathSensitivity(PathSensitivity.RELATIVE)
+                files.from(rpcWindowsParentPinJar.flatMap { it.archiveFile })
+                appResourcesDir.set(layout.dir(rpcWindowsApplicationResources.map { it.destinationDir }))
+                if (previewAdapter) {
+                    // Do not change public/Kotlin bytecode targets or silently run a21-preview class on17.
+                    // This is a family constraint for the investigation, not Foundation's eventual supplier pin.
+                    javaHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+                    launcherJvmArgs.addAll(listOf(
+                        "--enable-preview",
+                        "--module-path=\$APPDIR/resources/rpc-loader-jdk21",
+                        "--add-modules=dev.p2pkit.rpc.windows.loader",
+                        "--enable-native-access=dev.p2pkit.rpc.windows.loader",
+                    ))
+                    if (packageTask in imageTasks) {
+                        dependsOn(":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar")
+                        inputs.file(adapterJar).withPropertyName("rpcWindowsPreviewAdapterJar")
+                            .withPathSensitivity(PathSensitivity.NONE)
+                        // Complete this same image before Gradle snapshots it or an installer consumes it.
+                        // This is build-directory staging only, not installed-root or DLL-load authority.
+                        doLast {
+                            check(targetFormat == TargetFormat.AppImage && packageName.get() == "P2pKit Sample")
+                            val image = destinationDir.get().dir(packageName.get()).asFile.toPath()
+                            val app = image.resolve("app")
+                            val resources = app.resolve("resources")
+                            for (directory in listOf(image, app, resources)) {
+                                check(Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+                                    "Expected existing ordinary Windows image directories"
+                                }
+                            }
+                            val source = adapterJar.get().asFile.toPath()
+                            val before = Files.readAttributes(
+                                source, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+                            )
+                            check(before.isRegularFile && before.size() in 1..16L * 1024 * 1024)
+                            val bytes = Files.newInputStream(source).use { it.readNBytes(16 * 1024 * 1024 + 1) }
+                            val after = Files.readAttributes(
+                                source, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+                            )
+                            check(bytes.size.toLong() == before.size() && after.isRegularFile &&
+                                after.size() == before.size() && after.fileKey() == before.fileKey() &&
+                                after.lastModifiedTime() == before.lastModifiedTime()) {
+                                "Preview adapter input changed during bounded staging"
+                            }
+                            val cfg = app.resolve(packageName.get() + ".cfg")
+                            check(Files.isRegularFile(cfg, LinkOption.NOFOLLOW_LINKS) &&
+                                Files.size(cfg) in 1..65536L)
+                            val cfgBytes = Files.newInputStream(cfg).use { it.readNBytes(65537) }
+                            check(cfgBytes.size <= 65536 &&
+                                !cfgBytes.toString(Charsets.UTF_8).contains(source.fileName.toString())) {
+                                "Preview adapter must not enter the generated application classpath"
+                            }
+                            val adapterDirectory = resources.resolve("rpc-loader-jdk21")
+                            Files.createDirectory(adapterDirectory)
+                            val target = adapterDirectory.resolve(source.fileName)
+                            Files.write(target, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+                            check(Files.mismatch(source, target) == -1L) {
+                                "Preview adapter image bytes differ from their declared build input"
+                            }
+                        }
+                    } else {
+                        val imageTask = if (packageTask.startsWith("packageRelease")) {
+                            "createReleaseDistributable"
+                        } else {
+                            "createDistributable"
+                        }
+                        val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)
+                        val completedImage = maintainedImage.flatMap { image ->
+                            image.destinationDir.map { it.dir(image.packageName.get()) }
+                        }
+                        // Compose 1.11.1 only supplies appImage automatically on macOS. Without this
+                        // Windows would build a second image from --input, omitting our staged module.
+                        // Windows jpackage consumes the actual named image, not its output parent.
+                        if (!appImage.isPresent) appImage.set(completedImage)
+                        dependsOn(maintainedImage)
+                        inputs.dir(completedImage)
+                            .withPropertyName("rpcWindowsPreviewCompletedImage")
+                            .withPathSensitivity(PathSensitivity.RELATIVE)
+                        doFirst {
+                            check(appImage.get().asFile == completedImage.get().asFile) {
+                                "Windows installer must consume its completed maintained application image"
+                            }
+                        }
+                    }
+                }
+                doFirst {
+                    check(appResourcesDir.get().asFile == rpcWindowsApplicationResources.get().destinationDir) {
+                        "Windows native application resources were replaced after package configuration"
+                    }
+                }
+            }
+        }
+    }
 }
 
 compose.desktop {

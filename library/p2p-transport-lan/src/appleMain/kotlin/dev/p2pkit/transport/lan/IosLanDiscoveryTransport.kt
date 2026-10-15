@@ -10,7 +10,6 @@ import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
-import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -18,13 +17,14 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import platform.Foundation.NSLock
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
 import platform.Network.nw_advertise_descriptor_set_no_auto_rename
 import platform.Network.nw_advertise_descriptor_set_txt_record_object
@@ -55,6 +55,7 @@ import platform.Network.nw_endpoint_get_bonjour_service_type
 import platform.Network.nw_endpoint_get_bonjour_service_domain
 import platform.Network.nw_endpoint_t
 import platform.Network.nw_error_get_error_code
+import platform.Network.nw_interface_type_cellular
 import platform.Network.nw_listener_set_advertise_descriptor
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_create
@@ -64,8 +65,7 @@ import platform.Network.nw_parameters_prohibit_interface_type
 import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
 import platform.Network.nw_txt_record_t
-import platform.Network.nw_interface_type_cellular
-import platform.Foundation.NSLock
+import kotlin.concurrent.Volatile
 
 /** Build one browser policy symmetric with listener/outbound LAN policy. */
 internal fun createAppleLanBrowserParameters(): nw_parameters_t {
@@ -108,7 +108,9 @@ internal class IosLanDiscoveryTransport(
     private val transportContext: TransportContext,
     private val endpointRegistry: IosEndpointRegistry,
     private val dataTransport: IosLanDataTransport,
-    txtDns: IosLanTxtDns? = null
+    txtDns: IosLanTxtDns? = null,
+    private val policy: OrganizationLan? = null,
+    private val role: LanRole = LanRole.Host
 ) : DiscoveryTransport {
 
     override val type: TransportKind = TransportKind.LAN
@@ -237,6 +239,7 @@ internal class IosLanDiscoveryTransport(
     }
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) = lock.withLock {
+        check(role == LanRole.Host) { "A dial-only LAN transport cannot advertise" }
         if (advertising) return@withLock
         logAppleLanPackagingIssues(transportContext.lanServiceTypeBonjour, "startAdvertising")
         IosLanDebug.log(
@@ -641,7 +644,7 @@ internal class IosLanDiscoveryTransport(
      * [onAfterListenerRebind] share the same lifecycle code. Caller MUST
      * hold [lock] and MUST have checked that [browser] is null.
      */
-    private fun createBrowserLocked(recoveryAttempt: Int) {
+    private suspend fun createBrowserLocked(recoveryAttempt: Int) {
         // AUDIT-2026-06 (#8): every new browser instance opens a fresh
         // generation. Entries in [announceCache] confirmed by an older
         // generation are ghost candidates until this browser re-adds them.
@@ -654,7 +657,9 @@ internal class IosLanDiscoveryTransport(
         // strictly validated, untrusted TXT claims for this current logical service incarnation.
         nw_browse_descriptor_set_include_txt_record(descriptor, false)
 
-        val browserParams = createAppleLanBrowserParameters()
+        val browserParams = if (policy == null) createAppleLanBrowserParameters() else {
+            restrictAppleLanParameters(nw_parameters_create(), policy, dataTransport.queue)
+        }
         IosLanDebug.log(
             "browse",
             "browser params: cellular=PROHIBITED, " +
@@ -867,7 +872,10 @@ internal class IosLanDiscoveryTransport(
             platform = localPeer.platform,
             supportedTransports = localPeer.supportedTransports,
             protocolVersion = transportContext.lanProtocolVersion,
-            fingerprint = transportContext.localFingerprint
+            fingerprint = transportContext.localFingerprint,
+            numericEndpoint = policy?.takeIf { transportContext.localFingerprint != null }?.let {
+                LanEndpoint(it.localAddress, checkNotNull(dataTransport.tcpPort.value))
+            },
         )
         val txt = IosBonjour.mapToTxtRecord(
             properties
@@ -1026,7 +1034,15 @@ internal class IosLanDiscoveryTransport(
             return
         }
         val peerId = record.peerId
-        val internalPeer = record.toInternalPeer(TransportHint(type = TransportKind.LAN))
+        // Strict organization transport never dials an opaque Bonjour endpoint. Validate numeric hints
+        // before publication; the transport STILL checks policy/interface and the actual connected socket.
+        val numeric = record.numericEndpoint
+        if (policy != null && numeric != null && !policy.allows(numeric.host)) {
+            withdrawInvalidResolution(servicePid, generation)
+            return
+        }
+        val internalPeer = record.toInternalPeer(TransportHint(type = TransportKind.LAN,
+            host = numeric?.host, port = numeric?.port))
         // AUDIT-2026-06 (#8): stamp the entry with the generation that
         // confirmed it. A live peer re-added by a replacement browser gets
         // re-stamped here and keeps being announced; a ghost keeps its old

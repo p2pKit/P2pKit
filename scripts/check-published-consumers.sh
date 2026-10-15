@@ -27,6 +27,7 @@ GRADLE_EXECUTOR="${P2PKIT_GRADLE_EXECUTOR:-}"
 REMOTE_REPOSITORY_URL="${P2PKIT_CONSUMER_REPOSITORY_URL:-}"
 CONSUMER_PROFILE="${P2PKIT_CONSUMER_PROFILE:-complete}"
 CURRENT_SOURCE_CONSUMER=1
+RPC_CONSUMER=0
 AUDIT_WORK_STATE=""
 for boolean_value in "$KEEP_CONSUMER_ARTIFACTS" "$AUDIT_CONSUMER_METADATA"; do
     [[ "$boolean_value" == 0 || "$boolean_value" == 1 ]] || {
@@ -171,6 +172,10 @@ elif [[ $# -ne 0 ]]; then
     echo "FAIL: usage: scripts/check-published-consumers.sh [--latest-published]" >&2
     exit 2
 fi
+if [[ "$CURRENT_SOURCE_CONSUMER" == 1 && "$CONSUMER_PROFILE" == complete ]]; then
+    # RPC is new source, not part of immutable RC3 or the focused LAN profile.
+    RPC_CONSUMER=1
+fi
 
 fail() {
     echo "FAIL: $*" >&2
@@ -214,6 +219,9 @@ if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
     )
     if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
         remote_pom_artifacts+=(p2p-transport-lan-android)
+    fi
+    if [[ "$RPC_CONSUMER" == 1 ]]; then
+        remote_pom_artifacts+=(p2p-rpc-jvm p2p-rpc-android)
     fi
     for artifact in "${remote_pom_artifacts[@]}"; do
         directory="$REPO_DIR/$GROUP_PATH/$artifact/$VERSION"
@@ -269,6 +277,8 @@ LAN_JVM="$BASE/p2p-transport-lan-jvm/$VERSION/p2p-transport-lan-jvm-$VERSION.pom
 LAN_ANDROID="$BASE/p2p-transport-lan-android/$VERSION/p2p-transport-lan-android-$VERSION.pom"
 PROV_ANDROID="$BASE/p2p-network-provisioning-android-android/$VERSION/p2p-network-provisioning-android-android-$VERSION.pom"
 PROV_DESKTOP="$BASE/p2p-network-provisioning-desktop/$VERSION/p2p-network-provisioning-desktop-$VERSION.pom"
+RPC_JVM="$BASE/p2p-rpc-jvm/$VERSION/p2p-rpc-jvm-$VERSION.pom"
+RPC_ANDROID="$BASE/p2p-rpc-android/$VERSION/p2p-rpc-android-$VERSION.pom"
 
 required_poms=("$CORE_JVM" "$LAN_JVM")
 if [[ "$CONSUMER_PROFILE" == complete ]]; then
@@ -276,6 +286,9 @@ if [[ "$CONSUMER_PROFILE" == complete ]]; then
 fi
 if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
     required_poms+=("$LAN_ANDROID")
+fi
+if [[ "$RPC_CONSUMER" == 1 ]]; then
+    required_poms+=("$RPC_JVM" "$RPC_ANDROID")
 fi
 for pom in "${required_poms[@]}"; do
     [[ -f "$pom" ]] || fail "missing generated POM: $pom"
@@ -307,6 +320,19 @@ assert_scope "$PROV_DESKTOP" p2p-core-jvm compile
 assert_scope "$PROV_DESKTOP" kotlinx-coroutines-core-jvm compile
 [[ -z "$(pom_scope "$PROV_DESKTOP" p2p-transport-lan-jvm)" ]] ||
     fail "desktop provisioning still publishes its test-only LAN dependency"
+fi
+
+if [[ "$RPC_CONSUMER" == 1 ]]; then
+    for target in jvm android; do
+        rpc_pom="$BASE/p2p-rpc-$target/$VERSION/p2p-rpc-$target-$VERSION.pom"
+        assert_scope "$rpc_pom" "p2p-core-$target" compile
+        assert_scope "$rpc_pom" "p2p-transport-lan-$target" compile
+        assert_scope "$rpc_pom" kotlinx-serialization-core-jvm compile
+        assert_scope "$rpc_pom" kotlinx-serialization-json-jvm runtime
+        assert_scope "$rpc_pom" kotlinx-serialization-json-io-jvm runtime
+    done
+    assert_scope "$RPC_JVM" p2p-network-provisioning-desktop runtime
+    assert_scope "$RPC_ANDROID" p2p-network-provisioning-android-android runtime
 fi
 
 if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
@@ -485,6 +511,16 @@ mkdir -p \
     "$FIXTURE_DIR/kmpConsumer/src/iosMain/kotlin/consumer"
 fi
 
+# Gradle's -p selects this isolated project, so the repository's heap settings
+# do not carry over. D8/R8 and lint exceed Gradle's 512m/384m defaults. Bound the
+# fixture to the maintained executor's heap/metaspace/CPU/worker budget without
+# copying root properties, changing caller homes, or overriding executor flags.
+cat > "$FIXTURE_DIR/gradle.properties" <<'EOF_CONSUMER_RESOURCES'
+org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8
+org.gradle.workers.max=2
+org.gradle.parallel=false
+EOF_CONSUMER_RESOURCES
+
 if [[ -z "${ANDROID_HOME:-}" && -z "${ANDROID_SDK_ROOT:-}" ]]; then
     SDK_LINE="$(sed -n '/^sdk\.dir=/p' "$ROOT/local.properties" 2>/dev/null | tail -n 1)"
     [[ -n "$SDK_LINE" ]] || fail "Android SDK is unavailable (set ANDROID_HOME/ANDROID_SDK_ROOT or local.properties sdk.dir)"
@@ -558,6 +594,10 @@ if [[ "$CONSUMER_PROFILE" == complete ]]; then
         >> "$FIXTURE_DIR/settings.gradle.kts"
 else
     echo 'include(":lanJvm", ":androidConsumer")' >> "$FIXTURE_DIR/settings.gradle.kts"
+fi
+
+if [[ "$RPC_CONSUMER" == 1 ]]; then
+    echo 'include(":rpcJvm")' >> "$FIXTURE_DIR/settings.gradle.kts"
 fi
 
 cat "$ROOT/scripts/consumer-buildscript.gradle.kts" > "$FIXTURE_DIR/build.gradle.kts"
@@ -802,12 +842,12 @@ EOF
 if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
 cat >> "$FIXTURE_DIR/lanJvm/build.gradle.kts" <<'EOF'
 
-val upstreamJmdns by configurations.creating {
+val upstreamJmdns = configurations.create("upstreamJmdns") {
     isCanBeConsumed = false
     isCanBeResolved = true
 }
 dependencies { add(upstreamJmdns.name, "org.jmdns:jmdns:3.6.3") }
-val publishedPomRuntimeClasspath by configurations.creating {
+val publishedPomRuntimeClasspath = configurations.create("publishedPomRuntimeClasspath") {
     isCanBeConsumed = false
     isCanBeResolved = true
     extendsFrom(configurations.getByName("implementation"), configurations.getByName("runtimeOnly"))
@@ -951,12 +991,28 @@ private fun captureOwners(factory: Any): List<NativeOwner> = installedStarters(f
     NativeOwner(dns, checkNotNull(dns.socket), timer, stateTimer, field(dns, "_executor") as ExecutorService)
 }
 
+// Passive failure diagnostics only. Never print local addresses, interface or
+// service names, peer identifiers, TXT payloads, credentials or private paths.
+private fun reportNativeState(factory: Any) {
+    val handles = installedStarters(factory).keys.map { it as JmDNSImpl }
+    println("consumer-lan owners=${handles.size}")
+    handles.forEachIndexed { index, dns ->
+        val socket = dns.socket
+        println(
+            "consumer-lan owner=$index probing=${dns.isProbing} announcing=${dns.isAnnouncing} " +
+                "announced=${dns.isAnnounced} closing=${dns.isClosing} closed=${dns.isClosed} " +
+                "socketPresent=${socket != null} socketClosed=${socket?.isClosed} " +
+                "registeredServices=${dns.services.size} cachedNames=${dns.cache.size}"
+        )
+    }
+}
+
 private fun requirePackaging(coexist: Boolean): Any? {
-    val loader = JmDNS::class.java.classLoader
+    val loader = checkNotNull(JmDNS::class.java.classLoader)
     val resource = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
     check(loader.getResources(resource).toList().size == 1) { "Missing/duplicate private version resource" }
     val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(resource)).use { load(it) } }
-    check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.5")
+    check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.6")
     check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
     check(JmDNS.VERSION == properties.getProperty("jmdns.version"))
     val privateJar = JmDNS::class.java.protectionDomain.codeSource.location
@@ -1000,6 +1056,12 @@ fun main(arguments: Array<String>) = runBlocking {
     val kits = mutableListOf<P2pKit>()
     var owners = emptyList<NativeOwner>()
     var failure: Throwable? = null
+    var phase = "create-kits"
+    val started = System.nanoTime()
+    fun markPhase(value: String) {
+        phase = value
+        println("consumer-lan phase=$phase elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
+    }
     fun recordFailure(error: Throwable) {
         val original = failure
         if (original == null) failure = error else if (original !== error) original.addSuppressed(error)
@@ -1018,13 +1080,17 @@ fun main(arguments: Array<String>) = runBlocking {
         // replacement, transport injection, fabricated callback, or timer fault.
         // This requires an up multicast-capable LAN interface and sends mDNS.
         withTimeout(30_000) {
-            kits.forEach {
-                it.startAdvertising()
-                it.startDiscovery()
+            kits.forEachIndexed { index, kit ->
+                markPhase("advertise-$index")
+                kit.startAdvertising()
+                markPhase("discover-$index")
+                kit.startDiscovery()
             }
+            markPhase("capture-owners")
             owners = captureOwners(factory)
             check(owners.size == kits.size)
-            for (kit in kits) {
+            kits.forEachIndexed { index, kit ->
+                markPhase("metadata-$index")
                 val info = owners.flatMap { it.dns.services.values }
                     .single { it.getPropertyString("pid") == kit.localPeerId.value }
                 check(info.type == "_p2pkit2._tcp.local." && info.port in 1..65_535)
@@ -1034,6 +1100,7 @@ fun main(arguments: Array<String>) = runBlocking {
                 check(info.getPropertyString("caps").split(',').contains("LAN"))
                 check(info.getPropertyString("fp") == checkNotNull(kit.localFingerprint).value)
                 val other = kits.single { it !== kit }
+                markPhase("await-peer-$index")
                 val observed = kit.peers.first { peers -> peers.any { it.id == other.localPeerId } }
                     .single { it.id == other.localPeerId }
                 check(observed.name == other.localDeviceName && TransportKind.LAN in observed.supportedTransports)
@@ -1042,18 +1109,27 @@ fun main(arguments: Array<String>) = runBlocking {
         if (upstreamFactory != null) check(installedStarters(upstreamFactory).isEmpty())
     } catch (error: Throwable) {
         recordFailure(error)
+        println("consumer-lan failedPhase=$phase errorType=${error.javaClass.simpleName}")
+        try {
+            reportNativeState(factory)
+        } catch (diagnosticFailure: Throwable) {
+            recordFailure(diagnosticFailure)
+        }
     } finally {
         withContext(NonCancellable) {
-            kits.asReversed().forEach { kit ->
+            kits.indices.reversed().forEach { index ->
+                val kit = kits[index]
                 try {
+                    markPhase("stop-$index")
                     withTimeout(30_000) { kit.stop() }
                 } catch (error: Throwable) {
                     recordFailure(error)
                 }
             }
         }
-        owners.forEach { owner ->
+        owners.forEachIndexed { index, owner ->
             try {
+                markPhase("verify-disposed-$index")
                 owner.requireDisposed(factory)
             } catch (error: Throwable) {
                 recordFailure(error)
@@ -1175,12 +1251,12 @@ dependencies {
     add("coexistReleaseImplementation", "org.jmdns:jmdns:3.6.3")
 }
 
-val publishedPomDebugRuntimeClasspath by configurations.creating {
+val publishedPomDebugRuntimeClasspath = configurations.create("publishedPomDebugRuntimeClasspath") {
     isCanBeConsumed = false
     isCanBeResolved = true
     extendsFrom(configurations.getByName("implementation"), configurations.getByName("runtimeOnly"))
 }
-val publishedPomCoexistRuntimeClasspath by configurations.creating {
+val publishedPomCoexistRuntimeClasspath = configurations.create("publishedPomCoexistRuntimeClasspath") {
     isCanBeConsumed = false
     isCanBeResolved = true
     extendsFrom(
@@ -1266,7 +1342,7 @@ tasks.register("verifyEmbeddedJmdnsPackaging") {
                 val properties = Properties().apply {
                     zip.getInputStream(checkNotNull(zip.getEntry(privateVersion))).use { load(it) }
                 }
-                check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.5")
+                check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.6")
                 check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
                 check(zip.getEntry("META-INF/services/org.slf4j.spi.SLF4JServiceProvider") == null)
                 val definitionNames = entries.filter { it.name.matches(Regex("classes[0-9]*\\.dex")) }
@@ -1350,12 +1426,12 @@ class EmbeddedLanActivity : Activity() {
     }
 
     private fun runSmoke() = runBlocking {
-        val loader = JmDNS::class.java.classLoader
+        val loader = checkNotNull(JmDNS::class.java.classLoader)
         val path = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
         val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(path)).use { load(it) } }
-        check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.5")
+        check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.6")
         check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
-        check(JmDNS.VERSION == "3.6.3-p2pkit.410.5")
+        check(JmDNS.VERSION == "3.6.3-p2pkit.410.6")
         val service = ServiceInfo.create(
             "_p2pkit2._tcp.local.", "consumer", 4242, 0, 0, mapOf("fixture" to "android")
         )
@@ -1494,6 +1570,142 @@ fun iosEvents(): SharedFlow<String> = IosLanDebug.events
 EOF
 fi
 
+if [[ "$RPC_CONSUMER" == 1 ]]; then
+    mkdir -p "$FIXTURE_DIR/rpcJvm/src/main/kotlin/consumer"
+    cat > "$FIXTURE_DIR/rpcJvm/build.gradle.kts" <<EOF
+plugins { kotlin("jvm") }
+kotlin { jvmToolchain(17) }
+dependencies { implementation("$GROUP:p2p-rpc-jvm:$VERSION") }
+tasks.register<JavaExec>("runPublishedRpcApiSmoke") {
+    dependsOn("classes")
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("consumer.RpcJvmConsumerKt")
+    jvmArgs("-Xms16m", "-Xmx128m", "-XX:ActiveProcessorCount=2")
+    args(layout.buildDirectory.file("reports/rpc-api/smoke.txt").get().asFile.absolutePath)
+}
+EOF
+    # One common API contract is independently compiled against Maven JVM,
+    # Android and KMP/Apple coordinates. No source/project substitution, unsafe
+    # transport, test identity store or network invocation is provided here.
+    cat > "$FIXTURE_DIR/rpcJvm/src/main/kotlin/consumer/PublishedRpcConsumer.kt" <<'EOF'
+package consumer
+
+import dev.p2pkit.core.AppId
+import dev.p2pkit.rpc.RpcClient
+import dev.p2pkit.rpc.RpcDiagnostics
+import dev.p2pkit.rpc.RpcExecutionEvidence
+import dev.p2pkit.rpc.RpcFailure
+import dev.p2pkit.rpc.RpcFailureKind
+import dev.p2pkit.rpc.RpcFailurePhase
+import dev.p2pkit.rpc.RpcHost
+import dev.p2pkit.rpc.RpcLimits
+import dev.p2pkit.rpc.RpcPlatform
+import dev.p2pkit.rpc.RpcProcedure
+import dev.p2pkit.rpc.RpcReply
+import dev.p2pkit.rpc.RpcRetry
+import dev.p2pkit.rpc.RpcRetryAdvice
+import dev.p2pkit.rpc.RpcRetrySafety
+import dev.p2pkit.rpc.RpcSelectedHost
+import dev.p2pkit.rpc.RpcTrustStore
+import dev.p2pkit.transport.lan.OrganizationLan
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.builtins.serializer
+
+private val echo = RpcProcedure("consumer.echo", 1, String.serializer(), String.serializer(), String.serializer())
+
+suspend fun publishedHost(
+    platform: RpcPlatform, scope: CoroutineScope, applicationId: AppId,
+    network: OrganizationLan, durableTrust: RpcTrustStore,
+): RpcHost = RpcHost.create(platform, scope) {
+    appId = applicationId
+    lan = network
+    trustStore = durableTrust
+    // Compilation fixture deliberately denies every caller. Real applications
+    // must provide their own authorization, protected stores and lifecycle.
+    register(echo, authorize = { false }) { _, request -> RpcReply.Success(request) }
+}
+
+suspend fun publishedClient(
+    platform: RpcPlatform, scope: CoroutineScope, applicationId: AppId,
+    network: OrganizationLan, durableTrust: RpcTrustStore,
+): RpcClient = RpcClient.create(platform, scope) {
+    appId = applicationId
+    lan = network
+    trustStore = durableTrust
+}
+
+suspend fun publishedCall(client: RpcClient, selected: RpcSelectedHost): RpcReply<String, String> {
+    client.connect(selected)
+    return client.call(echo, "fixture", retry = RpcRetry.RecoverOnly())
+}
+
+fun publishedDiagnostics(client: RpcClient): StateFlow<RpcDiagnostics> = client.diagnostics
+
+// Only value/API operations run in the JVM smoke; no kit, socket or key is created.
+fun verifyPublishedRpcValues() {
+    check(echo.retrySafety == RpcRetrySafety.NeverReinvoke)
+    check(echo.requestLimitBytes == 65_536 && echo.responseLimitBytes == 65_536)
+    check(RpcRetry.RecoverOnly().maxAttempts == 3)
+    check(RpcLimits.host128().trustedClients == 128) // Configuration, NOT capacity proof.
+    val reply: RpcReply<String, String> = RpcReply.Success("fixture")
+    check(reply is RpcReply.Success && reply.value == "fixture")
+    val failure = RpcFailure(RpcFailureKind.UnknownOutcome, RpcFailurePhase.AwaitingResponse,
+        executionEvidence = RpcExecutionEvidence.MayHaveExecuted, retryAdvice = RpcRetryAdvice.RecoverStatus)
+    check(failure.kind == RpcFailureKind.UnknownOutcome)
+    check(failure.executionEvidence == RpcExecutionEvidence.MayHaveExecuted)
+    check(failure.retryAdvice == RpcRetryAdvice.RecoverStatus && failure.cause == null)
+}
+EOF
+    cat > "$FIXTURE_DIR/rpcJvm/src/main/kotlin/consumer/RpcJvmConsumer.kt" <<'EOF'
+package consumer
+
+import dev.p2pkit.core.security.JvmSecureIdentityStore
+import dev.p2pkit.rpc.RpcPlatform
+import dev.p2pkit.rpc.jvm
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+
+fun publishedJvmPlatform(protectedIdentity: JvmSecureIdentityStore): RpcPlatform = RpcPlatform.jvm(protectedIdentity)
+
+fun main(args: Array<String>) {
+    verifyPublishedRpcValues()
+    val result = Path.of(args.single())
+    Files.createDirectories(result.parent)
+    Files.writeString(result, "PASS: published RPC JVM API values; no network or capacity claim\n",
+        StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+}
+EOF
+    echo "dependencies { implementation(\"$GROUP:p2p-rpc-android:$VERSION\") }" \
+        >> "$FIXTURE_DIR/androidConsumer/build.gradle.kts"
+    echo "kotlin { sourceSets { commonMain.dependencies { implementation(\"$GROUP:p2p-rpc:$VERSION\") } } }" \
+        >> "$FIXTURE_DIR/kmpConsumer/build.gradle.kts"
+    for location in androidConsumer/src/main kmpConsumer/src/commonMain; do
+        cp "$FIXTURE_DIR/rpcJvm/src/main/kotlin/consumer/PublishedRpcConsumer.kt" \
+            "$FIXTURE_DIR/$location/kotlin/consumer/PublishedRpcConsumer.kt"
+    done
+    cat > "$FIXTURE_DIR/androidConsumer/src/main/kotlin/consumer/RpcAndroidConsumer.kt" <<'EOF'
+package consumer
+
+import android.content.Context
+import dev.p2pkit.rpc.RpcPlatform
+import dev.p2pkit.rpc.android
+
+fun publishedAndroidPlatform(context: Context): RpcPlatform = RpcPlatform.android(context)
+EOF
+    cp "$FIXTURE_DIR/androidConsumer/src/main/kotlin/consumer/RpcAndroidConsumer.kt" \
+        "$FIXTURE_DIR/kmpConsumer/src/androidMain/kotlin/consumer/RpcAndroidConsumer.kt"
+    cat > "$FIXTURE_DIR/kmpConsumer/src/iosMain/kotlin/consumer/RpcIosConsumer.kt" <<'EOF'
+package consumer
+
+import dev.p2pkit.rpc.RpcPlatform
+import dev.p2pkit.rpc.ios
+
+fun publishedIosPlatform(): RpcPlatform = RpcPlatform.ios()
+EOF
+fi
+
 if [[ "$AUDIT_CONSUMER_METADATA" == 1 ]]; then
     # This explicit opt-in is separate from the generic executor. Only immutable
     # reviewed external records plus exact source-local publication hashes enter
@@ -1535,6 +1747,9 @@ if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
         :androidConsumer:assembleCoexistRelease
         :androidConsumer:verifyEmbeddedJmdnsPackaging
     )
+fi
+if [[ "$RPC_CONSUMER" == 1 ]]; then
+    consumer_tasks+=( :rpcJvm:compileKotlin :rpcJvm:runPublishedRpcApiSmoke )
 fi
 run_consumer_gradle() {
     if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
@@ -1591,6 +1806,21 @@ PY_PACKAGING_REPORT
     done
 fi
 
+if [[ "$RPC_CONSUMER" == 1 ]]; then
+    python3 - "$FIXTURE_DIR/rpcJvm/build/reports/rpc-api/smoke.txt" <<'PY_RPC_REPORT'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+expected = b"PASS: published RPC JVM API values; no network or capacity claim\n"
+if not path.is_file() or path.is_symlink():
+    sys.exit("FAIL: missing or invalid published RPC API smoke report")
+with path.open("rb") as stream:
+    if stream.read(len(expected) + 1) != expected:
+        sys.exit("FAIL: missing or invalid published RPC API smoke report")
+PY_RPC_REPORT
+fi
+
 MERGED_MANIFEST="$(find "$FIXTURE_DIR/androidConsumer/build/intermediates" \
     -path '*/processDebugManifest/AndroidManifest.xml' -print -quit)"
 [[ -f "$MERGED_MANIFEST" ]] || fail "Android consumer merged manifest was not produced"
@@ -1611,10 +1841,13 @@ fi
 if [[ "$CONSUMER_PROFILE" == lan-jvm-android ]]; then
     echo "RESULT: PASS — supplemental lan-jvm-android published runtime/packaging checks; not the complete native gate"
 elif [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
-    echo "RESULT: PASS — published scopes, Android LAN permissions, isolated JVM/Android/KMP/iOS 14 consumers, and embedded JmDNS consumer checks are complete"
+    echo "RESULT: PASS — published scopes, Android LAN permissions, isolated JVM/Android/KMP/iOS 14 consumers including RPC, and embedded JmDNS consumer checks are complete"
 else
     echo "RESULT: PASS — published scopes, Android LAN permissions, and isolated JVM/Android/KMP/iOS 14 consumers are complete"
 fi
 if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
     echo "SCOPE: JVM normal-close smoke and Android D8/R8 packaging; no failed-recovery or Android API24 runtime claim"
+fi
+if [[ "$RPC_CONSUMER" == 1 ]]; then
+    echo "SCOPE: RPC public API compilation and JVM value smoke; no RPC network, ART/device or capacity qualification"
 fi

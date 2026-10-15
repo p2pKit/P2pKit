@@ -1403,5 +1403,116 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
                     self.assertEqual((case.bootstrap / "driver.stdout.log").read_bytes(), b"synthetic driver fixture only\n")
 
 
+class JmdnsStartupLockInventoryTest(unittest.TestCase):
+    """Execute only the real inline lock guards, never the deferred Intel job."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.path = ROOT / ".github/workflows/audit-jmdns-startup.yml"
+        cls.text = cls.path.read_text(encoding="utf-8")
+        cls.locks = sorted(os.fsdecode(name) for name in subprocess.check_output(
+            ["git", "--no-optional-locks", "ls-files", "-z", "--", "*lockfile"], cwd=ROOT).split(b"\0") if name)
+
+    @staticmethod
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    def body(self, step_id):
+        lines = self.text.splitlines()
+        indices = [i for i, line in enumerate(lines) if line == "        id: " + step_id]
+        self.assertEqual(len(indices), 1)
+        start = indices[0]
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("      - ")), len(lines))
+        markers = [i for i in range(start, end) if lines[i] == "        run: |"]
+        self.assertEqual(len(markers), 1)
+        body = lines[markers[0] + 1:end]
+        self.assertTrue(all(not line.strip() or line.startswith("          ") for line in body))
+        return ast.parse("\n".join(line[10:] if line.strip() else "" for line in body),
+                         filename=str(self.path) + ":" + step_id)
+
+    def admit(self, names):
+        nodes = self.body("init").body
+        indices = [i for i, node in enumerate(nodes) if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "lockfiles" for target in node.targets)]
+        self.assertEqual(len(indices), 1)
+        runner = types.SimpleNamespace(require=self.require, git=mock.Mock(
+            return_value=b"\0".join(os.fsencode(name) for name in names) + b"\0"))
+        namespace = {"root": ROOT, "runner": runner, "os": os}
+        selected = ast.Module(body=nodes[indices[0]:indices[0] + 2], type_ignores=[])
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("Unexpected native process")):
+            exec(compile(selected, str(self.path) + ":lock-admission", "exec"), namespace)
+        runner.git.assert_called_once_with(ROOT, "ls-files", "-z", "--", "*lockfile")
+        return namespace["lockfiles"]
+
+    def owned_source(self, names=None):
+        temporary = tempfile.TemporaryDirectory(prefix="p2pkit-lock-guard-fixture-")
+        self.addCleanup(temporary.cleanup)
+        state = Path(temporary.name)
+        (state / "context.json").write_bytes(b"synthetic context only\n")
+        source = {"commit": COMMIT, "tree": TREE, "status": "", "diffSha256": EMPTY_HASH}
+        context = {"id": JOB_ID, "source": source}
+        records = {name: {"bytes": (ROOT / name).stat().st_size,
+                          "sha256": hashlib.sha256((ROOT / name).read_bytes()).hexdigest()}
+                   for name in (self.locks if names is None else names)}
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        baseline = {"jobId": JOB_ID, "contextSha256": digest(state / "context.json"),
+                    "stateIdentity": {"device": state.stat().st_dev, "inode": state.stat().st_ino},
+                    "locks": copy.deepcopy(records)}
+        runner = types.SimpleNamespace(require=self.require, file_digest=digest,
+                                       source_snapshot=mock.Mock(return_value=source))
+        namespace = {"root": ROOT, "state": state, "context": context, "baseline": baseline,
+                     "runner": runner, "file_record": lambda path: records[path.relative_to(ROOT).as_posix()]}
+        nodes = [node for node in self.body("diagnostic").body
+                 if isinstance(node, ast.FunctionDef) and node.name == "owned_source"]
+        self.assertEqual(len(nodes), 1)
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(self.path) + ":owned-source", "exec"), namespace)
+        return namespace, records
+
+    def test_admission_accepts_all_current_fourteen_locks(self):
+        self.assertEqual(len(self.locks), 14)
+        self.assertIn("library/p2p-rpc/gradle.lockfile", self.locks)
+        self.assertIn("samples/p2p-sample-rpc/gradle.lockfile", self.locks)
+        self.assertEqual(self.admit(self.locks), self.locks)
+
+    def test_admission_rejects_missing_duplicate_or_extra_locks(self):
+        for names in (self.locks[:-2], self.locks[:-1], self.locks[:-1] + [self.locks[0]],
+                      self.locks + ["unexpected/gradle.lockfile"]):
+            with self.subTest(names=names), self.assertRaisesRegex(ValueError, "tracked locks"):
+                self.admit(names)
+
+    def test_owned_source_accepts_exact_current_lock_bytes(self):
+        namespace, records = self.owned_source()
+        self.assertEqual(namespace["owned_source"](), records)
+        namespace["runner"].source_snapshot.assert_called_once_with(ROOT)
+
+    def test_owned_source_rejects_the_retired_twelve_lock_baseline(self):
+        namespace, _ = self.owned_source(self.locks[:-2])
+        with self.assertRaisesRegex(ValueError, "tracked lock changed"):
+            namespace["owned_source"]()
+
+    def test_owned_source_rejects_changed_bytes_or_source_identity(self):
+        namespace, records = self.owned_source()
+        records[self.locks[0]]["sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "tracked lock changed"):
+            namespace["owned_source"]()
+        namespace["runner"].source_snapshot.return_value = {"commit": "f" * 40}
+        with self.assertRaisesRegex(ValueError, "Owned source/context changed"):
+            namespace["owned_source"]()
+
+    def test_final_record_follows_guard_and_names_all_fourteen_unchanged(self):
+        finalizers = [node for node in self.body("diagnostic").body if isinstance(node, ast.Try)]
+        self.assertEqual(len(finalizers), 1)
+        statements = finalizers[0].finalbody[0].body[:2]
+        guard, write = mock.Mock(return_value={name: "fixture" for name in self.locks}), mock.Mock()
+        bootstrap = ROOT / "synthetic-no-write-bootstrap"
+        namespace = {"owned_source": guard, "runner": types.SimpleNamespace(write_new_json=write),
+                     "bootstrap": bootstrap}
+        exec(compile(ast.Module(body=statements, type_ignores=[]), str(self.path) + ":lock-finalizer", "exec"), namespace)
+        guard.assert_called_once_with()
+        write.assert_called_once_with(bootstrap / "locks-after.json",
+                                      {"locks": guard.return_value, "allFourteenUnchanged": True})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

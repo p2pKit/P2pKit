@@ -205,6 +205,27 @@ expect_policy_failure configure-on-demand-write \
     '--write-locks requires --no-configure-on-demand' \
     rALl --write-locks --dry-run --configure-on-demand
 
+# Foundation's writer retains the genuine Dokka compatibility graphs, not
+# synthetic empty replacements. Invalid roles must fail before any project task;
+# the writer must never coerce a configuration into an acceptable role.
+for role in unresolvable consumable; do
+    cat >"$WORK/dokka-$role.init.gradle.kts" <<'KOTLIN'
+gradle.afterProject {
+    if (path == ":p2p-core") {
+        tasks.named("dokkaHtml").get()
+        val live = configurations.getByName("dokkaHtmlRuntime")
+KOTLIN
+    if [[ "$role" == "unresolvable" ]]; then
+        printf '%s\n' '        live.isCanBeResolved = false' >>"$WORK/dokka-$role.init.gradle.kts"
+    else
+        printf '%s\n' '        live.isCanBeConsumed = true' >>"$WORK/dokka-$role.init.gradle.kts"
+    fi
+    printf '    }\n}\n' >>"$WORK/dokka-$role.init.gradle.kts"
+    expect_policy_failure "dokka-$role" \
+        'Dokka migration lock refresh requires a resolvable, non-consumable configuration' \
+        rALl --write-locks --dry-run --init-script "$WORK/dokka-$role.init.gradle.kts"
+done
+
 # The one sanctioned graph remains selectable by any Gradle-supported name.
 if ! run_gradle "$WORK/authorized.log" rALl --write-locks --dry-run; then
     cat "$WORK/authorized.log" >&2
@@ -221,6 +242,22 @@ while IFS= read -r project; do
     grep -Fq ":$project:check SKIPPED" "$WORK/authorized.log" ||
         fail "lock refresh omitted :$project:check"
 done < <(sed -n 's/^include(":\([^"]*\)")$/\1/p' "$ROOT/settings.gradle.kts")
+
+# The RPC library's docs must participate alongside every existing library.
+# Compatibility helpers are only realized for their real configurations, never
+# executed instead of the required current HTML publication tasks.
+for project in p2p-core p2p-transport-lan p2p-rpc \
+    p2p-network-provisioning-android p2p-network-provisioning-desktop; do
+    grep -Fq ":$project:dokkaGeneratePublicationHtml SKIPPED" "$WORK/authorized.log" ||
+        fail "lock refresh omitted :$project:dokkaGeneratePublicationHtml"
+    for helper in dokkaHtml dokkaJavadoc; do
+        if grep -Fq ":$project:$helper SKIPPED" "$WORK/authorized.log"; then
+            fail "lock refresh selected disabled compatibility task :$project:$helper"
+        fi
+    done
+done
+grep -Fq ':cyclonedxBom SKIPPED' "$WORK/authorized.log" ||
+    fail "lock refresh omitted :cyclonedxBom"
 
 snapshot_locks >"$LOCKS_AFTER"
 cmp -s "$LOCKS_BEFORE" "$LOCKS_AFTER" ||

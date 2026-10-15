@@ -7,13 +7,14 @@ import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.NetworkPathObserver
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.P2pSessionProfile
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
-import dev.p2pkit.core.internal.PeerIdStorage
-import dev.p2pkit.core.internal.SecureIdentityStorage
 import dev.p2pkit.core.internal.DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS
 import dev.p2pkit.core.internal.DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS
 import dev.p2pkit.core.internal.DEFAULT_HANDSHAKE_TIMEOUT_MS
+import dev.p2pkit.core.internal.PeerIdStorage
+import dev.p2pkit.core.internal.SecureIdentityStorage
 import dev.p2pkit.core.internal.newP2pKit
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.protocol.HelloPayload
@@ -50,6 +51,9 @@ public class P2pKitBuilder internal constructor() {
 
     /** Sink for diagnostic logs. Defaults to no-op. */
     public var logger: P2pLogger = P2pLogger.NoOp
+
+    /** Opt-in bounded, authenticated binary channel. Null preserves ordinary P2P behavior. */
+    public var sessionProfile: P2pSessionProfile? = null
 
     internal val transportsBuilder: TransportsBuilder = TransportsBuilder()
     internal var keepAlive: KeepAliveConfig = KeepAliveConfig()
@@ -232,7 +236,8 @@ public class P2pKitBuilder internal constructor() {
             discoveryRefreshTimeoutMillis = discoveryRefreshTimeoutMillisForTest,
             featureOperationSettleTimeoutMillis = featureOperationSettleTimeoutMillisForTest,
             beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest,
-            securityCryptographyForTest = securityCryptographyForTest
+            securityCryptographyForTest = securityCryptographyForTest,
+            sessionProfile = sessionProfile
         )
     }
 }

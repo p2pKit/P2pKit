@@ -19,6 +19,7 @@ reset_fixture() {
         "$FIXTURE/scripts/tests" \
         "$FIXTURE/library/p2p-core/api/android" \
         "$FIXTURE/library/p2p-transport-lan/api/android" \
+        "$FIXTURE/library/p2p-rpc/api/android" \
         "$FIXTURE/library/p2p-network-provisioning-android/api/android"
     cp "$ROOT/build.gradle.kts" "$FIXTURE/build.gradle.kts"
     cp "$ROOT/.github/workflows/ci.yml" "$FIXTURE/.github/workflows/ci.yml"
@@ -39,6 +40,8 @@ reset_fixture() {
         "$FIXTURE/library/p2p-transport-lan/build.gradle.kts"
     cp "$ROOT/library/p2p-transport-lan/api/android/p2p-transport-lan.api" \
         "$FIXTURE/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
+    cp "$ROOT/library/p2p-rpc/build.gradle.kts" "$FIXTURE/library/p2p-rpc/build.gradle.kts"
+    cp "$ROOT/library/p2p-rpc/api/android/p2p-rpc.api" "$FIXTURE/library/p2p-rpc/api/android/p2p-rpc.api"
     cp "$ROOT/library/p2p-network-provisioning-android/build.gradle.kts" \
         "$FIXTURE/library/p2p-network-provisioning-android/build.gradle.kts"
     cp "$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api" \
@@ -177,6 +180,27 @@ reset_fixture
 printf '%s\n' 'public final class dev/p2pkit/transport/lan/AndroidLanDataTransport {' \
     >>"$FIXTURE/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
 expect_rejected "internal-symbol-leak" "incorrectly freeze internal symbol"
+
+for signature in \
+    'public final class dev/p2pkit/rpc/internal/RpcHostEngine {' \
+    '    public fun <init> (Ldev/p2pkit/rpc/internal/RpcHostEngine;)V' \
+    '    public fun getEngine ()Ldev/p2pkit/rpc/internal/RpcHostEngine;' \
+    '    public static synthetic fun accessor ()Ldev/p2pkit/rpc/internal/RpcHostEngine;' \
+    '    public static final field engine Ldev/p2pkit/rpc/internal/RpcHostEngine;' \
+    '    public synthetic fun <init> (Ldev/p2pkit/rpc/internal/RpcHostEngine;)V'; do
+    reset_fixture
+    printf '%s\n' "$signature" >>"$FIXTURE/library/p2p-rpc/api/android/p2p-rpc.api"
+    expect_rejected "rpc-internal-api-leak" "incorrectly freeze internal symbol"
+done
+
+# The genuine generated baseline already includes the private-constructor bridge.
+# Exercise that exact permitted shape separately without making internal classes
+# or non-constructor synthetic accessors acceptable API.
+reset_fixture
+printf '%s\n' \
+    '    public synthetic fun <init> (Ldev/p2pkit/rpc/internal/RpcHostEngine;Lkotlin/jvm/internal/DefaultConstructorMarker;)V' \
+    >>"$FIXTURE/library/p2p-rpc/api/android/p2p-rpc.api"
+"$CHECKER" --root "$FIXTURE" --static-only >/dev/null
 
 reset_fixture
 remove_matching_lines \

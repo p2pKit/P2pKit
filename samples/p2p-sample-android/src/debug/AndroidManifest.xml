@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <application>
+    <service
+        android:name=".rpclab.RpcLabShareService"
+        android:exported="false"
+        android:foregroundServiceType="shortService"
+        android:stopWithTask="true" />
+    <activity
+        android:name=".rpclab.RpcLabActivity"
+        android:label="@string/rpc_lab_app_name"
+        android:exported="true">
+      <!-- Compatibility shortcut redirects to MainActivity's guarded RPC section; it owns no separate RPC UI. -->
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

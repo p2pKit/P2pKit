@@ -2,6 +2,8 @@ package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.P2pSessionProfile
+import dev.p2pkit.core.reserveOrThrow
 
 /**
  * Streaming parser for one connection. Input is copied once into a reusable
@@ -11,9 +13,11 @@ import dev.p2pkit.core.P2pLogger
  */
 internal class FrameReader(
     private val logger: P2pLogger = P2pLogger.NoOp,
-    private val expectedVersion: Byte = ProtocolConstants.LEGACY_VERSION
+    private val expectedVersion: Byte = ProtocolConstants.LEGACY_VERSION,
+    private val profile: P2pSessionProfile? = null
 ) {
 
+    private var bufferLease = profile?.payloadBudget?.reserveOrThrow(INITIAL_CAPACITY.toLong())
     private var buffer: ByteArray = ByteArray(INITIAL_CAPACITY)
     private var buffered: Int = 0
 
@@ -32,49 +36,71 @@ internal class FrameReader(
 
         val frames = mutableListOf<Frame>()
         var inputOffset = 0
-        while (inputOffset < bytes.size) {
-            if (buffered < ProtocolConstants.HEADER_SIZE) {
-                val copied = appendFrom(
-                    source = bytes,
-                    sourceOffset = inputOffset,
-                    byteCount = minOf(
-                        bytes.size - inputOffset,
-                        ProtocolConstants.HEADER_SIZE - buffered
+        try {
+            while (inputOffset < bytes.size) {
+                if (buffered < ProtocolConstants.HEADER_SIZE) {
+                    val copied = appendFrom(
+                        source = bytes,
+                        sourceOffset = inputOffset,
+                        byteCount = minOf(
+                            bytes.size - inputOffset,
+                            ProtocolConstants.HEADER_SIZE - buffered
+                        )
                     )
-                )
-                inputOffset += copied
-                if (buffered < ProtocolConstants.HEADER_SIZE) break
-            }
+                    inputOffset += copied
+                    if (buffered < ProtocolConstants.HEADER_SIZE) break
+                }
 
-            val header = inspectHeader()
-            val frameSize = ProtocolConstants.HEADER_SIZE + header.payloadLength
-            if (buffered < frameSize) {
-                val copied = appendFrom(
-                    source = bytes,
-                    sourceOffset = inputOffset,
-                    byteCount = minOf(bytes.size - inputOffset, frameSize - buffered)
-                )
-                inputOffset += copied
-                if (buffered < frameSize) break
-            }
+                val header = inspectHeader()
+                val frameSize = ProtocolConstants.HEADER_SIZE + header.payloadLength
+                if (buffered < frameSize) {
+                    val copied = appendFrom(
+                        source = bytes,
+                        sourceOffset = inputOffset,
+                        byteCount = minOf(bytes.size - inputOffset, frameSize - buffered)
+                    )
+                    inputOffset += copied
+                    if (buffered < frameSize) break
+                }
 
-            if (header.type == null) {
-                skippedUnknownFrames++
-                warnUnknown(header.typeCode)
-            } else {
-                frames += FrameCodec.decode(
-                    bytes = buffer,
-                    offset = 0,
-                    length = frameSize,
-                    expectedVersion = expectedVersion
-                )
+                if (header.type == null) {
+                    skippedUnknownFrames++
+                    warnUnknown(header.typeCode)
+                } else {
+                    val lease = profile?.payloadBudget?.reserveOrThrow(header.payloadLength.toLong() + 256)
+                    try {
+                        frames += FrameCodec.decode(
+                            bytes = buffer,
+                            offset = 0,
+                            length = frameSize,
+                            expectedVersion = expectedVersion
+                        ).also { it.payloadLease = lease }
+                    } catch (failure: Throwable) {
+                        lease?.release()
+                        throw failure
+                    }
+                }
+                buffered = 0
+                val retainedCapacity = if (profile == null) MAX_RETAINED_CAPACITY else 4_096
+                if (buffer.size > retainedCapacity) {
+                    val replacementLease = profile?.payloadBudget?.reserveOrThrow(INITIAL_CAPACITY.toLong())
+                    buffer = ByteArray(INITIAL_CAPACITY)
+                    bufferLease?.release()
+                    bufferLease = replacementLease
+                }
             }
-            buffered = 0
-            if (buffer.size > MAX_RETAINED_CAPACITY) {
-                buffer = ByteArray(INITIAL_CAPACITY)
-            }
+            return frames
+        } catch (failure: Throwable) {
+            frames.forEach(Frame::releasePayload)
+            throw failure
         }
-        return frames
+    }
+
+    fun close() {
+        buffer = ByteArray(0)
+        buffered = 0
+        bufferLease?.release()
+        bufferLease = null
     }
 
     internal fun bufferedBytes(): Int = buffered
@@ -105,6 +131,16 @@ internal class FrameReader(
         val typeCode = buffer[5]
         val type = PacketType.fromCode(typeCode)
         val payloadLength = FrameCodec.readIntBE(buffer, 32)
+        if (profile != null) {
+            if (type !in RESTRICTED_TYPES) {
+                throw P2pError.ProtocolError("Packet type is not permitted by the restricted profile")
+            }
+            if (type == PacketType.DATA && (payloadLength > 65_536 ||
+                (buffer[6].toInt() and FrameFlags.IS_TEXT) != 0)
+            ) {
+                throw P2pError.ProtocolError("Restricted DATA frame exceeds its binary chunk limit")
+            }
+        }
         if (payloadLength < 0) {
             throw P2pError.ProtocolError("Negative payload length in header: $payloadLength")
         }
@@ -157,10 +193,18 @@ internal class FrameReader(
             val doubled = capacity.toLong() * 2
             capacity = minOf(Int.MAX_VALUE.toLong(), maxOf(doubled, required.toLong())).toInt()
         }
-        val replacement = ByteArray(capacity)
+        val replacementLease = profile?.payloadBudget?.reserveOrThrow(capacity.toLong())
+        val replacement = try {
+            ByteArray(capacity)
+        } catch (failure: Throwable) {
+            replacementLease?.release()
+            throw failure
+        }
         buffer.copyInto(replacement, endIndex = buffered)
         relocatedBytes += buffered.toLong()
         buffer = replacement
+        bufferLease?.release()
+        bufferLease = replacementLease
     }
 
     private fun warnUnknown(typeCode: Byte) {
@@ -183,5 +227,9 @@ internal class FrameReader(
         const val INITIAL_CAPACITY: Int = 256
         const val MAX_RETAINED_CAPACITY: Int = 256 * 1024
         const val WARNING_BURST: Int = 4
+        val RESTRICTED_TYPES: Set<PacketType> = setOf(
+            PacketType.HELLO, PacketType.DATA, PacketType.ACK, PacketType.PING,
+            PacketType.PONG, PacketType.CLOSE, PacketType.ERROR
+        )
     }
 }

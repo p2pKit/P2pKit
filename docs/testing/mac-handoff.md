@@ -133,8 +133,11 @@ git diff --check
 Arrange an EXIT/failure finalizer for that stop **before** launching the writer;
 retain original command and stop statuses separately. Use at most two Gradle
 workers, no parallel execution, bounded heap and in-process Kotlin compilation in
-the owned home's `gradle.properties`. Keep raw command/stop logs, all 12 before/after
-lockfiles, metadata and independent artifact-review results outside Git. Stop only
+the owned home's `gradle.properties`. Keep raw command/stop logs, **every currently
+tracked before/after lockfile**, metadata and independent artifact-review results
+outside Git. Enumerate with `git ls-files '*lockfile'`: the original handoff had12;
+the October2 RPC branch at `c6df2cb3` has14, including RPC/diagnostics additions.
+An OSV input list or an old lock count is not permission to omit current locks. Stop only
 workers owned by this invocation; preserve evidence before disposing its outputs.
 
 The underlying full operation is `./gradlew resolveAndLockAll --write-locks

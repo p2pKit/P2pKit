@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "scope": "Host-specific filesystem tests; portable RPC tests remain in every jvmTest. Not Windows native qualification.",
+  "entries": [
+    {
+      "host": "posix",
+      "path": "samples/p2p-sample-rpc/src/posixJvmTest/kotlin/dev/p2pkit/sample/rpc/desktop/DesktopRpcProfileTest.kt",
+      "methods": [
+        "identityTrustAndSelectionSurviveClosureWithoutPersistingPlaintextAndRevocationSurvivesRestart",
+        "wrongPasswordConcurrentOpenAndCorruptionFailWithoutIdentityReset",
+        "missingMetadataForeignFilesSymlinksAndLoosePermissionsAreNotRepairedOrDeleted"
+      ]
+    },
+    {
+      "host": "posix",
+      "path": "samples/p2p-sample-rpc/src/posixJvmTest/kotlin/dev/p2pkit/sample/rpc/desktop/DesktopRpcRuntimePosixTest.kt",
+      "methods": [
+        "runtimeOwnershipPrecedesEveryFileAllocation",
+        "unusedRuntimeOwnsAPrivateVaultAndRetiresOnlyItsNewDirectory",
+        "unexpectedForeignContentIsPreservedAndCloseCannotClaimSuccess",
+        "replacedIdentityDirectoryIsNotDestroyed",
+        "replacedRootDirectoryIsNotDestroyed"
+      ]
+    },
+    {
+      "host": "posix",
+      "path": "samples/p2p-sample-rpc/src/posixJvmTest/kotlin/dev/p2pkit/sample/rpc/lab/LabCleanupOwnerPosixTest.kt",
+      "methods": [
+        "failedVaultRetainsItsFailureAndForeignFileButDoesNotStrandIndependentVaults"
+      ]
+    },
+    {
+      "host": "posix",
+      "path": "samples/p2p-sample-rpc/src/posixJvmTest/kotlin/dev/p2pkit/sample/rpc/lab/LabMobileTest.kt",
+      "methods": [
+        "mobileImportAndReadyBindTheActualPhoneSourceArtifactRunAndHost",
+        "mobileTelemetryRequiresItsRealCollectorAndRejectsJvmOrSentinelSubstitution",
+        "usbSnapshotsMustAdvanceInsideTheExistingProviderDeadline"
+      ]
+    },
+    {
+      "host": "posix",
+      "path": "samples/p2p-sample-rpc/src/posixJvmTest/kotlin/dev/p2pkit/sample/rpc/lab/LabTelemetryTest.kt",
+      "methods": [
+        "waitsForAnActuallyNewSampleWithoutReplayingThePreviousOne",
+        "repeatedOrMissingSamplesReachTheExistingCallerDeadline",
+        "replayWrongRunAndImpossibleResourceValuesAreRejected"
+      ]
+    },
+    {
+      "host": "posix",
+      "path": "samples/p2p-sample-rpc/src/posixJvmTest/kotlin/dev/p2pkit/sample/rpc/lab/LabVaultPosixTest.kt",
+      "methods": [
+        "opaqueValuesAreEncryptedCopiedAndRecoverableOnlyWithTheSameKey",
+        "atomicAbsentWinnerIsStableAcrossThreadsAndSeparateStoreInstances",
+        "corruptionAndNamespaceSubstitutionFailClosed",
+        "deletionIsIdempotentAndMissingIsNotAnEmptyValue",
+        "unprotectedPathsAndSymlinksAreRejectedWithoutReadingTheirTargets",
+        "trustIsPersistedAndSeparatedByPurposeAndSyntheticAppId",
+        "createOnlyPublicationHasExactlyOneWinnerAndNeverOverwritesIt",
+        "fixtureDestructionRemovesOnlyOwnedFilesAndPreservesUnrelatedEvidence",
+        "destructionRefusesReplacedFileLifetimes"
+      ]
+    },
+    {
+      "host": "portable",
+      "path": "samples/p2p-sample-rpc/src/jvmTest/kotlin/dev/p2pkit/sample/rpc/desktop/DesktopRpcRuntimeTest.kt",
+      "methods": [
+        "explicitLocalReadinessCannotAccidentallyAdvertiseOrStartDiscovery"
+      ]
+    },
+    {
+      "host": "portable",
+      "path": "samples/p2p-sample-rpc/src/jvmTest/kotlin/dev/p2pkit/sample/rpc/lab/LabCleanupOwnerTest.kt",
+      "methods": [
+        "successfulCleanupPublishesOnlyAfterEveryResourceAndNeverRepeats",
+        "multipleRetirementFailuresRemainOrderedAndTheSameFailureCannotSuppressItself",
+        "failedReceiptCannotBecomeSuccessfulCloseOrRepeatNonIdempotentRetirement",
+        "concurrentCloseWaitsForTheSuccessfulPhysicalAttempt",
+        "concurrentCloseWaitsAndReceivesTheExactPhysicalFailure",
+        "reentrantCleanupFailsAndThatExactFailureRemainsTerminal"
+      ]
+    },
+    {
+      "host": "portable",
+      "path": "samples/p2p-sample-rpc/src/jvmTest/kotlin/dev/p2pkit/sample/rpc/lab/LabVaultTest.kt",
+      "methods": [
+        "controlFilesRejectDuplicatesAndNonAsciiInsteadOfSilentlyNormalizing"
+      ]
+    },
+    {
+      "host": "windows",
+      "path": "samples/p2p-sample-rpc/src/windowsJvmTest/kotlin/dev/p2pkit/sample/rpc/desktop/DesktopRpcWindowsRefusalTest.kt",
+      "methods": [
+        "productionOpenRefusesBeforeAnyPathAccessAndClearsTransferredPassword",
+        "productionOpenAttemptRefusesWithoutInventingAFileOrCleanupOwner"
+      ]
+    }
+  ]
+}

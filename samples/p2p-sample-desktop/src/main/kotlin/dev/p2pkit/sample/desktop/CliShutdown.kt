@@ -45,13 +45,14 @@ internal fun runCliWithShutdownHook(block: suspend () -> Unit) {
 
 /** One on-demand read, with no prefetch or application work on the reader thread. */
 internal class CliConsoleInput(private val reader: BufferedReader) : AutoCloseable {
+    private val lines = CliLineReader(reader)
     private val executor = Executors.newSingleThreadExecutor { task ->
         Thread(task, "p2pkit-cli-stdin").apply { isDaemon = true }
     }
 
     suspend fun readLine(): String? = suspendCancellableCoroutine { continuation ->
         val read = executor.submit {
-            continuation.resumeWith(runCatching { reader.readLine() })
+            continuation.resumeWith(runCatching { lines.readLine() })
         }
         continuation.invokeOnCancellation { read.cancel(true) }
     }

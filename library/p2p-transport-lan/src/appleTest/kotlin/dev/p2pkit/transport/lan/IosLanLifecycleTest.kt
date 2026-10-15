@@ -80,6 +80,7 @@ class IosLanLifecycleTest {
     private val diagnostics = KitTestDiagnostics()
     private val lanTimeouts = IosLanTimeoutDiagnostics()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
+    private var discoveryTrace: AppleLanDiscoveryTrace? = null
 
     @BeforeTest
     fun isolateDefaults() {
@@ -89,6 +90,7 @@ class IosLanLifecycleTest {
         defaultsLease = AppleGlobalStateTestGuard.acquire(
             keys = arrayOf(peerIdKey, peerIdV2Key)
         )
+        discoveryTrace = AppleLanDiscoveryTrace()
     }
 
     private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
@@ -122,21 +124,41 @@ class IosLanLifecycleTest {
         return kit
     }
 
-    private suspend fun P2pKit.awaitPeer(target: P2pKit, phase: Phase = Phase.DISCOVERY): Peer =
+    private suspend fun P2pKit.awaitPeer(
+        target: P2pKit,
+        phase: Phase = Phase.DISCOVERY,
+        stage: AppleLanDiscoveryStage = AppleLanDiscoveryStage.INITIAL_PEER
+    ): Peer = traceAppleLanDiscovery(stage, ::discoveryObservations) {
         lanTimeouts.withTimeout(phase, DISCOVERY_TIMEOUT_MS) {
             peers.first { current -> current.any { it.id == target.localPeerId } }
                 .first { it.id == target.localPeerId }
         }
+    }
+
+    private fun discoveryObservations(): Set<AppleLanDiscoveryMarker> = checkNotNull(discoveryTrace).snapshot()
 
     @AfterTest
     fun teardown() {
         runBlocking {
-            diagnostics.finish {
+            var primary: Throwable? = null
+            try {
+                diagnostics.finish {
+                    try {
+                        removeStoredPeerId()
+                    } finally {
+                        defaultsLease?.close()
+                        defaultsLease = null
+                    }
+                }
+            } catch (failure: Throwable) {
+                primary = failure
+                throw failure
+            } finally {
                 try {
-                    removeStoredPeerId()
-                } finally {
-                    defaultsLease?.close()
-                    defaultsLease = null
+                    withTimeout(5_000) { discoveryTrace?.close() }
+                    discoveryTrace = null
+                } catch (failure: Throwable) {
+                    primary?.addSuppressed(failure) ?: throw failure
                 }
             }
         }
@@ -182,7 +204,7 @@ class IosLanLifecycleTest {
             // A fresh browser generation must repopulate both the endpoint
             // registry and the state-backed event relay.
             alice.startDiscovery()
-            alice.awaitPeer(bob, Phase.REDISCOVERY)
+            alice.awaitPeer(bob, Phase.REDISCOVERY, AppleLanDiscoveryStage.REDISCOVERY)
         }
     }
 
@@ -219,22 +241,28 @@ class IosLanLifecycleTest {
             // Each kit must see the OTHER TWO. If the discovery transport
             // accidentally treated peer #1 as a "first peer" cache key
             // somewhere, this lights it up.
-            val aliceSees = lanTimeouts.withTimeout(Phase.DISCOVERY_1, DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers ->
-                    peers.any { it.id == bob.localPeerId } &&
-                        peers.any { it.id == charlie.localPeerId }
+            val aliceSees = traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER_SET, ::discoveryObservations) {
+                lanTimeouts.withTimeout(Phase.DISCOVERY_1, DISCOVERY_TIMEOUT_MS) {
+                    alice.peers.first { peers ->
+                        peers.any { it.id == bob.localPeerId } &&
+                            peers.any { it.id == charlie.localPeerId }
+                    }
                 }
             }
-            val bobSees = lanTimeouts.withTimeout(Phase.DISCOVERY_2, DISCOVERY_TIMEOUT_MS) {
-                bob.peers.first { peers ->
-                    peers.any { it.id == alice.localPeerId } &&
-                        peers.any { it.id == charlie.localPeerId }
+            val bobSees = traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER_SET, ::discoveryObservations) {
+                lanTimeouts.withTimeout(Phase.DISCOVERY_2, DISCOVERY_TIMEOUT_MS) {
+                    bob.peers.first { peers ->
+                        peers.any { it.id == alice.localPeerId } &&
+                            peers.any { it.id == charlie.localPeerId }
+                    }
                 }
             }
-            val charlieSees = lanTimeouts.withTimeout(Phase.DISCOVERY_3, DISCOVERY_TIMEOUT_MS) {
-                charlie.peers.first { peers ->
-                    peers.any { it.id == alice.localPeerId } &&
-                        peers.any { it.id == bob.localPeerId }
+            val charlieSees = traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER_SET, ::discoveryObservations) {
+                lanTimeouts.withTimeout(Phase.DISCOVERY_3, DISCOVERY_TIMEOUT_MS) {
+                    charlie.peers.first { peers ->
+                        peers.any { it.id == alice.localPeerId } &&
+                            peers.any { it.id == bob.localPeerId }
+                    }
                 }
             }
 
@@ -290,6 +318,13 @@ class IosLanLifecycleTest {
             }
             lanTimeouts.withTimeout(Phase.HANDSHAKE_CONNECTED, HANDSHAKE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Connected }
+                // Outgoing handshake completion can precede the responder's lifecycle commit.
+                // This test stops an established session, not a pending incoming setup. Observe
+                // Bob's public committed owner as well, within the existing readiness deadline.
+                val incoming = bob.sessions.first { current ->
+                    current.any { it.peer.id == alice.localPeerId }
+                }.single { it.peer.id == alice.localPeerId }
+                incoming.state.first { it == ConnectionState.Connected }
             }
 
             // Bob exits cleanly and Alice must honor the CLOSE frame without
@@ -443,7 +478,7 @@ class IosLanLifecycleTest {
             // mutate it through the public DSL). Alice should see the peer
             // reappear within a reasonable Bonjour TTL.
             bob.startAdvertising()
-            alice.awaitPeer(bob, Phase.REDISCOVERY)
+            alice.awaitPeer(bob, Phase.REDISCOVERY, AppleLanDiscoveryStage.REDISCOVERY)
         }
     }
 

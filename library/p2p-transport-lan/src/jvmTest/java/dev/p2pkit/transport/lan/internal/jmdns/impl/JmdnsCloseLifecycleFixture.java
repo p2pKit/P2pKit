@@ -57,7 +57,8 @@ public final class JmdnsCloseLifecycleFixture {
     private static final int LOCAL_QUERY_PORT = 45_002;
     private static final List<String> MODES = List.of(
             "control", "failed_recovery", "shared_close", "close_wins",
-            "recovery_wins", "responder_close", "callback_executor", "cleanup_retry");
+            "recovery_wins", "responder_close", "callback_executor", "cleanup_retry",
+            "stop_during_recovery", "failed_goodbyes");
     // One fixture per child JVM. Initialize before constructor virtual dispatch
     // so an early native send failure cannot precede diagnostic ownership.
     private static final StartupTrace STARTUP = new StartupTrace();
@@ -105,6 +106,12 @@ public final class JmdnsCloseLifecycleFixture {
                     break;
                 case "cleanup_retry":
                     cleanupRetry(fixture);
+                    break;
+                case "stop_during_recovery":
+                    stopDuringRecovery(fixture);
+                    break;
+                case "failed_goodbyes":
+                    failedGoodbyes(fixture);
                     break;
                 default:
                     throw new AssertionError("unknown_fixture_mode");
@@ -193,6 +200,46 @@ public final class JmdnsCloseLifecycleFixture {
         f.assertDisposed();
         require(callbacks.get() == 1, "failed_recovery_delegate_repeated");
         f.phase("failed_recovery_original_timers_disposed_without_rescue");
+    }
+
+    private static void stopDuringRecovery(Fixture f) throws Exception {
+        f.announceService();
+        AtomicInteger callbacks = new AtomicInteger();
+        f.dns.setDelegate((origin, services) -> callbacks.incrementAndGet());
+        f.control.failRecoverySend = true;
+        f.dns.recover();
+        awaitCondition(() -> f.control.recoverySendFaults.get() > 0 && f.snapshot().recoveryMutationActive,
+                STEP_MILLIS, "pending_recovery_cancellation_not_observed");
+        Thread recovery = f.snapshot().recoveryWorker;
+        require(recovery != null && recovery.isAlive(), "pending_recovery_worker_missing");
+        f.rememberThread(recovery);
+
+        long started = System.nanoTime();
+        f.dns.close();
+        require(System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(6_000),
+                "terminal_close_exceeded_sdk_cleanup_budget");
+        f.assertDisposed();
+        require(callbacks.get() == 0, "terminal_close_published_recovery_failure_callback");
+        f.phase("pending_recovery_disposed_within_sdk_budget_without_rescue");
+    }
+
+    private static void failedGoodbyes(Fixture f) throws Exception {
+        // All four participants (three services and the host) start cancellation
+        // together. A failed send must not multiply the existing 5s goodbye
+        // allowance by the number of resources before real disposal starts.
+        for (int index = 0; index < 3; index++) {
+            f.announceService();
+        }
+        f.control.failRecoverySend = true;
+        long started = System.nanoTime();
+        f.dns.close();
+        require(System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(6_000),
+                "shared_goodbye_phase_exceeded_sdk_cleanup_budget");
+        require(f.control.recoverySendFaults.get() > 0
+                        && f.control.recoverySendThread.get() == f.stateTimer,
+                "real_original_state_timer_failure_missing");
+        f.assertDisposed();
+        f.phase("failed_goodbyes_disposed_within_sdk_budget_without_rescue");
     }
 
     private static void sharedClose(Fixture f) throws Exception {

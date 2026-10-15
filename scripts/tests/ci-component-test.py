@@ -38,6 +38,25 @@ class ComponentTests(unittest.TestCase):
                     self.assertIn('strict', argv)
                     self.assertIn('--no-build-cache', argv)
                     self.assertIn('--no-configuration-cache', argv)
+    def test_rpc_library_and_sample_preserve_native_host_and_android_coverage(self):
+        with tempfile.TemporaryDirectory(prefix='ci-rpc-routing-') as temporary:
+            root = Path(temporary)
+            with patch.object(C, 'ROOT', root):
+                for component in ('jvm-linux', 'jvm-windows', 'android'):
+                    self.assertFalse(any(':p2p-sample-rpc:' in arg
+                                         for _, argv in C.commands(component) for arg in argv))
+                (root / 'library/p2p-rpc').mkdir(parents=True)
+                (root / 'samples/p2p-sample-rpc').mkdir(parents=True)
+                for component in ('jvm-linux', 'jvm-windows'):
+                    tasks = C.commands(component)[0][1]
+                    self.assertEqual(tasks.count(':p2p-rpc:jvmTest'), 1)
+                    self.assertEqual(tasks.count(':p2p-sample-rpc:jvmTest'), 1)
+                    self.assertNotIn('--tests', tasks)
+                tasks = C.commands('android')[0][1]
+                self.assertEqual(tasks.count(':p2p-rpc:testAndroidHostTest'), 1)
+                self.assertEqual(tasks.count(':p2p-sample-rpc:testAndroidHostTest'), 1)
+                self.assertNotIn('--tests', tasks)
+
     def test_native_platform_acceptance_preserved(self):
         self.assertIn('full', C.commands('apple-arm64')[0][1])
         self.assertIn('ios-x64', C.commands('apple-x64')[0][1])

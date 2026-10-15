@@ -189,6 +189,41 @@ def archive_fixture_tree(source, destination, errors, budget=None):
             errors.append(f"Fixture evidence directory {parent}: {type(error).__name__}: {error}")
     return records
 
+
+def finalize_fixture_scope(scope, completed, label, grace, attempt, *, before_close=None):
+    """Process finalization is separate from repeatable failed evidence disposal.
+
+    Reuse only a positively drained, closed instance with an unchanged launch
+    ledger. Never ask a closed adapter (whose capabilities were released) to
+    rediscover processes. This does not clear independent retention obligations.
+    """
+    launches = runner.digest(runner.json_bytes(scope.launches))
+    previous = completed.get(scope)
+    if previous is not None:
+        runner.require(previous["launchesSha256"] == launches and not scope.discovery_errors,
+                       "Finalized fixture scope changed; previous retirement is not reusable")
+        return {**previous, "reusedVerifiedFinalization": True}
+
+    result = {"id": uuid.uuid4().hex, "launchesSha256": launches, "completedUtc": None,
+              "reusedVerifiedFinalization": False,
+              "survivors": attempt(label + " drain", lambda: scope.drain(grace=grace, kill_wait=5)),
+              "discoveryErrors": attempt(label + " discovery status", lambda: sorted(scope.discovery_errors))}
+    # Windows still needs its process handle to collect an exit status. Preserve
+    # capture-before-close ordering on every backend; repeat disposal need not
+    # poll an already closed process handle or overwrite its completed capture.
+    result["captureComplete"] = before_close is None or attempt(label + " capture", before_close) is not None
+
+    def close():
+        scope.close()
+        return True
+
+    result["closed"] = attempt(label + " close", close) is True
+    if result["survivors"] == [] and result["discoveryErrors"] == [] and result["closed"] and result["captureComplete"]:
+        result["completedUtc"] = runner.utc()
+        completed[scope] = dict(result)
+    return result
+
+
 FIXTURE = r'''import json, os, pathlib, signal, subprocess, sys, time
 state = pathlib.Path(os.environ["P2PKIT_AUDIT_STATE_DIR"])
 arguments = sys.argv[1:]
@@ -575,6 +610,77 @@ class PurePolicyTests(unittest.TestCase):
         path.mkdir.assert_called_once_with(mode=0o700, parents=True, exist_ok=True)
         create.assert_not_called()
         reopen.assert_not_called()
+
+    def test_repeat_disposal_uses_only_unchanged_complete_closed_scope_finalization(self):
+        class Scope:
+            launches = [{"pid": 123, "created": True}]
+            discovery_errors = set()
+            closed = False
+
+            def drain(self, **_kwargs):
+                if self.closed:
+                    raise AssertionError("A closed scope cannot perform a fresh drain")
+                return []
+
+            def close(self):
+                self.closed = True
+
+        scope, completed, errors = Scope(), {}, ["independent whole-chain retention remains pending"]
+        calls = []
+
+        def attempt(label, action):
+            calls.append(label)
+            return action()
+
+        first = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+        self.assertTrue(first["closed"])
+        self.assertIsNotNone(first["completedUtc"])
+        self.assertFalse(first["reusedVerifiedFinalization"])
+        again = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+        self.assertEqual(again["id"], first["id"])
+        self.assertTrue(again["reusedVerifiedFinalization"])
+        self.assertEqual(calls, ["guard drain", "guard discovery status", "guard close"])
+        self.assertEqual(errors, ["independent whole-chain retention remains pending"])
+        scope.launches = [*scope.launches, {"pid": 124, "created": True}]
+        with self.assertRaisesRegex(runner.AuditError, "previous retirement is not reusable"):
+            finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+
+    def test_failed_or_uncertain_scope_finalization_is_never_cached(self):
+        for failure in ("drain", "discovery", "close"):
+            with self.subTest(failure=failure):
+                scope, completed = mock.Mock(), {}
+                scope.launches = []
+                scope.discovery_errors = {"unresolved"} if failure == "discovery" else set()
+                scope.drain.return_value = None if failure == "drain" else []
+                if failure == "close":
+                    scope.close.side_effect = OSError("injected closure failure")
+
+                def attempt(_label, action):
+                    try:
+                        return action()
+                    except OSError:
+                        return None
+
+                result = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+                self.assertIsNone(result["completedUtc"])
+                self.assertEqual(completed, {})
+
+    def test_scope_capture_completes_before_handle_close_and_is_not_repeated(self):
+        scope, completed, order = mock.Mock(), {}, []
+        scope.launches, scope.discovery_errors = [], set()
+        scope.drain.side_effect = lambda **_kwargs: (order.append("drain") or [])
+        scope.close.side_effect = lambda: order.append("close")
+
+        def capture():
+            self.assertNotIn("close", order)
+            order.append("capture")
+            return 0, b"", b""
+
+        attempt = lambda _label, action: action()
+        for _ in range(2):
+            result = finalize_fixture_scope(scope, completed, "sentinel", .1, attempt, before_close=capture)
+            self.assertTrue(result["captureComplete"])
+        self.assertEqual(order, ["drain", "capture", "close"])
 
     def test_readonly_retry_is_only_windows_exact_unlink_access_denied(self):
         denied = PermissionError(errno.EACCES, "synthetic original failure")
@@ -2875,6 +2981,117 @@ class DeadlinePolicyTests(unittest.TestCase):
         self.assertEqual(labels.count("stop-spawn"), 1)
         self.assertEqual(value.scope.drains, 2)
 
+class LinuxObservationTests(unittest.TestCase):
+    """Scripted /proc transitions; no kernel or native-host acceptance claims."""
+
+    def setUp(self):
+        self.scope = processes.LinuxScope.__new__(processes.LinuxScope)
+        self.scope.job, self.scope.invocation = "a" * 32, "b" * 32
+        self.scope.state, self.scope.home = "/fixture-state", "/fixture-home"
+        self.scope.known, self.scope.handles = {}, {}
+        self.scope.leaders, self.scope.launches = [], []
+        self.scope.discovery_errors, self.scope.baseline = set(), set()
+        self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
+        self.identity = {"pid": 43210, "uid": 1000, "parentPid": 4000, "group": 43210,
+                         "session": 4000, "startTicks": 99, "live": True}
+        self.current = dict(self.identity)
+        self.scope._identity = mock.Mock(side_effect=lambda _pid, **_kwargs:
+                                        None if self.current is None else dict(self.current))
+        self.scope._pids = lambda: [self.identity["pid"]]
+        self.scope._environment = mock.Mock(side_effect=PermissionError(errno.EACCES, "scripted access denial"))
+        self.scope._acquire = mock.Mock(return_value=7)
+        self.scope._send = mock.Mock()
+
+    def discover(self):
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True):
+            return self.scope.discover()
+
+    def test_live_denial_and_missing_census_never_admit_cleanup_or_signaling(self):
+        self.assertEqual(self.discover(), [])
+        self.scope._pids = lambda: []
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+        with mock.patch.object(processes.PosixScope, "drain", return_value=[]), \
+                self.assertRaisesRegex(processes.OwnershipError, "Unclassified Linux"):
+            self.scope.drain()
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_verified_end_nonrunning_or_replacement_reconciles_only_the_recorded_lifetime(self):
+        for current, outcome in ((None, "lifetime-ended"), ({**self.identity, "live": False}, "nonrunning"),
+                                 ({**self.identity, "startTicks": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.assertEqual(self.discover(), [])
+                self.current = current
+                self.scope._pids = lambda: []
+                self.scope._environment.side_effect = None
+                self.scope._environment.return_value = {}
+                self.assertEqual(self.discover(), [])
+                self.assertFalse(self.scope.discovery_errors)
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], outcome)
+                self.scope._acquire.assert_not_called()
+                self.scope._send.assert_not_called()
+
+    def test_later_positive_environment_observation_can_resolve_owned_or_foreign_process(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                self.setUp()
+                self.assertEqual(self.discover(), [])
+                env = processes.ownership_environment({}, self.scope.job, self.scope.invocation,
+                                                      self.scope.state, self.scope.home) if owned else {}
+                self.scope._environment.side_effect = None
+                self.scope._environment.return_value = {key.encode(): value.encode() for key, value in env.items()}
+                self.assertEqual(self.discover(), [self.identity] if owned else [])
+                self.assertFalse(self.scope.discovery_errors)
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "owned" if owned else "unmarked")
+                self.assertEqual(self.scope._acquire.call_count, int(owned))
+                self.scope._send.assert_not_called()
+
+    def test_pending_identity_denial_or_uid_change_is_not_verified_exit(self):
+        self.assertEqual(self.discover(), [])
+        self.current["uid"] = 0
+        self.assertEqual(self.discover(), [])
+        self.assertTrue(self.scope.pending_discoveries)
+        self.scope._identity = processes.LinuxScope._identity.__get__(self.scope)
+        with mock.patch.object(Path, "read_bytes", side_effect=PermissionError(errno.EACCES, "scripted stat denial")), \
+                self.assertRaisesRegex(processes.OwnershipError, "recorded Linux"):
+            self.scope._identity(self.identity["pid"])
+        self.assertTrue(self.scope.discovery_errors)
+        self.scope._send.assert_not_called()
+
+    def test_positive_exit_cannot_clear_structural_failure_or_exceed_record_bound(self):
+        self.assertEqual(self.discover(), [])
+        self.scope._environment.side_effect = processes.OwnershipError("scripted structural failure")
+        self.assertEqual(self.discover(), [])
+        self.current = None
+        self.scope._pids = lambda: []
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(self.scope.discovery_errors,
+                         {f"Cannot inspect new same-uid process {self.identity['pid']}: OwnershipError"})
+        self.scope.discovery_reconciliations = [{}] * 1024
+        with self.assertRaisesRegex(processes.OwnershipError, "evidence exceeds"):
+            self.scope._discovery_failed(self.identity, PermissionError(errno.EACCES, "scripted"))
+        self.scope._send.assert_not_called()
+
+    def test_positive_candidate_identity_rechecks_require_readability_and_release_failed_handle(self):
+        with self.assertRaises(PermissionError):
+            self.scope._inspect_environment(self.identity)
+        self.scope._identity.assert_called_with(self.identity["pid"], required=True)
+        acquire = processes.LinuxScope._acquire.__get__(self.scope)
+        for observed, error in ((None, None), ({**self.identity, "startTicks": 100}, None),
+                                (None, processes.OwnershipError("scripted identity denial"))):
+            with self.subTest(error=error), mock.patch.object(processes.os, "pidfd_open", return_value=7, create=True), \
+                    mock.patch.object(processes.os, "close") as close:
+                self.scope._identity = mock.Mock(return_value=observed, side_effect=error)
+                with self.assertRaises((ProcessLookupError, processes.OwnershipError)):
+                    acquire(self.identity)
+                close.assert_called_once_with(7)
+                self.scope._send.assert_not_called()
+
 
 class DarwinObservationTests(unittest.TestCase):
     """Scripted Darwin API transitions, not native Mach/cleanup acceptance."""
@@ -2889,12 +3106,22 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
         self.scope.observation_reconciliations = []
         self.scope.drain_reconciliations, self.scope.active_drain = [], None
+
+        self.scope.identity_history, self.scope.ownership_proofs = {}, {}
+        self.scope.foreign_sessions, self.scope.controller_session = {}, 42
+        self.scope.pipe_fds, self.scope.pipe_marker = (7, 8), (101, 102, 103)
+        self.scope._has_pipe = mock.Mock(return_value=False)
+        self.scope._audit_session = mock.Mock(return_value=self.scope.controller_session)
         self.scope.self_port, self.scope.argmax = 7, 4096
-        self.scope.system, self.scope.proc = mock.Mock(), mock.Mock()
-        self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 1, "group": 43210,
-                         "uniqueId": 99, "parentUniqueId": 1, "pidVersion": 3,
+        self.scope.system, self.scope.proc, self.scope.bsm = mock.Mock(), mock.Mock(), mock.Mock()
+        self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 4000, "group": 43210,
+                         "uniqueId": 99, "parentUniqueId": 91, "pidVersion": 3, "originalParentPidVersion": 2,
                          "startSeconds": 123, "startMicroseconds": 456,
                          "status": 2, "flags": 4, "live": True}
+        self.parent = {**self.identity, "pid": 4000, "uniqueId": 91, "parentUniqueId": 0,
+                       "startSeconds": 1, "parentPid": 0}
+        self.scope._remember_identity(self.parent)
+        self.scope.baseline.add(self.scope._key(self.parent))
         self.current = dict(self.identity)
         self.scope._identity = mock.Mock(side_effect=lambda _pid, **_kwargs:
                                         None if self.current is None else dict(self.current))
@@ -2913,6 +3140,48 @@ class DarwinObservationTests(unittest.TestCase):
         with mock.patch.object(processes.time, "monotonic", side_effect=lambda: self.elapsed), \
                 mock.patch.object(processes.time, "sleep", side_effect=sleep):
             yield
+
+    def test_pending_context_is_redacted_recorded_data_and_cannot_resolve_ownership(self):
+        self.fail_environment_census()
+        key = self.scope._key(self.identity)
+        self.scope.diagnostic_roles = {key: 'xcodebuild'}
+        original_errors = set(self.scope.discovery_errors)
+        original_pending = dict(self.scope.pending_discoveries)
+        self.scope.proc.reset_mock()
+        self.scope.system.reset_mock()
+        self.scope._identity.reset_mock()
+        for owned, expected in ((False, 'BASELINE'), (True, 'OWNED')):
+            if owned:
+                self.scope.known[self.scope._key(self.parent)] = self.parent
+            actual = self.scope._pending_context()
+            self.assertEqual(actual, {'scope': 'RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT',
+                'roles': {'xcodebuild': 1}, 'parentage': {expected: 1}})
+            self.assertEqual(self.scope.discovery_errors, original_errors)
+            self.assertEqual(self.scope.pending_discoveries, original_pending)
+            self.assertNotIn(key, self.scope.known)
+            self.assertNotIn(key, self.scope.handles)
+        self.scope.proc.assert_not_called()
+        self.assertEqual(self.scope.proc.mock_calls, [])
+        self.assertEqual(self.scope.system.mock_calls, [])
+        self.scope._identity.assert_not_called()
+
+    def test_pending_context_does_not_promote_missing_traced_or_invalid_parentage(self):
+        self.fail_environment_census()
+        for parent, flags, expected in ((999, 0, 'UNOBSERVED'), (91, 2, 'TRACED'), (99, 0, 'INVALID')):
+            self.scope.pending_discoveries[self.identity['pid']]['lastIdentity'] = {
+                **self.identity, 'parentUniqueId': parent, 'flags': flags}
+            actual = self.scope._pending_context()
+            self.assertEqual(actual['parentage'], {expected: 1})
+            self.assertEqual(actual['roles'], {'UNRECORDED': 1})
+            self.assertTrue(self.scope.discovery_errors)
+            self.assertEqual(self.scope.handles, {})
+
+    def test_kernel_role_labels_do_not_export_paths_private_names_or_truncated_guesses(self):
+        for name in (b'PRIVATE_SECRET', b'/private/java', b'com.apple.CoreSi', b'python-private', b'OTHER', b''):
+            self.assertEqual(processes.darwin_diagnostic_role(name), 'OTHER')
+        for name in (b'Python', b'Python3', b'python3.14'):
+            self.assertEqual(processes.darwin_diagnostic_role(name), 'python')
+        self.assertEqual(processes.darwin_diagnostic_role(b'xctest'), 'xctest')
 
     def test_exiting_task_name_error_reconciles_to_terminal_not_inexit(self):
         for terminal in (None, {**self.identity, "status": 5, "live": False}):
@@ -3070,6 +3339,370 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.proc.proc_signal_with_audittoken.assert_not_called()
         self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "replaced")
 
+    def test_original_parent_proof_survives_parent_exit_and_numeric_reparenting(self):
+        self.scope.baseline.clear()
+        self.scope.known[self.scope._key(self.parent)] = {**self.parent, "live": False, "status": 5}
+        child = {**self.identity, "parentPid": 9876, "group": 9876}
+        proof = self.scope._ownership_proof(child, {})
+        self.assertEqual(proof, {"kind": "kernel-original-parent", "ancestors": [list(self.scope._key(self.parent))]})
+
+    def test_same_pid_or_process_group_is_not_original_parent_ownership(self):
+        self.scope.baseline.clear()
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        self.current.update(parentPid=self.parent["pid"], parentUniqueId=999, group=self.parent["group"])
+        with self.assertRaises(processes.DiscoveryUncertain):
+            self.scope._ownership_proof(self.current, {})
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_foreign_baseline_parent_is_positive_nonownership(self):
+        self.assertIsNone(self.scope._ownership_proof(self.identity, {}))
+        self.assertFalse(self.scope.known)
+
+    def test_reaper_unique_id_and_original_parent_version_cannot_prove_nonownership(self):
+        reaper = {**self.parent, "pid": 1, "uniqueId": 1}
+        self.scope._remember_identity(reaper)
+        self.scope.baseline.add(self.scope._key(reaper))
+        for version in (self.parent["pidVersion"], reaper["pidVersion"], -1):
+            with self.subTest(version=version):
+                child = {**self.identity, "parentPid": 1, "parentUniqueId": 1,
+                         "originalParentPidVersion": version}
+                with self.assertRaises(processes.DiscoveryUncertain):
+                    self.scope._ownership_proof(child, {})
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.foreign_sessions)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_pipe_proof_survives_missing_and_reaper_ancestry(self):
+        self.scope.identity_history.clear()
+        self.scope._has_pipe.return_value = True
+        self.assertEqual(self.scope._ownership_proof(self.identity, {}), {"kind": "inherited-pipe-capability"})
+        self.scope._audit_session.assert_not_called()
+
+    def test_different_audit_session_is_nonownership_not_signal_authority(self):
+        self.scope.identity_history.clear()
+        self.scope._audit_session.return_value = 43
+        self.assertIsNone(self.scope._ownership_proof(self.identity, {}))
+        self.assertEqual(self.scope.description()["foreignAuditSessions"], [{
+            "identity": list(self.scope._key(self.identity)), "kind": "different-kernel-audit-session",
+            "signalAuthority": False}])
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.handles)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_same_or_unassigned_audit_session_does_not_prove_ownership_or_nonownership(self):
+        self.scope.identity_history.clear()
+        for controller, observed in ((42, 42), (42, 0), (42, 0xffffffff), (0, 42), (0xffffffff, 42)):
+            with self.subTest(controller=controller, observed=observed):
+                self.scope.controller_session = controller
+                self.scope._audit_session.return_value = observed
+                with self.assertRaises(processes.DiscoveryUncertain):
+                    self.scope._ownership_proof(self.identity, {})
+        self.assertFalse(self.scope.foreign_sessions)
+
+    def test_unclassified_session_reason_uses_existing_read_without_conveying_authority(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}):
+            self.assertEqual(self.scope.discover(), [])
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "SAME_VALID_SESSION")
+        self.assertEqual(record["firstFailure"], "Darwin non-reaper original-parent lifetime was not observed")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.scope._audit_session.assert_called_once_with(self.current)
+        self.scope._has_pipe.assert_called_once_with(self.current)
+        self.assertTrue(self.scope.discovery_errors)
+        self.assertEqual(self.scope.known, {})
+        self.assertEqual(self.scope.handles, {})
+        self.assertEqual(self.scope.foreign_sessions, {})
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_unadmitted_session_reasons_remain_unclassified_and_export_no_session_numbers(self):
+        self.current["parentUniqueId"] = 999
+        cases = ((42, 0, "UNADMITTED_TARGET_SESSION"), (42, 0xffffffff, "UNADMITTED_TARGET_SESSION"),
+                 (0, 42, "UNADMITTED_CONTROLLER_SESSION"), (0xffffffff, 42, "UNADMITTED_CONTROLLER_SESSION"),
+                 (0, 0xffffffff, "UNADMITTED_CONTROLLER_SESSION"))
+        for controller, observed, reason in cases:
+            with self.subTest(controller=controller, observed=observed), \
+                    mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                    mock.patch.object(self.scope, "_environment", return_value={}):
+                self.scope.controller_session = controller
+                self.scope._audit_session.reset_mock()
+                self.scope._audit_session.return_value = observed
+                self.assertEqual(self.scope.discover(), [])
+                record = self.scope.pending_discoveries[self.current["pid"]]
+                self.assertEqual(record["auditSessionExclusion"], reason)
+                self.assertEqual(set(record), {"identity", "message", "firstFailure", "failures", "outcome",
+                                               "lastIdentity", "lastFailure", "auditSessionExclusion"})
+                self.scope._audit_session.assert_called_once_with(self.current)
+                self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+                self.assertTrue(self.scope.discovery_errors)
+                self.assertEqual(self.scope.known, {})
+                self.assertEqual(self.scope.handles, {})
+                self.assertEqual(self.scope.foreign_sessions, {})
+
+    def test_session_reason_does_not_survive_a_later_unobserved_token_failure(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}):
+            self.scope.discover()
+            self.assertEqual(self.scope.pending_discoveries[self.current["pid"]]["auditSessionExclusion"],
+                             "SAME_VALID_SESSION")
+            self.scope._audit_session.side_effect = processes.DarwinObservationExhausted("scripted token denial")
+            self.scope.discover()
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "NOT_RECORDED")
+        self.assertEqual(record["lastFailure"], "scripted token denial")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.assertTrue(self.scope.discovery_errors)
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+
+    def test_session_diagnostic_is_bounded_and_unknown_values_are_not_exported(self):
+        error = processes.DiscoveryUncertain("scripted missing parent")
+        error.audit_session_exclusion = "private-unreviewed-session-value"
+        for _ in range(100):
+            self.scope._discovery_failed(self.current, error)
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "NOT_RECORDED")
+        self.assertEqual(record["failures"], 100)
+        self.assertEqual(len(self.scope.pending_discoveries), 1)
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        self.assertNotIn("private-unreviewed-session-value", json.dumps(self.scope.description()))
+        self.scope.discovery_reconciliations = [record] * 1024
+        with self.assertRaisesRegex(processes.OwnershipError, "discovery evidence exceeds"):
+            self.scope._discovery_failed({**self.current, "pid": self.current["pid"] + 1}, error)
+        self.scope._audit_session.assert_not_called()
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_traced_parent_edge_is_not_ownership_evidence(self):
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        with self.assertRaisesRegex(processes.DiscoveryUncertain, "traced"):
+            self.scope._ownership_proof({**self.identity, "flags": self.identity["flags"] | 2}, {})
+
+    def test_pipe_native_layout_and_identity_validation(self):
+        self.assertEqual([ctypes.sizeof(kind) for kind in (processes.DarwinFileInfo, processes.DarwinVinfoStat,
+            processes.DarwinPipeInfo, processes.DarwinFdInfo)], [24, 136, 184, 8])
+
+        def observed(pid, fd, flavor, pointer, size):
+            self.assertEqual((pid, fd, flavor, size), (43210, 17, 6, 184))
+            value = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinPipeInfo)).contents
+            value.handle, value.peer, value.stat.ino = self.scope.pipe_marker
+            value.stat.mode = 0o010600
+            return size
+
+        self.scope.proc.proc_pidfdinfo.side_effect = observed
+        self.assertEqual(self.scope._pipe_identity(43210, 17), self.scope.pipe_marker)
+        self.scope.proc.proc_pidfdinfo.side_effect = None
+        self.scope.proc.proc_pidfdinfo.return_value = 183
+        with self.assertRaisesRegex(processes.OwnershipError, "Unsupported"):
+            self.scope._pipe_identity(43210, 17)
+        self.scope.proc.proc_pidfdinfo.return_value = 0
+        for error in (errno.EBADF, errno.ENOENT, errno.EINVAL):
+            ctypes.set_errno(error)
+            self.scope.proc.proc_pidfdinfo.side_effect = lambda *_args, error=error: (ctypes.set_errno(error) or 0)
+            self.assertIsNone(self.scope._pipe_identity(43210, 17))
+        self.scope.proc.proc_pidfdinfo.side_effect = lambda *_args: (ctypes.set_errno(errno.EPERM) or 0)
+        with self.assertRaises(processes.DarwinObservationError):
+            self.scope._pipe_identity(43210, 17)
+
+    def test_descriptor_marker_is_checked_against_held_capability_and_current_lifetime(self):
+        self.scope._has_pipe = processes.DarwinScope._has_pipe.__get__(self.scope)
+
+        def census(pid, flavor, arg, pointer, size):
+            self.assertEqual((pid, flavor, arg), (self.identity["pid"], 1, 0))
+            rows = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinFdInfo))
+            rows[0].fd, rows[0].type = 18, 1  # A nonpipe descriptor is never inspected as a pipe.
+            rows[1].fd, rows[1].type = 19, 6
+            return 16
+
+        self.scope.proc.proc_pidinfo.side_effect = census
+        for marker, expected in ((self.scope.pipe_marker, True), ((901, 902, 903), False), (None, False)):
+            with self.subTest(markerPresent=expected), self.clock(), \
+                    mock.patch.object(self.scope, "_pipe_identity", side_effect=lambda pid, _fd:
+                                      self.scope.pipe_marker if pid == os.getpid() else marker) as inspect:
+                self.assertEqual(self.scope._has_pipe(self.identity), expected)
+                self.assertEqual(inspect.call_args_list, [mock.call(os.getpid(), 8), mock.call(43210, 19)])
+        for lost in (None, (901, 902, 903)):
+            with mock.patch.object(self.scope, "_pipe_identity", return_value=lost), \
+                    self.assertRaisesRegex(processes.OwnershipError, "held pipe capability"):
+                self.scope._has_pipe(self.identity)
+
+    def test_pipe_census_bounds_and_permission_failures_do_not_authorize_signaling(self):
+        self.scope._has_pipe = processes.DarwinScope._has_pipe.__get__(self.scope)
+        with mock.patch.object(self.scope, "_pipe_identity", return_value=self.scope.pipe_marker), self.clock():
+            self.scope.proc.proc_pidinfo.return_value = 7
+            with self.assertRaisesRegex(processes.OwnershipError, "Unsupported Darwin descriptor census"):
+                self.scope._has_pipe(self.identity)
+            self.scope.proc.proc_pidinfo.side_effect = lambda _pid, _flavor, _arg, _ptr, size: size
+            with mock.patch.object(processes, "MAX_PROCESS_FDS", 256), \
+                    self.assertRaisesRegex(processes.OwnershipError, "exceeds its bound"):
+                self.scope._has_pipe(self.identity)
+            self.scope.proc.proc_pidinfo.side_effect = lambda *_args: (ctypes.set_errno(errno.EPERM) or 0)
+            with self.assertRaises(processes.DiscoveryUncertain):
+                self.scope._ownership_proof(self.identity, {})
+        self.assertFalse(self.scope.known)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_only_verified_inherited_pipe_descriptors_are_passed_not_reused_or_closed_fds(self):
+        ids = ["a" * 32, "b" * 32, "c" * 32]
+        records = [{"id": identifier, "fd": 8 + index, "digest": self.scope._pipe_digest(self.scope.pipe_marker)}
+                   for index, identifier in enumerate(ids)]
+        environment = {processes.CHAIN_ENV: ":".join(ids), processes.PIPE_ENV: json.dumps(records)}
+        with mock.patch.object(self.scope, "_pipe_identity", side_effect=[self.scope.pipe_marker, None, (9, 9, 9)]):
+            self.assertEqual(self.scope._inherited_pipes(environment), records[:1])
+
+    def test_malformed_and_duplicate_pipe_bindings_fail_without_descriptor_access(self):
+        valid = {"id": self.scope.invocation, "fd": 8, "digest": self.scope._pipe_digest(self.scope.pipe_marker)}
+        records = [None, {}, [valid] * 33, [valid, valid], [{**valid, "id": "c" * 32}],
+                   [{**valid, "fd": True}], [{**valid, "fd": 2}], [{**valid, "digest": "x"}]]
+        with mock.patch.object(self.scope, "_pipe_identity") as inspect:
+            for record in records:
+                with self.subTest(record=record), self.assertRaises(processes.OwnershipError):
+                    self.scope._inherited_pipes({processes.CHAIN_ENV: self.scope.invocation,
+                                                 processes.PIPE_ENV: json.dumps(record)})
+            with self.assertRaisesRegex(processes.OwnershipError, "Duplicate"):
+                self.scope._inherited_pipes({processes.PIPE_ENV: '[{"id":"a","id":"b"}]'})
+            inspect.assert_not_called()
+
+    def test_native_audit_session_decoder_must_match_bound_pid_and_credentials(self):
+        self.scope._audit_session = processes.DarwinScope._audit_session.__get__(self.scope)
+        token = processes.AuditToken()
+        self.scope.bsm.audit_token_to_pid.return_value = self.identity["pid"]
+        self.scope.bsm.audit_token_to_euid.return_value = self.identity["uid"]
+        self.scope.bsm.audit_token_to_asid.return_value = 42
+        with mock.patch.object(self.scope, "_acquire", return_value=token):
+            self.assertEqual(self.scope._audit_session(self.identity), 42)
+            self.scope.bsm.audit_token_to_asid.assert_called_once_with(token)
+            self.scope.bsm.audit_token_to_euid.return_value = 0
+            with self.assertRaisesRegex(processes.OwnershipError, "decoder/identity mismatch"):
+                self.scope._audit_session(self.identity)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_close_releases_only_own_pipe_references_and_is_idempotent(self):
+        with mock.patch.object(processes.os, "close") as close:
+            self.scope.close()
+            self.scope.close()
+            self.assertEqual(close.call_args_list, [mock.call(7), mock.call(8)])
+        self.assertFalse(self.scope.description()["inheritedPipeBound"])
+
+    def test_missing_intermediary_blocks_drain_without_signaling_unknown_process(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            self.assertEqual(self.scope.discover(), [])
+            self.assertEqual(len(self.scope.pending_discoveries), 1)
+            with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                self.scope.drain(grace=.01, kill_wait=.01)
+            send.assert_not_called()
+            self.current = None
+            self.assertEqual(self.scope.discover(), [])
+            self.assertEqual(self.scope.discovery_errors, set())
+            self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "lifetime-ended")
+
+    def test_pending_lifetime_is_not_a_quiet_drain_sample_before_verified_exit(self):
+        self.current["parentUniqueId"] = 999
+        self.on_sleep = lambda: setattr(self, "current", None) if self.elapsed >= .6 else None
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            self.assertEqual(self.scope.drain(), [])
+            self.assertGreaterEqual(self.elapsed, .6)
+            self.assertLess(self.elapsed, 5, "Use the existing grace, not an extended cleanup deadline")
+            send.assert_not_called()
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_errors, set())
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "lifetime-ended")
+
+    def test_pending_lifetime_recovered_as_owned_is_drained_only_after_positive_proof(self):
+        self.current["parentUniqueId"] = 999
+        self.scope._has_pipe.side_effect = lambda _identity: self.elapsed >= .6
+        token = processes.AuditToken()
+
+        def retire(identity, handle, signum):
+            self.assertGreaterEqual(self.elapsed, .6)
+            self.assertEqual(identity, self.current)
+            self.assertIs(handle, token)
+            self.assertEqual(signum, processes.SIG_TERM)
+            self.assertEqual(self.scope.ownership_proofs[self.scope._key(identity)]["kind"],
+                             "inherited-pipe-capability")
+            self.current = None
+
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_acquire", return_value=token) as acquire, \
+                mock.patch.object(self.scope, "_send", side_effect=retire) as send, self.clock():
+            self.assertEqual(self.scope.drain(), [])
+            acquire.assert_called_once()
+            send.assert_called_once()
+            self.assertLess(self.elapsed, 5)
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "owned")
+
+    def test_pending_lifetime_must_still_fail_after_original_grace_and_kill_wait(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                self.scope.drain(grace=1, kill_wait=1)
+            self.assertGreaterEqual(self.elapsed, 2)
+            self.assertLess(self.elapsed, 2.21)
+            send.assert_not_called()
+        self.assertEqual(len(self.scope.pending_discoveries), 1)
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+
+    def test_complete_census_resolves_child_before_its_intermediate_parent(self):
+        self.scope.baseline.clear()
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        middle = {**self.identity, "pid": 43211, "uniqueId": 98}
+        child = {**self.identity, "parentUniqueId": 98}
+        rows = {row["pid"]: row for row in (child, middle, self.parent)}
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_pids", return_value=[child["pid"], middle["pid"]]), \
+                mock.patch.object(self.scope, "_identity", side_effect=lambda pid, **_kwargs: rows.get(pid)), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_acquire", return_value=processes.AuditToken()):
+            self.assertEqual({row["pid"] for row in self.scope.discover()}, set(rows))
+        proof = self.scope.ownership_proofs[self.scope._key(child)]
+        self.assertEqual(proof["kind"], "kernel-original-parent")
+        self.assertEqual(proof["ancestors"], [list(self.scope._key(middle)), list(self.scope._key(self.parent))])
+
+    def test_lineage_collision_cycle_and_history_bound_are_refused(self):
+        self.scope._remember_identity(self.identity)
+        with self.assertRaisesRegex(processes.OwnershipError, "bound lifetime"):
+            self.scope._remember_identity({**self.identity, "startMicroseconds": 999})
+        with mock.patch.object(processes, "MAX_PROCESSES", len(self.scope.identity_history)):
+            with self.assertRaisesRegex(processes.OwnershipError, "history exceeds"):
+                self.scope._remember_identity({**self.identity, "uniqueId": 100})
+        self.scope.baseline.clear()
+        self.scope.identity_history[self.parent["uniqueId"]]["parentUniqueId"] = self.identity["uniqueId"]
+        with self.assertRaisesRegex(processes.OwnershipError, "Cyclic"):
+            self.scope._ownership_proof(self.identity, {})
+
+    def test_bad_domain_cannot_be_hidden_by_positive_kernel_ancestry(self):
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        bad = {processes.CHAIN_ENV.encode(): self.scope.invocation.encode()}
+        with self.assertRaisesRegex(processes.OwnershipError, "lacks its ancestor"):
+            self.scope._ownership_proof(self.identity, bad)
+
+    def test_exec_gate_requires_exact_release_and_closes_both_descriptors(self):
+        spec = importlib.util.spec_from_file_location("gate_fixture", SCRIPTS / "audit_exec_gate.py")
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        for ready, release, execute in (([], b"G", False), ([8], b"", False), ([8], b"X", False), ([8], b"G", True)):
+            with self.subTest(ready=ready, release=release), \
+                    mock.patch.object(gate.sys, "argv", ["gate", "7", "8", "/exact/command", "two words"]), \
+                    mock.patch.object(gate.os, "write", return_value=1), \
+                    mock.patch.object(gate.select, "select", return_value=(ready, [], [])), \
+                    mock.patch.object(gate.os, "read", return_value=release), \
+                    mock.patch.object(gate.os, "close") as close, mock.patch.object(gate.os, "execv") as execv:
+                self.assertEqual(gate.main(), 125)  # Mock exec cannot replace this test process.
+                self.assertEqual(close.call_args_list, [mock.call(7), mock.call(8)])
+                self.assertEqual(execv.call_count, int(execute))
+                if execute:
+                    execv.assert_called_once_with("/exact/command", ["/exact/command", "two words"])
+
     def test_token_retries_release_ports_and_revalidate_exec_versions(self):
         for failure in ("task-name", "task-info", "token-size", "exec-version"):
             with self.subTest(failure=failure):
@@ -3169,7 +3802,8 @@ class DarwinObservationTests(unittest.TestCase):
                                           ("startusec", "startMicroseconds")):
                         setattr(value.bsd, native, terminal[field])
                     for native, field in (("uniqueid", "uniqueId"), ("parentuniqueid", "parentUniqueId"),
-                                          ("pidversion", "pidVersion")):
+                                          ("pidversion", "pidVersion"),
+                                          ("parentpidversion", "originalParentPidVersion")):
                         setattr(value.unique, native, terminal[field])
                     return ctypes.sizeof(value)
 
@@ -3570,6 +4204,179 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.system.task_name_for_pid.assert_not_called()
 
 
+class SupervisorMergeTests(unittest.TestCase):
+    """Focused merge-contract models; Darwin callbacks below are NOT native proof."""
+
+    def test_backend_interfaces_and_no_shadowing(self):
+        import ast
+        import inspect
+        tree = ast.parse((SCRIPTS / 'audit_processes.py').read_text())
+        for cls in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+            names = [node.name for node in cls.body if isinstance(node, ast.FunctionDef)]
+            self.assertEqual(len(names), len(set(names)), cls.name)
+        for backend in (processes.PosixScope, processes.LinuxScope,
+                        processes.DarwinScope, processes.WindowsScope):
+            inspect.signature(backend.drain).bind(None, grace=1, kill_wait=1, deadline=3)
+            inspect.signature(backend.spawn).bind(None, [], '/', {}, stdin=None, stdout=None, stderr=None)
+        child = processes.PosixProcess(mock.Mock(pid=1, stdout=None, stderr=None, returncode=0))
+        self.assertEqual(child.returncode, 0)
+        child.process.poll.assert_not_called()
+
+    def test_linux_original_deadline_and_pending_refusal_are_both_retained(self):
+        model = LinuxObservationTests(); model.setUp(); scope = model.scope
+        for deadline in (None, 42.5):
+            with mock.patch.object(processes.PosixScope, 'drain', return_value=[]) as drain:
+                self.assertEqual(scope.drain(.2, .3, deadline=deadline), [])
+                if deadline is None:
+                    drain.assert_called_once_with(.2, .3)
+                else:
+                    drain.assert_called_once_with(.2, .3, deadline=42.5)
+                scope.pending_discoveries[1] = {'identity': model.identity}
+                with self.assertRaisesRegex(processes.OwnershipError, 'Unclassified Linux'):
+                    scope.drain(.2, .3, deadline=deadline)
+                scope.pending_discoveries.clear()
+
+    def test_linux_retirement_uncertainty_is_not_transient_access_denial(self):
+        model = LinuxObservationTests(); model.setUp(); scope = model.scope
+        error = PermissionError(errno.EACCES, 'modeled failed pidfd close')
+        error._p2pkit_retirement = {'status': 'UNKNOWN', 'resources': [], 'omitted': 1}
+        scope._discovery_failed(model.identity, error)
+        self.assertFalse(scope.pending_discoveries)
+        self.assertTrue(scope.discovery_errors)
+
+    def test_proof_resolution_never_discards_original_retirement_uncertainty(self):
+        for cls in (processes.DiscoveryUncertain, ProcessLookupError):
+            with self.subTest(boundary="discovery", error=cls.__name__):
+                model = DarwinObservationTests(); model.setUp(); scope = model.scope
+                original = cls("modeled ownership observation failed")
+                original._p2pkit_retirement = {"status": "UNKNOWN", "resources": [], "omitted": 1}
+                scope._inspect_environment = mock.Mock(return_value={})
+                scope._ownership_proof = mock.Mock(side_effect=original)
+                scope._discovery_resolved = mock.Mock()
+                with mock.patch.object(processes.os, 'getuid', return_value=1000), \
+                        self.assertRaises(cls) as caught:
+                    scope.discover()
+                self.assertIs(caught.exception, original)
+                scope._discovery_resolved.assert_not_called()
+                self.assertFalse(scope.pending_discoveries)
+        model = DarwinObservationTests(); model.setUp(); scope = model.scope
+        original = processes.DarwinObservationExhausted("modeled observation and retirement failed")
+        original._p2pkit_retirement = {"status": "UNKNOWN", "resources": [], "omitted": 1}
+        scope._has_pipe.side_effect = original
+        with self.assertRaises(processes.DarwinObservationExhausted) as caught:
+            scope._ownership_proof(model.identity, {})
+        self.assertIs(caught.exception, original)
+        scope._discovery_failed(model.identity, original)
+        self.assertFalse(scope.pending_discoveries)
+        self.assertTrue(scope.discovery_errors)
+
+    def test_darwin_close_attempts_all_originals_and_preserves_sticky_failure(self):
+        model = DarwinObservationTests(); model.setUp(); scope = model.scope
+        original = OSError('modeled first pipe close failed')
+        calls = []
+        def close(fd):
+            calls.append(fd)
+            if fd == 7:
+                raise original
+        with mock.patch.object(processes.os, 'close', side_effect=close):
+            with self.assertRaises(OSError) as caught:
+                scope.close()
+            self.assertIs(caught.exception, original)
+            self.assertEqual(calls, [7, 8])
+            self.assertEqual(scope.pipe_fds, ())
+            self.assertIsNone(scope.pipe_marker)
+            with self.assertRaises(OSError) as caught:
+                scope.close()
+            self.assertIs(caught.exception, original)
+            self.assertEqual(calls, [7, 8])
+            self.assertTrue(processes.retirement_details(original))
+
+    @contextmanager
+    def darwin_spawn(self, *, fail_admission=False, fail_close=False, borrowed=False):
+        import inspect
+        model = DarwinObservationTests(); model.setUp(); scope = model.scope
+        owner = {**model.parent, 'pid': os.getpid(), 'uniqueId': 501,
+                 'uid': os.getuid(), 'realUid': os.getuid()}
+        identity = {**model.identity, 'parentPid': owner['pid'], 'parentUniqueId': owner['uniqueId'],
+                    'uid': os.getuid(), 'realUid': os.getuid()}
+        scope._identity.side_effect = lambda pid, **kwargs: owner if pid == owner['pid'] else identity
+        scope._inherited_pipes = mock.Mock(return_value=[])
+        scope._pipe_identity = mock.Mock(return_value=scope.pipe_marker)
+        scope._has_pipe = mock.Mock(return_value=not fail_admission)
+        scope._acquire = mock.Mock(return_value='modeled-token')
+        env = processes.ownership_environment({}, scope.job, scope.invocation, scope.state, scope.home)
+        streams = [mock.Mock(), mock.Mock()]
+        if fail_close:
+            streams[0].close.side_effect = OSError('modeled first stream close failure')
+        popen = mock.Mock(pid=identity['pid'], stdout=None if borrowed else streams[0],
+                          stderr=None if borrowed else streams[1], returncode=None)
+        signature = inspect.signature(subprocess.Popen)
+        def create(*args, **kwargs):
+            signature.bind(*args, **kwargs)
+            return popen
+        with mock.patch.object(processes, 'resolve_executable', return_value=[PYTHON, '-c', 'pass']), \
+                mock.patch.object(processes.subprocess, 'Popen', side_effect=create) as spawn, \
+                mock.patch.object(processes.os, 'pipe', side_effect=[(20, 21), (22, 23)]), \
+                mock.patch.object(processes.os, 'close') as close, \
+                mock.patch.object(processes.os, 'read', return_value=b'R'), \
+                mock.patch.object(processes.os, 'write', return_value=1), \
+                mock.patch.object(processes.select, 'select', return_value=([20], [], [])):
+            yield scope, env, spawn, close, streams
+
+    def test_darwin_direct_gate_preserves_borrowed_stream_contract(self):
+        with tempfile.TemporaryDirectory(prefix='merge-input-') as temporary:
+            root = Path(temporary); (root / 'input').write_bytes(b'public modeled input')
+            with (root / 'input').open('rb') as source, (root / 'out').open('wb') as out, \
+                    (root / 'err').open('wb') as err, self.darwin_spawn(borrowed=True) as model:
+                scope, env, spawn, close, _ = model
+                child = scope.spawn([PYTHON, '-c', 'pass'], '/', env, stdin=source, stdout=out, stderr=err)
+                kwargs = spawn.call_args.kwargs
+                self.assertEqual(kwargs['stdin'], source.fileno())
+                self.assertIs(kwargs['stdout'], out)
+                self.assertIs(kwargs['stderr'], err)
+                self.assertEqual(kwargs['pass_fds'], (8, 21, 22))
+                self.assertTrue(scope.launches[-1]['gateReleased'])
+                self.assertEqual(scope.ownership_proofs[scope._key(scope.known[next(iter(scope.known))])]['kind'],
+                                 'direct-spawn-gate')
+                self.assertIsNone(child.stdout)
+                self.assertFalse(source.closed or out.closed or err.closed)
+                self.assertEqual([call.args[0] for call in close.call_args_list], [21, 22, 20, 23])
+        with self.darwin_spawn() as model:
+            scope, env, spawn, _, _ = model
+            with self.assertRaisesRegex(processes.OwnershipError, 'Both owned'):
+                scope.spawn([PYTHON], '/', env, stdout=object())
+            spawn.assert_not_called()
+            with self.assertRaises(processes.OwnershipError):
+                scope.spawn([PYTHON], '/', env, stdin=subprocess.PIPE)
+            spawn.assert_not_called()
+
+    def test_darwin_failed_gate_closes_each_original_despite_stream_failure(self):
+        with self.darwin_spawn(fail_admission=True, fail_close=True) as model:
+            scope, env, spawn, close, streams = model
+            with self.assertRaisesRegex(processes.OwnershipError, 'did not inherit') as caught:
+                scope.spawn([PYTHON], '/', env)
+            self.assertFalse(scope.launches[-1]['gateReleased'])
+            self.assertEqual(len(scope.leaders), 1)
+            for stream in streams:
+                stream.close.assert_called_once()
+            self.assertEqual([call.args[0] for call in close.call_args_list], [21, 22, 20, 22 + 1])
+            self.assertTrue(processes.retirement_details(caught.exception))
+
+    def test_darwin_failed_construction_attempts_both_pipe_closes(self):
+        def initialize(scope, *args):
+            scope.handles, scope.leaders, scope.known = {}, [], {}
+            scope._closed, scope._retirement_error = False, None
+        close_error = OSError('modeled constructor first close failure')
+        with mock.patch.object(processes.PosixScope, '__init__', new=initialize), \
+                mock.patch.object(processes.os, 'pipe', return_value=(20, 21)), \
+                mock.patch.object(processes.DarwinScope, '_pipe_identity', return_value=None), \
+                mock.patch.object(processes.os, 'close', side_effect=[close_error, None]) as close:
+            with self.assertRaisesRegex(processes.OwnershipError, 'Cannot bind') as caught:
+                processes.DarwinScope('job', 'id', '/state', '/home')
+            self.assertEqual(close.call_args_list, [mock.call(20), mock.call(21)])
+            self.assertTrue(processes.retirement_details(caught.exception))
+
+
 class ExecutorFixtureTests(unittest.TestCase):
     def setUp(self):
         global CASE_EVIDENCE
@@ -3583,6 +4390,7 @@ class ExecutorFixtureTests(unittest.TestCase):
         self.root.mkdir()
         self.state = self.base / "state"
         self.sentinel_scopes = []
+        self.fixture_native_finalizations = {}
         self.fixture_retention_errors = []
         self.fixture_archivists = []
         if EVIDENCE_ROOT is not None:
@@ -3652,26 +4460,31 @@ class ExecutorFixtureTests(unittest.TestCase):
                 return None
 
         if hasattr(self, "scope"):
-            record["guardSurvivors"] = attempt("Fixture guard drain", lambda: self.scope.drain(grace=.5, kill_wait=5))
+            finalization = attempt("Fixture guard finalization", lambda: finalize_fixture_scope(
+                self.scope, self.fixture_native_finalizations, "Fixture guard", .5, attempt))
+            record["guardFinalization"] = finalization
+            record["guardSurvivors"] = None if finalization is None else finalization["survivors"]
             if record["guardSurvivors"] is None:
                 errors.append("Fixture guard worker retirement is unproven; retain the generated fixture")
             if record["guardSurvivors"]:
                 errors.append(f"Fixture-owned survivors: {record['guardSurvivors']}")
-            discovery = attempt("Fixture guard discovery status", lambda: sorted(self.scope.discovery_errors))
+            discovery = None if finalization is None else finalization["discoveryErrors"]
             if discovery:
                 errors.append(f"Fixture ownership uncertainty: {discovery}")
-            attempt("Fixture guard close", self.scope.close)
         else:
             errors.append("Fixture ownership guard was not established; retain the unadmitted generated fixture")
         for number, (sentinel_scope, capture) in enumerate(getattr(self, "sentinel_scopes", [])):
-            survivors = attempt(f"Fixture sentinel {number} drain", lambda: sentinel_scope.drain(grace=.2, kill_wait=5))
-            record["sentinels"].append({"index": number, "survivors": survivors})
+            finalization = attempt(f"Fixture sentinel {number} finalization", lambda: finalize_fixture_scope(
+                sentinel_scope, self.fixture_native_finalizations, f"Fixture sentinel {number}", .2, attempt,
+                before_close=lambda: capture.finish(sentinel_scope, timeout=5)))
+            survivors = None if finalization is None else finalization["survivors"]
+            record["sentinels"].append({"index": number, "survivors": survivors, "finalization": finalization})
             if survivors is None:
                 errors.append(f"Separately-owned sentinel {number} retirement is unproven")
             if survivors:
                 errors.append(f"Separately-owned sentinel {number} survived teardown")
-            attempt(f"Fixture sentinel {number} capture", lambda: capture.finish(sentinel_scope, timeout=5))
-            attempt(f"Fixture sentinel {number} close", sentinel_scope.close)
+            if finalization is not None and finalization["discoveryErrors"]:
+                errors.append(f"Separately-owned sentinel {number} discovery remains unresolved")
         for number, archivist in enumerate(getattr(self, "fixture_archivists", [])):
             retained = attempt(f"Dependent fixture evidence {number}", archivist)
             if retained is not None:
@@ -3782,14 +4595,14 @@ class ExecutorFixtureTests(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, "Real fixture child did not establish readiness")
             time.sleep(.05)
 
-    def sentinel(self):
+    def sentinel(self, command=None):
         identifier = uuid.uuid4().hex
         # Sibling of this fixture guard, not its descendant: the leaf must not stop
         # it, but the real outer controller's domains remain intact for cancellation.
         environment = processes.ownership_environment(dict(os.environ), self.context["id"], identifier,
             str(self.state), self.context["gradleHome"], allow_new_context=True)
         scope = processes.make_scope(self.context["id"], identifier, str(self.state), self.context["gradleHome"])
-        child = scope.spawn([PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), environment)
+        child = scope.spawn(command or [PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), environment)
         self.sentinel_scopes.append((scope, Capture(child)))
         return child
 
@@ -4990,6 +5803,10 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertFalse(record["cleanupComplete"])
         self.assertFalse(record["fixtureDataRemoved"])
         self.assertEqual(record["guardSurvivors"], [])
+        self.assertTrue(record["guardFinalization"]["closed"])
+        self.assertIsNotNone(record["guardFinalization"]["completedUtc"])
+        self.assertFalse(record["guardFinalization"]["reusedVerifiedFinalization"])
+        self.assertEqual(self.fixture_native_finalizations[self.scope]["id"], record["guardFinalization"]["id"])
         self.assertTrue(set(primary["retentionReasons"]).issubset(record["errors"]))
         self.assertTrue(self.base.is_dir())
         self.assertTrue(temporary.is_dir())
@@ -5112,14 +5929,16 @@ class PosixNativeTests(ExecutorFixtureTests):
             ":lanJvm:runEmbeddedJmdnsCoexistenceUpstreamFirstSmoke", ":lanJvm:runEmbeddedJmdnsPomSmoke",
             ":androidConsumer:assembleDebug", ":androidConsumer:assembleRelease",
             ":androidConsumer:assembleCoexistDebug", ":androidConsumer:assembleCoexistRelease",
-            ":androidConsumer:verifyEmbeddedJmdnsPackaging"])
+            ":androidConsumer:verifyEmbeddedJmdnsPackaging", ":rpcJvm:compileKotlin", ":rpcJvm:runPublishedRpcApiSmoke"])
         self.assertEqual(receipts["consumer-publish"]["reports"], [])
-        self.assertEqual(len(build["reports"]), 2)
+        self.assertEqual(len(build["reports"]), 3)
         packaging_path = paths["consumerWorkDir"] / "consumer/androidConsumer/build/reports/embedded-jmdns/packaging.txt"
+        rpc_path = paths["consumerWorkDir"] / "consumer/rpcJvm/build/reports/rpc-api/smoke.txt"
         report_source = "external/" + paths["fixtureReport"].relative_to(child_state).as_posix()
         packaging_source = "external/" + packaging_path.relative_to(child_state).as_posix()
+        rpc_source = "external/" + rpc_path.relative_to(child_state).as_posix()
         reports = {report["source"]: report for report in build["reports"]}
-        self.assertEqual(set(reports), {report_source, packaging_source})
+        self.assertEqual(set(reports), {report_source, packaging_source, rpc_source})
         report = reports[report_source]
         expected = b'{"fixtureOnly":true,"result":"synthetic-consumer-report-not-compilation"}\n'
         self.assertEqual(report["source"], "external/" + paths["fixtureReport"].relative_to(child_state).as_posix())
@@ -5136,6 +5955,13 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertEqual(packaging["bytes"], len(expected_packaging))
         self.assertEqual(packaging_path.read_bytes(), expected_packaging)
         self.assertEqual((Path(build["evidenceDirectory"]) / packaging["retained"]).read_bytes(), expected_packaging)
+        rpc = reports[rpc_source]
+        expected_rpc = b"PASS: published RPC JVM API values; no network or capacity claim\n"
+        self.assertEqual(rpc["classification"], "changed-since-admission")
+        self.assertEqual(rpc["sha256"], runner.digest(expected_rpc))
+        self.assertEqual(rpc["bytes"], len(expected_rpc))
+        self.assertEqual(rpc_path.read_bytes(), expected_rpc)
+        self.assertEqual((Path(build["evidenceDirectory"]) / rpc["retained"]).read_bytes(), expected_rpc)
         optional = list(child_state.glob("consumer-receipts.*"))
         self.assertEqual(len(optional), 1)
         self.assertEqual({path.name for path in optional[0].iterdir()}, {"consumer-publish.json", "consumer-build.json"})
@@ -5159,11 +5985,58 @@ class PosixNativeTests(ExecutorFixtureTests):
             "schema": 1, "outerReceipt": outer["evidenceDirectory"], "childState": str(child_state),
             "realNativeReceiptIds": [receipt["id"] for receipt in receipts.values()],
             "retainedReportSha256": report["sha256"], "unrelatedSentinelSurvived": True,
+            "retainedRpcSmokeSha256": rpc["sha256"],
             "scope": "Native executor/caller/report integration with synthetic tools; not product compilation or Apple approval.",
         })
 
 
 class LinuxNativeTests(PosixNativeTests):
+    def test_real_lifetime_reconciles_scripted_visibility_denial_only_after_verified_exit(self):
+        # The access denial is injected; the process/exit observation and guard
+        # ownership are real. This is not a claim about the host's /proc policy.
+        probe = processes.make_scope(self.context["id"], uuid.uuid4().hex, str(self.state), self.context["gradleHome"])
+        ready, release = self.state / "linux-observer-ready", self.state / "linux-observer-release"
+        code = """import pathlib, sys, time
+ready, release = map(pathlib.Path, sys.argv[1:])
+ready.write_text('ready')
+end = time.monotonic() + 10
+while not release.exists():
+    if time.monotonic() >= end: raise SystemExit(7)
+    time.sleep(.02)
+"""
+        child = self.scope.spawn([PYTHON, "-c", code, str(ready), str(release)], str(self.root), self.env)
+        capture = Capture(child)
+        original = probe._environment
+        def visibility(pid):
+            if pid == child.pid:
+                raise PermissionError(errno.EACCES, "scripted visibility denial for real lifetime")
+            return original(pid)
+        try:
+            self.ready(ready)
+            with mock.patch.object(probe, "_environment", side_effect=visibility):
+                self.assertNotIn(child.pid, {row["pid"] for row in probe.discover()})
+                self.assertIn(child.pid, probe.pending_discoveries)
+                self.assertIsNone(child.poll())
+                with self.assertRaisesRegex(processes.OwnershipError, "Unclassified Linux"):
+                    probe.drain(grace=.2, kill_wait=1)
+                self.assertIsNone(child.poll(), "The denied observation cannot authorize signaling")
+                release.write_text("release")
+                self.assertEqual(capture.finish(self.scope)[0], 0)
+                self.assertNotIn(child.pid, {row["pid"] for row in probe.discover()})
+            self.assertFalse(probe.pending_discoveries)
+            self.assertFalse(probe.discovery_errors)
+            entries = [row for row in probe.discovery_reconciliations if row["identity"]["pid"] == child.pid]
+            self.assertEqual(len(entries), 1)
+            self.assertIn(entries[0]["outcome"], ("lifetime-ended", "nonrunning"))
+            runner.write_new_json(CASE_EVIDENCE / "linux-real-lifetime-reconciliation.json", {
+                "scope": "Real process/exit with scripted visibility denial; no host access-policy claim",
+                "nativeLifetimeObserved": True, "denialConferredSignalAuthority": False,
+                "reconciliation": entries[0], "finalOwnership": probe.description(),
+            })
+        finally:
+            release.touch(exist_ok=True)
+            probe.close()
+
     def test_real_pidfd_stale_handle_cannot_signal_unrelated_sentinel(self):
         child = self.scope.spawn([PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), self.env)
         capture = Capture(child)
@@ -5183,6 +6056,247 @@ class LinuxNativeTests(PosixNativeTests):
 
 
 class DarwinNativeTests(PosixNativeTests):
+    def test_terminal_command_shell_retirement_uses_actual_native_lifetime_and_closed_negative_controls(self):
+        # Compile the actual helper on this architecture, not a Python or x86
+        # substitution. Its native child is within the unchanged executor scope.
+        sentinel = self.sentinel()
+        binary = self.state / "terminal-retirement-controls"
+        architecture = {"macos-x64": "x86_64", "macos-arm64": "arm64"}[processes.host_role()]
+        command = ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-Wall", "-Wextra", "-Werror",
+                   "-fobjc-arc", "-fblocks", "-arch", architecture, "-mmacosx-version-min=15.0",
+                   "-framework", "AppKit", str(SCRIPTS / "tests/fixtures/apple-terminal-retirement.m"),
+                   "-o", str(binary)]
+        for argv in (command, [str(binary)]):
+            code, out, err, receipt = self.run_leaf(argv, kind="command")
+            self.assertEqual(code, 0, err.decode(errors="replace"))
+            self.assertEqual([receipt[k] for k in ("productExitCode", "stopExitCode", "finalExitCode")], [0, 0, 0])
+            self.assertEqual(receipt["ownedSurvivors"], [])
+            self.assertEqual(receipt["errors"], [])
+            self.assertTrue(receipt["sourceUnchanged"])
+        self.assertEqual(out, b"PASS: native shell result-before-exit, positive retirement and fail-closed observation controls\n")
+        self.assertIsNone(sentinel.poll())
+
+    def test_system_shell_and_term_resistant_utility_are_owned_but_sibling_is_not(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        ready, pidfile = self.state / "shell-ready", self.state / "utility-pid"
+        script = 'trap "" TERM; /bin/sleep 120 & printf "%s" "$!" > "$1"; : > "$2"; wait'
+        child = self.scope.spawn(["/bin/bash", "--noprofile", "--norc", "-c", script,
+                                  "ownership-fixture", str(pidfile), str(ready)], str(self.root), self.env)
+        capture = Capture(child)
+        self.ready(ready)
+        utility_pid = int(pidfile.read_text())
+        live = {row["pid"]: row for row in self.scope.discover()}
+        self.assertIn(child.pid, live)
+        self.assertIn(utility_pid, live)
+        self.assertNotIn(sentinel.pid, live)
+        self.assertEqual(live[utility_pid]["parentUniqueId"], live[child.pid]["uniqueId"])
+        proof = self.scope.ownership_proofs[self.scope._key(live[child.pid])]
+        self.assertEqual(proof["kind"], "direct-spawn-gate")
+        observed = self.scope._inspect_environment(live[utility_pid])
+        if not self.scope._ours(observed):
+            self.assertEqual(self.scope.ownership_proofs[self.scope._key(live[utility_pid])]["kind"],
+                             "inherited-pipe-capability")
+        runner.write_new_json(CASE_EVIDENCE / "system-tools-control.json", {
+            "shellIdentity": live[child.pid], "utilityIdentity": live[utility_pid],
+            "utilityMarkersObservable": self.scope._ours(observed),
+            "sameExecutableSentinelExcluded": True})
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertEqual(capture.finish(self.scope)[0], -signal.SIGKILL)
+        self.assertIsNone(sentinel.poll())
+
+    def test_exited_system_shell_leaves_reparented_system_utility_identifiable(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        pidfile = self.state / "reparented-system-pid"
+        script = '/bin/sleep 120 </dev/null >/dev/null 2>&1 & printf "%s" "$!" > "$1"'
+        child = self.scope.spawn(["/bin/sh", "-c", script, "ownership-fixture", str(pidfile)],
+                                 str(self.root), self.env)
+        capture = Capture(child)
+        self.assertEqual(capture.finish(self.scope)[0], 0)
+        worker_pid = int(pidfile.read_text())
+        bound = self.scope.launches[-1]["boundIdentity"]
+        worker = self.scope._identity(worker_pid, required=True)
+        self.assertIsNotNone(worker)
+        self.assertNotEqual(worker["parentPid"], child.pid)
+        self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertIsNone(sentinel.poll())
+        runner.write_new_json(CASE_EVIDENCE / "reparented-system-control.json", {
+            "leaderIdentity": bound, "reparentedWorkerIdentity": worker, "sameExecutableSentinelSurvived": True})
+
+    def test_system_utility_exec_after_reparent_is_owned_without_inventing_original_parent(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        pidfile = self.state / "after-reparent-exec-pid"
+        producer = r'''import os, pathlib, sys, time
+parent = os.getpid()
+worker = os.fork()
+if worker:
+    pathlib.Path(sys.argv[1]).write_text(str(worker))
+    os._exit(0)
+fd = os.open('/dev/null', os.O_RDWR)
+for target in (0, 1, 2): os.dup2(fd, target)
+os.close(fd)
+end = time.monotonic() + 5
+while os.getppid() == parent:
+    if time.monotonic() > end: os._exit(125)
+    time.sleep(.001)
+os.execl('/bin/sleep', 'sleep', '120')
+'''
+        child = self.scope.spawn([PYTHON, "-c", producer, str(pidfile)], str(self.root), self.env)
+        capture = Capture(child)
+        # No census until the real worker has reparented AND executed. This
+        # prevents a lucky early environment observation from satisfying proof.
+        self.assertEqual(child.wait(timeout=5), 0)
+        worker_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while True:
+            worker = self.scope._identity(worker_pid, required=True)
+            self.assertIsNotNone(worker)
+            if worker["parentPid"] == 1 and worker["parentUniqueId"] == 1:
+                break
+            self.assertLess(time.monotonic(), deadline, "Worker did not execute after actual reparenting")
+            time.sleep(.01)
+        self.assertNotIn(self.scope._key(worker), self.scope.known)
+        self.assertTrue(self.scope._has_pipe(worker))
+        observed = self.scope._inspect_environment(worker)
+        self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+        proof = self.scope.ownership_proofs[self.scope._key(worker)]
+        if not self.scope._ours(observed):
+            self.assertEqual(proof["kind"], "inherited-pipe-capability")
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertEqual(capture.finish(self.scope)[0], 0)
+        self.assertIsNone(sentinel.poll())
+        runner.write_new_json(CASE_EVIDENCE / "reparent-before-exec-control.json", {
+            "leaderIdentity": self.scope.launches[-1]["boundIdentity"], "workerIdentity": worker,
+            "environmentHidden": not self.scope._ours(observed), "ownershipProof": proof,
+            "sameExecutableSentinelSurvived": True})
+
+    def test_fast_system_command_has_preexec_binding_and_truthful_launch_trace(self):
+        code, out, err, receipt = self.run_leaf(["/usr/bin/true"], kind="command")
+        self.assertEqual((code, out, err), (0, b"", b""))
+        launch = receipt["ownership"]["launches"][receipt["productLaunchIndex"]]
+        self.assertTrue(launch["gateReleased"])
+        self.assertEqual(launch["boundIdentity"]["pid"], receipt["productPid"])
+        self.assertEqual(launch["resolvedArgv"], ["/usr/bin/true"])
+        self.assertEqual(launch["bootstrapArgv"][1:3], ["-I", "-S"])
+        self.assertEqual(launch["bootstrapArgv"][-1], "/usr/bin/true")
+        self.assertEqual(Path(launch["bootstrapArgv"][3]), SCRIPTS / "audit_exec_gate.py")
+        self.assertEqual(receipt["ownership"]["discoveryErrors"], [])
+
+    def test_failed_gate_token_admission_cannot_start_the_product(self):
+        forbidden = self.state / "unadmitted-product"
+        with mock.patch.object(self.scope, "_acquire", side_effect=processes.OwnershipError("fixture token denial")):
+            with self.assertRaisesRegex(processes.OwnershipError, "fixture token denial"):
+                self.scope.spawn([PYTHON, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", str(forbidden)],
+                                 str(self.root), self.env)
+        gate = self.scope.leaders[-1]
+        self.assertEqual(gate.wait(timeout=5), 125)
+        self.assertFalse(forbidden.exists())
+        self.assertFalse(self.scope.launches[-1]["gateReleased"])
+
+    def test_missing_or_foreign_launch_domain_is_rejected_before_popen(self):
+        before = len(self.scope.leaders)
+        for env in ({}, {**self.env, processes.CHAIN_ENV: uuid.uuid4().hex}):
+            with self.subTest(environment="missing" if not env else "foreign"):
+                with self.assertRaisesRegex(processes.OwnershipError, "bound inherited"):
+                    self.scope.spawn(["/usr/bin/true"], str(self.root), env)
+        self.assertEqual(len(self.scope.leaders), before)
+
+    def test_cancellation_drains_system_shell_and_utility_without_pipe_leak(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        invocation = uuid.uuid4().hex
+        ready = self.state / "cancel-system-ready"
+        script = 'trap "" TERM; /bin/sleep 120 & : > "$1"; wait'
+        capture, receipt_path = self.start(["/bin/bash", "--noprofile", "--norc", "-c", script,
+                                           "ownership-fixture", str(ready)], kind="command", invocation=invocation)
+        self.ready(ready)
+        cancel = Capture(self.scope.spawn([PYTHON, str(EXECUTOR), "request-cancel", "--state", str(self.state),
+            "--id", invocation], str(self.root), self.env))
+        self.assertEqual(cancel.finish(self.scope)[0], 0)
+        self.assertEqual(capture.finish(self.scope)[0], 125)
+        receipt = runner.read_json(receipt_path)
+        self.assertTrue(receipt["cancelRequested"])
+        self.assertEqual(receipt["stopExitCode"], 0)
+        self.assertEqual(receipt["ownedSurvivors"], [])
+        self.assertEqual(receipt["ownership"]["discoveryErrors"], [])
+        self.assertEqual(receipt["errors"], ["AuditError: Invocation cancellation requested",
+                                            "Invocation cancellation cannot be a successful product result"])
+        self.assertIsNone(sentinel.poll())
+
+    def test_unobserved_double_fork_fails_closed_until_hidden_child_exits(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        release, pidfile = self.state / "fork-release", self.state / "unobserved-child"
+        producer = r'''import json, os, pathlib, sys, time
+release, result = map(pathlib.Path, sys.argv[1:])
+deadline = time.monotonic() + 5
+while not release.exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit(125)
+    time.sleep(.01)
+read, write = os.pipe()
+middle = os.fork()
+if middle == 0:
+    os.close(read)
+    parent = os.getpid()
+    if os.fork() == 0:
+        os.write(write, str(os.getpid()).encode())
+        os.close(write)
+        # Deliberately remove every inherited optional pipe marker as well as
+        # losing the unobserved intermediary. Missing all proof must fail closed.
+        for binding in json.loads(os.environ.get('P2PKIT_AUDIT_DARWIN_PIPES', '[]')):
+            os.close(binding['fd'])
+        end = time.monotonic() + 5
+        while os.getppid() == parent:
+            if time.monotonic() > end: os._exit(125)
+            time.sleep(.001)
+        os.execl('/bin/sleep', 'sleep', '3')
+    os._exit(0)
+os.close(write)
+worker = os.read(read, 64)
+os.close(read)
+os.waitpid(middle, 0)
+result.write_bytes(worker)
+'''
+        child = self.scope.spawn([PYTHON, "-c", producer, str(release), str(pidfile)], str(self.root), self.env)
+        capture = Capture(child)
+        release.touch()
+        # Deliberately do not census while the real intermediate forks/exits.
+        # This tests missing evidence, not a synthesized positive ancestry.
+        self.assertEqual(child.wait(timeout=5), 0)
+        worker_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while True:
+            worker = self.scope._identity(worker_pid, required=True)
+            self.assertIsNotNone(worker)
+            if worker["parentPid"] == 1 and worker["parentUniqueId"] == 1:
+                break
+            self.assertLess(time.monotonic(), deadline, "Unobserved worker did not execute after reparenting")
+            time.sleep(.01)
+        self.assertNotIn(self.scope._key(worker), self.scope.known)
+        self.assertFalse(self.scope._has_pipe(worker))
+        observed = self.scope._inspect_environment(worker)
+        hidden = not self.scope._ours(observed)
+        if hidden:
+            with mock.patch.object(self.scope, "_send", wraps=self.scope._send) as send:
+                self.assertNotIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+                with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                    self.scope.drain(grace=.01, kill_wait=.01)
+                send.assert_not_called()
+            deadline = time.monotonic() + 5
+            while self.scope.pending_discoveries:
+                self.assertLess(time.monotonic(), deadline, "Natural child exit was not reconciled")
+                time.sleep(.05)
+                self.scope.discover()
+        else:
+            # A host exposing the genuine inherited domain has positive ownership;
+            # do not manufacture a hidden environment to claim SIP coverage there.
+            self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertEqual(capture.finish(self.scope)[0], 0)
+        self.assertIsNone(sentinel.poll())
+        runner.write_new_json(CASE_EVIDENCE / "unobserved-intermediary-control.json", {
+            "childIdentity": worker, "environmentHidden": hidden, "unprovenChildWasNotSignaled": hidden,
+            "sameExecutableSentinelSurvived": True})
+
     def test_real_opaque_task_token_and_stale_token_leave_sentinel_alive(self):
         self.assertIsInstance(self.scope, processes.DarwinScope)
         # Framework Python can re-exec after Popen returns. Bind the saved token
@@ -5522,6 +6636,10 @@ def main():
                                unittest.defaultTestLoader.loadTestsFromTestCase(native)])
     if os.name == "posix":
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ReportRetentionPosixTests))
+
+    if native is LinuxNativeTests:
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(LinuxObservationTests))
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(SupervisorMergeTests))
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)
     print(f"Retained fixture receipts/logs: {EVIDENCE_ROOT}", flush=True)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1

@@ -1,0 +1,95 @@
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSImpl.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSImpl.java
+@@ -872 +872,7 @@
+-            return this._localHost.recoverState();
++            boolean result = this._localHost.recoverState();
++            synchronized (_lifecycle) {
++                // A new host generation gets a new cancellation allowance. Do
++                // not reset it during a failed recovery or a close retry.
++                _lifecycle.goodbyeBudget = null;
++            }
++            return result;
+@@ -2370,0 +2377 @@
++                goodbyeBudget();
+@@ -2398 +2405,5 @@
+-            this.unregisterAllServices();
++            if (!cancelForRecovery(goodbyeBudget())) {
++                // Terminal close owns the remaining services/socket after this
++                // mutation hands off. Do not remove those obligations early.
++                return;
++            }
+@@ -2400 +2410,0 @@
+-            _localHost.waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
+@@ -2455,0 +2466,32 @@
++    private JmDNSLifecycle.GoodbyeBudget goodbyeBudget() {
++        synchronized (_lifecycle) {
++            if (_lifecycle.goodbyeBudget == null) {
++                _lifecycle.goodbyeBudget = new JmDNSLifecycle.GoodbyeBudget();
++            }
++            return _lifecycle.goodbyeBudget;
++        }
++    }
++
++    private boolean cancelForRecovery(JmDNSLifecycle.GoodbyeBudget goodbye) throws InterruptedException {
++        for (ServiceInfo service : _services.values()) {
++            ((ServiceInfoImpl) service).cancelState();
++        }
++        this.startCanceler();
++        for (Map.Entry<String, ServiceInfo> entry : _services.entrySet()) {
++            ServiceInfoImpl service = (ServiceInfoImpl) entry.getValue();
++            while (!service.isCanceled() && !isTerminalRequested() && goodbye.remainingMillis() > 0L) {
++                // Observe terminal handoff without interrupting owned callbacks
++                // or extending the original cancellation deadline.
++                service.waitForCanceledInterruptibly(Math.min(100L, goodbye.remainingMillis()));
++            }
++            if (isTerminalRequested()) {
++                return false;
++            }
++            _services.remove(entry.getKey(), service);
++        }
++        while (!this.isCanceled() && !isTerminalRequested() && goodbye.remainingMillis() > 0L) {
++            _localHost.waitForCanceledInterruptibly(Math.min(100L, goodbye.remainingMillis()));
++        }
++        return !isTerminalRequested();
++    }
++
+@@ -2738,0 +2781 @@
++            JmDNSLifecycle.GoodbyeBudget goodbye = goodbyeBudget();
+@@ -2761 +2804 @@
+-                            ((ServiceInfoImpl) service).waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
++                            ((ServiceInfoImpl) service).waitForCanceledInterruptibly(goodbye.remainingMillis());
+@@ -2777 +2820 @@
+-                        _localHost.waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
++                        _localHost.waitForCanceledInterruptibly(goodbye.remainingMillis());
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSLifecycle.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSLifecycle.java
+@@ -41,0 +42 @@
++    GoodbyeBudget goodbyeBudget;
+@@ -188,0 +190,24 @@
++    /** One monotonic allowance for all participants in a host cancellation. */
++    static final class GoodbyeBudget {
++        private final long origin;
++
++        GoodbyeBudget() {
++            this(System.nanoTime());
++        }
++
++        GoodbyeBudget(long origin) {
++            this.origin = origin;
++        }
++
++        long remainingMillis() {
++            return remainingMillis(System.nanoTime());
++        }
++
++        long remainingMillis(long now) {
++            long allowance = TimeUnit.MILLISECONDS.toNanos(DNSConstants.CLOSE_TIMEOUT);
++            long remaining = Math.max(0L, allowance - Math.max(0L, now - origin));
++            // Round up only the last fractional millisecond, never reset the origin.
++            return (remaining + 999_999L) / 1_000_000L;
++        }
++    }
++
+@@ -193 +218 @@
+-     * owner's clock; they retain their own original CLOSE_TIMEOUT allowance.
++     * owner's clock; all participants share the host's CLOSE_TIMEOUT allowance.
