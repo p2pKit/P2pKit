@@ -139,7 +139,7 @@ public final class PackagedVerifierTests {
         return result; // Independent fixture geometry; no production parser generates its own expected readbacks.
     }
 
-    private static Class<?> actualClass(String simple, Path main, String expectedHash) throws Exception {
+    static Class<?> actualClass(String simple, Path main, String expectedHash) throws Exception {
         String name = PROFILE + simple;
         String resource = name.replace('.', '/') + ".class";
         Class<?> actual = Class.forName(name, false, ClassLoader.getSystemClassLoader());

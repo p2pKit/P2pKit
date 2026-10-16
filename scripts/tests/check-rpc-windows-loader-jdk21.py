@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -68,6 +69,7 @@ def main():
                         "AncestorRetirementTests" in name or
                         "ByteReadInvocationTests" in name or
                         "PackagedVerifierTests" in name or
+                        "LoadedRegistrationTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -168,23 +170,26 @@ def main():
                       "iat-byte", "export-address", "page-count"]
     empty_classpath = output / "empty-application-classpath"
     empty_classpath.mkdir()
-    for case in packaged_cases:
-        connected = base[1:] + access + ["--patch-module", MODULE + "=" + str(classes)]
-        connected += ["--class-path", str(empty_classpath) if case == "missing-helper" else
+    def connected_run(name, test_class, arguments, expected, missing_helper=False, flags=()):
+        connected = base[1:] + list(flags) + access + ["--patch-module", MODULE + "=" + str(classes)]
+        connected += ["--class-path", str(empty_classpath) if missing_helper else
                       os.pathsep.join(str(path) for path in application_paths)]
-        connected += ["--module", MODULE + "/" + PACKAGE + ".PackagedVerifierTests", case, str(main_directory),
-                      bindings[0]["sha256"], bindings[1]["sha256"]]
+        connected += ["--module", MODULE + "/" + PACKAGE + "." + test_class, *arguments]
         # Java argument files avoid Windows' process-command limit. Quote every token, including backslashes;
         # do not use a shell or an ambient/current-directory classpath fallback.
         require(all(not any(char in str(item) for char in "\x00\r\n") for item in connected), "Invalid Java argument")
         arguments = "\n".join('"' + str(item).replace("\\", "\\\\").replace('"', '\\"') + '"' for item in connected) + "\n"
         require(len(arguments.encode("utf-8")) <= 256 * 1024, "Unbounded connected Java command")
-        argument_file = output / ("packaged-verifier-" + case + ".args")
+        argument_file = output / (name + ".args")
         with argument_file.open("x", encoding="utf-8", newline="\n") as target:
             target.write(arguments)
-        run("packaged-verifier-" + case, [java21, "@" + str(argument_file)], 0,
+        run(name, [java21, "@" + str(argument_file)], 0, expected, "")
+
+    for case in packaged_cases:
+        connected_run("packaged-verifier-" + case, "PackagedVerifierTests", [case, str(main_directory),
+                      bindings[0]["sha256"], bindings[1]["sha256"]],
             "WINDOWS_PACKAGED_VERIFIER_PASS case=" + re.escape(case) +
-            r" scope=REAL_JDK21_TO_JDK17_BYTE_COMPARISON_NOT_LOAD_OR_AUTHORITY\n", "")
+            r" scope=REAL_JDK21_TO_JDK17_BYTE_COMPARISON_NOT_LOAD_OR_AUTHORITY\n", case == "missing-helper")
     models, _ = run("models", base + access + ["--patch-module", MODULE + "=" + str(classes),
                          "--module", MODULE + "/" + PACKAGE + ".ModelTests"], 0,
                    r"WINDOWS_LOADER_JDK21_MODELS_PASS tests=14 "
@@ -299,6 +304,62 @@ def main():
         original_bytes_scope = "DEVELOPMENT_JVM_HANDLE_BYTES_NOT_INSTALLED_IDENTITY_MAPPING_OR_PROFILE"
         run("system-bootstrap-bytes", base + access + bootstrap_entry + ["bytes"], 0,
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=bytes scope=" + original_bytes_scope + r"\n", "")
+    loaded_registration_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    if os.name == "nt":
+        # A distinct development fixture, never the productive DLL or profile backend. Finish the existing
+        # controls first so a new compiler/runtime failure preserves their original results.
+        native = output / "test-native"
+        run("compile-deny-storage-dll", [sys.executable, "-I", "-B",
+            ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm/build-test-dll.py",
+            "--jdk17", args.java17.resolve(strict=True), "--output", native], 0,
+            r"WINDOWS_TEST_DLL_COMPILE_PASS scope=TEST_ONLY_DENY_STORAGE_NOT_PACKAGED\n", "")
+        receipt_path = native / "compiler-receipt.json"
+        require(receipt_path.stat().st_size <= 256 * 1024, "Unbounded fixture compiler receipt")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        require(isinstance(receipt, dict) and type(receipt.get("schema")) is int and receipt["schema"] == 1 and
+                receipt.get("result") == "PASS" and
+                receipt.get("scope") == "TEST_ONLY_DENY_STORAGE_NOT_PACKAGED" and
+                receipt.get("nativeExecution") == receipt.get("packaging") == "NOT_PERFORMED" and
+                receipt.get("profileBackend") == "NOT_LINKED" and receipt.get("sourceDirty") is False and
+                type(receipt.get("statusBytes")) is int and receipt["statusBytes"] == 0 and
+                receipt.get("statusSha256") == hashlib.sha256(b"").hexdigest(),
+                "Fixture compilation is not clean-source, test-only, unexecuted evidence")
+        for key, revision in (("source", "HEAD"), ("tree", "HEAD^{tree}")):
+            require(isinstance(receipt.get(key), str) and re.fullmatch("[0-9a-f]{40}", receipt[key]),
+                    "Invalid compiler source binding")
+            observed = subprocess.run(["git", "rev-parse", revision], cwd=ROOT, stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, check=False)
+            require(observed.returncode == 0 and observed.stdout.strip() == receipt[key].encode("ascii") and
+                    not observed.stderr, "Compiler source no longer matches the original checkout")
+        dll = native / "p2pkit-windows-profile.dll"
+        bound = receipt.get("dll")
+        require(isinstance(bound, dict) and set(bound) == {"path", "name", "bytes", "sha256"} and
+                bound["path"] == str(dll) and bound["name"] == dll.name and
+                type(bound["bytes"]) is int and 512 <= bound["bytes"] <= 4 * 1024 * 1024 and
+                isinstance(bound["sha256"], str) and re.fullmatch("[0-9a-f]{64}", bound["sha256"]),
+                "Invalid separately produced fixture identity")
+        with dll.open("rb") as source:
+            compiled = source.read(4 * 1024 * 1024 + 1)
+        require(len(compiled) == bound["bytes"] and hashlib.sha256(compiled).hexdigest() == bound["sha256"],
+                "Compiler DLL changed before its first test execution")
+        def require_clean_source():
+            state = subprocess.run(["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=ROOT,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   timeout=15, check=False)
+            require(state.returncode == 0 and not state.stdout and not state.stderr,
+                    "Loaded native fixture requires the original clean source")
+
+        require_clean_source()
+        loaded_registration_scope = "DEV_TEST_DLL_DENY_STORAGE_NOT_INSTALLED_AUTHORITY_OR_PROVIDER"
+        for case in ("pin", "success", "address"):
+            connected_run("loaded-registration-" + case, "LoadedRegistrationTests",
+                [case, str(dll), bound["sha256"], str(bound["bytes"]), receipt["source"], receipt["tree"],
+                 str(main_directory), bindings[0]["sha256"], bindings[1]["sha256"]],
+                "WINDOWS_LOADED_REGISTRATION_PASS case=" + case + " scope=" + loaded_registration_scope + r"\n",
+                flags=("-Xcheck:jni", "--add-modules=jdk.unsupported"))
+        require_clean_source()
+        with dll.open("rb") as source:
+            require(source.read(4 * 1024 * 1024 + 1) == compiled, "Compiler DLL changed during fixture execution")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     for binding in bindings:
         with (main_directory / binding["resource"]).open("rb") as source:
@@ -312,7 +373,8 @@ def main():
               "originalJvmFileScope": original_file_scope, "originalJvmSecurityScope": original_security_scope,
               "originalJvmDescriptorPolicy": original_security_policy, "originalJvmAncestorScope": original_ancestor_scope,
               "originalJvmAncestorPolicies": original_ancestor_policies,
-              "originalJvmBytesScope": original_bytes_scope, "commands": records}
+              "originalJvmBytesScope": original_bytes_scope,
+              "loadedRegistrationScope": loaded_registration_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
 

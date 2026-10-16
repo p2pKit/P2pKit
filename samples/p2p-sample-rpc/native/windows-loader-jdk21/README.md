@@ -625,3 +625,41 @@ permission to register JNI. No library is loaded by this bridge, and the public
 productive loader continues to refuse. Test fixtures remain outside both
 production artifacts; connected development-JVM tests are not installed-runtime
 or protected-profile qualification.
+
+## Actual loaded development DLL connection
+
+On Windows, the maintained adapter checker additionally builds a **separate
+test-only DLL** from the original policy, JNI and registrar sources plus the
+existing aborting `deny_storage.c` backend. It never compiles `profile_win32.c`,
+stages this DLL to application resources, installs it or changes production
+availability. All storage methods abort; only ABI/capability JNI calls execute.
+Other hosts compile the Java fixture but explicitly report native execution as
+`UNSUPPORTED_HOST_NOT_EXECUTED`.
+
+The fixed MSVC recipe records clean source/tree, selected direct source/header
+and tool hashes, compiler arguments and original DLL length/hash **before** any
+execution. This is bounded test provenance, not an independent installed package
+identity or a complete transitive SDK provenance claim. Actual fixture execution
+requires a clean checkout. Raw records remain within the existing component's
+private reports and supervisor; no replacement process supervisor is introduced.
+
+Three fresh JDK21 processes run with `-Xcheck:jni`, the dedicated module's native
+access and explicit `jdk.unsupported`. They check pre-load wrong-pin refusal,
+successful registration/lifetime and native rejection of one wrong JNI address.
+The test retains the original file without write/delete sharing. It uses the
+unchanged conditional bootstrap, original JVM acquisition, constrained DLL load,
+exact export lookup, mapped headers/code/full-IAT readback and packaged byte
+comparison before calling the original registrar. Expected imports come from
+separate fixed kernel32 resolution and physical SystemDirectory module pins,
+never from the candidate's IAT. No parser/import allowlist is relaxed for the
+fixture. Successful calls return the actual partial ABI13/capabilities `0x43`,
+not the full provider's different contract. Original owners remain retained
+after private frame retirement, failed registration and a GC request. No unload
+is introduced behind registered JNI addresses.
+
+These tests connect genuine development DLL, Windows FFM and JNI mechanics;
+they do **not** establish a trusted first OS call, installed ancestor/ACL
+authority, production provider assembly, protected NTFS storage, ordinary-user
+admission or installed Host/Client qualification. The public productive factory
+must still refuse in every case. Test classes and the deny-storage DLL are
+excluded from the production adapter and canonical MSI inputs.

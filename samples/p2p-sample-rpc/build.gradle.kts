@@ -196,11 +196,11 @@ val rpcWindowsLoaderJdk21Jar = tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
     isReproducibleFileOrder = true
 }
 // Keep the existing adapter controls in the ordinary Windows component, not an obsolete hosted dispatch lane.
-// This is development-JDK invocation/refusal testing only; no candidate DLL or protected profile is opened.
+// Development-JDK controls include a separate deny-storage test DLL, never the productive profile DLL.
 val windowsControlsJdk17 = extensions.getByType<JavaToolchainService>().launcherFor {
     languageVersion.set(JavaLanguageVersion.of(17))
 }
-// Only explicit adapter verification/Windows JVM tests compile this inert connection fixture.
+// Only explicit adapter verification/Windows JVM tests compile the connection fixtures.
 // Depend on compilation outputs, never jvmTest itself (which already depends on verification on Windows).
 val windowsVerifierCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test")
 val windowsVerifierClasspath = files(mainCompilation.output.allOutputs, mainCompilation.runtimeDependencyFiles,
@@ -213,6 +213,10 @@ val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJd
     workingDir(rootProject.layout.projectDirectory)
     inputs.file(rootProject.file("scripts/tests/check-rpc-windows-loader-jdk21.py"))
     inputs.dir(layout.projectDirectory.dir("native/windows-loader-jdk21/src/test/java"))
+    // This test-only Windows DLL never enters production resources, packaging or the artifact freeze.
+    inputs.files(listOf("profile_policy.c", "profile_jni.c", "profile_jni_registration.c", "profile_policy.h",
+        "profile_win32.h", "profile_jni_registration.h", "tests/jvm/deny_storage.c", "tests/jvm/build-test-dll.py")
+        .map { layout.projectDirectory.file("native/windows-profile/$it") })
     inputs.files(windowsVerifierClasspath)
     outputs.upToDateWhen { false }
     doFirst {

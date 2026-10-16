@@ -347,6 +347,9 @@ class ImageInspectionTest(unittest.TestCase):
                       ADAPTER_PREFIX + "AncestorRetirementTests.class",
                       ADAPTER_PREFIX + "ByteReadInvocationTests.class",
                       ADAPTER_PREFIX + "PackagedVerifierTests.class",
+                      ADAPTER_PREFIX + "LoadedRegistrationTests.class",
+                      ADAPTER_PREFIX + "LoadedRegistrationTests$Fixture.class",
+                      ADAPTER_PREFIX + "LoadedRegistrationTests$SystemImports.class",
                       ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Unexpected.class",
                       "META-INF/versions/21/" + ADAPTER_ENTRIES[1],
                       "META-INF/services/unexpected", "unexpected.dll"):
