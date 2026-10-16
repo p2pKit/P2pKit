@@ -347,9 +347,10 @@ in Java: the supplied OS read entry copies into a private, bounded output buffer
 
 Both queries must return the exact 48-byte AMD64 `MEMORY_BASIC_INFORMATION`; the complete requested range
 must fit one committed `MEM_IMAGE` region within the original image and allocation base. Code permits only
-current `PAGE_EXECUTE_READ`; data/IAT permits only `PAGE_READONLY`, `PAGE_READWRITE` or `PAGE_WRITECOPY`,
-never writable executable, guard or no-access pages. Initial `AllocationProtect` is compared, not confused
-with current protection. Successful reads require a nonzero `BOOL` and the exact full 64-bit byte count.
+current `PAGE_EXECUTE_READ`; the separate header `READ_ONLY` policy accepts exactly current
+`PAGE_READONLY`, refusing writable, copy-on-write and executable protection. Data/IAT still permits only
+`PAGE_READONLY`, `PAGE_READWRITE` or `PAGE_WRITECOPY`, never executable, guard or no-access pages.
+Initial `AllocationProtect` is compared, not confused with current protection. Successful reads require a nonzero `BOOL` and the exact full 64-bit byte count.
 All semantic query fields must match before and after the read; unspecified padding is excluded.
 
 Result/failure owners, both query frames, byte-count storage and bounded output/result arrays are reserved
@@ -364,8 +365,10 @@ caller must supply and retain actual original custody, select ranges/policies fr
 PE plan, perform the existing byte/export/import comparisons, and establish the actual system providers.
 Ranges crossing region boundaries are refused, not silently shortened or retried. Production remains unavailable.
 
-Thirty-five fresh-process controls exercise JDK-generated inert query/read upcalls, never the real OS APIs.
+Thirty-nine fresh-process controls exercise JDK-generated inert query/read upcalls, never the real OS APIs.
 Windows uses actual Windows argument/error-capture mechanics; non-Windows tests verify production refusal
 before reflectively exercising private frame mechanics only. They cover complete and partial results,
-high-32-bit count mismatch, region/protection changes, padding, alias/overflow refusal, independent owner
-scopes, synchronous return and retained cleanup failures. No installed-runtime or native-storage credit follows.
+high-32-bit count mismatch, exact read-only header policy, region/protection changes, padding, alias/overflow
+refusal, independent owner scopes, synchronous return and retained cleanup failures. Writable, copy-on-write
+and executable header refusals complete one query and no read, retaining their original ownership and cleanup
+checks. No installed-runtime or native-storage credit follows.

@@ -170,7 +170,8 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".ExportLookupInvocationTests", case], 0,
             "WINDOWS_EXPORT_FFM_LOOKUP_PASS case=" + re.escape(case) +
             " scope=JDK_UPCALL_MARSHALING_NOT_EXPORT_LOOKUP_OR_AUTHORITY host=" + export_host + r"\n", "")
-    image_cases = ["success", "data", "data-copy", "maximum", "arguments", "virtual", "thread", "reentrant",
+    image_cases = ["success", "data", "data-copy", "readonly", "readonly-writable", "readonly-copy",
+                   "readonly-executable", "maximum", "arguments", "virtual", "thread", "reentrant",
                    "padding-change", "close-after-result", "source-frame-alias", "count-frame-alias", "retired-frame",
                    "closed-bootstrap", "closed-module", "invocation-error", "query-failed", "query-short",
                    "allocation-mismatch", "not-committed", "not-image", "code-writable", "data-executable", "guard",

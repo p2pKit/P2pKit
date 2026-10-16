@@ -15,37 +15,47 @@ internal class WindowsProfileMappedCode private constructor(private val layout: 
     data class Region(val address: Long, val bytes: Int, val executable: Boolean = true)
     data class Readback(val address: Long, val bytes: ByteArray)
 
-    /** Headers first, then complete executable sections. The caller must read each range under original custody. */
+    /** Complete, page-bounded requests: each fits a single supported Windows query region/read call. */
     fun regions(moduleBase: Long, mappedImageBytes: Long): List<Region> {
         checkMapping(moduleBase, mappedImageBytes)
-        return Collections.unmodifiableList(layout.sections.map {
-            Region(moduleBase + it.rva, it.mappedBytes, it.executable)
-        })
+        val ranges = layout.sections.flatMap { section ->
+            (0 until section.mappedBytes step PAGE_BYTES).map { offset ->
+                Region(moduleBase + section.rva + offset, PAGE_BYTES, section.executable)
+            }
+        }
+        return Collections.unmodifiableList(ranges)
     }
 
     /**
-     * Check a complete, unique inventory without using a callback to dereference arbitrary native addresses.
-     * Readback bytes are bounded and privately copied before comparison. Concurrent mutation cannot change the
-     * retained plan, but atomic native acquisition/continued immutability still belongs to the actual loader.
-     * Writable data, IAT/provider identities, non-header metadata and page protections require separate checks.
+     * Reassemble a complete unique page inventory before comparing original sections, so a DIR64 crossing
+     * pages is still one validated eight-byte update. The private layout bounds total copied bytes to 128MiB
+     * and page count to 32,768. Every supplied page is copied once before later caller-owned entries are read.
+     * Writable data, IAT/provider identities, non-header metadata and actual protections require separate checks.
+     * This neither observes native memory nor establishes simultaneous acquisition/continued immutability.
      */
     fun verify(moduleBase: Long, mappedImageBytes: Long, observed: List<Readback>) {
         checkMapping(moduleBase, mappedImageBytes)
-        val count = layout.sections.size
+        val count = layout.sections.sumOf { it.mappedBytes / PAGE_BYTES }
         require(observed.size == count) { "Windows profile executable readback inventory differs" }
-        val pending = layout.sections.associateByTo(linkedMapOf()) { moduleBase + it.rva }
-        // Consume each supplied entry once and retain its bounded private byte snapshot before comparison.
-        val snapshots = List(count) { index ->
+        val pending = linkedMapOf<Long, Pair<Int, Int>>()
+        layout.sections.forEachIndexed { index, section ->
+            for (offset in 0 until section.mappedBytes step PAGE_BYTES) {
+                pending[moduleBase + section.rva + offset] = index to offset
+            }
+        }
+        val snapshots = layout.sections.map { ByteArray(it.mappedBytes) }
+        repeat(count) { index ->
             val readback = observed[index]
-            val section = pending.remove(readback.address)
-            require(section != null && readback.bytes.size == section.mappedBytes) {
+            val destination = pending.remove(readback.address)
+            require(destination != null && readback.bytes.size == PAGE_BYTES) {
                 "Windows profile executable readback range differs"
             }
-            section to readback.bytes.copyOf()
+            readback.bytes.copyInto(snapshots[destination.first], destination.second)
         }
         check(pending.isEmpty()) { "Windows profile executable readback inventory differs" }
         val delta = moduleBase - layout.preferredBase
-        for ((section, actual) in snapshots) {
+        layout.sections.forEachIndexed { index, section ->
+            val actual = snapshots[index]
             var cursor = 0
             for (relocation in section.relocations) {
                 compareUnchanged(section.rawBytes, actual, cursor, relocation)
@@ -77,6 +87,8 @@ internal class WindowsProfileMappedCode private constructor(private val layout: 
     }
 
     companion object {
+        private const val PAGE_BYTES = 4096
+
         /** Snapshot and reparse the same pinned bytes; no expected bytes are taken from a loaded candidate. */
         fun prepare(library: ByteArray, image: WindowsProfileByteManifest.ByteAuthorization): WindowsProfileMappedCode {
             val layout = WindowsProfilePeImage.codeLayout(library)

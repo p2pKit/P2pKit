@@ -18,7 +18,7 @@ import java.util.Arrays;
  * only the fixed current-process ReadProcessMemory call copies into our privately owned bounded buffer.
  */
 final class WindowsImageReadInvocation {
-    enum Kind { EXECUTABLE, DATA }
+    enum Kind { EXECUTABLE, READ_ONLY, DATA }
 
     static final int MAXIMUM_BYTES = 65_536;
     static final MemoryLayout INFORMATION = MemoryLayout.sequenceLayout(6, ValueLayout.JAVA_LONG);
@@ -251,6 +251,7 @@ final class WindowsImageReadInvocation {
         long size = fields[4];
         long protection = fields[6];
         boolean readable = kind == Kind.EXECUTABLE ? protection == 0x20 :
+            kind == Kind.READ_ONLY ? protection == 0x02 :
             protection == 0x02 || protection == 0x04 || protection == 0x08;
         if (base < module.address() || (base & 4095) != 0 || size <= 0 || (size & 4095) != 0 ||
             base > Long.MAX_VALUE - size || base + size > module.address() + imageBytes ||

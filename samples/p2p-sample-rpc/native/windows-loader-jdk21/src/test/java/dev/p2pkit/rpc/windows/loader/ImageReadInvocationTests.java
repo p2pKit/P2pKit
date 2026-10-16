@@ -45,8 +45,9 @@ public final class ImageReadInvocationTests {
             .equals("jdk.internal.foreign.abi.x64.windows.Windowsx64Linker");
         rva = mode.equals("maximum") ? 0 : mode.equals("region-short") ? 4032 : 256;
         length = mode.equals("maximum") ? 65_536 : 128;
-        kind = mode.equals("data") || mode.equals("data-copy") || mode.equals("data-executable")
-            ? WindowsImageReadInvocation.Kind.DATA : WindowsImageReadInvocation.Kind.EXECUTABLE;
+        kind = mode.startsWith("readonly") ? WindowsImageReadInvocation.Kind.READ_ONLY :
+            mode.equals("data") || mode.equals("data-copy") || mode.equals("data-executable")
+                ? WindowsImageReadInvocation.Kind.DATA : WindowsImageReadInvocation.Kind.EXECUTABLE;
         bootstrapArena = Arena.ofConfined();
         moduleArena = Arena.ofConfined();
         try {
@@ -82,7 +83,7 @@ public final class ImageReadInvocationTests {
                 setField("query", MethodHandles.filterReturnValue((MethodHandle) field("query"), afterReturn));
             }
             boolean success = switch (mode) {
-                case "success", "data", "data-copy", "maximum", "arguments", "virtual", "thread", "reentrant",
+                case "success", "data", "data-copy", "readonly", "maximum", "arguments", "virtual", "thread", "reentrant",
                      "padding-change", "close-after-result", "source-frame-alias", "count-frame-alias" -> true;
                 default -> false;
             };
@@ -200,7 +201,11 @@ public final class ImageReadInvocationTests {
             information.set(ValueLayout.JAVA_LONG, 24, mode.equals("region-short") || mode.equals("region-overflow")
                 ? 4096 : mode.equals("region-gap") ? IMAGE_BYTES - 4096 : IMAGE_BYTES);
             information.set(ValueLayout.JAVA_INT, 32, mode.equals("not-committed") ? 0x2000 : 0x1000);
-            int protection = kind == WindowsImageReadInvocation.Kind.EXECUTABLE ? 0x20 : mode.equals("data-copy") ? 0x08 : 0x04;
+            int protection = kind == WindowsImageReadInvocation.Kind.EXECUTABLE ? 0x20 :
+                kind == WindowsImageReadInvocation.Kind.READ_ONLY ? 0x02 : mode.equals("data-copy") ? 0x08 : 0x04;
+            if (mode.equals("readonly-writable")) protection = 0x04;
+            if (mode.equals("readonly-copy")) protection = 0x08;
+            if (mode.equals("readonly-executable")) protection = 0x20;
             if (mode.equals("code-writable")) protection = 0x40;
             if (mode.equals("data-executable")) protection = 0x20;
             if (mode.equals("guard")) protection |= 0x100;

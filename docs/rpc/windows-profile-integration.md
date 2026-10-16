@@ -668,14 +668,23 @@ AMD64 `DIR64` writes are adjusted, using unsigned 64-bit addition. Expanding com
 relocations into headers, raw padding, import metadata or the relocation program. No header rewriting,
 hotpatch tolerance, arbitrary masking or missing-header success is admitted.
 
-Each `Region.executable=false` is a header region that requires actual read-only, non-executable protection;
-code requires execute/read protection. Byte comparison does not observe either property. In particular the
-FFM reader's generic DATA mode permits writable data and cannot alone establish header protection. A later
-admitted reader must split/reassemble whole-region plans at actual query-region boundaries and the 65,536-byte
-call bound, retaining the same original ownership and complete inventory. Original file bytes do not establish
-Windows loader behavior; an unexpected actual mapped header/padding difference must fail closed, not silently
-create a normalization exception. Writable data, other metadata, native mapping identity and physical module
-ownership still require separate checks. All comparison inputs remain inert bounded readbacks, not native views.
+Each `Region.executable=false` is a header page requiring actual read-only, non-executable protection;
+code requires execute/read protection. The FFM reader now provides distinct `READ_ONLY` mode (exact
+`PAGE_READONLY`), in addition to unchanged executable and mutable-data policies. Do not substitute DATA
+for headers: it intentionally admits writable/copy-on-write data. These mechanics do not discover trusted
+OS entry points or activate a productive caller.
+
+Header/code requests now cover the exact complete inventory as 4KiB pages, each within any accepted Windows
+query region and below the 65,536-byte call bound. The original private layout bounds the inventory to 32,768
+pages / 128MiB. Every supplied page is copied once into its original section before comparison, preserving
+cross-page eight-byte `DIR64` semantics and rejecting missing, duplicated, misaddressed or wrong-sized pages.
+Correctly addressed observations may arrive in any order; swapping contents without addresses is rejected.
+
+Original file bytes do not establish Windows loader behavior or simultaneous/continued mapping stability.
+An unexpected actual mapped header/padding difference must fail closed, not silently create a normalization
+exception. Writable data, other metadata, native mapping identity and physical module ownership still require
+separate checks. All comparison inputs remain inert bounded readbacks, not native views. Real original-owner
+read acquisition and final productive loader/provider assembly remain dependent on bootstrap authority.
 
 `WindowsProfileImportAddresses` separately requires every original logical DLL/function pair and actual IAT
 slot exactly once. Each observed slot value must equal that import's independently resolved original export
