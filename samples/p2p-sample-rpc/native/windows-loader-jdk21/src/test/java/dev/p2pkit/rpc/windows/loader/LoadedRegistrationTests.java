@@ -73,7 +73,10 @@ public final class LoadedRegistrationTests {
             }
         } catch (Throwable failure) {
             fixture.failure = failure;
-            try { System.out.println(diagnostic(fixture.stage, failure)); }
+            try {
+                System.out.println(diagnostic(fixture.stage, failure));
+                if (fixture.mappedObservation != null) System.out.println(fixture.mappedObservation);
+            }
             catch (Throwable reporting) { fixture.diagnosticFailure = reporting; }
             throw failure;
         }
@@ -84,6 +87,8 @@ public final class LoadedRegistrationTests {
     private static final class Fixture {
         private Throwable failure;
         private Throwable diagnosticFailure;
+        private Throwable mappedObservationFailure;
+        private String mappedObservation;
         private Stage stage = Stage.PREFLIGHT;
         private FileChannel file;
         private byte[] originalBytes;
@@ -196,7 +201,25 @@ public final class LoadedRegistrationTests {
                 pages[index] = reads[index].invoke().bytes();
             }
             stage = Stage.COMPARE;
-            long[] verified = plan.verify(module.address(), exportTargets, importTargets, pages);
+            long[] verified;
+            try {
+                verified = plan.verify(module.address(), exportTargets, importTargets, pages);
+            } catch (Throwable comparisonFailure) {
+                // Observe ONLY after refusal, with the original copied test DLL bytes and existing readbacks.
+                // No retry, additional native read, byte masking or changed acceptance requirement.
+                try {
+                    String observation = (String) helper.getMethod("mappedObservation", byte[].class, long.class,
+                        long[].class, byte[][].class).invoke(null, originalBytes, module.address(), requested, pages);
+                    check(observation.matches("WINDOWS_LOADED_MAPPED_OBSERVATION first=" +
+                        "(NONE|HEADER_RAW|HEADER_PADDING|EXECUTABLE_RAW|EXECUTABLE_PADDING|RELOCATION)" +
+                        " offset=([0-9]|[1-9][0-9]{1,2}|[1-3][0-9]{3}|40[0-8][0-9]|409[0-5])" +
+                        " headerFilePage=(MATCH|DIFFERENT) executable=(MATCH|DIFFERENT)"));
+                    mappedObservation = observation;
+                } catch (Throwable diagnosticFailure) {
+                    mappedObservationFailure = diagnosticFailure;
+                }
+                throw comparisonFailure;
+            }
             stage = Stage.REGISTER;
             long[] methods = Arrays.copyOf(verified, 23);
             MemorySegment registrar = null;

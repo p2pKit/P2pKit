@@ -697,3 +697,11 @@ and its full traceback stays in private evidence. An inert formatting control
 runs without native access on every supported development host. The projection
 helps locate a failed connection boundary; it does not turn an attempted load,
 registration or cleanup into a pass or establish productive installation authority.
+
+After a mapped comparison refuses, the same test may additionally classify its
+already-copied synthetic readbacks: header/code, original/padding/relocation,
+within-page offset, whether the complete header page equals the same pinned file
+prefix, and whether all executable bytes match their original/DIR64 expectation.
+This closed test-only projection performs no additional native call and never
+changes the strict comparison or its original failure. It exposes no readback
+bytes, process address, path or arbitrary message; it cannot authorize loading.
