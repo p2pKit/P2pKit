@@ -197,6 +197,9 @@ def main():
                       bindings[0]["sha256"], bindings[1]["sha256"]],
             "WINDOWS_PACKAGED_VERIFIER_PASS case=" + re.escape(case) +
             r" scope=REAL_JDK21_TO_JDK17_BYTE_COMPARISON_NOT_LOAD_OR_AUTHORITY\n", case == "missing-helper")
+    run("loaded-registration-diagnostics", base + ["--patch-module", MODULE + "=" + str(classes),
+        "--module", MODULE + "/" + PACKAGE + ".LoadedRegistrationTests", "diagnostics"], 0,
+        r"WINDOWS_LOADED_REGISTRATION_DIAGNOSTICS_PASS scope=INERT_FORMATTING_NOT_DLL_OR_AUTHORITY\n", "")
     models, _ = run("models", base + access + ["--patch-module", MODULE + "=" + str(classes),
                          "--module", MODULE + "/" + PACKAGE + ".ModelTests"], 0,
                    r"WINDOWS_LOADER_JDK21_MODELS_PASS tests=14 "

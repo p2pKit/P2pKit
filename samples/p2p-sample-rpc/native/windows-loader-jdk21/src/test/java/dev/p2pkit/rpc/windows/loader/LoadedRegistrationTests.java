@@ -32,10 +32,27 @@ import java.util.Set;
 public final class LoadedRegistrationTests {
     private static Fixture retained;
     private static final String PROFILE = "dev.p2pkit.sample.rpc.profile.";
+    private static final String LOADER = "dev.p2pkit.rpc.windows.loader.";
+
+    private enum Stage { PREFLIGHT, MANIFEST, PLAN, BOOTSTRAP, LOAD, EXPORT, IMPORT, READ,
+        COMPARE, REGISTER, ABI, RETIRE, LOADER_REFUSAL }
+    private enum Category { ASSERTION, ARGUMENT, STATE, LINKAGE, REFLECTION, IO, SECURITY,
+        ERROR, EXCEPTION, UNKNOWN }
+    private enum Site { FIXTURE, IMPORT_FIXTURE, CLASS_BINDING, PACKAGED_ADAPTER, PACKAGED_HELPER,
+        PE_IMAGE, BYTE_MANIFEST, MAPPED_CODE, IMPORT_ADDRESSES, EXPORT_ADDRESSES, JNI_PLAN,
+        JNI_DECLARATION, LOADER_RUNTIME, SYSTEM_BOOTSTRAP, ORIGINAL_JVM, JVM_ACQUISITION,
+        LIBRARY_LOAD, EXPORT_LOOKUP, IMAGE_READ, REGISTRATION_INVOCATION, REGISTRATION_OWNER,
+        SITE_UNKNOWN }
 
     private LoadedRegistrationTests() {}
 
     public static void main(String[] args) throws Throwable {
+        if (args.length == 1 && args[0].equals("diagnostics")) {
+            diagnostics(); // Inert formatting only, before every platform/linker/native-access guard.
+            System.out.println("WINDOWS_LOADED_REGISTRATION_DIAGNOSTICS_PASS" +
+                " scope=INERT_FORMATTING_NOT_DLL_OR_AUTHORITY");
+            return;
+        }
         check(args.length == 9);
         String mode = args[0];
         check(mode.equals("success") || mode.equals("address") || mode.equals("pin"));
@@ -47,15 +64,18 @@ public final class LoadedRegistrationTests {
         retained = fixture; // Root all original owners BEFORE file acquisition or any native effect.
         try {
             fixture.run(args);
+            fixture.stage = Stage.LOADER_REFUSAL;
+            try {
+                WindowsLoader.openInstalledProvider();
+                throw new AssertionError("Test DLL enabled productive loading");
+            } catch (UnsupportedOperationException expected) {
+                check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
+            }
         } catch (Throwable failure) {
             fixture.failure = failure;
+            try { System.out.println(diagnostic(fixture.stage, failure)); }
+            catch (Throwable reporting) { fixture.diagnosticFailure = reporting; }
             throw failure;
-        }
-        try {
-            WindowsLoader.openInstalledProvider();
-            throw new AssertionError("Test DLL enabled productive loading");
-        } catch (UnsupportedOperationException expected) {
-            check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
         }
         System.out.println("WINDOWS_LOADED_REGISTRATION_PASS case=" + mode +
             " scope=DEV_TEST_DLL_DENY_STORAGE_NOT_INSTALLED_AUTHORITY_OR_PROVIDER");
@@ -63,6 +83,8 @@ public final class LoadedRegistrationTests {
 
     private static final class Fixture {
         private Throwable failure;
+        private Throwable diagnosticFailure;
+        private Stage stage = Stage.PREFLIGHT;
         private FileChannel file;
         private byte[] originalBytes;
         private WindowsPackagedVerifier plan;
@@ -109,6 +131,7 @@ public final class LoadedRegistrationTests {
                 return;
             }
             // Reuse the independently hash-bound real Java17 class/resource check, not a fixture helper substitute.
+            stage = Stage.MANIFEST;
             Path main = Path.of(args[6]).toRealPath();
             PackagedVerifierTests.actualClass("WindowsProfilePackagedVerifier", main, args[7]);
             Class<?> declaration = PackagedVerifierTests.actualClass("WindowsProfileCustodyJni", main, args[8]);
@@ -121,6 +144,7 @@ public final class LoadedRegistrationTests {
             Object[] manifest = (Object[]) helper.getMethod("manifest", byte[].class, String.class, String.class)
                 .invoke(null, originalBytes, args[4], args[5]);
             check(manifest.length == 2);
+            stage = Stage.PLAN;
             plan = WindowsPackagedVerifier.prepare((byte[]) manifest[0], originalBytes,
                 (String) manifest[1], args[4], args[5]);
             check(plan.declaringClass() == declaration && plan.imageLayout()[0] <= 16L * 1024 * 1024);
@@ -129,10 +153,12 @@ public final class LoadedRegistrationTests {
 
             // This is expressly conditional development bootstrap. Its observations cannot authorize
             // the earlier OS calls or a production DLL; no fixture object is presented as that authority.
+            stage = Stage.BOOTSTRAP;
             bootstrap = WindowsSystemBootstrapCandidate.inspect();
             originalJvm = bootstrap.inspectOriginalJvm();
             originalArena = (Arena) field(bootstrap, "originalArena");
             entries = (MemorySegment[]) field(bootstrap, "entries");
+            stage = Stage.LOAD;
             load = WindowsLibraryLoadInvocation.prepare(this, originalJvm, file, entries[5], originalArena,
                 path.toString());
             loaded = load.invoke();
@@ -140,6 +166,7 @@ public final class LoadedRegistrationTests {
             imports = new SystemImports(bootstrap, originalArena, entries, imported.length / 2);
             imports.requireModulePath(module, path.toString());
 
+            stage = Stage.EXPORT;
             long[] layout = plan.imageLayout();
             String[] names = plan.exportNames();
             long[] rvas = plan.exportRvas();
@@ -154,7 +181,9 @@ public final class LoadedRegistrationTests {
             }
             // Derive expected import targets by separate logical-library resolution and physical system
             // provider pins BEFORE reading any IAT. Never select an expected target from candidate memory.
+            stage = Stage.IMPORT;
             long[] importTargets = imports.resolve(imported);
+            stage = Stage.READ;
             long[] requested = plan.regions(module.address());
             reads = new WindowsImageReadInvocation[requested.length / 3];
             byte[][] pages = new byte[reads.length][];
@@ -166,7 +195,9 @@ public final class LoadedRegistrationTests {
                     kind == 1 ? WindowsImageReadInvocation.Kind.EXECUTABLE : WindowsImageReadInvocation.Kind.DATA);
                 pages[index] = reads[index].invoke().bytes();
             }
+            stage = Stage.COMPARE;
             long[] verified = plan.verify(module.address(), exportTargets, importTargets, pages);
+            stage = Stage.REGISTER;
             long[] methods = Arrays.copyOf(verified, 23);
             MemorySegment registrar = null;
             for (int index = 0; index < names.length; index++) {
@@ -189,15 +220,18 @@ public final class LoadedRegistrationTests {
                 check(owner.state() == WindowsJniRegistrationOwner.State.Failed &&
                     refused.kind == WindowsJniRegistrationOwner.FailureKind.NativeRefusal);
                 check(field(owner, "report").equals(new WindowsJniRegistrationOwner.Report(32, 1, 0, 3, 0, 0, 0, 0)));
+                stage = Stage.ABI;
                 expect(UnsatisfiedLinkError.class, () -> abi.invoke(null));
             } else {
                 owner = WindowsJniRegistrationOwner.registerOnce(roots, registration);
                 check(owner.state() == WindowsJniRegistrationOwner.State.Registered);
                 check(field(owner, "report").equals(new WindowsJniRegistrationOwner.Report(32, 1, 2, 0, 1, 0, 0, 0)));
+                stage = Stage.ABI;
                 check(abi.invoke(null).equals(13) && capabilities.invoke(null).equals(0x43L));
                 System.gc(); // A request, not a claim that collection occurred.
                 check(abi.invoke(null).equals(13) && capabilities.invoke(null).equals(0x43L));
             }
+            stage = Stage.RETIRE;
             check(owner == WindowsJniRegistrationOwner.retainedProcessOwner() && owner.retention == roots &&
                 owner.ownsInvocation(registration));
             check(!entriesFrame.scope().isAlive() && !reportFrame.scope().isAlive());
@@ -314,6 +348,126 @@ public final class LoadedRegistrationTests {
         }
 
         private static boolean validModule(long value) { return value > 0 && (value & 65_535) == 0; }
+    }
+
+    /** Closed diagnostic projection. Never emit a throwable message, filename, method, path, address or cause text. */
+    private static String diagnostic(Stage stage, Throwable failure) {
+        Throwable actual = failure;
+        for (int depth = 0; depth < 8 && actual.getClass() == InvocationTargetException.class; depth++) {
+            Throwable next = ((InvocationTargetException) actual).getTargetException();
+            if (next == null || next == actual) break;
+            actual = next;
+        }
+        Category category = actual instanceof AssertionError ? Category.ASSERTION :
+            actual instanceof IllegalArgumentException ? Category.ARGUMENT :
+            actual instanceof IllegalStateException ? Category.STATE :
+            actual instanceof LinkageError ? Category.LINKAGE :
+            actual instanceof ReflectiveOperationException ? Category.REFLECTION :
+            actual instanceof java.io.IOException ? Category.IO :
+            actual instanceof SecurityException ? Category.SECURITY :
+            actual instanceof Error ? Category.ERROR :
+            actual instanceof Exception ? Category.EXCEPTION : Category.UNKNOWN;
+        Site found = Site.SITE_UNKNOWN;
+        int line = 0;
+        StackTraceElement[] frames = actual.getStackTrace();
+        for (int index = 0; index < Math.min(64, frames.length); index++) {
+            StackTraceElement frame = frames[index];
+            // These assertion helpers obscure the actual fixture call site; no native frame is guessed.
+            if (frame.getClassName().equals(LOADER + "LoadedRegistrationTests") &&
+                (frame.getMethodName().equals("check") || frame.getMethodName().equals("expect"))) continue;
+            Site candidate = site(frame.getClassName());
+            if (candidate != Site.SITE_UNKNOWN && frame.getLineNumber() > 0 && frame.getLineNumber() <= 4096) {
+                found = candidate;
+                line = frame.getLineNumber();
+                break;
+            }
+        }
+        return "WINDOWS_LOADED_REGISTRATION_REFUSED stage=" + stage.name() + " category=" + category.name() +
+            " site=" + found.name() + " line=" + line;
+    }
+
+    private static Site site(String name) {
+        return switch (name) {
+            case LOADER + "LoadedRegistrationTests", LOADER + "LoadedRegistrationTests$Fixture" -> Site.FIXTURE;
+            case LOADER + "LoadedRegistrationTests$SystemImports" -> Site.IMPORT_FIXTURE;
+            case LOADER + "PackagedVerifierTests" -> Site.CLASS_BINDING;
+            case LOADER + "WindowsPackagedVerifier" -> Site.PACKAGED_ADAPTER;
+            case PROFILE + "WindowsProfilePackagedVerifier", PROFILE + "WindowsProfilePackagedVerifier$Companion",
+                PROFILE + "WindowsProfileLoadedNativeFixture" -> Site.PACKAGED_HELPER;
+            case PROFILE + "WindowsProfilePeImage", PROFILE + "WindowsProfilePeImage$Reader" -> Site.PE_IMAGE;
+            case PROFILE + "WindowsProfileByteManifest" -> Site.BYTE_MANIFEST;
+            case PROFILE + "WindowsProfileMappedCode", PROFILE + "WindowsProfileMappedCode$Companion" ->
+                Site.MAPPED_CODE;
+            case PROFILE + "WindowsProfileImportAddresses", PROFILE + "WindowsProfileImportAddresses$Plan",
+                PROFILE + "WindowsProfileImportAddresses$Plan$Companion" -> Site.IMPORT_ADDRESSES;
+            case PROFILE + "WindowsProfileExportAddresses" -> Site.EXPORT_ADDRESSES;
+            case PROFILE + "WindowsProfileJniPlan", PROFILE + "WindowsProfileJniPlan$Companion" -> Site.JNI_PLAN;
+            case PROFILE + "WindowsProfileCustodyJni" -> Site.JNI_DECLARATION;
+            case LOADER + "WindowsLoaderRuntime", LOADER + "WindowsLoader" -> Site.LOADER_RUNTIME;
+            case LOADER + "WindowsSystemBootstrapCandidate" -> Site.SYSTEM_BOOTSTRAP;
+            case LOADER + "WindowsOriginalJvmCandidate" -> Site.ORIGINAL_JVM;
+            case LOADER + "WindowsJvmAcquisitionInvocation" -> Site.JVM_ACQUISITION;
+            case LOADER + "WindowsLibraryLoadInvocation" -> Site.LIBRARY_LOAD;
+            case LOADER + "WindowsExportLookupInvocation" -> Site.EXPORT_LOOKUP;
+            case LOADER + "WindowsImageReadInvocation" -> Site.IMAGE_READ;
+            case LOADER + "WindowsJniRegistrationInvocation" -> Site.REGISTRATION_INVOCATION;
+            case LOADER + "WindowsJniRegistrationOwner" -> Site.REGISTRATION_OWNER;
+            default -> Site.SITE_UNKNOWN;
+        };
+    }
+
+    private static void diagnostics() {
+        String secret = "C:\\private\\DO_NOT_PRINT\naddress=0x12345678";
+        Throwable assertion = new AssertionError(secret);
+        assertion.setStackTrace(new StackTraceElement[] {
+            new StackTraceElement(LOADER + "LoadedRegistrationTests", "check", secret, 409),
+            new StackTraceElement(LOADER + "LoadedRegistrationTests$Fixture", secret, secret, 123),
+        });
+        String expected = "WINDOWS_LOADED_REGISTRATION_REFUSED stage=READ category=ASSERTION site=FIXTURE line=123";
+        check(diagnostic(Stage.READ, assertion).equals(expected));
+        Throwable nested = assertion;
+        for (int depth = 0; depth < 8; depth++) nested = new InvocationTargetException(nested, secret);
+        check(diagnostic(Stage.READ, nested).equals(expected));
+        Throwable tooDeep = new InvocationTargetException(nested, secret);
+        tooDeep.setStackTrace(new StackTraceElement[0]);
+        // The ninth wrapper is not unwrapped; no unbounded cause traversal or borrowed assertion category.
+        String bounded = diagnostic(Stage.READ, tooDeep);
+        check(bounded.contains(" category=REFLECTION "));
+        check(!bounded.contains("ASSERTION") && !bounded.contains(secret));
+        Throwable ordinary = new Exception(secret, assertion);
+        ordinary.addSuppressed(assertion);
+        ordinary.setStackTrace(new StackTraceElement[] {
+            new StackTraceElement(secret, secret, secret, 123),
+            new StackTraceElement(LOADER + "WindowsImageReadInvocation", secret, secret, -2),
+            new StackTraceElement(LOADER + "WindowsImageReadInvocation", secret, secret, 4097),
+        });
+        check(diagnostic(Stage.IMPORT, ordinary).equals(
+            "WINDOWS_LOADED_REGISTRATION_REFUSED stage=IMPORT category=EXCEPTION site=SITE_UNKNOWN line=0"));
+        check(ordinary.getCause() == assertion && ordinary.getSuppressed().length == 1 &&
+            ordinary.getSuppressed()[0] == assertion && ordinary.getStackTrace().length == 3);
+        StackTraceElement[] many = new StackTraceElement[65];
+        Arrays.fill(many, new StackTraceElement(secret, secret, secret, 1));
+        many[64] = new StackTraceElement(LOADER + "WindowsImageReadInvocation", secret, secret, 7);
+        ordinary.setStackTrace(many);
+        check(diagnostic(Stage.READ, ordinary).endsWith(" site=SITE_UNKNOWN line=0"));
+        Throwable[] categories = {new IllegalArgumentException(secret), new IllegalStateException(secret),
+            new UnsatisfiedLinkError(secret), new NoSuchMethodException(secret), new java.io.IOException(secret),
+            new SecurityException(secret), new Error(secret), new Throwable(secret)};
+        Category[] names = {Category.ARGUMENT, Category.STATE, Category.LINKAGE, Category.REFLECTION,
+            Category.IO, Category.SECURITY, Category.ERROR, Category.UNKNOWN};
+        for (int index = 0; index < categories.length; index++) {
+            categories[index].setStackTrace(new StackTraceElement[0]);
+            check(diagnostic(Stage.PREFLIGHT, categories[index]).equals(
+                "WINDOWS_LOADED_REGISTRATION_REFUSED stage=PREFLIGHT category=" + names[index].name() +
+                    " site=SITE_UNKNOWN line=0"));
+        }
+        for (Stage stage : Stage.values()) {
+            String projected = diagnostic(stage, assertion);
+            check(projected.matches("WINDOWS_LOADED_REGISTRATION_REFUSED stage=[A-Z_]+" +
+                " category=ASSERTION site=FIXTURE line=123"));
+            check(!projected.contains(secret) && projected.indexOf('\n') < 0 && projected.length() <= 192);
+        }
+        check(retained == null); // Formatter validation never acquired the native fixture's process owner.
     }
 
     private static Object field(Object owner, String name) throws ReflectiveOperationException {

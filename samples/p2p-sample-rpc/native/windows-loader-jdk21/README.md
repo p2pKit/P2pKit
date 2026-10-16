@@ -683,3 +683,12 @@ tool activity. The receipt records that fixed setting. This follows Microsoft's
 STL CI setup practice; no machine environment, registry, installed tool, compiler
 security flag, execution policy or native-test deadline is changed. It does not
 prove that telemetry caused any previously observed setup timeout.
+
+The loaded-registration test emits a bounded closed failure projection containing
+only its fixed stage/category/source-site identifiers and a bounded source line.
+It never emits argument values, paths, exception messages, native addresses or
+payload bytes in that projection. The original failure still fails the process
+and its full traceback stays in private evidence. An inert formatting control
+runs without native access on every supported development host. The projection
+helps locate a failed connection boundary; it does not turn an attempted load,
+registration or cleanup into a pass or establish productive installation authority.
