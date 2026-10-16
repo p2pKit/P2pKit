@@ -336,3 +336,36 @@ production host refusal. They check exact HMODULE/name/terminator, maximum name 
 overflow refusals, null/wrong returns, partial private-buffer overlap and ordinal-pointer rejection, original
 scope retirement, thread/reentry, retained errors and independent cleanup. No real export lookup, Windows
 DLL execution, protected profile or installed application is qualified by these controls.
+
+## Bounded original-image query and read mechanics
+
+`WindowsImageReadInvocation` provides dormant `VirtualQuery` / `ReadProcessMemory` mechanics for one
+original-image-relative range of 1–65,536 bytes. It requires the actual Windows-x64 boot linker, retains
+separate original bootstrap and module owners/arenas plus the original PE plan, and uses only the fixed
+current-process pseudo-handle. No OS export is discovered here. No arbitrary native memory is dereferenced
+in Java: the supplied OS read entry copies into a private, bounded output buffer.
+
+Both queries must return the exact 48-byte AMD64 `MEMORY_BASIC_INFORMATION`; the complete requested range
+must fit one committed `MEM_IMAGE` region within the original image and allocation base. Code permits only
+current `PAGE_EXECUTE_READ`; data/IAT permits only `PAGE_READONLY`, `PAGE_READWRITE` or `PAGE_WRITECOPY`,
+never writable executable, guard or no-access pages. Initial `AllocationProtect` is compared, not confused
+with current protection. Successful reads require a nonzero `BOOL` and the exact full 64-bit byte count.
+All semantic query fields must match before and after the read; unspecified padding is excluded.
+
+Result/failure owners, both query frames, byte-count storage and bounded output/result arrays are reserved
+before native calls. Actual Windows `GetLastError` is captured after each call without requiring zero on
+success. Independent private-buffer retirement failures retain original owners; failed reads expose no
+result, and successful results return defensive copies. One-shot, thread/scope, overflow and complete
+source/output-disjointness checks remain enforced. Neither original module nor bootstrap arena is closed.
+
+This is **not** proof of first-load authority, mapped-file identity, atomic mapping stability or IAT
+immutability. Matching queries cannot exclude an intervening change or image copy-on-write. A later reviewed
+caller must supply and retain actual original custody, select ranges/policies from the independently pinned
+PE plan, perform the existing byte/export/import comparisons, and establish the actual system providers.
+Ranges crossing region boundaries are refused, not silently shortened or retried. Production remains unavailable.
+
+Thirty-five fresh-process controls exercise JDK-generated inert query/read upcalls, never the real OS APIs.
+Windows uses actual Windows argument/error-capture mechanics; non-Windows tests verify production refusal
+before reflectively exercising private frame mechanics only. They cover complete and partial results,
+high-32-bit count mismatch, region/protection changes, padding, alias/overflow refusal, independent owner
+scopes, synchronous return and retained cleanup failures. No installed-runtime or native-storage credit follows.

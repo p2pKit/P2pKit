@@ -62,6 +62,7 @@ def main():
                         "VmAcquisitionInvocationTests" in name or
                         "LibraryLoadInvocationTests" in name or
                         "ExportLookupInvocationTests" in name or
+                        "ImageReadInvocationTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -169,6 +170,17 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".ExportLookupInvocationTests", case], 0,
             "WINDOWS_EXPORT_FFM_LOOKUP_PASS case=" + re.escape(case) +
             " scope=JDK_UPCALL_MARSHALING_NOT_EXPORT_LOOKUP_OR_AUTHORITY host=" + export_host + r"\n", "")
+    image_cases = ["success", "data", "data-copy", "maximum", "arguments", "virtual", "thread", "reentrant",
+                   "padding-change", "close-after-result", "source-frame-alias", "count-frame-alias", "retired-frame",
+                   "closed-bootstrap", "closed-module", "invocation-error", "query-failed", "query-short",
+                   "allocation-mismatch", "not-committed", "not-image", "code-writable", "data-executable", "guard",
+                   "region-gap", "region-short", "region-overflow", "read-failed", "partial-read", "excess-read",
+                   "late-query-failed", "mapping-change", "clear-failure", "late-module-close", "readback-failure"]
+    for case in image_cases:
+        run("image-read-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".ImageReadInvocationTests", case], 0,
+            "WINDOWS_IMAGE_FFM_READ_PASS case=" + re.escape(case) +
+            " scope=JDK_UPCALL_MARSHALING_NOT_OS_MEMORY_READ_OR_AUTHORITY capture=" + capture_scope + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_PREVIEW_REFUSALS_AND_PORTABLE_MODELS_NOT_OS_JNI_OR_RELEASE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
