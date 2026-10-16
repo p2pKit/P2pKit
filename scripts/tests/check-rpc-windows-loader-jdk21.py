@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real JVM preview/module refusal controls and portable FFM models; no OS DLL/JNI/profile operations."""
+"""JVM refusal/models plus a conditional Windows system-bootstrap investigation, not installed authority."""
 
 import argparse
 import hashlib
@@ -63,6 +63,7 @@ def main():
                         "LibraryLoadInvocationTests" in name or
                         "ExportLookupInvocationTests" in name or
                         "ImageReadInvocationTests" in name or
+                        "SystemBootstrapCandidateTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -76,7 +77,7 @@ def main():
     records = []
 
     def run(name, command, expected, stdout=None, stderr=None):
-        # Ordinary, fixed Java compiler/model commands. This is not Foundation's installed-app supervisor.
+        # Fixed compiler/controls, including Windows system-only investigation. Not installed-app supervision.
         with (output / (name + "-stdout.log")).open("xb") as out, \
                 (output / (name + "-stderr.log")).open("xb") as err:
             result = subprocess.run([str(item) for item in command], cwd=ROOT, stdin=subprocess.DEVNULL,
@@ -182,10 +183,22 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".ImageReadInvocationTests", case], 0,
             "WINDOWS_IMAGE_FFM_READ_PASS case=" + re.escape(case) +
             " scope=JDK_UPCALL_MARSHALING_NOT_OS_MEMORY_READ_OR_AUTHORITY capture=" + capture_scope + r"\n", "")
+    bootstrap_entry = ["--patch-module", MODULE + "=" + str(classes), "--module",
+                       MODULE + "/" + PACKAGE + ".SystemBootstrapCandidateTests"]
+    run("system-bootstrap-runtime", base + bootstrap_entry + ["runtime"], 0,
+        r"WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=runtime scope=RUNTIME_REFUSAL_NO_SYSTEM_BOOTSTRAP\n", "")
+    run("system-bootstrap-virtual", base + access + bootstrap_entry + ["virtual"], 0,
+        r"WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=virtual scope=THREAD_REFUSAL_NO_SYSTEM_BOOTSTRAP\n", "")
+    bootstrap_case = "inspect" if os.name == "nt" else "unsupported"
+    bootstrap_scope = ("DEVELOPMENT_JVM_SYSTEM_CALLS_NOT_INSTALLED_AUTHORITY_OR_PROFILE" if os.name == "nt"
+                       else "RUNTIME_REFUSAL_NO_SYSTEM_BOOTSTRAP")
+    run("system-bootstrap-" + bootstrap_case, base + access + bootstrap_entry + [bootstrap_case], 0,
+        "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=" + bootstrap_case + " scope=" + bootstrap_scope + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
-    result = {"scope": "JDK21_PREVIEW_REFUSALS_AND_PORTABLE_MODELS_NOT_OS_JNI_OR_RELEASE", "result": "PASS",
+    result = {"scope": "JDK21_CONTROLS_AND_CONDITIONAL_SYSTEM_BOOTSTRAP_NOT_INSTALLED_OR_PROFILE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
-              "observation": actual, "modelResult": models.strip(), "commands": records}
+              "observation": actual, "modelResult": models.strip(),
+              "systemBootstrapScope": bootstrap_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
 

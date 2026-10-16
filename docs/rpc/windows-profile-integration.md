@@ -703,3 +703,24 @@ Neither helper performs Windows calls, establishes first-load authority, opens a
 or changes ABI13/`0x43`, availability, the MSI or application selector. Their tests prove bounded byte/address
 algorithms only. Trusted bootstrap/installed-root authority, productive constrained loading, actual mapping and
 provider observations, full-provider activation, and real Windows qualification remain distinct requirements.
+
+### Conditional system bootstrap implementation
+
+The isolated JDK21 module now contains a dormant, zero-argument
+[`WindowsSystemBootstrapCandidate`](../../samples/p2p-sample-rpc/native/windows-loader-jdk21/README.md#conditional-first-system-call-candidate-not-production-authority).
+It investigates constant-String kernel32 lookup through the already-running JDK,
+permanent physical-provider pins and bounded system-directory/module observations.
+This is materially different from the rejected environment-based default lookup
+or an arbitrary candidate DLL authorizing itself, but it is **not yet trusted
+production bootstrap**: Windows redirection/activation context precedes KnownDLL
+lookup. Foundation must bind the actual launcher/JDK startup authority before the
+first call, not endorse a nominal Java context or use later observations as proof
+of earlier safety. The package/runtime supplier pin remains Foundation-owned.
+
+RPC owns this candidate implementation and subsequent original-handle verification,
+constrained load, import-provider/one-VM/registrar and full session assembly. The
+existing session-transfer and composed JNI storage operations are not being
+reimplemented. Actual development-Windows system-call results, when executed,
+remain separate from installed authority and W01–W11. The productive factory,
+partial ABI13/0x43 and availability gates remain unchanged until the real contract
+is implemented and admitted; this is not merely a deferred-testing limitation.

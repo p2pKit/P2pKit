@@ -2,9 +2,10 @@
 
 **PRODUCTION DISABLED.** This named module contains actual JDK21 preview FFM
 memory preparation and runtime-policy checks. It does not contain a trusted OS
-bootstrap, installed-directory admission, native lookup, DLL load, productive JNI
+bootstrap, installed-directory admission, productive DLL load/JNI
 registration, protected profile provider or Windows runtime qualification. Dormant
-post-admission registration ownership and FFM call mechanics are described below.
+post-admission registration ownership, FFM call mechanics and a conditional system-only
+bootstrap investigation are described below. The latter does not supply initial authority.
 
 It does not replace the existing Desktop application, installer, version encoding,
 Foundation custody or publication pipeline. The ordinary Java17 compilation and
@@ -372,3 +373,41 @@ high-32-bit count mismatch, exact read-only header policy, region/protection cha
 refusal, independent owner scopes, synchronous return and retained cleanup failures. Writable, copy-on-write
 and executable header refusals complete one query and no read, retaining their original ownership and cleanup
 checks. No installed-runtime or native-storage credit follows.
+
+## Conditional first-system-call candidate (not production authority)
+
+`WindowsSystemBootstrapCandidate` investigates a concrete JDK21 route, rather than
+introducing a caller-supplied trust object. Its only initial library lookup is the
+fixed **String** `kernel32.dll`. The JDK21 raw-library String route passes the name
+through its native loader to Windows `LoadLibrary`; it does not use the distinct
+`Path` canonicalization or `defaultLookup` CRT/environment fallback. This is not a
+`LOAD_LIBRARY_SEARCH_SYSTEM32` or get-existing-only operation.
+
+**That distinction does not establish initial trust.** Windows redirection and
+activation-context handling precede loaded-module/KnownDLL lookup. Foundation must
+independently bind the actual installed launcher/runtime, original OS imports and
+absence of attacker-controlled initial redirection/injection before this route may
+become production authority. The exact supplier/full JDK build and startup context
+are not replaced by runtime properties, a filename, an adjacent manifest or the
+candidate's own later observations. A compromised JVM cannot validate itself back
+into trust. The public `WindowsLoader.openInstalledProvider()` remains unchanged
+and refuses; no application route calls this candidate.
+
+The candidate has no caller inputs. It requires the actual boot-module Windows x64
+linker, preview/native-access policy and an ordinary platform thread before lookup.
+A single original owner retains the lookup and physical provider pins for process
+lifetime, including failure. Fixed exported addresses are observed with
+`GetModuleHandleExW(FROM_ADDRESS|PIN)` and `GetModuleFileNameW`; provider paths must
+match kernel32/kernelbase in the OS-returned system directory. The current process
+identifier must agree with the existing JDK process API. These are bounded
+post-call observations, **not** first-call authority, ancestor/file custody,
+physical code integrity, import closure or a complete Windows provider.
+
+The maintained checker adds runtime/thread refusals on every host and an actual
+system-only invocation on Windows (unsupported-host refusal elsewhere). It uses
+its development JDK and original hosted process. No protected profile, RPC DLL,
+JNI registrar, installer, account launcher, privilege grant or security-policy
+change is involved. Its result explicitly distinguishes these system calls from
+the existing inert controls and from unperformed installed-runtime qualification.
+The test class stays outside the packaged adapter. No `ALL-UNNAMED`, internal-JDK
+opening, alternate launcher or new native producer is introduced.
