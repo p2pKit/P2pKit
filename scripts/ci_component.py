@@ -32,7 +32,8 @@ COMPONENTS = {
     'consumers': ('macos-14', 120),
 }
 # Explicit focused diagnostics are not release components or aggregate inputs.
-DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30)}
+DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30),
+               'consumers-pom-diagnostic': ('macos-14', 60)}
 
 FLAGS = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
          '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
@@ -139,6 +140,8 @@ def commands(component):
                  'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])]
     if component == 'bundle-diagnostic':
         return [('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh'])]
+    if component == 'consumers-pom-diagnostic':
+        return [('published-pom-diagnostic', bash + ['scripts/check-published-consumers.sh', '--pom-diagnostic'])]
     if component == 'consumers':
         return [('isolated-consumers', bash + ['scripts/check-published-consumers.sh'])]
     if component == 'compatibility':
@@ -187,7 +190,7 @@ def record_tools(component):
         match = re.search(pattern, version_output)
         if match is None or not re.fullmatch(r'[A-Za-z0-9 ._+()/-]{1,120}', match[1]):
             raise RuntimeError('Cannot identify required tool: ' + name)
-        if component == 'consumers' and name == 'xcode' and match[1] != '16.2':
+        if component in ('consumers', 'consumers-pom-diagnostic') and name == 'xcode' and match[1] != '16.2':
             raise RuntimeError('Consumer baseline requires Xcode 16.2')
         with tool.open('rb') as stream:
             digest = hashlib.sha256()

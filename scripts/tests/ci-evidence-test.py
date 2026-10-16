@@ -38,6 +38,39 @@ class EvidenceTests(unittest.TestCase):
             environment=dict(os.environ), private=self.root / "command", timeout=options.pop("timeout", 5),
             **options)
 
+    def test_consumer_discovery_diagnostics_retain_only_finite_passive_observations(self):
+        row = ("CONSUMER_DISCOVERY_SNAPSHOT INDEX 0 LISTENERS 2 ADDED 4 RESOLVED 3 "
+               "OTHER_ADDED 2 OTHER_RESOLVED 1 REMOTE_SRV 1 REMOTE_TXT 1 PEERS 0 SEES_OTHER 0\n")
+        (self.root / "stdout.log").write_text(row + row.replace("INDEX 0", "INDEX 1") +
+            "consumer-lan failedPhase=await-peer-0 errorType=TimeoutCancellationException\n" +
+            "> Task :lanJvm:runEmbeddedJmdnsPomSmoke FAILED\n")
+        result = E.failure_diagnostics(self.root, self.root, include_reports=False)
+        self.assertEqual(result["consumerDiscoverySnapshots"], [dict(index=index, listeners=2, added=4, resolved=3,
+            other_added=2, other_resolved=1, remote_srv=1, remote_txt=1, peers=0, sees_other=0) for index in (0, 1)])
+        self.assertEqual(result["categories"], ["CONSUMER_TIMEOUT_AWAIT_PEER_0"])
+        self.assertEqual(result["failedGradleTasks"], [":lanJvm:runEmbeddedJmdnsPomSmoke"])
+        self.assertLess(len(json.dumps(result)), 1200)
+
+    def test_consumer_diagnostics_refuse_duplicates_malformed_counts_and_private_suffixes(self):
+        row = ("CONSUMER_DISCOVERY_SNAPSHOT INDEX 0 LISTENERS 2 ADDED 4 RESOLVED 3 "
+               "OTHER_ADDED 2 OTHER_RESOLVED 1 REMOTE_SRV 1 REMOTE_TXT 1 PEERS 0 SEES_OTHER 0\n")
+        for bad in (row.replace("INDEX 0", "INDEX 2"), row.replace("ADDED 4", "ADDED 4097", 1),
+                    row.replace("OTHER_RESOLVED 1", "OTHER_RESOLVED 3"), row.replace("REMOTE_SRV 1", "REMOTE_SRV 2"),
+                    row.rstrip() + " PRIVATE_ID\n", row.replace("LISTENERS 2", "LISTENERS 33")):
+            with self.subTest(bad=bad):
+                (self.root / "stdout.log").write_text(bad +
+                    "consumer-lan failedPhase=PRIVATE_ID errorType=TimeoutCancellationException\n" +
+                    "CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE PRIVATE_ID\n")
+                result = E.failure_diagnostics(self.root, self.root, include_reports=False)
+                self.assertNotIn("consumerDiscoverySnapshots", result)
+                self.assertNotIn("PRIVATE_ID", json.dumps(result))
+                self.assertEqual(result["categories"], [])
+        (self.root / "stdout.log").write_text(row + row.replace("PEERS 0", "PEERS 1") +
+            "CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE\n")
+        result = E.failure_diagnostics(self.root, self.root, include_reports=False)
+        self.assertEqual(result["consumerDiscoverySnapshots"], [])
+        self.assertEqual(result["categories"], ["CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE"])
+
     def test_real_success_captures_both_private_streams_and_known_close(self):
         public = io.StringIO()
         with contextlib.redirect_stdout(public), contextlib.redirect_stderr(public):
@@ -1786,7 +1819,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_task_diagnostic_names_cover_every_actual_component_route(self):
         import ci_component
-        observed = {name for component in ci_component.COMPONENTS
+        observed = {name for component in (*ci_component.COMPONENTS, *ci_component.DIAGNOSTICS)
                     for name, _argv in ci_component.commands(component)}
         self.assertEqual(set(), observed - E.TASK_NAMES)
         self.assertTrue({"prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop",

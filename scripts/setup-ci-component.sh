@@ -13,17 +13,17 @@ if [[ "$component" == source ]]; then
 fi
 # Only the complete consumer and writer CLI lanes use the temporary macOS 14
 # execution baseline. Native/installer/Swift lanes retain their existing images.
-if [[ "$component" == consumers || "$component" == dependency-update ]]; then
+if [[ "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
   [[ "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == ARM64 ]]
   [[ "$(sw_vers -productVersion)" == 14.* ]]
 fi
 if [[ "${RUNNER_OS:-}" == macOS ]]; then
-  if [[ "$component" == consumers || "$component" == dependency-update ]]; then
+  if [[ "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
     xcode=/Applications/Xcode_16.2.app/Contents/Developer
   elif [[ "${RUNNER_ARCH:-}" == ARM64 ]]; then xcode=/Applications/Xcode_26.5.app/Contents/Developer
   else xcode=/Applications/Xcode_26.3.app/Contents/Developer; fi
   test -d "$xcode"
-  if [[ "$component" == consumers || "$component" == dependency-update ]]; then
+  if [[ "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
     version="$(DEVELOPER_DIR="$xcode" xcodebuild -version)"
     [[ "${version%%$'\n'*}" == 'Xcode 16.2' ]]
   fi

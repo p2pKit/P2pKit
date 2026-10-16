@@ -138,7 +138,7 @@ TASK_NAMES = frozenset({
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
     "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
-    "isolated-consumers", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
+    "isolated-consumers", "published-pom-diagnostic", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
     "prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop", "gradle-stop", "component-setup"})
 
 
@@ -946,6 +946,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     generator_phases, duplicate_generator_phases = {}, set()
     phase_observations, duplicate_phases = {}, set()
     inventory_observations, signature_counts = [], []
+    consumer_snapshots, duplicate_consumers = {}, set()
     modules = {"p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
                "p2p-network-provisioning-desktop", "p2p-sample-android", "p2p-sample-desktop",
                "p2p-sample-desktop-ui", "p2p-sample-diagnostics", "sample-kmp-shared", "p2p-sample-rpc", "buildSrc"}
@@ -996,6 +997,33 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 # The captures themselves are bounded; cap each parsed line too.
                 if len(line) > 4096:
                     continue
+                consumer_keys = ("index", "listeners", "added", "resolved", "other_added", "other_resolved",
+                                 "remote_srv", "remote_txt", "peers", "sees_other")
+                consumer = re.fullmatch(rb"CONSUMER_DISCOVERY_SNAPSHOT " + b" ".join(
+                    key.upper().encode() + rb" (0|[1-9][0-9]{0,3})" for key in consumer_keys) + rb"\r?\n?", line)
+                if consumer:
+                    values = dict(zip(consumer_keys, map(int, consumer.groups())))
+                    index = values["index"]
+                    if (index in (0, 1) and values["listeners"] <= 32 and
+                            all(value <= 4096 for value in values.values()) and
+                            values["other_resolved"] <= values["other_added"] <= values["added"] and
+                            values["other_resolved"] <= values["resolved"] <= values["added"] and
+                            all(values[key] in (0, 1) for key in ("remote_srv", "remote_txt", "sees_other"))):
+                        if index in consumer_snapshots:
+                            duplicate_consumers.add(index)
+                        else:
+                            consumer_snapshots[index] = values
+                if line.removesuffix(b"\n").removesuffix(b"\r") == b"CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE":
+                    categories.add("CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE")
+                consumer_failure = re.fullmatch(
+                    rb"consumer-lan failedPhase=(create-kits|advertise-[01]|discover-[01]|capture-owners|"
+                    rb"metadata-[01]|await-peer-[01]) errorType=TimeoutCancellationException\r?\n?", line)
+                if consumer_failure:
+                    categories.add("CONSUMER_TIMEOUT_" + consumer_failure[1].decode("ascii").upper().replace("-", "_"))
+                consumer_task = re.fullmatch(rb"> Task :lanJvm:(runEmbeddedJmdns(?:Coexistence(?:UpstreamFirst)?)?Smoke|"
+                                             rb"runEmbeddedJmdnsPomSmoke) FAILED\r?\n?", line)
+                if consumer_task:
+                    tasks.add(":lanJvm:" + consumer_task[1].decode("ascii"))
                 location = re.fullmatch(rb"PUBLICATION_EMBEDDED_CHECK_LINES ([0-9]{1,5}(?:,[0-9]{1,5}){0,15})\s*", line)
                 if location:
                     publication_lines = [int(value) for value in location[1].split(b",")]
@@ -1085,6 +1113,9 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                     if len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names:
                         tasks.add(task)
     inventory_fields = {"centralInventory": inventory_observations[0]} if len(inventory_observations) == 1 else {}
+    if consumer_snapshots:
+        inventory_fields["consumerDiscoverySnapshots"] = [consumer_snapshots[key] for key in sorted(consumer_snapshots)
+                                                         if key not in duplicate_consumers]
     if len(signature_counts) == 1:
         inventory_fields["centralSignatureCounts"] = signature_counts[0]
     observed_exits = {key: value for key, value in dependency_exits.items()

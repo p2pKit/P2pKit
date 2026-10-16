@@ -240,7 +240,8 @@ class ComponentTests(unittest.TestCase):
                 return code, report, invoked.call_args_list, error
 
     def test_bundle_diagnostic_explicit_only_and_never_in_required_all(self):
-        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30)})
+        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30),
+                                       'consumers-pom-diagnostic': ('macos-14', 60)})
         self.assertEqual(len(C.COMPONENTS), 13)
         self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
         self.assertEqual({row['component'] for row in C.matrix('all')['include']}, set(C.COMPONENTS))
@@ -250,6 +251,29 @@ class ComponentTests(unittest.TestCase):
                         'bundle-diagnostic,bundle-diagnostic', 'all,bundle-diagnostic'):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 C.matrix(invalid)
+
+    def test_pom_diagnostic_is_explicit_only_and_preserves_original_failure_and_cleanup(self):
+        self.assertEqual(C.matrix('consumers-pom-diagnostic'), {'include': [{'component': 'consumers-pom-diagnostic',
+                         'os': 'macos-14', 'minutes': 60, 'job_minutes': 70}]})
+        self.assertNotIn('consumers-pom-diagnostic', C.COMPONENTS)
+        self.assertEqual(len(C.matrix('all')['include']), 13)
+        self.assertEqual(C.commands('consumers-pom-diagnostic'), [('published-pom-diagnostic',
+                         ['bash', 'scripts/check-published-consumers.sh', '--pom-diagnostic'])])
+        self.assertEqual(C.commands('consumers'), [('isolated-consumers',
+                         ['bash', 'scripts/check-published-consumers.sh'])])
+        for invalid in ('consumers-pom-diagnostic,source', 'all,consumers-pom-diagnostic'):
+            with self.assertRaises(ValueError):
+                C.matrix(invalid)
+        for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
+                                                           component='consumers-pom-diagnostic')
+            self.assertIsNone(error)
+            self.assertEqual(code, status or stopped)
+            self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
+                                               {'task': 'gradle-stop', 'exitCode': stopped}])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+            self.assertEqual(calls[-1].kwargs['timeout'], 90)
+            self.assertEqual(len(calls), 2)
 
     def test_jmdns_diagnostic_is_focused_independent_and_preserves_failure_cleanup(self):
         self.assertEqual(C.matrix('jmdns-diagnostic'), {'include': [{'component': 'jmdns-diagnostic',
@@ -430,7 +454,7 @@ class ComponentTests(unittest.TestCase):
 class SetupBaselineTests(unittest.TestCase):
     def selected(self, component, *, os_name='macOS', arch='ARM64', release='14.8.1', xcode='16.2', present=True):
         source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
-        begin = source.index('if [[ "$component" == consumers || "$component" == dependency-update ]]; then')
+        begin = source.index('if [[ "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then')
         end = source.index('  xcodegen_bin_dir=', begin)
         # Actual selection/admission shell block, with synthetic readbacks only.
         # No SDK installation, GPG, Gradle, network or native evidence.
@@ -448,7 +472,7 @@ class SetupBaselineTests(unittest.TestCase):
             return result.returncode, output.read_text() if output.exists() else ''
 
     def test_actual_selection_requires_exact_temporary_host_and_tool(self):
-        for component in ('consumers', 'dependency-update'):
+        for component in ('consumers', 'consumers-pom-diagnostic', 'dependency-update'):
             self.assertEqual(self.selected(component),
                              (0, 'DEVELOPER_DIR=/Applications/Xcode_16.2.app/Contents/Developer\n'))
             for changed in ({'os_name': 'Linux'}, {'arch': 'X64'}, {'release': '26.0'},

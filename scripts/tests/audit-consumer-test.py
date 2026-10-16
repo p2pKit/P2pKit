@@ -971,6 +971,51 @@ class ConsumerGateTest(unittest.TestCase):
                 self.assert_rejected(result, "missing or invalid published RPC API smoke report")
         self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
 
+    def test_pom_diagnostic_uses_original_published_smoke_only_without_claiming_full_qualification(self):
+        result = self.run_gate({"P2PKIT_CONSUMER_WORK_DIR": str(self.work)}, arguments=("--pom-diagnostic",))
+        self.assertEqual(result.returncode, 0, self.output(result))
+        self.assertIn("focused published POM discovery diagnostic only", result.stdout)
+        self.assertIn("NOT complete consumer or release qualification", result.stdout)
+        leaves = self.calls("gradle")
+        self.assertEqual(len(leaves), 2)
+        self.assertEqual(leaves[0]["argv"], ["--no-daemon", "--console=plain", *EXPECTED_FOCUSED_PUBLISH_TASKS,
+                                            f"-Dmaven.repo.local={self.work / 'repository'}"])
+        self.assertEqual(leaves[1]["argv"], ["--no-daemon", "--console=plain", "-p", str(self.work / "consumer"),
+                                            f"-PconsumerRepo={self.work / 'repository'}", ":lanJvm:runEmbeddedJmdnsPomSmoke"])
+        self.assertFalse(self.calls("xcrun"))
+        self.assertFalse(self.calls("curl"))
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        passive = smoke.split("private fun reportDiscoveryState", 1)[1].split("private fun reportNativeState", 1)[0]
+        self.assertIn('field(dns, "_serviceListeners")', passive)
+        self.assertIn('field(status, "_addedServices")', passive)
+        self.assertIn('CONSUMER_DISCOVERY_SNAPSHOT INDEX $index', passive)
+        self.assertIn('CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE', passive)
+        self.assertIn('catch (_: Throwable)', passive)
+        for forbidden in ('getServiceInfo(', 'requestServiceInfo(', '.addServiceListener(', 'JvmLanDiag.enabled',
+                          'hostAddress', '.textBytes', '.toString()', '.close(', '.cancel(', 'Thread.sleep('):
+            self.assertNotIn(forbidden, passive)
+        printed = passive.split('println(', 1)[1].split(')', 1)[0]
+        self.assertNotIn('localPeerId', printed)
+        self.assertEqual(smoke.count("withTimeout(30_000)"), 2)
+        self.assertIn('kit.peers.first', smoke)
+        self.assertIn('failure?.let { throw it }', smoke)
+        self.assertIn('owner.requireDisposed(factory)', smoke)
+
+    def test_pom_diagnostic_rejects_remote_audit_executor_profiles_and_extra_arguments(self):
+        for options, arguments in (({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://invalid.example"}, ("--pom-diagnostic",)),
+                ({"P2PKIT_CONSUMER_AUDIT_METADATA": "1"}, ("--pom-diagnostic",)),
+                ({"P2PKIT_GRADLE_EXECUTOR": "/not/an/executor"}, ("--pom-diagnostic",)),
+                ({"P2PKIT_CONSUMER_PROFILE": "lan-jvm-android"}, ("--pom-diagnostic",)),
+                ({}, ("--pom-diagnostic", "--latest-published")),
+                ({}, ("--pom-diagnostic", "extra"))):
+            with self.subTest(options=options, arguments=arguments):
+                result = self.run_gate(options, arguments=arguments)
+                self.assertEqual(result.returncode, 2, self.output(result))
+                self.assertIn("requires ordinary source-local", result.stderr)
+        # setUp records fixture Git construction; no PRODUCT boundary may run.
+        for kind in ("gradle", "gradle-stop", "executor", "curl", "xcrun"):
+            self.assertFalse(self.calls(kind), kind)
+
     def test_focused_profile_uses_only_five_publications_and_exact_embedded_tasks_without_native_tools(self):
         result = self.run_gate({"P2PKIT_CONSUMER_PROFILE": "lan-jvm-android",
                                 "P2PKIT_CONSUMER_WORK_DIR": str(self.work), "FAKE_MISSING_FRAMEWORK": "1"})

@@ -218,3 +218,6 @@ No local model, source-only CI, accepted Windows risk or historical preview is a
 substitute for an actually required gate. Windows RPC's unfinished productive
 loader/profile behavior and owner-accepted post-release testing limits must be
 stated honestly in the combined candidate; no unsafe load or fake runtime pass.
+
+For focused published-POM discovery diagnosis, dispatch CI with `component=consumers-pom-diagnostic`.
+This runs the original source-local POM smoke and cleanup, not the required complete consumer gate or release qualification.
