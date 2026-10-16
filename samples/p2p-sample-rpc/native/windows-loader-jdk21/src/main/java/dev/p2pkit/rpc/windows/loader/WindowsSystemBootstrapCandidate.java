@@ -337,4 +337,10 @@ final class WindowsSystemBootstrapCandidate {
         if (index < 0 || index > 2) throw new IllegalArgumentException("Unknown fixed JVM file entry");
         return entries[8 + index];
     }
+
+    MemorySegment originalJvmSecurityEntry(WindowsOriginalJvmCandidate candidate, int index) {
+        requireOriginalJvm(candidate);
+        if (index < 0 || index > 3) throw new IllegalArgumentException("Unknown fixed JVM security entry");
+        return entries[1 + index]; // PIN, module pathname, system directory, exact named export resolution.
+    }
 }

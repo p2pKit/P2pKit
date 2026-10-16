@@ -74,6 +74,8 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsOriginalJvmFileCandidate$Failure.class",
     ADAPTER_PREFIX + "WindowsInstallationSecurity.class",
     ADAPTER_PREFIX + "WindowsInstallationSecurity$Kind.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmSecurityCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmSecurityCandidate$Failure.class",
 )
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",

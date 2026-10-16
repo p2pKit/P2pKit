@@ -339,4 +339,9 @@ final class WindowsOriginalJvmCandidate {
             throw new IllegalStateException("JVM file candidate is not this runtime's original retained attachment");
         }
     }
+
+    MemorySegment originalFileSecurityEntry(WindowsOriginalJvmFileCandidate candidate, int index) {
+        requireOriginalFile(candidate);
+        return bootstrap.originalJvmSecurityEntry(this, index);
+    }
 }

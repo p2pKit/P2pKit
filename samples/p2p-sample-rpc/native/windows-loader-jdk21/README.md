@@ -474,3 +474,33 @@ actual admitted OS query on the retained original handle. No such native securit
 query or installed-ancestor assembly is supplied by these inert descriptor tests.
 The production factory and availability flags remain unchanged, not enabled by a
 passing parser or a development-runtime observation.
+
+### Actual original-handle security readback (conditional development scope)
+
+`WindowsOriginalJvmFileCandidate.inspectSecurity()` connects its original retained
+HANDLE to a single bounded native OWNER|DACL query, not to a supplied descriptor or
+pathname. The conditional bootstrap pins the already-loaded fixed `ntdll.dll`,
+checks its observed path against the original OS system directory, resolves only
+`NtQuerySecurityObject`, and pins that export's physical provider. Its original
+module/provider must agree. This introduces no explicit library load, candidate
+helper, account operation, privilege grant, or ACL change. As with the existing JVM
+export lookup, a later same-provider check does not exclude earlier implicit
+forwarder effects or establish pre-bootstrap/runtime authority.
+
+The query requests exactly OWNER|DACL (`5`) into a preallocated 64 KiB buffer with
+one DWORD return length. Exact `STATUS_SUCCESS` and a bounded returned length are
+required; there is no resizing, probe/retry or `GetLastError` interpretation of the
+NTSTATUS result. The original file/module/entry owners remain retained while
+private call buffers retire independently. Only successfully returned bounded
+bytes reach the descriptor policy; query completion and policy acceptance are
+separate observations. A parser refusal is not a native-query failure or permission
+to modify the object's ACL. Unexpected errors remain retained failures.
+
+The Windows development test reports the **actual** descriptor decision, ACCEPTED
+or REFUSED, without printing owner SIDs, paths or descriptor bytes. Neither result
+qualifies the toolcache runtime as an installed application. Duplicate/wrong-thread
+queries refuse, retained file/VM ownership survives a GC request, and the public
+productive factory must still refuse. macOS compiles these sources and runs the
+inert parser controls, but does not receive Windows native-security-query credit.
+Actual ancestor custody, expected packaged/runtime identity, first-call authority,
+loaded mapping/import verification and complete provider assembly remain required.

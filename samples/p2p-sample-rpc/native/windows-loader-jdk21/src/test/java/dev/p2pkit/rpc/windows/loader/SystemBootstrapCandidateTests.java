@@ -22,6 +22,7 @@ public final class SystemBootstrapCandidateTests {
     public static void main(String[] args) throws InterruptedException {
         check(args.length == 1);
         String scope;
+        String policy = "";
         if (args[0].equals("runtime") || args[0].equals("unsupported")) {
             refused();
             scope = "RUNTIME_REFUSAL_NO_SYSTEM_BOOTSTRAP";
@@ -123,9 +124,53 @@ public final class SystemBootstrapCandidateTests {
                 check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
             }
             scope = "DEVELOPMENT_JVM_FILE_LEASE_NOT_INSTALLED_ACL_ANCESTOR_MAPPING_OR_PROFILE";
+        } else if (args[0].equals("security")) {
+            WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
+            WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();
+            WindowsOriginalJvmFileCandidate file = runtime.inspectFile();
+            WindowsOriginalJvmSecurityCandidate security = file.inspectSecurity();
+            check(security.completed());
+            boolean accepted = security.descriptorPolicyAccepted();
+            try {
+                file.inspectSecurity();
+                throw new AssertionError("Original file security acquisition was repeated");
+            } catch (IllegalStateException expected) {
+                // A completed native query does not authorize another query or owner replacement.
+            }
+            AtomicReference<Throwable> unexpected = new AtomicReference<>();
+            Thread worker = Thread.startVirtualThread(() -> {
+                try {
+                    try {
+                        security.descriptorPolicyAccepted();
+                        throw new AssertionError("Security observation crossed its original thread");
+                    } catch (IllegalStateException expected) {
+                        // Descriptor policy is not a transferable installation authority.
+                    }
+                    try {
+                        file.inspectSecurity();
+                        throw new AssertionError("Security query crossed its original thread");
+                    } catch (IllegalStateException expected) {
+                        // Refuse before a second native query.
+                    }
+                } catch (Throwable failure) { unexpected.set(failure); }
+            });
+            worker.join();
+            check(unexpected.get() == null);
+            System.gc();
+            check(security.completed() && security.descriptorPolicyAccepted() == accepted);
+            check(file.leaseHeld() && runtime.singleVirtualMachineObserved() && original.completed());
+            try {
+                WindowsLoader.openInstalledProvider();
+                throw new AssertionError("Observed file descriptor enabled productive loading");
+            } catch (UnsupportedOperationException expected) {
+                check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
+            }
+            scope = "DEVELOPMENT_JVM_HANDLE_SECURITY_NOT_INSTALLED_ANCESTOR_MAPPING_OR_PROFILE";
+            // Actual development-file policy may accept OR refuse. Neither outcome admits installation.
+            policy = " descriptorPolicy=" + (accepted ? "ACCEPTED" : "REFUSED");
         } else {
             throw new IllegalArgumentException("Unknown system bootstrap control");
         }
-        System.out.println("WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=" + args[0] + " scope=" + scope);
+        System.out.println("WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=" + args[0] + " scope=" + scope + policy);
     }
 }

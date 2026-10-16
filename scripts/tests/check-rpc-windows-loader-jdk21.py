@@ -201,6 +201,8 @@ def main():
         "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=" + bootstrap_case + " scope=" + bootstrap_scope + r"\n", "")
     original_jvm_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_file_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_security_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_security_policy = "NOT_EXECUTED"
     if os.name == "nt":
         original_jvm_scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE"
         run("system-bootstrap-jvm", base + access + bootstrap_entry + ["jvm"], 0,
@@ -208,12 +210,18 @@ def main():
         original_file_scope = "DEVELOPMENT_JVM_FILE_LEASE_NOT_INSTALLED_ACL_ANCESTOR_MAPPING_OR_PROFILE"
         run("system-bootstrap-file", base + access + bootstrap_entry + ["file"], 0,
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=file scope=" + original_file_scope + r"\n", "")
+        original_security_scope = "DEVELOPMENT_JVM_HANDLE_SECURITY_NOT_INSTALLED_ANCESTOR_MAPPING_OR_PROFILE"
+        security, _ = run("system-bootstrap-security", base + access + bootstrap_entry + ["security"], 0,
+            "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=security scope=" + original_security_scope +
+            r" descriptorPolicy=(ACCEPTED|REFUSED)\n", "")
+        original_security_policy = security.strip().rsplit("=", 1)[1]
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_CONTROLS_AND_CONDITIONAL_SYSTEM_BOOTSTRAP_NOT_INSTALLED_OR_PROFILE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
               "observation": actual, "modelResult": models.strip(),
               "systemBootstrapScope": bootstrap_scope, "originalJvmScope": original_jvm_scope,
-              "originalJvmFileScope": original_file_scope, "commands": records}
+              "originalJvmFileScope": original_file_scope, "originalJvmSecurityScope": original_security_scope,
+              "originalJvmDescriptorPolicy": original_security_policy, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
 

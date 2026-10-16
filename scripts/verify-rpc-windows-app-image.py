@@ -136,6 +136,7 @@ ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".cl
     "WindowsOriginalJvmCandidate", "WindowsOriginalJvmCandidate$Failure",
     "WindowsOriginalJvmFileCandidate", "WindowsOriginalJvmFileCandidate$Failure",
     "WindowsInstallationSecurity", "WindowsInstallationSecurity$Kind",
+    "WindowsOriginalJvmSecurityCandidate", "WindowsOriginalJvmSecurityCandidate$Failure",
 ))))
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
