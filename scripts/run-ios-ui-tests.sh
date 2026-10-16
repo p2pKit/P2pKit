@@ -36,6 +36,18 @@ source "$SCRIPT_DIR/run-ios-app.sh"
 
 initialize_ios_run_cleanup "$PROJECT_DIR" "ios-ui-run"
 
+# Hosted compatibility selects its exact reviewed runtime before ordinary
+# launcher admission. Never silently pick the first duplicate device name.
+if [[ -n "${SIM_RUNTIME:-}" ]]; then
+    selected_udid="$(select_runtime_simulator_udid "$SIM_NAME" "$SIM_RUNTIME" \
+        "$(xcrun simctl list --json devices available)")"
+    if [[ -n "$SIM_UDID" && "$SIM_UDID" != "$selected_udid" ]]; then
+        echo "[ios-run] Explicit SIM_UDID conflicts with the selected runtime/device." >&2
+        exit 1
+    fi
+    SIM_UDID="$selected_udid"
+fi
+
 device_list="$(xcrun simctl list devices available)"
 udid="$(resolve_simulator_udid "$SIM_NAME" "$SIM_UDID" "$device_list")"
 if [[ -z "$RUN_DIR" ]]; then
