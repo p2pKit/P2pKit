@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /** Inert PE bytes and address comparisons only; no Windows lookup, native memory, JNI or installed evidence. */
 class WindowsProfileImportAddressesTest {
@@ -161,6 +162,161 @@ class WindowsProfileImportAddressesTest {
         }
     }
 
+    @Test fun fullIatPlanRequiresEveryPageBoundedByteAtEitherImageBase() {
+        val bytes = fullLibrary()
+        val image = image(bytes)
+        val plan = WindowsProfileImportAddresses.prepare(bytes, image)
+        for (base in listOf(BASE, BASE + 65_536)) {
+            assertEquals(listOf(WindowsProfileImportAddresses.Region(base + FULL_IAT_RVA, 16),
+                WindowsProfileImportAddresses.Region(base + FULL_IAT_RVA + 16, 24)),
+                plan.regions(base, image.imageBytes))
+            val resolved = resolutions(image).map { it.copy(address = TARGET) }
+            plan.verify(base, image.imageBytes, resolved.reversed(),
+                fullReadback(bytes, image, resolved, base).reversed())
+        }
+        assertFalse(WindowsProfileAvailability.IMPLEMENTED)
+        assertFalse(WindowsProfileAvailability.QUALIFIED)
+    }
+
+    @Test fun completeIatTerminatorAndNonzeroPaddingChangesRefuseWhileNamedOnlyComparisonCannotSeeThem() {
+        val bytes = fullLibrary()
+        val image = image(bytes)
+        val plan = WindowsProfileImportAddresses.prepare(bytes, image)
+        // Original leading/trailing bytes are deliberately nonzero; only the two declared slots may change.
+        assertTrue(bytes[FULL_IAT_FILE] != 0.toByte())
+        assertTrue(bytes[FULL_IAT_FILE + 39] != 0.toByte())
+        for (offset in (0 until 8) + (24 until 40)) {
+            val actual = fullReadback(bytes, image)
+            val region = if (offset < 16) actual.first() else actual.last()
+            val local = if (offset < 16) offset else offset - 16
+            region.bytes[local] = (region.bytes[local].toInt() xor 1).toByte()
+            // Existing slot verification remains intentionally narrower; this unchanged inventory still passes.
+            verify(image)
+            assertFailsWith<IllegalArgumentException> {
+                plan.verify(BASE, image.imageBytes, resolutions(image), actual)
+            }
+        }
+    }
+
+    @Test fun completeIatUsesExactResolvedNamedSlotsAndRejectsPartialOrDuplicateInventory() {
+        val bytes = fullLibrary()
+        val image = image(bytes)
+        val plan = WindowsProfileImportAddresses.prepare(bytes, image)
+        val actual = fullReadback(bytes, image)
+        val badLists = listOf(emptyList(), actual.dropLast(1), actual + actual.first(),
+            listOf(actual.first(), actual.first()),
+            listOf(actual.first().copy(address = actual.first().address + 8), actual.last()),
+            listOf(actual.first().copy(bytes = actual.first().bytes.copyOf(8)), actual.last()),
+            listOf(actual.first(), actual.last().copy(bytes = actual.last().bytes.copyOf(32))))
+        for (candidate in badLists) assertFailsWith<IllegalArgumentException> {
+            plan.verify(BASE, image.imageBytes, resolutions(image), candidate)
+        }
+        for (offset in 8 until 24) {
+            val changed = fullReadback(bytes, image)
+            val region = if (offset < 16) changed.first() else changed.last()
+            val local = if (offset < 16) offset else offset - 16
+            region.bytes[local] = (region.bytes[local].toInt() xor 1).toByte()
+            assertFailsWith<IllegalArgumentException> {
+                plan.verify(BASE, image.imageBytes, resolutions(image), changed)
+            }
+        }
+    }
+
+    @Test fun completeIatPlanCannotBeReboundByChangedBytesImportTuplesOrSize() {
+        val bytes = fullLibrary()
+        val image = image(bytes)
+        val changed = bytes.copyOf().apply { this[FULL_IAT_FILE] = 0 }
+        assertFailsWith<IllegalArgumentException> { WindowsProfileImportAddresses.prepare(changed, image) }
+        val changedImports = image.namedImports.toMutableList().apply { this[0] = this[0].copy(function = "Other") }
+        for (bad in listOf(image.copy(dllBytes = image.dllBytes - 1), image.copy(imageBytes = image.imageBytes + 4096),
+            image.copy(namedImports = changedImports), image.copy(namedImports = image.namedImports.reversed()))) {
+            assertFailsWith<IllegalArgumentException> { WindowsProfileImportAddresses.prepare(bytes, bad) }
+        }
+        assertFailsWith<IllegalArgumentException> { WindowsProfileImportAddresses.prepare(ByteArray(511), image) }
+    }
+
+    @Test fun completeIatSnapshotAndInventoryCannotBeChangedByLaterCallerMutation() {
+        val bytes = fullLibrary()
+        val image = image(bytes)
+        val imports = image.namedImports.toMutableList()
+        val plan = WindowsProfileImportAddresses.prepare(bytes, image.copy(namedImports = imports))
+        val actual = fullReadback(bytes, image)
+        bytes.fill(0)
+        imports.clear()
+        plan.verify(BASE, image.imageBytes, resolutions(image), actual)
+        assertFailsWith<UnsupportedOperationException> {
+            (plan.regions(BASE, image.imageBytes) as MutableList<WindowsProfileImportAddresses.Region>).clear()
+        }
+        // Resolution collection happens after the readback's private snapshot; mutate a consumed caller array.
+        val resolved = resolutions(image)
+        val mutation = object : AbstractList<WindowsProfileImportAddresses.ResolvedImport>() {
+            override val size = resolved.size
+            override fun get(index: Int): WindowsProfileImportAddresses.ResolvedImport {
+                actual.forEach { it.bytes.fill(0) }
+                return resolved[index]
+            }
+        }
+        plan.verify(BASE, image.imageBytes, mutation, actual)
+        assertFailsWith<IllegalArgumentException> { plan.verify(BASE, image.imageBytes, resolved, actual) }
+    }
+
+    @Test fun completeIatBoundsInventoryBeforeReadingAndConsumesEachEntryOnce() {
+        val bytes = fullLibrary()
+        val image = image(bytes)
+        val plan = WindowsProfileImportAddresses.prepare(bytes, image)
+        val actual = Once(fullReadback(bytes, image))
+        val resolved = Once(resolutions(image))
+        plan.verify(BASE, image.imageBytes, resolved, actual)
+        assertEquals(listOf(1, 1), actual.reads.toList())
+        assertEquals(listOf(1, 1), resolved.reads.toList())
+        for (count in listOf(0, 1, 3, Int.MAX_VALUE)) assertFailsWith<IllegalArgumentException> {
+            plan.verify(BASE, image.imageBytes, resolutions(image), Unread(count))
+        }
+        for (base in listOf(0L, BASE + 1, -65_536L)) assertFailsWith<IllegalArgumentException> {
+            plan.regions(base, image.imageBytes)
+        }
+        for (size in listOf(0L, image.imageBytes - 1, image.imageBytes + 1, Long.MAX_VALUE)) {
+            assertFailsWith<IllegalArgumentException> { plan.regions(BASE, size) }
+            assertFailsWith<IllegalArgumentException> { plan.verify(BASE, size, resolutions(image), Unread(2)) }
+        }
+    }
+
+    private fun fullReadback(
+        bytes: ByteArray,
+        image: WindowsProfileByteManifest.ByteAuthorization,
+        resolved: List<WindowsProfileImportAddresses.ResolvedImport> = resolutions(image),
+        base: Long = BASE,
+    ): List<WindowsProfileImportAddresses.Readback> {
+        val actual = bytes.copyOfRange(FULL_IAT_FILE, FULL_IAT_FILE + 40)
+        val buffer = ByteBuffer.wrap(actual).order(ByteOrder.LITTLE_ENDIAN)
+        image.namedImports.forEachIndexed { index, entry ->
+            buffer.putLong((entry.addressRva - FULL_IAT_RVA).toInt(), resolved[index].address)
+        }
+        return listOf(WindowsProfileImportAddresses.Readback(base + FULL_IAT_RVA, actual.copyOfRange(0, 16)),
+            WindowsProfileImportAddresses.Readback(base + FULL_IAT_RVA + 16, actual.copyOfRange(16, 40)))
+    }
+
+    private fun fullLibrary(): ByteArray = library().copyOf(0x3200).apply {
+        val bytes = this
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putShort(0x86, 4)
+            putInt(0x98 + 56, 0x6000)
+            val section = 0x98 + 240 + 120
+            ".idata".toByteArray(Charsets.US_ASCII).copyInto(bytes, section)
+            putInt(section + 8, 0x2000)
+            putInt(section + 12, 0x4000)
+            putInt(section + 16, 0x2000)
+            putInt(section + 20, 0x1200)
+            putInt(section + 36, 0x40000040)
+            putInt(0x98 + 112 + 12 * 8, FULL_IAT_RVA.toInt())
+            putInt(0x98 + 116 + 12 * 8, 40)
+            putInt(0xe10, FULL_IAT_RVA.toInt() + 8)
+            putLong(FULL_IAT_FILE + 8, 0x28a0)
+            putLong(FULL_IAT_FILE + 16, 0x28c0)
+        }
+        for (index in (0 until 8) + (32 until 40)) this[FULL_IAT_FILE + index] = (index + 1).toByte()
+    }
+
     private fun verify(
         image: WindowsProfileByteManifest.ByteAuthorization,
         resolved: List<WindowsProfileImportAddresses.ResolvedImport> = resolutions(image),
@@ -180,7 +336,7 @@ class WindowsProfileImportAddressesTest {
         WindowsProfileImportAddresses.IatSlot(base + entry.addressRva, resolved[index].address)
     }
 
-    private fun image(): WindowsProfileByteManifest.ByteAuthorization {
+    private fun library(): ByteArray {
         val bytes = WindowsProfilePeFixture.create()
         // Extend the existing real parser fixture with one distinct named import and complete null terminators.
         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -189,6 +345,10 @@ class WindowsProfileImportAddressesTest {
             putLong(0xe88, 0x28c0)
         }
         "GetCurrentProcess".toByteArray(Charsets.US_ASCII).copyInto(bytes, 0xec2)
+        return bytes
+    }
+
+    private fun image(bytes: ByteArray = library()): WindowsProfileByteManifest.ByteAuthorization {
         val source = "a".repeat(40)
         val tree = "b".repeat(40)
         val manifest = WindowsProfileByteManifest.produce(source, tree, true, bytes)
@@ -209,6 +369,8 @@ class WindowsProfileImportAddressesTest {
     }
 
     private companion object {
+        const val FULL_IAT_RVA = 0x4ff0L
+        const val FULL_IAT_FILE = 0x21f0
         const val BASE = 0x180000000L
         const val TARGET = 0x7ffa00001001L
     }

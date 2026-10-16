@@ -655,23 +655,40 @@ bootstrap authority and do not enable the partial native component or change its
 ## Dormant mapped-code and import comparisons
 
 `WindowsProfileMappedCode.prepare` privately snapshots and reparses the original DLL and requires its digest,
-file length and `SizeOfImage` to match the independently supplied byte authorization. Its bounded comparison
-requires every executable section exactly once at the same actual module base. It compares logical
-`VirtualSize` bytes: original raw-backed bytes, validated AMD64 `DIR64` updates using unsigned 64-bit addition,
-and any logical zero-filled tail. It rejects executable discardable sections for this supported plan rather
-than assuming their continued availability. This does not narrow the existing structural-only PE reader.
+file length and `SizeOfImage` to match the independently supplied byte authorization. Its complete inventory
+now includes original headers and every executable section, including file-alignment and executable-page
+padding. The supported mapping plan requires the maintained producer's 4KiB section alignment, and refuses
+other alignments and executable discardable sections rather than inventing their mapping/protection semantics.
+The structural-only PE reader remains unchanged in those respects.
 
-File-alignment and page-alignment padding are deliberately **not compared**; executable padding and actual
-page protections need separate verification before productive use. Headers, writable data, other metadata,
-native mapping identity and physical module ownership are also outside this comparator. No arbitrary masking
-of executable code or hotpatch tolerance is introduced. Inputs are inert bounded readbacks, not native views.
+Headers preserve every original byte, including the preferred `ImageBase`, followed by zero padding to their
+page boundary. Executable regions preserve **all** original `SizeOfRawData` bytes (also when larger than
+`VirtualSize`), followed by zeros through the page-aligned maximum of those sizes. Only previously validated
+AMD64 `DIR64` writes are adjusted, using unsigned 64-bit addition. Expanding compared ranges does not authorize
+relocations into headers, raw padding, import metadata or the relocation program. No header rewriting,
+hotpatch tolerance, arbitrary masking or missing-header success is admitted.
+
+Each `Region.executable=false` is a header region that requires actual read-only, non-executable protection;
+code requires execute/read protection. Byte comparison does not observe either property. In particular the
+FFM reader's generic DATA mode permits writable data and cannot alone establish header protection. A later
+admitted reader must split/reassemble whole-region plans at actual query-region boundaries and the 65,536-byte
+call bound, retaining the same original ownership and complete inventory. Original file bytes do not establish
+Windows loader behavior; an unexpected actual mapped header/padding difference must fail closed, not silently
+create a normalization exception. Writable data, other metadata, native mapping identity and physical module
+ownership still require separate checks. All comparison inputs remain inert bounded readbacks, not native views.
 
 `WindowsProfileImportAddresses` separately requires every original logical DLL/function pair and actual IAT
 slot exactly once. Each observed slot value must equal that import's independently resolved original export
 address, not merely an address inside some allowed library. Legitimate forwarding or linker folding may yield
 the same target for distinct names. The logical import name does not identify or authorize the physical
 forwarded provider; the productive loader must independently establish and retain its original identity.
-Import terminators and padding require separate checks.
+Its new `prepare(library, authorization)` full-IAT plan reparses a private snapshot and binds the digest,
+file size, image size and exact named-import list to that same byte authorization. It requests the entire
+declared IAT as 4KiB page-bounded ranges, snapshots every range exactly once, and applies the original
+named-slot comparison. Every other byte must match the original IAT, including null terminators and leading,
+inter-table and trailing padding. Missing/duplicate/wrong-size ranges or changed metadata fail closed.
+No caller-owned array or original expected-byte buffer escapes. These page-sized requests simplify bounded
+observation; they do not establish atomic acquisition, continued IAT immutability or system-provider identity.
 
 Neither helper performs Windows calls, establishes first-load authority, opens a profile, publishes a provider,
 or changes ABI13/`0x43`, availability, the MSI or application selector. Their tests prove bounded byte/address

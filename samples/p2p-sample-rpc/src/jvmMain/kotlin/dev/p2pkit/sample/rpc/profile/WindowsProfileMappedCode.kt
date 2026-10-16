@@ -3,28 +3,31 @@ package dev.p2pkit.sample.rpc.profile
 import java.util.Collections
 
 /**
- * Exact logical executable-section comparison against independently pinned file bytes, including AMD64 DIR64
+ * Exact headers and complete executable-page comparison against independently pinned file bytes, including AMD64 DIR64
  * relocation. This is a dormant loader algorithm, NOT a loader, native memory reader or loading authority.
  * A productive caller must separately establish original file/module/ancestor custody, system-call authority,
  * readable mappings and protections, import providers and lifetime before obtaining actual readbacks.
  * Matching caller-supplied arrays establishes none of those prerequisites or Windows provider availability.
- * Executable file/page alignment padding is excluded here and requires separate verification before productive use.
+ * Supports separate 4KiB section pages only. Header pages require read-only, non-executable protection;
+ * executable pages require execute/read protection. These byte comparisons do not observe that OS protection.
  */
 internal class WindowsProfileMappedCode private constructor(private val layout: WindowsProfilePeImage.CodeLayout) {
-    data class Region(val address: Long, val bytes: Int)
+    data class Region(val address: Long, val bytes: Int, val executable: Boolean = true)
     data class Readback(val address: Long, val bytes: ByteArray)
 
-    /** Logical VirtualSize only: excludes raw-file alignment padding and mapped-page padding. */
+    /** Headers first, then complete executable sections. The caller must read each range under original custody. */
     fun regions(moduleBase: Long, mappedImageBytes: Long): List<Region> {
         checkMapping(moduleBase, mappedImageBytes)
-        return Collections.unmodifiableList(layout.sections.map { Region(moduleBase + it.rva, it.virtualBytes) })
+        return Collections.unmodifiableList(layout.sections.map {
+            Region(moduleBase + it.rva, it.mappedBytes, it.executable)
+        })
     }
 
     /**
      * Check a complete, unique inventory without using a callback to dereference arbitrary native addresses.
      * Readback bytes are bounded and privately copied before comparison. Concurrent mutation cannot change the
      * retained plan, but atomic native acquisition/continued immutability still belongs to the actual loader.
-     * Writable data, headers, IAT/provider identities, metadata and page protections require separate checks.
+     * Writable data, IAT/provider identities, non-header metadata and page protections require separate checks.
      */
     fun verify(moduleBase: Long, mappedImageBytes: Long, observed: List<Readback>) {
         checkMapping(moduleBase, mappedImageBytes)
@@ -35,7 +38,7 @@ internal class WindowsProfileMappedCode private constructor(private val layout: 
         val snapshots = List(count) { index ->
             val readback = observed[index]
             val section = pending.remove(readback.address)
-            require(section != null && readback.bytes.size == section.virtualBytes) {
+            require(section != null && readback.bytes.size == section.mappedBytes) {
                 "Windows profile executable readback range differs"
             }
             section to readback.bytes.copyOf()
