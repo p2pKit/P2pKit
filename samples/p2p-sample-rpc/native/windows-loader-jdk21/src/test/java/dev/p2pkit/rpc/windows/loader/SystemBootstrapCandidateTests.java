@@ -84,6 +84,45 @@ public final class SystemBootstrapCandidateTests {
                 check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
             }
             scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE";
+        } else if (args[0].equals("file")) {
+            WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
+            WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();
+            WindowsOriginalJvmFileCandidate file = runtime.inspectFile();
+            check(file.completed() && file.leaseHeld());
+            try {
+                runtime.inspectFile();
+                throw new AssertionError("Original runtime file acquisition was repeated");
+            } catch (IllegalStateException expected) {
+                // Permanent original attachment precludes another native open or observation.
+            }
+            AtomicReference<Throwable> unexpected = new AtomicReference<>();
+            Thread worker = Thread.startVirtualThread(() -> {
+                try {
+                    try {
+                        file.leaseHeld();
+                        throw new AssertionError("Original file lease crossed its owner thread");
+                    } catch (IllegalStateException expected) {
+                        // No arbitrary thread receives the original retained handle.
+                    }
+                    try {
+                        runtime.inspectFile();
+                        throw new AssertionError("File acquisition crossed its owner thread");
+                    } catch (IllegalStateException expected) {
+                        // Refuse before another native call.
+                    }
+                } catch (Throwable failure) { unexpected.set(failure); }
+            });
+            worker.join();
+            check(unexpected.get() == null);
+            System.gc(); // Exercise retained ownership; GC is not a deterministic collection assertion.
+            check(file.completed() && file.leaseHeld() && runtime.singleVirtualMachineObserved() && original.completed());
+            try {
+                WindowsLoader.openInstalledProvider();
+                throw new AssertionError("File observation enabled productive loading");
+            } catch (UnsupportedOperationException expected) {
+                check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
+            }
+            scope = "DEVELOPMENT_JVM_FILE_LEASE_NOT_INSTALLED_ACL_ANCESTOR_MAPPING_OR_PROFILE";
         } else {
             throw new IllegalArgumentException("Unknown system bootstrap control");
         }

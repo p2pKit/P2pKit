@@ -81,6 +81,8 @@ final class WindowsOriginalJvmCandidate {
     private boolean attempted;
     private boolean frameRetired;
     private boolean succeeded;
+    private boolean fileAttempted;
+    private WindowsOriginalJvmFileCandidate file;
 
     // Merely constructing an object is not admission: observe requires the actual bootstrap's retained
     // attachment identity before preparing restricted descriptors or executing any supplied entry.
@@ -319,4 +321,22 @@ final class WindowsOriginalJvmCandidate {
 
     boolean completed() { requireCompleted(); return true; }
     boolean singleVirtualMachineObserved() { requireCompleted(); return true; }
+
+    WindowsOriginalJvmFileCandidate inspectFile() {
+        requireCompleted();
+        if (fileAttempted) throw new IllegalStateException("Original JVM file candidate was already attempted");
+        fileAttempted = true;
+        file = new WindowsOriginalJvmFileCandidate(this, linker, bootstrapArena,
+            bootstrap.originalJvmFileEntry(this, 0), bootstrap.originalJvmFileEntry(this, 1),
+            bootstrap.originalJvmFileEntry(this, 2), observedModulePath, modulePathLength);
+        file.observe();
+        return file;
+    }
+
+    void requireOriginalFile(WindowsOriginalJvmFileCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || file != candidate) {
+            throw new IllegalStateException("JVM file candidate is not this runtime's original retained attachment");
+        }
+    }
 }

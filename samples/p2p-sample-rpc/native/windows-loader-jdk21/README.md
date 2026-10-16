@@ -435,3 +435,42 @@ becomes a trusted runtime pin. The development-only Windows test exercises this
 actual call chain in a fresh JVM, with duplicate/thread refusals and unchanged
 productive-loader refusal. Non-Windows hosts compile it but explicitly report this
 Windows-only execution as unperformed.
+
+### Original runtime file lease and installed-object security policy
+
+The original JVM attachment now has a one-shot, zero-input `inspectFile()` operation.
+It opens only its own observed module path with `CreateFileW(GENERIC_READ |
+READ_CONTROL, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT)`. The
+actual Windows x64 HANDLE return bits are retained before allocating their scoped
+view. That original handle remains process-owned on success and failure; there is
+no Stop-time close or module unload. Six fixed handle-information queries surround
+one bounded normalized final-path query. The two semantic observations must agree
+on volume/file identity, size, link count and attributes. Reparse, directory,
+offline, delete-pending, zero-identity, multiple-link and oversized files refuse.
+Temporary native buffers retire independently; padding is not treated as identity.
+
+This is a **final-file development-runtime lease**, not approved installed custody.
+The case-folded path comparison does not establish ancestor case policy, absence of
+reparse ancestors, NTFS admission, owner/ACL authority, expected packaged identity,
+loaded mapping equivalence or absence of pre-existing writable mappings. The actual
+Windows-only fresh-process test checks the native calls, one-shot/thread ownership,
+retention after a GC request, and unchanged public-loader refusal. Hosted toolcache
+runtime bytes are never relabeled as a protected Program Files installation.
+
+`WindowsInstallationSecurity` independently provides a bounded, private-snapshot
+SELF_RELATIVE owner/DACL parser for future original-handle security observations.
+It accepts only binary SYSTEM, Administrators or TrustedInstaller ownership; null
+DACLs, malformed spans, unknown ACE types/flags/masks, and untrusted effective
+mutation grants refuse. A DENY does not rescue an unsafe ALLOW. Inheritance-only
+entries do not grant the current object rights; inherited effective entries remain
+checked. Secure inherited DACLs need not carry `DACL_PROTECTED`. The specific root
+file/subdirectory creation exception requires **independently proved volume-root
+identity**; it must never be selected merely from a string prefix. All non-root
+objects disallow those untrusted creation/write grants.
+
+The parser does not emulate AccessCheck or infer token-group membership, SACL/MIC
+policy, or filesystem custody. Its bounded OWNER|DACL input still must come from an
+actual admitted OS query on the retained original handle. No such native security
+query or installed-ancestor assembly is supplied by these inert descriptor tests.
+The production factory and availability flags remain unchanged, not enabled by a
+passing parser or a development-runtime observation.

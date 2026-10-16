@@ -23,7 +23,8 @@ final class WindowsSystemBootstrapCandidate {
     private static final MemoryLayout PATH = MemoryLayout.sequenceLayout(PATH_CHARS, ValueLayout.JAVA_SHORT);
     private static final String[] EXPORTS = {
         "GetCurrentProcessId", "GetModuleHandleExW", "GetModuleFileNameW", "GetSystemDirectoryW",
-        "GetProcAddress", "LoadLibraryExW", "VirtualQuery", "ReadProcessMemory"
+        "GetProcAddress", "LoadLibraryExW", "VirtualQuery", "ReadProcessMemory",
+        "CreateFileW", "GetFileInformationByHandleEx", "GetFinalPathNameByHandleW"
     };
     private static final FunctionDescriptor PID = FunctionDescriptor.of(ValueLayout.JAVA_INT);
     // withTargetLayout is restricted in JDK21. Construct these only after inspect's runtime/access guard,
@@ -329,5 +330,11 @@ final class WindowsSystemBootstrapCandidate {
         if (candidate == null || originalJvm != candidate) {
             throw new IllegalStateException("Original JVM candidate is not this bootstrap's retained attachment");
         }
+    }
+
+    MemorySegment originalJvmFileEntry(WindowsOriginalJvmCandidate candidate, int index) {
+        requireOriginalJvm(candidate);
+        if (index < 0 || index > 2) throw new IllegalArgumentException("Unknown fixed JVM file entry");
+        return entries[8 + index];
     }
 }

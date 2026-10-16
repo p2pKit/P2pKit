@@ -64,6 +64,7 @@ def main():
                         "ExportLookupInvocationTests" in name or
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
+                        "InstallationSecurityTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -126,6 +127,10 @@ def main():
                          "--module", MODULE + "/" + PACKAGE + ".ModelTests"], 0,
                    r"WINDOWS_LOADER_JDK21_MODELS_PASS tests=14 "
                    r"scope=PORTABLE_FFM_DATA_NOT_WINDOWS_NATIVE_OR_PROFILE\n", "")
+    run("installation-security-policy", base + ["--patch-module", MODULE + "=" + str(classes),
+        "--module", MODULE + "/" + PACKAGE + ".InstallationSecurityTests"], 0,
+        r"WINDOWS_INSTALLATION_SECURITY_PASS tests=259 "
+        r"scope=INERT_DESCRIPTOR_POLICY_NOT_NATIVE_READBACK_OR_AUTHORITY\n", "")
     # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
     owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
                    "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]
@@ -195,16 +200,20 @@ def main():
     run("system-bootstrap-" + bootstrap_case, base + access + bootstrap_entry + [bootstrap_case], 0,
         "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=" + bootstrap_case + " scope=" + bootstrap_scope + r"\n", "")
     original_jvm_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_file_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     if os.name == "nt":
         original_jvm_scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE"
         run("system-bootstrap-jvm", base + access + bootstrap_entry + ["jvm"], 0,
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=jvm scope=" + original_jvm_scope + r"\n", "")
+        original_file_scope = "DEVELOPMENT_JVM_FILE_LEASE_NOT_INSTALLED_ACL_ANCESTOR_MAPPING_OR_PROFILE"
+        run("system-bootstrap-file", base + access + bootstrap_entry + ["file"], 0,
+            "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=file scope=" + original_file_scope + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_CONTROLS_AND_CONDITIONAL_SYSTEM_BOOTSTRAP_NOT_INSTALLED_OR_PROFILE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
               "observation": actual, "modelResult": models.strip(),
               "systemBootstrapScope": bootstrap_scope, "originalJvmScope": original_jvm_scope,
-              "commands": records}
+              "originalJvmFileScope": original_file_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
 
