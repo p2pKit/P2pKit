@@ -69,17 +69,136 @@ def digest(path, progress, maximum=64 * 1024 * 1024):
 def command_path(path):
     text = str(path)
     require(path.is_absolute() and text and len(text) < 1024 and
-            all(32 <= ord(char) < 127 and char not in '\"%!^&|<>' for char in text),
+            all(32 <= ord(char) < 127 and char not in '\"%!^&|<>;' for char in text),
             "Unsupported fixed Windows compiler path")
     return text
 
 
-def quoted(value):
-    require(value and all(32 <= ord(char) < 127 and char not in '\"%!^&|<>' for char in value),
-            "Unsupported fixed compiler argument")
-    # Quote every argument, including paths containing parentheses but no spaces. No caller flags are accepted.
-    require(not value.endswith("\\"), "Unsupported trailing separator in compiler argument")
-    return '"' + value + '"'
+def directory(path):
+    info = path.lstat()
+    require(stat.S_ISDIR(info.st_mode) and not path.is_symlink() and
+            not (getattr(info, "st_file_attributes", 0) & 0x400), "Expected an original installed-tool directory")
+    return path
+
+
+def version(value, components):
+    require(isinstance(value, str) and len(value) <= 32 and
+            re.fullmatch(r"(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){" +
+                         str(components - 1) + r"}", value), "Invalid installed toolchain version")
+    parts = tuple(int(part) for part in value.split("."))
+    require(all(part <= 65535 for part in parts), "Installed toolchain version exceeds its bound")
+    return parts
+
+
+def selected_vc(installation, progress):
+    directory(installation)
+    selection = installation / "VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"
+    metadata = digest(selection, progress, 128)
+    with selection.open("rb") as source:
+        snapshot = source.read(129)
+    require(0 < len(snapshot) <= 128, "Default MSVC version exceeds its bound")
+    require(len(snapshot) == metadata["bytes"] and hashlib.sha256(snapshot).hexdigest() == metadata["sha256"],
+            "Default MSVC version bytes changed before selection")
+    text = snapshot.decode("ascii").strip(" \t\r\n")
+    version(text, 3)
+    tools = directory(installation / "VC/Tools/MSVC" / text)
+    required_directories = [tools / "bin/Hostx64/x64", tools / "include", tools / "lib/x64"]
+    for path in required_directories:
+        directory(path)
+    inputs = [selection, tools / "bin/Hostx64/x64/cl.exe", tools / "bin/Hostx64/x64/link.exe",
+              tools / "include/vcruntime.h", tools / "lib/x64/libcmt.lib",
+              tools / "lib/x64/libvcruntime.lib", tools / "lib/x64/oldnames.lib"]
+    require(digest(selection, progress, 128) == metadata, "Default MSVC selection changed during observation")
+    for path in inputs:
+        regular(path)
+        command_path(path)
+    return {"root": tools, "version": text, "inputs": inputs}
+
+
+def reconcile_sdk_roots(values):
+    require(isinstance(values, list) and 1 <= len(values) <= 2, "No registered Windows SDK root")
+    roots = []
+    for value in values:
+        require(isinstance(value, str) and value and "\x00" not in value,
+                "Malformed registered Windows SDK root")
+        root = Path(value)
+        command_path(root)
+        directory(root)  # Do not resolve away an explicitly refused registry-root reparse entry.
+        root = directory(root.resolve(strict=True))
+        if roots:
+            require(root == roots[0], "Registered Windows SDK roots disagree")
+        roots.append(root)
+    return roots[0]
+
+
+def registered_sdk_root():
+    # Only fixed read-only registered developer-tool locations. This is not runtime/bootstrap authority.
+    import winreg
+    values = []
+    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows Kits\Installed Roots",
+                                0, winreg.KEY_QUERY_VALUE | view) as key:
+                value, kind = winreg.QueryValueEx(key, "KitsRoot10")
+        except FileNotFoundError:
+            continue
+        require(kind == winreg.REG_SZ, "Registered Windows SDK root is not an exact string")
+        values.append(value)
+    return reconcile_sdk_roots(values)
+
+
+def selected_sdk(root, progress):
+    include = directory(root / "Include")
+    available = []
+    with os.scandir(include) as entries:
+        for index, entry in enumerate(entries):
+            remaining(progress, 150)
+            require(index < 64, "Installed Windows SDK inventory exceeds its bound")
+            path = directory(Path(entry.path))
+            parsed = version(path.name, 4)
+            require(parsed[:2] == (10, 0), "Unsupported registered Windows SDK family")
+            include_parts = [path / kind for kind in ("ucrt", "shared", "um")]
+            lib_parts = [root / "Lib" / path.name / kind / "x64" for kind in ("ucrt", "um")]
+            binary = root / "bin" / path.name / "x64"
+            inputs = [include_parts[0] / "stdio.h", include_parts[1] / "ntdef.h",
+                      include_parts[2] / "Windows.h", lib_parts[0] / "libucrt.lib",
+                      lib_parts[1] / "kernel32.lib"]
+            required = include_parts + lib_parts + [binary] + inputs
+            # Incomplete installed versions are not selected; malformed/reparsed present entries refuse.
+            complete = True
+            for item in required:
+                if not item.exists():
+                    require(not item.is_symlink(), "Reparsed incomplete Windows SDK input")
+                    complete = False
+                elif item in inputs:
+                    regular(item)
+                else:
+                    directory(item)
+            available.append((parsed, path.name, complete, include_parts, lib_parts, binary, inputs))
+    candidates = [item for item in available if item[2]]
+    require(candidates, "No complete installed Windows SDK version")
+    require(len({item[0] for item in available}) == len(available), "Ambiguous installed Windows SDK versions")
+    chosen = max(candidates, key=lambda item: item[0])
+    return {"root": root, "version": chosen[1], "include": chosen[3], "lib": chosen[4],
+            "bin": chosen[5], "inputs": chosen[6],
+            "inventory": [{"version": item[1], "complete": item[2]} for item in sorted(available)]}
+
+
+def child_environment(system, output, tools=None, sdk=None):
+    system32 = system / "System32"
+    paths = [system32]
+    if tools is not None:
+        require(sdk is not None, "Complete installed compiler/SDK selection required")
+        paths = [tools / "bin/Hostx64/x64", sdk["bin"], system32]
+    environment = {"PATH": ";".join(command_path(path) for path in paths),
+                   "SystemRoot": command_path(system), "WINDIR": str(system),
+                   "SystemDrive": system.drive, "VSLANG": "1033",
+                   "TEMP": str(output / "tmp"), "TMP": str(output / "tmp"), "USERPROFILE": str(output),
+                   "APPDATA": str(output), "LOCALAPPDATA": str(output)}
+    if tools is not None:
+        environment["INCLUDE"] = ";".join(command_path(path) for path in [tools / "include", *sdk["include"]])
+        environment["LIB"] = ";".join(command_path(path) for path in [tools / "lib/x64", *sdk["lib"]])
+    return environment
 
 
 def git(progress, *arguments):
@@ -136,36 +255,21 @@ def compile_fixture(progress):
 
     # Normal compiler/tool selection only, not OS-bootstrap or installed-runtime authority.
     system = Path(os.environ["SystemRoot"]).resolve(strict=True)
-    system32 = system / "System32"
-    command_processor = system32 / "cmd.exe"
     locator = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"
     locator = locator.resolve(strict=True)
-    for path in (system, command_processor, locator):
+    for path in (system, locator):
         command_path(path)
-    selected_tools = {str(path): digest(path, progress) for path in (command_processor, locator)}
-    environment = {"PATH": ";".join(str(path) for path in (system32,
-                       system32 / "WindowsPowerShell/v1.0", system32 / "Wbem")),
-                   "SystemRoot": str(system), "WINDIR": str(system),
-                   "ComSpec": str(command_processor), "SystemDrive": system.drive, "VSLANG": "1033",
-                   # Microsoft STL CI uses this supported optional setup-telemetry opt-out. Apply it
-                   # only to our reconstructed child environment, never machine/user configuration.
-                   "VSCMD_SKIP_SENDTELEMETRY": "1"}
-    # VS setup may query these fixed installed-tool locations; no credentials, Java overrides or compiler
-    # response flags are inherited. Actual compiler flags are cleared again inside each batch child.
-    for name in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
-        value = Path(os.environ[name]).resolve(strict=True)
-        environment[name] = command_path(value)
+    selected_tools = {str(locator): digest(locator, progress)}
+    environment = child_environment(system, output)
     remaining(progress, 150)
     output.mkdir(mode=0o700)
     progress["output"] = output
     temporary = output / "tmp"
     temporary.mkdir()
-    environment.update({"TEMP": str(temporary), "TMP": str(temporary), "USERPROFILE": str(output),
-                        "APPDATA": str(output), "LOCALAPPDATA": str(output)})
     records = []
     receipt = {"schema": 1, "scope": SCOPE, **original, "result": "FAIL",
                "inputScope": "SELECTED_DIRECT_INPUTS_NOT_TRANSITIVE_SDK_PROVENANCE",
-               "vsDevCmdEnvironment": {"VSCMD_SKIP_SENDTELEMETRY": environment["VSCMD_SKIP_SENDTELEMETRY"]},
+               "toolSelection": "DIRECT_REGISTERED_MSVC_SDK_NO_SETUP_SCRIPT",
                "sources": source_inputs, "tools": selected_tools, "commands": records,
                "nativeExecution": "NOT_PERFORMED", "profileBackend": "NOT_LINKED", "packaging": "NOT_PERFORMED"}
 
@@ -183,7 +287,7 @@ def compile_fixture(progress):
                 limit = remaining(progress, timeout)
                 record["timeoutSeconds"] = limit
                 result = subprocess.run(command, cwd=output, env=environment, stdin=subprocess.DEVNULL,
-                                        stdout=out, stderr=err, timeout=limit, check=False)
+                                        stdout=out, stderr=err, timeout=limit, check=False, shell=False)
                 record["exit"] = result.returncode
             except subprocess.TimeoutExpired:
                 record["timedOut"] = True
@@ -198,54 +302,30 @@ def compile_fixture(progress):
         require(record["exit"] == 0, "Fixed compiler command failed")
         return stdout.read_text(encoding="utf-8", errors="strict").replace("\r\n", "\n")
 
-    def batch(label, lines):
-        path = output / (label + ".cmd")
-        with path.open("x", encoding="ascii", newline="\r\n") as target:
-            target.write("\n".join(lines) + "\n")
-        command_path(path)
-        # Fixed batch-file pathname only; the command language receives no caller-selected switches/body.
-        command = quoted(str(command_processor)) + ' /d /s /c "' + quoted(str(path)) + '"'
-        return run(label, command)
-
     try:
         progress["stage"] = "LOCATE"
         installation = run("locate-msvc", [str(locator), "-latest", "-products", "*", "-requires",
                                            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                                            "-property", "installationPath"], 15).strip()
         require(installation and "\n" not in installation, "Installed MSVC selection was ambiguous")
-        developer = Path(installation) / "Common7/Tools/VsDevCmd.bat"
-        command_path(developer)
-        selected_tools[str(developer)] = digest(developer, progress)
-        setup = ["@echo off", "setlocal DisableDelayedExpansion", 'set "INCLUDE="', 'set "LIB="',
-                 'set "LIBPATH="', 'set "CL="', 'set "_CL_="', 'set "LINK="', 'set "_LINK_="',
-                 'set "ERRORLEVEL="', 'call ' + quoted(str(developer)) + " -arch=x64 -host_arch=x64",
-                 "if errorlevel 1 exit /b 2", 'if /i not "%VSCMD_ARG_TGT_ARCH%"=="x64" exit /b 2',
-                 'set "CL="', 'set "_CL_="', 'set "LINK="', 'set "_LINK_="', 'set "ERRORLEVEL="',
-                 'cd /d ' + quoted(str(output)), 'if errorlevel 1 exit /b 2']
         progress["stage"] = "INVENTORY"
-        inventory = batch("compiler-inventory", setup + [
-            "echo P2PKIT_VCTOOLS=%VCToolsInstallDir%", "echo P2PKIT_VCVERSION=%VCToolsVersion%",
-            "echo P2PKIT_SDK=%WindowsSdkDir%", "echo P2PKIT_SDKVERSION=%WindowsSDKVersion%", "exit /b 0"])
-        fields = {}
-        for line in inventory.splitlines():
-            if line.startswith("P2PKIT_"):
-                name, value = line.split("=", 1)
-                require(name not in fields and value, "Compiler inventory is incomplete or duplicated")
-                fields[name] = value
-        require(set(fields) == {"P2PKIT_VCTOOLS", "P2PKIT_VCVERSION", "P2PKIT_SDK", "P2PKIT_SDKVERSION"},
-                "Compiler inventory differs from the fixed contract")
-        tools = Path(fields["P2PKIT_VCTOOLS"]).resolve(strict=True)
-        sdk = Path(fields["P2PKIT_SDK"]).resolve(strict=True)
-        require(re.fullmatch(r"[0-9.]+", fields["P2PKIT_VCVERSION"]) and
-                re.fullmatch(r"[0-9.]+\\?", fields["P2PKIT_SDKVERSION"]), "Invalid selected toolchain version")
+        installation_path = Path(installation)
+        command_path(installation_path)
+        vc = selected_vc(installation_path, progress)
+        tools = vc["root"]
+        remaining(progress, 150)
+        sdk_root = registered_sdk_root()
+        sdk = selected_sdk(sdk_root, progress)
         compiler = tools / "bin/Hostx64/x64/cl.exe"
         linker = tools / "bin/Hostx64/x64/link.exe"
-        for path in (tools, sdk, compiler, linker):
+        for path in (tools, sdk_root, compiler, linker):
             command_path(path)
-        for path in (compiler, linker):
+        for path in vc["inputs"] + sdk["inputs"]:
             selected_tools[str(path)] = digest(path, progress)
-        receipt["toolchain"] = {"vcTools": str(tools), "vcVersion": fields["P2PKIT_VCVERSION"],
-                                 "sdk": str(sdk), "sdkVersion": fields["P2PKIT_SDKVERSION"]}
+        environment = child_environment(system, output, tools, sdk)
+        receipt["toolchain"] = {"vcTools": str(tools), "vcVersion": vc["version"],
+                                 "sdk": str(sdk_root), "sdkVersion": sdk["version"],
+                                 "sdkInventory": sdk["inventory"], "environment": environment}
         recipe = [str(compiler), "/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/GS", "/sdl",
                   "/guard:cf", "/D_WIN32_WINNT=0x0A00", "/I" + str(jdk / "include"),
                   "/I" + str(jdk / "include/win32"), "/LD", *[str(SOURCE / name) for name in INPUT_NAMES],
@@ -253,16 +333,12 @@ def compile_fixture(progress):
                   "/NXCOMPAT", "/GUARD:CF", "/INCREMENTAL:NO", "/MANIFEST:EMBED", "/OPT:REF", "/OPT:ICF",
                   "kernel32.lib"]
         receipt["compilerArguments"] = recipe
-        # Pin the selected version in the second setup too; don't silently compile using another VC/SDK.
-        compile_setup = setup + [
-            'if not "%VCToolsVersion%"=="' + fields["P2PKIT_VCVERSION"] + '" exit /b 2',
-            'if not "%WindowsSDKVersion%"=="' + fields["P2PKIT_SDKVERSION"] + '" exit /b 2',
-            'if /i not "%VCToolsInstallDir%"=="' + fields["P2PKIT_VCTOOLS"] + '" exit /b 2',
-            'if /i not "%WindowsSdkDir%"=="' + fields["P2PKIT_SDK"] + '" exit /b 2',
-            'set "PATH=' + str(compiler.parent) + ';%PATH%"']
         progress["stage"] = "COMPILE"
-        batch("compile-dll", compile_setup + [" ".join(quoted(item) for item in recipe), "exit /b %ERRORLEVEL%"])
+        # Absolute executable + argv, with no command processor, setup script, ambient flags or response file.
+        run("compile-dll", recipe)
         progress["stage"] = "VERIFY"
+        require(selected_vc(installation_path, progress) == vc and registered_sdk_root() == sdk_root and
+                selected_sdk(sdk_root, progress) == sdk, "Installed compiler/SDK selection changed")
         current = source_state(progress)
         require(current == original, "Source state changed while compiling the fixture")
         require(all(digest(Path(path), progress) == value for path, value in source_inputs.items()),
