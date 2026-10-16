@@ -495,6 +495,79 @@ class ReleaseTest(unittest.TestCase):
             with self.subTest(event=event), self.assertRaises(R.Hold):
                 self.plan()
 
+    def detached_merged_pr_checks(self):
+        pull = self.api.data["/pulls/99"]
+        pull.update(state="closed", created_at="2026-09-15T08:00:00Z")
+        pull["head"]["ref"] = "reviewed-feature"
+        for row in self.api.collections[f"/commits/{HEAD}/check-runs?filter=all"]:
+            if row["app"]["slug"] == "github-actions":
+                self.api.data[f"/actions/runs/{row['id']}"].update(
+                    pull_requests=[], head_branch="reviewed-feature", created_at="2026-09-15T08:30:00Z")
+
+    def test_merged_pr_checks_survive_empty_dynamic_associations(self):
+        self.detached_merged_pr_checks()
+        with mock.patch.object(self.api, "json", wraps=self.api.json) as requests:
+            checked = R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+        self.assertEqual(4, len(checked))
+        self.assertEqual(1, sum(call.args[0] == "/pulls/99" for call in requests.call_args_list))
+        self.assertEqual(HEAD, self.plan()["pullRequest"]["head"])
+        self.assertEqual([], self.api.mutations)
+
+    def test_empty_pr_association_requires_actual_merged_source_branch_and_timing(self):
+        self.detached_merged_pr_checks()
+        original = copy.deepcopy(self.api.data)
+        pull = original["/pulls/99"]
+        changes = [
+            ("/pulls/99", {"number": 100}), ("/pulls/99", {"merged": False}),
+            ("/pulls/99", {"state": "open"}),
+            ("/pulls/99", {"base": {**pull["base"], "ref": "topic"}}),
+            ("/pulls/99", {"base": {**pull["base"], "repo": {"full_name": "fork/P2pKit"}}}),
+            ("/pulls/99", {"head": {**pull["head"], "repo": {"full_name": "fork/P2pKit"}}}),
+            ("/pulls/99", {"head": {**pull["head"], "sha": SOURCE}}),
+            ("/pulls/99", {"head": {**pull["head"], "ref": ""}}),
+            ("/pulls/99", {"created_at": "2026-09-15T09:01:00Z"}),
+            ("/pulls/99", {"merged_at": "2026-09-15T08:59:00Z"}),
+        ]
+        gate = next(row for row in self.api.collections[f"/commits/{HEAD}/check-runs?filter=all"]
+                    if row["name"] == "complete-gate")
+        path = f"/actions/runs/{gate['id']}"
+        changes.extend((path, change) for change in (
+            {"created_at": "2026-09-15T07:59:00Z"}, {"created_at": "2026-09-15T09:01:00Z"},
+            {"head_branch": "other-feature"}, {"head_sha": SOURCE}, {"event": "push"},
+            {"repository": {"full_name": "fork/P2pKit"}},
+            {"head_repository": {"full_name": "fork/P2pKit"}},
+        ))
+        for path, change in changes:
+            self.api.data = copy.deepcopy(original)
+            self.api.data[path].update(change)
+            with self.subTest(path=path, change=change), self.assertRaises(R.Hold):
+                R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+
+    def test_nonempty_or_malformed_pr_association_never_uses_merged_fallback(self):
+        self.detached_merged_pr_checks()
+        gate = next(row for row in self.api.collections[f"/commits/{HEAD}/check-runs?filter=all"]
+                    if row["name"] == "complete-gate")
+        run = self.api.data[f"/actions/runs/{gate['id']}"]
+        for associations in ([{"number": 100, "head": {"sha": HEAD}}],
+                             [{"number": 99, "head": {"sha": SOURCE}}], {}, None, "missing"):
+            if associations == "missing":
+                run.pop("pull_requests", None)
+            else:
+                run["pull_requests"] = associations
+            with mock.patch.object(self.api, "json", wraps=self.api.json) as requests:
+                with self.subTest(associations=associations), self.assertRaises(R.Hold):
+                    R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+            self.assertFalse(any(call.args[0] == "/pulls/99" for call in requests.call_args_list))
+
+    def test_merged_fallback_never_hides_latest_failed_or_incomplete_check(self):
+        self.detached_merged_pr_checks()
+        original = copy.deepcopy(self.api.collections)
+        for change in ({"conclusion": "failure"}, {"conclusion": "skipped"}, {"status": "in_progress"}):
+            self.api.collections = copy.deepcopy(original)
+            self.newer_check("complete-gate", "pull_request", sha=HEAD, change=change)
+            with self.subTest(change=change), self.assertRaises(R.Hold):
+                self.plan()
+
     def test_trigger_event_set_is_explicit_for_each_maintained_workflow(self):
         for name, path in R.TRIGGERS.items():
             event_payload = {"name": name, "id": 900, "head_sha": SOURCE}
