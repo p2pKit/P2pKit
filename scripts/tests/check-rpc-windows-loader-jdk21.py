@@ -61,6 +61,7 @@ def main():
                 not any("ModelTests" in name or "RegistrationOwnerTests" in name or "RegistrationInvocationTests" in name or
                         "VmAcquisitionInvocationTests" in name or
                         "LibraryLoadInvocationTests" in name or
+                        "ExportLookupInvocationTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -158,6 +159,16 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".LibraryLoadInvocationTests", case], 0,
             "WINDOWS_LIBRARY_FFM_LOAD_PASS case=" + re.escape(case) +
             " scope=JDK_UPCALL_MARSHALING_NOT_DLL_LOADING_OR_AUTHORITY capture=" + capture_scope + r"\n", "")
+    export_cases = ["success", "long-name", "arguments", "forwarder", "wrong-address", "null-address",
+                    "high-address", "private-alias", "partial-frame-alias", "ordinal-buffer", "thread",
+                    "virtual", "closed-bootstrap", "closed-module", "close-after-result", "reentrant",
+                    "retired-frame", "clear-failure", "invocation-failure", "late-module-close"]
+    export_host = "WINDOWS_X64_LINKER" if os.name == "nt" else "INERT_FRAME_ONLY"
+    for case in export_cases:
+        run("export-lookup-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".ExportLookupInvocationTests", case], 0,
+            "WINDOWS_EXPORT_FFM_LOOKUP_PASS case=" + re.escape(case) +
+            " scope=JDK_UPCALL_MARSHALING_NOT_EXPORT_LOOKUP_OR_AUTHORITY host=" + export_host + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_PREVIEW_REFUSALS_AND_PORTABLE_MODELS_NOT_OS_JNI_OR_RELEASE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},

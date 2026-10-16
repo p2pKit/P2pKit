@@ -310,3 +310,29 @@ JDK17-only requirement. Each execution preserves a new report directory under
 `build/reports/rpc-windows-loader-jdk21/`; existing canonical CI captures these reports without a new workflow,
 packaging identity, release route, scope relaxation or qualification claim. Preview classes remain confined to
 the dedicated, unpublished adapter; test classes are excluded by the exact packaged-class inventory.
+
+## Exact nonforwarded export-call mechanics
+
+`WindowsExportLookupInvocation` is the dormant package-private `GetProcAddress(HMODULE, LPCSTR)` mechanism
+for an already admitted native module or original JVM. It retains separate original bootstrap and module
+owners/arenas plus the original export plan, copies a bounded C/JNI ASCII name, and never supplies an ordinal.
+Preparation rejects function RVAs inside the complete PE export-directory span (forwarder entries), invalid
+image/directory bounds, and address overflow. The future reviewed caller must derive every copied field from
+**the same independently pinned original PE observation** before calling: an object reference, numeric span,
+or expected address is not proof of that binding or permission to execute an OS export.
+
+Native return must equal the original module base plus the exact pinned function RVA, not merely fall inside
+the image. The returned zero-length view belongs to the original module arena, while the result retains both
+complete original owners. Private ASCII storage is cleared/retired only after synchronous return. One attempt,
+thread/scope checks, independently retained failures and no original-owner cleanup prevent retry or unloading
+through this component. Production preparation requires the actual boot Windows-x64 linker. There is no
+lookup of `GetProcAddress` itself, `defaultLookup`, `libraryLookup`, system-forwarder resolution or loader
+activation. A forwarded system export can involve another module load; this component must never bootstrap
+that authority by observing a provider only after it has executed.
+
+Twenty fresh-process controls use JDK-generated inert upcalls. On Windows they exercise real Windows-linker
+argument mechanics; elsewhere only private frame mechanics are invoked reflectively after verifying the
+production host refusal. They check exact HMODULE/name/terminator, maximum name size, PE forwarder/range and
+overflow refusals, null/wrong returns, partial private-buffer overlap and ordinal-pointer rejection, original
+scope retirement, thread/reentry, retained errors and independent cleanup. No real export lookup, Windows
+DLL execution, protected profile or installed application is qualified by these controls.

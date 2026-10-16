@@ -59,6 +59,9 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsLibraryLoadInvocation.class",
     ADAPTER_PREFIX + "WindowsLibraryLoadInvocation$Failure.class",
     ADAPTER_PREFIX + "WindowsLibraryLoadInvocation$Result.class",
+    ADAPTER_PREFIX + "WindowsExportLookupInvocation.class",
+    ADAPTER_PREFIX + "WindowsExportLookupInvocation$Failure.class",
+    ADAPTER_PREFIX + "WindowsExportLookupInvocation$Result.class",
 )
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
@@ -318,6 +321,7 @@ class ImageInspectionTest(unittest.TestCase):
                       ADAPTER_PREFIX + "RegistrationInvocationTests.class",
                       ADAPTER_PREFIX + "VmAcquisitionInvocationTests.class",
                       ADAPTER_PREFIX + "LibraryLoadInvocationTests.class",
+                      ADAPTER_PREFIX + "ExportLookupInvocationTests.class",
                       ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Unexpected.class",
                       "META-INF/versions/21/" + ADAPTER_ENTRIES[1],
                       "META-INF/services/unexpected", "unexpected.dll"):
