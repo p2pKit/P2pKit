@@ -215,7 +215,8 @@ val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJd
     inputs.dir(layout.projectDirectory.dir("native/windows-loader-jdk21/src/test/java"))
     // This test-only Windows DLL never enters production resources, packaging or the artifact freeze.
     inputs.files(listOf("profile_policy.c", "profile_jni.c", "profile_jni_registration.c", "profile_policy.h",
-        "profile_win32.h", "profile_jni_registration.h", "tests/jvm/deny_storage.c", "tests/jvm/build-test-dll.py")
+        "profile_win32.h", "profile_jni_registration.h", "tests/jvm/deny_storage.c", "tests/jvm/build-test-dll.py",
+        "tests/jvm/test-build-test-dll.py")
         .map { layout.projectDirectory.file("native/windows-profile/$it") })
     inputs.files(windowsVerifierClasspath)
     outputs.upToDateWhen { false }

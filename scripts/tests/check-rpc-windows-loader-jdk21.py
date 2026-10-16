@@ -120,12 +120,19 @@ def main():
         "classpath": [str(path) for path in application_paths], "classes": bindings,
     }, indent=2) + "\n", encoding="utf-8")
 
-    def run(name, command, expected, stdout=None, stderr=None):
+    def run(name, command, expected, stdout=None, stderr=None, timeout=60):
         # Fixed compiler/controls, including Windows system-only investigation. Not installed-app supervision.
         with (output / (name + "-stdout.log")).open("xb") as out, \
                 (output / (name + "-stderr.log")).open("xb") as err:
-            result = subprocess.run([str(item) for item in command], cwd=ROOT, stdin=subprocess.DEVNULL,
-                                    stdout=out, stderr=err, timeout=60, check=False)
+            try:
+                result = subprocess.run([str(item) for item in command], cwd=ROOT, stdin=subprocess.DEVNULL,
+                                        stdout=out, stderr=err, timeout=timeout, check=False)
+            except subprocess.TimeoutExpired:
+                # Do not lose the attempted command or read possibly unfinished descendant output.
+                # The existing outer component supervisor still owns final descendant retirement.
+                records.append({"case": name, "exit": None, "expectedExit": expected, "timedOut": True})
+                (output / "commands.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+                raise ValueError(name + " exceeded its fixed command deadline") from None
         streams = []
         for kind in ("stdout", "stderr"):
             path = output / (name + "-" + kind + ".log")
@@ -304,15 +311,21 @@ def main():
         original_bytes_scope = "DEVELOPMENT_JVM_HANDLE_BYTES_NOT_INSTALLED_IDENTITY_MAPPING_OR_PROFILE"
         run("system-bootstrap-bytes", base + access + bootstrap_entry + ["bytes"], 0,
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=bytes scope=" + original_bytes_scope + r"\n", "")
+    run("test-dll-compiler-budget", [sys.executable, "-I", "-B",
+        ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm/test-build-test-dll.py"], 0,
+        r"WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=12 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION\n", "")
     loaded_registration_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     if os.name == "nt":
         # A distinct development fixture, never the productive DLL or profile backend. Finish the existing
         # controls first so a new compiler/runtime failure preserves their original results.
+        # The producer has a separate cumulative 150-second compilation budget. Its caller must allow
+        # that budget plus receipt/retirement, not kill it at an individual tool's 60-second phase cap.
+        # Every existing control and every actual DLL/JNI case retains its original 60-second bound.
         native = output / "test-native"
         run("compile-deny-storage-dll", [sys.executable, "-I", "-B",
             ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm/build-test-dll.py",
             "--jdk17", args.java17.resolve(strict=True), "--output", native], 0,
-            r"WINDOWS_TEST_DLL_COMPILE_PASS scope=TEST_ONLY_DENY_STORAGE_NOT_PACKAGED\n", "")
+            r"WINDOWS_TEST_DLL_COMPILE_PASS scope=TEST_ONLY_DENY_STORAGE_NOT_PACKAGED\n", "", timeout=180)
         receipt_path = native / "compiler-receipt.json"
         require(receipt_path.stat().st_size <= 256 * 1024, "Unbounded fixture compiler receipt")
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))

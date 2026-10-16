@@ -9,6 +9,8 @@ import re
 import stat
 import subprocess
 import sys
+import time
+import traceback
 
 SCOPE = "TEST_ONLY_DENY_STORAGE_NOT_PACKAGED"
 MAXIMUM_DLL = 32 * 1024 * 1024
@@ -30,16 +32,36 @@ def regular(path):
     return info
 
 
-def digest(path, maximum=64 * 1024 * 1024):
+def remaining(progress, phase_limit):
+    available = progress["deadline"] - time.monotonic()
+    if available <= 0:
+        progress["timeout"] = "CUMULATIVE"
+        raise TimeoutError("Fixture compiler cumulative budget exhausted")
+    return min(phase_limit, available)
+
+
+def observation(progress):
+    return {"stage": progress["stage"], "timeout": progress["timeout"], "budgetSeconds": 150,
+            "elapsedSeconds": round(time.monotonic() - progress["started"], 6)}
+
+
+def digest(path, progress, maximum=64 * 1024 * 1024):
+    remaining(progress, 150)
     info = regular(path)
     require(0 < info.st_size <= maximum, "Compiler input/output exceeds its bound")
     value = hashlib.sha256()
     count = 0
     with path.open("rb") as source:
-        while block := source.read(65536):
+        while True:
+            remaining(progress, 150)
+            block = source.read(65536)
+            if not block:
+                break
+            remaining(progress, 150)
             count += len(block)
             require(count <= maximum, "Compiler input/output grew beyond its bound")
             value.update(block)
+    remaining(progress, 150)
     require(count == info.st_size, "Compiler input/output length changed")
     return {"bytes": count, "sha256": value.hexdigest()}
 
@@ -60,25 +82,31 @@ def quoted(value):
     return '"' + value + '"'
 
 
-def git(*arguments):
-    result = subprocess.run(["git", *arguments], cwd=ROOT, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, check=False)
+def git(progress, *arguments):
+    limit = remaining(progress, 15)
+    try:
+        result = subprocess.run(["git", *arguments], cwd=ROOT, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=limit, check=False)
+    except subprocess.TimeoutExpired:
+        progress["timeout"] = "CUMULATIVE" if limit < 15 else "PHASE"
+        raise
+    remaining(progress, 150)
     require(result.returncode == 0 and len(result.stdout) <= 1024 * 1024 and len(result.stderr) <= 65536,
             "Bounded source observation failed")
     return result.stdout
 
 
-def source_state():
-    source = git("rev-parse", "HEAD").decode("ascii").strip()
-    tree = git("rev-parse", "HEAD^{tree}").decode("ascii").strip()
-    status = git("status", "--porcelain=v1", "--untracked-files=all")
+def source_state(progress):
+    source = git(progress, "rev-parse", "HEAD").decode("ascii").strip()
+    tree = git(progress, "rev-parse", "HEAD^{tree}").decode("ascii").strip()
+    status = git(progress, "status", "--porcelain=v1", "--untracked-files=all")
     require(re.fullmatch("[0-9a-f]{40}", source) and re.fullmatch("[0-9a-f]{40}", tree),
             "Invalid original Git source/tree")
     return {"source": source, "tree": tree, "sourceDirty": bool(status),
             "statusBytes": len(status), "statusSha256": hashlib.sha256(status).hexdigest()}
 
 
-def main():
+def compile_fixture(progress):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jdk17", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -103,8 +131,8 @@ def main():
             "The fixed fixture producer requires the selected JDK17 headers")
     source_files = [SOURCE / name for name in INPUT_NAMES + HEADER_NAMES]
     source_files += [Path(__file__).resolve(), jdk / "include/jni.h", jdk / "include/win32/jni_md.h", release]
-    source_inputs = {str(path): digest(path) for path in source_files}
-    original = source_state()
+    source_inputs = {str(path): digest(path, progress) for path in source_files}
+    original = source_state(progress)
 
     # Normal compiler/tool selection only, not OS-bootstrap or installed-runtime authority.
     system = Path(os.environ["SystemRoot"]).resolve(strict=True)
@@ -114,7 +142,7 @@ def main():
     locator = locator.resolve(strict=True)
     for path in (system, command_processor, locator):
         command_path(path)
-    selected_tools = {str(path): digest(path) for path in (command_processor, locator)}
+    selected_tools = {str(path): digest(path, progress) for path in (command_processor, locator)}
     environment = {"PATH": ";".join(str(path) for path in (system32,
                        system32 / "WindowsPowerShell/v1.0", system32 / "Wbem")),
                    "SystemRoot": str(system), "WINDIR": str(system),
@@ -124,7 +152,9 @@ def main():
     for name in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
         value = Path(os.environ[name]).resolve(strict=True)
         environment[name] = command_path(value)
+    remaining(progress, 150)
     output.mkdir(mode=0o700)
+    progress["output"] = output
     temporary = output / "tmp"
     temporary.mkdir()
     environment.update({"TEMP": str(temporary), "TMP": str(temporary), "USERPROFILE": str(output),
@@ -141,16 +171,24 @@ def main():
         # Raw compiler output stays in this new private test directory; bounded reads never expose it publicly.
         stdout = output / (label + "-stdout.log")
         stderr = output / (label + "-stderr.log")
-        record = {"name": label, "command": command, "exit": None, "timedOut": False}
+        record = {"name": label, "command": command, "exit": None, "timedOut": False,
+                  "timeoutSeconds": None}
         records.append(record)
         with stdout.open("xb") as out, stderr.open("xb") as err:
             try:
+                limit = remaining(progress, timeout)
+                record["timeoutSeconds"] = limit
                 result = subprocess.run(command, cwd=output, env=environment, stdin=subprocess.DEVNULL,
-                                        stdout=out, stderr=err, timeout=timeout, check=False)
+                                        stdout=out, stderr=err, timeout=limit, check=False)
                 record["exit"] = result.returncode
             except subprocess.TimeoutExpired:
                 record["timedOut"] = True
+                progress["timeout"] = "CUMULATIVE" if limit < timeout else "PHASE"
                 raise
+            except TimeoutError:
+                record["timedOut"] = True
+                raise
+        remaining(progress, 150)
         require(stdout.stat().st_size <= 1024 * 1024 and stderr.stat().st_size <= 65536,
                 "Fixed compiler output exceeded its expected bound")
         require(record["exit"] == 0, "Fixed compiler command failed")
@@ -166,19 +204,21 @@ def main():
         return run(label, command)
 
     try:
+        progress["stage"] = "LOCATE"
         installation = run("locate-msvc", [str(locator), "-latest", "-products", "*", "-requires",
                                            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                                            "-property", "installationPath"], 15).strip()
         require(installation and "\n" not in installation, "Installed MSVC selection was ambiguous")
         developer = Path(installation) / "Common7/Tools/VsDevCmd.bat"
         command_path(developer)
-        selected_tools[str(developer)] = digest(developer)
+        selected_tools[str(developer)] = digest(developer, progress)
         setup = ["@echo off", "setlocal DisableDelayedExpansion", 'set "INCLUDE="', 'set "LIB="',
                  'set "LIBPATH="', 'set "CL="', 'set "_CL_="', 'set "LINK="', 'set "_LINK_="',
                  'set "ERRORLEVEL="', 'call ' + quoted(str(developer)) + " -arch=x64 -host_arch=x64",
                  "if errorlevel 1 exit /b 2", 'if /i not "%VSCMD_ARG_TGT_ARCH%"=="x64" exit /b 2',
                  'set "CL="', 'set "_CL_="', 'set "LINK="', 'set "_LINK_="', 'set "ERRORLEVEL="',
                  'cd /d ' + quoted(str(output)), 'if errorlevel 1 exit /b 2']
+        progress["stage"] = "INVENTORY"
         inventory = batch("compiler-inventory", setup + [
             "echo P2PKIT_VCTOOLS=%VCToolsInstallDir%", "echo P2PKIT_VCVERSION=%VCToolsVersion%",
             "echo P2PKIT_SDK=%WindowsSdkDir%", "echo P2PKIT_SDKVERSION=%WindowsSDKVersion%", "exit /b 0"])
@@ -199,7 +239,7 @@ def main():
         for path in (tools, sdk, compiler, linker):
             command_path(path)
         for path in (compiler, linker):
-            selected_tools[str(path)] = digest(path)
+            selected_tools[str(path)] = digest(path, progress)
         receipt["toolchain"] = {"vcTools": str(tools), "vcVersion": fields["P2PKIT_VCVERSION"],
                                  "sdk": str(sdk), "sdkVersion": fields["P2PKIT_SDKVERSION"]}
         recipe = [str(compiler), "/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/GS", "/sdl",
@@ -216,23 +256,61 @@ def main():
             'if /i not "%VCToolsInstallDir%"=="' + fields["P2PKIT_VCTOOLS"] + '" exit /b 2',
             'if /i not "%WindowsSdkDir%"=="' + fields["P2PKIT_SDK"] + '" exit /b 2',
             'set "PATH=' + str(compiler.parent) + ';%PATH%"']
+        progress["stage"] = "COMPILE"
         batch("compile-dll", compile_setup + [" ".join(quoted(item) for item in recipe), "exit /b %ERRORLEVEL%"])
-        current = source_state()
+        progress["stage"] = "VERIFY"
+        current = source_state(progress)
         require(current == original, "Source state changed while compiling the fixture")
-        require(all(digest(Path(path)) == value for path, value in source_inputs.items()),
+        require(all(digest(Path(path), progress) == value for path, value in source_inputs.items()),
                 "Original direct source/header bytes changed while compiling")
-        require(all(digest(Path(path)) == value for path, value in selected_tools.items()),
+        require(all(digest(Path(path), progress) == value for path, value in selected_tools.items()),
                 "Selected compiler/tool bytes changed while compiling")
         dll = output / "p2pkit-windows-profile.dll"
-        metadata = digest(dll, MAXIMUM_DLL)
+        metadata = digest(dll, progress, MAXIMUM_DLL)
         require(metadata["bytes"] >= 512, "Compiled fixture DLL is too short")
         receipt["dll"] = {"path": str(dll), "name": dll.name, **metadata}
+        remaining(progress, 150)
+        progress["stage"] = "COMPLETE"
         receipt["result"] = "PASS"
         print("WINDOWS_TEST_DLL_COMPILE_PASS scope=" + SCOPE)
     finally:
+        receipt["diagnostics"] = observation(progress)
         with (output / "compiler-receipt.json").open("x", encoding="utf-8") as target:
             target.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 
 
+def main():
+    # One compiler-only total deadline includes preflight, setup, Git and hash observations. The
+    # caller's separate retirement allowance does not extend compiler work or any native test budget.
+    started = time.monotonic()
+    progress = {"started": started, "deadline": started + 150, "stage": "PREFLIGHT",
+                "timeout": "NONE", "output": None}
+    try:
+        compile_fixture(progress)
+        return 0
+    except Exception:
+        detail = traceback.format_exc()
+        output = progress["output"]
+        if output is not None:
+            # Only our successfully create-only output may receive diagnostics. Preserve any existing
+            # producer receipt; a reporting failure must not replace the original compiler failure.
+            try:
+                with (output / "compiler-failure-detail.log").open("x", encoding="utf-8") as target:
+                    target.write(detail)
+                path = output / "compiler-receipt.json"
+                if not path.exists():
+                    receipt = {"schema": 1, "scope": SCOPE, "result": "FAIL",
+                               "diagnostics": observation(progress), "nativeExecution": "NOT_PERFORMED",
+                               "profileBackend": "NOT_LINKED", "packaging": "NOT_PERFORMED"}
+                    with path.open("x", encoding="utf-8") as target:
+                        target.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+            except Exception:
+                pass
+        # These values are fixed internal labels, never an exception message, command, path or identifier.
+        print("WINDOWS_TEST_DLL_COMPILE_REFUSED stage=" + progress["stage"] +
+              " timeout=" + progress["timeout"], file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
