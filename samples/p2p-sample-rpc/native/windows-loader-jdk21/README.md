@@ -705,3 +705,24 @@ prefix, and whether all executable bytes match their original/DIR64 expectation.
 This closed test-only projection performs no additional native call and never
 changes the strict comparison or its original failure. It exposes no readback
 bytes, process address, path or arbitrary message; it cannot authorize loading.
+
+### Fixed application-to-provider connection
+
+The Java17 application now has a zero-argument installed-provider entry. It
+resolves only the exact original boot-layer loader module and invokes its fixed
+zero-argument API. There is no supplied path, backend, classloader, owner token
+or permission flag. The current loader **still always refuses**. Its private-
+constructor typed `Unavailable` result denotes refusal before installed/native
+acquisition; generic loader exceptions remain uncertain, not retryable success.
+Windows profile selection occurs before any POSIX home-directory resolution.
+
+Only a future successful production-loader return may construct the private
+managed composition. Its distinct adapter contract is ABI1/`0x7f`; the underlying
+native ABI remains **13/`0x43`**, checked before every storage operation. Existing
+composed writes/deletes, namespace synchronization and ownership are reused.
+Normal loader return must first establish the independently authorized production
+artifact, runtime and original JNI owner, retained for process lifetime. The
+development deny-storage DLL deliberately has the same raw ABI and is **not**
+sufficient. Profile Stop cannot unload that owner. Availability/UI gates remain
+unchanged until productive admission exists; neither these model tests nor the
+actual cross-module typed-refusal test qualifies installed Windows operation.

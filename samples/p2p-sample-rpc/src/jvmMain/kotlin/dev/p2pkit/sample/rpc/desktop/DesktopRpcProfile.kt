@@ -8,6 +8,7 @@ import dev.p2pkit.sample.rpc.profile.ProtectedProfileLease
 import dev.p2pkit.sample.rpc.profile.ProtectedProfileSession
 import dev.p2pkit.sample.rpc.profile.WindowsProfileAvailability
 import dev.p2pkit.sample.rpc.profile.WindowsProfileFiles
+import dev.p2pkit.sample.rpc.profile.WindowsProfileInstalledProvider
 import dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyException
 import dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyFailure
 import java.nio.file.Path
@@ -75,7 +76,10 @@ internal class DesktopRpcProfile private constructor(
             var acquisitionStarted = false
             try {
                 require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
-                WindowsProfileAvailability.requirePosixProductionHost()
+                if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                    acquisitionStarted = true
+                    return openAttempt(password) { WindowsProfileFiles.openInstalled() }
+                }
                 val directory = Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop")
                 acquisitionStarted = true
                 return openAttempt(directory, password)
@@ -118,7 +122,9 @@ internal class DesktopRpcProfile private constructor(
             var acquired: ProtectedProfileSession? = null
             try {
                 require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
-                val files = try { acquire() } catch (failure: WindowsProfileFiles.AcquisitionFailure) {
+                val files = try { acquire() } catch (failure: WindowsProfileInstalledProvider.Unavailable) {
+                    return DesktopRpcProfileOpenAttempt(Result.failure(failure), null)
+                } catch (failure: WindowsProfileFiles.AcquisitionFailure) {
                     return DesktopRpcProfileOpenAttempt(
                         Result.failure(failure), failure.cleanupFailure, failure.retainedSession,
                     )

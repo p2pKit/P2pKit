@@ -31,6 +31,11 @@ RPC_CLASSES = (
     "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
     "dev/p2pkit/sample/rpc/desktop/DesktopRpcProfile.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileFiles.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Entry.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$CompleteAdapter.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable$Companion.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfilePinnedImage.class",
 )
@@ -39,6 +44,7 @@ RPC_CLASSES = (
 ADAPTER_PREFIX = "dev/p2pkit/rpc/windows/loader/"
 ADAPTER_ENTRIES = (
     "module-info.class", ADAPTER_PREFIX + "Probe.class", ADAPTER_PREFIX + "WindowsLoader.class",
+    ADAPTER_PREFIX + "WindowsLoader$Unavailable.class",
     ADAPTER_PREFIX + "WindowsLoaderRuntime.class", ADAPTER_PREFIX + "WindowsX64Frame.class",
     ADAPTER_PREFIX + "WindowsX64Frame$AcquisitionFailure.class",
     ADAPTER_PREFIX + "WindowsX64Frame$CloseFailure.class", ADAPTER_PREFIX + "WindowsX64Frame$CleanupObservation.class",

@@ -25,6 +25,11 @@ RPC_CLASSES = (
     "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
     "dev/p2pkit/sample/rpc/desktop/DesktopRpcProfile.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileFiles.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Entry.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$CompleteAdapter.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable$Companion.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfilePinnedImage.class",
 )
@@ -117,7 +122,7 @@ ADAPTER_JAR = "p2pkit-windows-loader-jdk21.jar"
 ADAPTER_PATH = "app/resources/rpc-loader-jdk21/" + ADAPTER_JAR
 ADAPTER_SCOPE = "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY"
 ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".class" for name in (
-    "Probe", "WindowsLoader", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
+    "Probe", "WindowsLoader", "WindowsLoader$Unavailable", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
     "WindowsX64Frame$CloseFailure", "WindowsX64Frame$CleanupObservation", "WindowsX64Frame$1",
     "WindowsJniRegistrationOwner", "WindowsJniRegistrationOwner$Failure", "WindowsJniRegistrationOwner$FailureKind",
     "WindowsJniRegistrationOwner$Invocation", "WindowsJniRegistrationOwner$Report",

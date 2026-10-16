@@ -46,6 +46,21 @@ class DesktopRpcProfileAcquisitionTest {
         assertTrue(password.all { it == '\u0000' })
     }
 
+    @Test fun genericUnsupportedFailureIsNotMistakenForTheExactLoaderNoEffectsResult() {
+        val password = password()
+        val failure = UnsupportedOperationException("WINDOWS_LOADER_DISABLED_TRUSTED_BOOTSTRAP_NOT_IMPLEMENTED")
+        var calls = 0
+        val attempt = DesktopRpcProfile.openAttempt(password) {
+            calls++
+            throw failure
+        }
+        assertSame(failure, attempt.result.exceptionOrNull())
+        assertSame(failure, attempt.cleanupFailure)
+        assertNull(attempt.retainedSession)
+        assertEquals(1, calls)
+        assertTrue(password.all { it == '\u0000' })
+    }
+
     @Test fun unpublishedNativeOwnerSurvivesAcquisitionReportingErrorWithoutCloseReplay() {
         val model = WindowsProfileModel()
         val failure = OutOfMemoryError("synthetic native reporting failure")

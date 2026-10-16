@@ -69,7 +69,7 @@ def main():
                         "AncestorRetirementTests" in name or
                         "ByteReadInvocationTests" in name or
                         "PackagedVerifierTests" in name or
-                        "LoadedRegistrationTests" in name or
+                        "LoadedRegistrationTests" in name or "InstalledProviderTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -104,7 +104,8 @@ def main():
     require(all(path.is_dir() and path in application_paths for path in main_directories),
             "Actual main class outputs are missing from the development classpath")
     resources = ["dev/p2pkit/sample/rpc/profile/" + name + ".class" for name in
-                 ("WindowsProfilePackagedVerifier", "WindowsProfileCustodyJni")]
+                 ("WindowsProfilePackagedVerifier", "WindowsProfileCustodyJni", "WindowsProfileInstalledProvider",
+                  "WindowsProfileFiles", "WindowsProfileInstalledProvider$Unavailable")]
     candidates = [path for path in main_directories if all((path / resource).is_file() for resource in resources)]
     require(len(candidates) == 1, "Original compiled helper/JNI class output is ambiguous or absent")
     main_directory = candidates[0]
@@ -197,6 +198,9 @@ def main():
                       bindings[0]["sha256"], bindings[1]["sha256"]],
             "WINDOWS_PACKAGED_VERIFIER_PASS case=" + re.escape(case) +
             r" scope=REAL_JDK21_TO_JDK17_BYTE_COMPARISON_NOT_LOAD_OR_AUTHORITY\n", case == "missing-helper")
+    connected_run("installed-provider-unavailable", "InstalledProviderTests", [str(main_directory),
+                  bindings[2]["sha256"], bindings[3]["sha256"], bindings[1]["sha256"], bindings[4]["sha256"]],
+        r"WINDOWS_INSTALLED_PROVIDER_REFUSAL_PASS scope=REAL_JDK21_TO_JDK17_TYPED_REFUSAL_NOT_INSTALLED_OR_NATIVE\n")
     run("loaded-registration-diagnostics", base + ["--patch-module", MODULE + "=" + str(classes),
         "--module", MODULE + "/" + PACKAGE + ".LoadedRegistrationTests", "diagnostics"], 0,
         r"WINDOWS_LOADED_REGISTRATION_DIAGNOSTICS_PASS scope=INERT_FORMATTING_NOT_DLL_OR_AUTHORITY\n", "")
