@@ -90,6 +90,8 @@ final class WindowsSystemBootstrapCandidate {
     private boolean succeeded;
     private boolean originalJvmAttempted;
     private WindowsOriginalJvmCandidate originalJvm;
+    private boolean profileDllAttempted;
+    private WindowsOriginalProfileDllFileCandidate profileDll;
     private boolean importsAttempted;
     private WindowsSystemImportResolution imports;
 
@@ -326,6 +328,40 @@ final class WindowsSystemBootstrapCandidate {
         originalJvm = new WindowsOriginalJvmCandidate(this, linker, originalArena, entries[1], entries[2], entries[4]);
         originalJvm.observe();
         return originalJvm;
+    }
+
+    WindowsOriginalProfileDllFileCandidate inspectOriginalProfileDll(String candidatePath) {
+        requireCompleted();
+        if (profileDllAttempted) throw new IllegalStateException("Original profile DLL file was already attempted");
+        profileDllAttempted = true;
+        profileDll = new WindowsOriginalProfileDllFileCandidate(this, candidatePath);
+        // The original facade and its failure carrier are rooted BEFORE validation or file acquisition.
+        // The locator is comparison/input data only, never approved package/startup authority.
+        profileDll.observe();
+        return profileDll;
+    }
+
+    void requireOriginalProfileDll(WindowsOriginalProfileDllFileCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || profileDll != candidate) {
+            throw new IllegalStateException("Profile DLL file is not this bootstrap's original retained attachment");
+        }
+    }
+
+    Linker originalProfileDllLinker(WindowsOriginalProfileDllFileCandidate candidate) {
+        requireOriginalProfileDll(candidate);
+        return linker;
+    }
+
+    Arena originalProfileDllArena(WindowsOriginalProfileDllFileCandidate candidate) {
+        requireOriginalProfileDll(candidate);
+        return originalArena;
+    }
+
+    MemorySegment originalProfileDllFileEntry(WindowsOriginalProfileDllFileCandidate candidate, int index) {
+        requireOriginalProfileDll(candidate);
+        if (index < 0 || index > 2) throw new IllegalArgumentException("Unknown fixed profile DLL file entry");
+        return entries[8 + index]; // CreateFileW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW only.
     }
 
     WindowsSystemImportResolution resolveSystemImports(WindowsPackagedVerifier plan) {

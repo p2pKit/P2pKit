@@ -766,10 +766,12 @@ unavailable.
 The original JVM file facade now delegates its unchanged native acquisition,
 metadata and retained-handle mechanics to one concrete `WindowsOriginalFileLease`.
 This isolates the existing algorithm for later independent DLL custody without
-copying it or substituting a DLL path into the JVM observation. The current core
-accepts only its exact original JVM facade; no second DLL owner or installation
-authority is claimed. The private original path is copied, and the core/facade
-and preallocated failure carrier remain rooted before native effects.
+copying it or substituting a DLL path into the JVM observation. The core accepts
+only its exact original JVM facade or the independently attached, final profile-
+DLL facade. These are two concrete owner types, not a caller-supplied authority,
+native-entry callback or interchangeable `Object`. The private original path is
+copied, and the core/facade and preallocated failure carrier remain rooted before
+native effects.
 
 Security, ancestor and byte observations still attach to that original facade
 and use the same original file handle. Their existing implementations and policy
@@ -780,3 +782,40 @@ ACL policies is **not** an admitted file. Neither the combined development-JVM
 observation nor inert owner/frame controls qualifies a production DLL or an
 installed protected profile. No handle/module unloading or productive activation
 is introduced.
+
+### Independent original DLL file attachment
+
+The original bootstrap can now attach one independent profile-DLL file candidate.
+It does not obtain, relabel or replace a JVM-file observation. Its pathname is only
+an untrusted locator: the exact fixed DLL basename and canonical local-drive
+subset are shared with the existing load invocation. Path refusal occurs before
+file effects; the caller cannot supply native entry addresses, a file handle,
+metadata, a byte buffer or an installation-authority flag. Fixed metadata bounds
+are 512 bytes through 32 MiB for this DLL role; the JVM streaming limit is unchanged.
+
+The same native file algorithm retains the original read-only/no-write-or-delete-
+sharing handle, repeated metadata, final-path correspondence and permanent scopes.
+The DLL attachment is one-shot; failure retains its original graph and precludes
+continuation. Portable controls cover locator/owner substitution and failure
+latching. A separate Windows development-fixture case actually acquires the
+compiled deny-storage DLL through this new path, without loading it or creating
+an original-JVM-file attachment. Separate fresh processes verify a genuinely
+absent file's retained native refusal and a malformed locator's refusal before
+file acquisition. This scope is distinct from the existing later constrained
+test-DLL mapping and JNI cases, which are preserved unchanged.
+
+The shared file algorithm now quarantines its private frame if an FFM invocation
+does not provide an observed normal primitive return. A normal failed Win32
+result is still a completed call followed by semantic refusal, not pending I/O.
+These fixed Win32 APIs are synchronous; this conservative return-provenance rule
+is not evidence that they perform asynchronous buffer writes. Known-return and
+pre-invocation failures retain their existing private-frame retirement, and
+original handle scopes are never closed.
+
+**This is not yet a complete DLL custody or productive loading pipeline.** The
+independent DLL still needs the shared original-handle security/ancestor policy
+and bounded same-handle byte snapshot, then the independent package identity and
+reviewed startup/import authority. The existing JVM security/ancestor/byte children
+are not promoted into DLL evidence. No productive-loader return, Windows UI
+availability, profile operation, installer identity or publication pipeline is
+changed by this component.

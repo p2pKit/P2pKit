@@ -23,6 +23,7 @@ public final class OriginalFileLeaseTests {
             case "snapshot" -> snapshot();
             case "retirement" -> retirement(false);
             case "retirement-failures" -> retirement(true);
+            case "retirement-unknown" -> retirementUnknown();
             case "thread" -> wrongThread();
             default -> throw new AssertionError("Unknown original file lease control");
         }
@@ -136,6 +137,38 @@ public final class OriginalFileLeaseTests {
                 expect(IllegalStateException.class, retained::completed);
             } finally {
                 // Only this inert test owns the arenas; no real or uncertain kernel operation exists.
+                if (frame.scope().isAlive()) frame.close();
+            }
+        }
+    }
+
+    private static void retirementUnknown() throws Throwable {
+        WindowsOriginalJvmFileCandidate facade = facade(null);
+        WindowsOriginalFileLease retained = core(facade);
+        WindowsOriginalFileLease.Failure failure = (WindowsOriginalFileLease.Failure) value(retained, "failure");
+        Throwable operation = new LinkageError("inert original file return uncertainty");
+        failure.operationFailure = operation;
+        try (Arena backing = Arena.ofConfined(); Arena original = Arena.ofConfined()) {
+            Arena frame = Arena.ofConfined();
+            try {
+                MemorySegment storage = backing.allocate(32);
+                storage.fill((byte) 0x5a);
+                MemorySegment view = storage.reinterpret(frame, null);
+                ((MemorySegment[]) value(retained, "buffers"))[0] = view;
+                field("frameArena").set(retained, frame);
+                field("handleArena").set(retained, original);
+                field("nativeReturnUnconfirmed").setBoolean(retained, true);
+                retire(retained);
+                retire(retained);
+                check(!(boolean) value(retained, "frameRetired") &&
+                    (boolean) value(retained, "nativeReturnUnconfirmed") && frame.scope().isAlive());
+                check(original.scope().isAlive() && view.scope().isAlive() && backing.scope().isAlive());
+                for (byte actual : storage.toArray(ValueLayout.JAVA_BYTE)) check(actual == 0x5a);
+                for (Throwable clear : failure.clearFailures) check(clear == null);
+                check(failure.operationFailure == operation && failure.arenaCloseFailure == null &&
+                    failure.retainedCandidate == retained && value(retained, "originalOwner") == facade);
+            } finally {
+                // This fixture alone owns inert memory. No native call or pending OS I/O occurred.
                 if (frame.scope().isAlive()) frame.close();
             }
         }

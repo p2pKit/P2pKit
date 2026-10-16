@@ -8,7 +8,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.nio.ByteOrder;
-import java.util.Locale;
 
 /**
  * Dormant fixed LoadLibraryExW mechanics, not bootstrap, installed authority or a productive loader.
@@ -17,7 +16,7 @@ import java.util.Locale;
  * There is no lookup, environment search, global search-path mutation, FreeLibrary or provider publication.
  */
 final class WindowsLibraryLoadInvocation {
-    static final int MAXIMUM_PATH_CHARS = 260;
+    static final int MAXIMUM_PATH_CHARS = WindowsProfileDllPath.MAXIMUM_PATH_CHARS;
     static final int SEARCH_SYSTEM32 = 0x00000800;
     static final MemoryLayout PATH = MemoryLayout.sequenceLayout(MAXIMUM_PATH_CHARS, ValueLayout.JAVA_SHORT);
     // On the guarded Windows-x64 ABI both an opaque HMODULE pointer and this 64-bit integer return
@@ -163,26 +162,7 @@ final class WindowsLibraryLoadInvocation {
         pathView = pathBuffer.asReadOnly(); // Zero-initialized terminator and unused tail remain private.
     }
 
-    private static void validatePath(String path) {
-        if (path == null || path.length() < 4 || path.length() >= MAXIMUM_PATH_CHARS ||
-            !path.matches("[A-Za-z]:\\\\[A-Za-z0-9 ._\\\\-]+") ||
-            !path.endsWith("\\p2pkit-windows-profile.dll")) {
-            throw new IllegalArgumentException("Unsupported canonical Windows library path");
-        }
-        String[] components = path.substring(3).split("\\\\", -1);
-        for (String component : components) {
-            if (component.isEmpty() || component.length() > 255 ||
-                !component.matches("[A-Za-z0-9][A-Za-z0-9 ._-]*") || component.endsWith(".") ||
-                component.endsWith(" ")) {
-                throw new IllegalArgumentException("Unsupported Windows library path component");
-            }
-            String stem = component.split("\\.", 2)[0].stripTrailing().toUpperCase(Locale.ROOT);
-            if (stem.equals("CON") || stem.equals("PRN") || stem.equals("AUX") || stem.equals("NUL") ||
-                stem.matches("(?:COM|LPT)[1-9]")) {
-                throw new IllegalArgumentException("Reserved Windows library path component");
-            }
-        }
-    }
+    private static void validatePath(String path) { WindowsProfileDllPath.require(path); }
 
     private void requireThread() {
         if (Thread.currentThread() != thread) {
