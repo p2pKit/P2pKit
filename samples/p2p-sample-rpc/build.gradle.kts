@@ -221,7 +221,17 @@ val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJd
 }
 tasks.named<Test>("jvmTest") {
     // Other host library tests still require only JDK17. Explicit adapter verification remains available there.
-    dependsOn(rpcJvmTestHost.map { if (it == "windows") listOf(verifyRpcWindowsLoaderJdk21) else emptyList() })
+    // Gradle treats a system-property provider as a known non-task producer: mapping its value to task
+    // providers does not add those tasks to the graph. Resolve only the host selector here, not a toolchain.
+    if (rpcJvmTestHost.get() == "windows") dependsOn(verifyRpcWindowsLoaderJdk21)
+    doFirst {
+        if (rpcJvmTestHost.get() == "windows") {
+            val controls = verifyRpcWindowsLoaderJdk21.get().state
+            check(controls.executed && !controls.skipped && controls.failure == null) {
+                "Windows RPC JVM tests require completed, unskipped adapter controls"
+            }
+        }
+    }
 }
 // Application-owned, opt-in lab integration. It is not part of the sample's main
 // artifact or any library publication, and is never an automatic transport fallback.
