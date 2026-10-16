@@ -344,4 +344,9 @@ final class WindowsOriginalJvmCandidate {
         requireOriginalFile(candidate);
         return bootstrap.originalJvmSecurityEntry(this, index);
     }
+
+    MemorySegment originalFileAncestorsEntry(WindowsOriginalJvmFileCandidate candidate, int index) {
+        requireOriginalFile(candidate);
+        return bootstrap.originalJvmAncestorsEntry(this, index);
+    }
 }

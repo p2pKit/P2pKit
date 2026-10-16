@@ -93,6 +93,8 @@ final class WindowsOriginalJvmSecurityCandidate {
     private boolean attempted;
     private boolean frameRetired;
     private boolean succeeded;
+    private boolean ancestorsAttempted;
+    private WindowsOriginalJvmAncestorsCandidate ancestors;
 
     WindowsOriginalJvmSecurityCandidate(WindowsOriginalJvmFileCandidate file, Linker linker, Arena bootstrapArena,
                                         Arena fileArena, MemorySegment fileHandle, MemorySegment pinEntry,
@@ -377,4 +379,20 @@ final class WindowsOriginalJvmSecurityCandidate {
 
     boolean completed() { requireCompleted(); return true; }
     boolean descriptorPolicyAccepted() { requireCompleted(); return policyAccepted; }
+
+    WindowsOriginalJvmAncestorsCandidate inspectAncestors() {
+        requireCompleted();
+        if (ancestorsAttempted) throw new IllegalStateException("Original JVM ancestors candidate was already attempted");
+        ancestorsAttempted = true;
+        ancestors = file.newOriginalAncestors(this, moduleArena, module, entry, pinEntry, resolveEntry);
+        ancestors.observe();
+        return ancestors;
+    }
+
+    void requireOriginalAncestors(WindowsOriginalJvmAncestorsCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || ancestors != candidate) {
+            throw new IllegalStateException("Ancestors candidate is not the original security attachment");
+        }
+    }
 }

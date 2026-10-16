@@ -24,7 +24,8 @@ final class WindowsSystemBootstrapCandidate {
     private static final String[] EXPORTS = {
         "GetCurrentProcessId", "GetModuleHandleExW", "GetModuleFileNameW", "GetSystemDirectoryW",
         "GetProcAddress", "LoadLibraryExW", "VirtualQuery", "ReadProcessMemory",
-        "CreateFileW", "GetFileInformationByHandleEx", "GetFinalPathNameByHandleW"
+        "CreateFileW", "GetFileInformationByHandleEx", "GetFinalPathNameByHandleW",
+        "GetVolumeInformationByHandleW", "GetDriveTypeW"
     };
     private static final FunctionDescriptor PID = FunctionDescriptor.of(ValueLayout.JAVA_INT);
     // withTargetLayout is restricted in JDK21. Construct these only after inspect's runtime/access guard,
@@ -342,5 +343,11 @@ final class WindowsSystemBootstrapCandidate {
         requireOriginalJvm(candidate);
         if (index < 0 || index > 3) throw new IllegalArgumentException("Unknown fixed JVM security entry");
         return entries[1 + index]; // PIN, module pathname, system directory, exact named export resolution.
+    }
+
+    MemorySegment originalJvmAncestorsEntry(WindowsOriginalJvmCandidate candidate, int index) {
+        requireOriginalJvm(candidate);
+        if (index < 0 || index > 1) throw new IllegalArgumentException("Unknown fixed JVM ancestors entry");
+        return entries[11 + index];
     }
 }

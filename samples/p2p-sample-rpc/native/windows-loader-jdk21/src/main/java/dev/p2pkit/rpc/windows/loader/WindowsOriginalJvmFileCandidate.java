@@ -332,4 +332,14 @@ final class WindowsOriginalJvmFileCandidate {
             throw new IllegalStateException("Security candidate is not this JVM file's original retained attachment");
         }
     }
+
+    WindowsOriginalJvmAncestorsCandidate newOriginalAncestors(WindowsOriginalJvmSecurityCandidate candidate,
+        Arena moduleArena, MemorySegment module, MemorySegment queryEntry, MemorySegment pinEntry,
+        MemorySegment resolveEntry) {
+        requireOriginalSecurity(candidate);
+        return new WindowsOriginalJvmAncestorsCandidate(candidate, linker, bootstrapArena, moduleArena,
+            module, queryEntry, pinEntry, resolveEntry, createEntry, informationEntry, finalPathEntry,
+            runtime.originalFileAncestorsEntry(this, 0), runtime.originalFileAncestorsEntry(this, 1),
+            handleArena, handle, sourcePath, sourceLength, first);
+    }
 }

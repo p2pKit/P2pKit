@@ -65,6 +65,7 @@ def main():
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
                         "InstallationSecurityTests" in name or
+                        "AncestorRetirementTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -131,6 +132,10 @@ def main():
         "--module", MODULE + "/" + PACKAGE + ".InstallationSecurityTests"], 0,
         r"WINDOWS_INSTALLATION_SECURITY_PASS tests=259 "
         r"scope=INERT_DESCRIPTOR_POLICY_NOT_NATIVE_READBACK_OR_AUTHORITY\n", "")
+    run("ancestor-frame-retirement", base + access + ["--patch-module", MODULE + "=" + str(classes),
+        "--module", MODULE + "/" + PACKAGE + ".AncestorRetirementTests"], 0,
+        r"WINDOWS_ANCESTOR_RETIREMENT_PASS tests=2 "
+        r"scope=INERT_FRAME_QUARANTINE_NOT_PENDING_OS_IO_OR_AUTHORITY\n", "")
     # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
     owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
                    "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]
@@ -203,6 +208,8 @@ def main():
     original_file_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_security_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_security_policy = "NOT_EXECUTED"
+    original_ancestor_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_ancestor_policies = "NOT_EXECUTED"
     if os.name == "nt":
         original_jvm_scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE"
         run("system-bootstrap-jvm", base + access + bootstrap_entry + ["jvm"], 0,
@@ -215,13 +222,19 @@ def main():
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=security scope=" + original_security_scope +
             r" descriptorPolicy=(ACCEPTED|REFUSED)\n", "")
         original_security_policy = security.strip().rsplit("=", 1)[1]
+        original_ancestor_scope = "DEVELOPMENT_JVM_ANCESTOR_HANDLES_NOT_APPROVED_INSTALLATION_MAPPING_OR_PROFILE"
+        ancestors, _ = run("system-bootstrap-ancestors", base + access + bootstrap_entry + ["ancestors"], 0,
+            "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=ancestors scope=" + original_ancestor_scope +
+            r" descriptorPolicies=(ACCEPTED|REFUSED)\n", "")
+        original_ancestor_policies = ancestors.strip().rsplit("=", 1)[1]
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_CONTROLS_AND_CONDITIONAL_SYSTEM_BOOTSTRAP_NOT_INSTALLED_OR_PROFILE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
               "observation": actual, "modelResult": models.strip(),
               "systemBootstrapScope": bootstrap_scope, "originalJvmScope": original_jvm_scope,
               "originalJvmFileScope": original_file_scope, "originalJvmSecurityScope": original_security_scope,
-              "originalJvmDescriptorPolicy": original_security_policy, "commands": records}
+              "originalJvmDescriptorPolicy": original_security_policy, "originalJvmAncestorScope": original_ancestor_scope,
+              "originalJvmAncestorPolicies": original_ancestor_policies, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
 

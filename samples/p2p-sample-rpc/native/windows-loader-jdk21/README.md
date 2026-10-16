@@ -504,3 +504,49 @@ productive factory must still refuse. macOS compiles these sources and runs the
 inert parser controls, but does not receive Windows native-security-query credit.
 Actual ancestor custody, expected packaged/runtime identity, first-call authority,
 loaded mapping/import verification and complete provider assembly remain required.
+
+### Original handle-relative ancestor observation
+
+The conditional security attachment also owns a one-shot `inspectAncestors()`.
+Its only path comes from the already-observed JVM module; its comparison identity
+comes from the original held file. A root directory lease permits read/write
+sharing but **not delete sharing**. The actual root must resolve to a bare volume
+GUID root, and the already-held original file must resolve through that same GUID
+and the exact original path suffix. This prevents treating a substituted directory
+as the volume root or relying solely on potentially colliding volume serials.
+Actual handle-based filesystem queries require fixed NTFS with persistent ACLs;
+no volume label is requested. None of this chooses Foundation's expected Program
+Files installation or its runtime pin.
+
+Each subsequent existing component is opened with `NtCreateFile` relative to its
+original held parent: bounded single-component names, `OBJ_DONT_REPARSE`,
+`FILE_OPEN_REPARSE_POINT`, synchronous options and no delete sharing. Actual
+handle metadata rejects reparse, offline, delete-pending and case-sensitive
+directories, requires the same volume and retains the complete chain. The final
+relative read-only file lease must match the original file identity/metadata.
+Directory metadata is re-observed after traversal; directory allocation/size is
+not namespace identity. The 64-handle limit includes root, directories and leaf.
+
+Root/directory owner-DACL snapshots use the same bounded native query and binary
+policy. The root's specific create-right exception is selected only after the
+actual bare-root identity check, not from a supplied enum or path prefix. A failed
+policy result is preserved separately from native observation completion. These
+snapshots do **not** prove continuous ACL immutability, absence of pre-existing
+security/delete handles or writable mappings, loaded image identity, original
+startup/export authority or complete installed-app admission.
+
+Synchronous creation options alone do not authorize frame retirement. Before every
+`NtCreateFile`, all input/output frames and parent leases have a permanent owner.
+Only exact returned success, IO_STATUS_BLOCK success, FILE_OPENED and a retained
+valid handle permit frame reuse. A thrown, pending, failed or contradictory
+completion retains the entire frame and all owners for process lifetime: no
+retry, clearing, closure or further candidate native call. Portable test-only
+reflection fixtures verify that the actual retirement gate preserves bytes and
+arenas under uncertainty and clears/retires only the non-uncertain frame. They use
+allocated inert memory and do not simulate a completed real pending Windows I/O.
+The fixture classes cannot enter the packaged adapter.
+
+The fresh-process Windows ancestry control executes the actual calls and records
+the actual ancestor policy decision, while retaining duplicate/thread/public
+factory refusal checks. Neither ACCEPTED nor REFUSED is installed authority.
+Productive DLL/provider activation and real installed qualification remain open.

@@ -168,6 +168,53 @@ public final class SystemBootstrapCandidateTests {
             scope = "DEVELOPMENT_JVM_HANDLE_SECURITY_NOT_INSTALLED_ANCESTOR_MAPPING_OR_PROFILE";
             // Actual development-file policy may accept OR refuse. Neither outcome admits installation.
             policy = " descriptorPolicy=" + (accepted ? "ACCEPTED" : "REFUSED");
+        } else if (args[0].equals("ancestors")) {
+            WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
+            WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();
+            WindowsOriginalJvmFileCandidate file = runtime.inspectFile();
+            WindowsOriginalJvmSecurityCandidate security = file.inspectSecurity();
+            WindowsOriginalJvmAncestorsCandidate ancestors = security.inspectAncestors();
+            check(ancestors.completed());
+            int count = ancestors.ancestorCount();
+            check(count >= 1 && count <= 63); // Root and directories, not the final identity probe.
+            boolean accepted = ancestors.descriptorPoliciesAccepted();
+            try {
+                security.inspectAncestors();
+                throw new AssertionError("Original ancestry acquisition was repeated");
+            } catch (IllegalStateException expected) {
+                // Original handles and query result stay owned; this is not permission to reopen them.
+            }
+            AtomicReference<Throwable> unexpected = new AtomicReference<>();
+            Thread worker = Thread.startVirtualThread(() -> {
+                try {
+                    try {
+                        ancestors.descriptorPoliciesAccepted();
+                        throw new AssertionError("Ancestor observations crossed their owner thread");
+                    } catch (IllegalStateException expected) {
+                        // No transfer of held directory ownership through a policy boolean.
+                    }
+                    try {
+                        security.inspectAncestors();
+                        throw new AssertionError("Ancestor acquisition crossed its owner thread");
+                    } catch (IllegalStateException expected) {
+                        // No native call or second path traversal.
+                    }
+                } catch (Throwable failure) { unexpected.set(failure); }
+            });
+            worker.join();
+            check(unexpected.get() == null);
+            System.gc();
+            check(ancestors.completed() && ancestors.ancestorCount() == count);
+            check(ancestors.descriptorPoliciesAccepted() == accepted);
+            check(security.completed() && file.leaseHeld() && runtime.singleVirtualMachineObserved());
+            try {
+                WindowsLoader.openInstalledProvider();
+                throw new AssertionError("Ancestor observations enabled productive loading");
+            } catch (UnsupportedOperationException expected) {
+                check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
+            }
+            scope = "DEVELOPMENT_JVM_ANCESTOR_HANDLES_NOT_APPROVED_INSTALLATION_MAPPING_OR_PROFILE";
+            policy = " descriptorPolicies=" + (accepted ? "ACCEPTED" : "REFUSED");
         } else {
             throw new IllegalArgumentException("Unknown system bootstrap control");
         }
