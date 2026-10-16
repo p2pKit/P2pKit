@@ -1,67 +1,38 @@
 name: Desktop cross-host
-
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/desktop-cross-host.yml"
-      - "build.gradle.kts"
-      - "settings.gradle.kts"
-      - "gradle.properties"
-      - "buildSrc/**"
-      - "gradle/wrapper/**"
-      - "gradle/libs.versions.toml"
-      - "gradle/verification-metadata.xml"
-      - "gradle.lockfile"
-      - "buildscript-gradle.lockfile"
-      - "samples/p2p-sample-desktop/**"
-      - "samples/p2p-sample-desktop-ui/**"
-      - "samples/p2p-sample-diagnostics/**"
-      - "library/p2p-core/**"
-      - "library/p2p-transport-lan/**"
-      - "library/p2p-network-provisioning-desktop/**"
   workflow_dispatch:
-
+    inputs:
+      component:
+        type: choice
+        default: all
+        options: [all, desktop-linux, desktop-windows, desktop-macos]
 permissions:
   contents: read
-
-concurrency:
-  group: desktop-cross-host-${{ github.ref }}
-  cancel-in-progress: true
-
+  actions: read
 jobs:
-  verify:
-    name: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-15]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.components.outputs.matrix }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-
-      - name: Configure Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Validate wrapper and configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          gradle-home-cache-excludes: caches/build-cache-1
-
-      - name: Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images
-        shell: bash
+      - id: components
+        env:
+          COMPONENT: ${{ inputs.component }}
         run: |
-          ./gradlew --no-daemon \
-            :p2p-sample-desktop:check \
-            :p2p-sample-desktop:installDist \
-            :p2p-sample-desktop-ui:test \
-            :p2p-sample-desktop-ui:checkRuntime \
-            :p2p-sample-desktop-ui:hotRunArgfile \
-            :p2p-sample-desktop-ui:createDistributable \
-            --console=plain
+          if [[ "$COMPONENT" == all ]]; then COMPONENT=desktop-linux,desktop-windows,desktop-macos; fi
+          echo "matrix=$(python3 -B scripts/ci_component.py --matrix "$COMPONENT")" >> "$GITHUB_OUTPUT"
+  component:
+    name: ${{ matrix.component }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/ci-component.yml
+    with:
+      component: ${{ matrix.component }}
+      runner: ${{ matrix.os }}
+      minutes: ${{ matrix.minutes }}
+      job_minutes: ${{ matrix.job_minutes }}

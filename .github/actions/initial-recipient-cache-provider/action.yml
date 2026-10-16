@@ -1,0 +1,24 @@
+name: Bounded initial-recipient cache provider
+description: Fixed initial-only provider route; existing execution HOLDs and qualifications remain
+inputs:
+  phase:
+    description: Exact save or lookup phase from the original preceding initial bootstrap step
+    required: true
+  python:
+    description: Original admitted absolute Python executable spelling
+    required: true
+  tool-path:
+    description: Original admitted absolute provider tool PATH
+    required: true
+outputs:
+  readback-sha256:
+    description: Hash of the retained private initial provider readback, not cache qualification
+  cache-primary-key:
+    description: Original lookup output, when present
+  cache-matched-key:
+    description: Original lookup output, when present
+  cache-hit:
+    description: Original lookup output, not resolver or custody acceptance
+runs:
+  using: node24
+  main: index.cjs

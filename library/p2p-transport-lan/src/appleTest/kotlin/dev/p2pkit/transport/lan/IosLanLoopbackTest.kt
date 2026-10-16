@@ -5,6 +5,7 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -45,7 +46,9 @@ class IosLanLoopbackTest {
     private lateinit var peerIdV2Key: String
 
     private val diagnostics = KitTestDiagnostics()
+    private val lanTimeouts = IosLanTimeoutDiagnostics()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
+    private var discoveryTrace: AppleLanDiscoveryTrace? = null
 
     @BeforeTest
     fun isolateDefaults() {
@@ -55,6 +58,7 @@ class IosLanLoopbackTest {
         defaultsLease = AppleGlobalStateTestGuard.acquire(
             keys = arrayOf(peerIdKey, peerIdV2Key)
         )
+        discoveryTrace = AppleLanDiscoveryTrace()
     }
 
     private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
@@ -89,20 +93,37 @@ class IosLanLoopbackTest {
     }
 
     private suspend fun P2pKit.awaitPeer(target: P2pKit): Peer =
-        withTimeout(DISCOVERY_TIMEOUT_MS) {
-            peers.first { current -> current.any { it.id == target.localPeerId } }
-                .first { it.id == target.localPeerId }
+        traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER, ::discoveryObservations) {
+            lanTimeouts.withTimeout(Phase.DISCOVERY, DISCOVERY_TIMEOUT_MS) {
+                peers.first { current -> current.any { it.id == target.localPeerId } }
+                    .first { it.id == target.localPeerId }
+            }
         }
+
+    private fun discoveryObservations(): Set<AppleLanDiscoveryMarker> = checkNotNull(discoveryTrace).snapshot()
 
     @AfterTest
     fun teardown() {
         runBlocking {
-            diagnostics.finish {
+            var primary: Throwable? = null
+            try {
+                diagnostics.finish {
+                    try {
+                        removeStoredPeerId()
+                    } finally {
+                        defaultsLease?.close()
+                        defaultsLease = null
+                    }
+                }
+            } catch (failure: Throwable) {
+                primary = failure
+                throw failure
+            } finally {
                 try {
-                    removeStoredPeerId()
-                } finally {
-                    defaultsLease?.close()
-                    defaultsLease = null
+                    withTimeout(5_000) { discoveryTrace?.close() }
+                    discoveryTrace = null
+                } catch (failure: Throwable) {
+                    primary?.addSuppressed(failure) ?: throw failure
                 }
             }
         }
@@ -110,15 +131,19 @@ class IosLanLoopbackTest {
 
     @Test
     fun twoKitsDiscoverEachOtherAndExchangeText() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
             val bobAsSeenByAlice = alice.awaitPeer(bob)
 
             val outgoingDeferred = async { alice.connect(bobAsSeenByAlice) }
-            val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
+            val incomingSession = lanTimeouts.withTimeout(Phase.HANDSHAKE_INCOMING, HANDSHAKE_TIMEOUT_MS) {
+                bob.incomingSessions.first()
+            }
+            val outgoing = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                outgoingDeferred.await()
+            }
 
             assertEquals("Alice", incomingSession.peer.name)
             assertEquals("Bob", outgoing.peer.name)
@@ -129,21 +154,27 @@ class IosLanLoopbackTest {
             }
             ready.await()
             outgoing.send(P2pMessage.Text("hi from Alice"))
-            val msg = assertIs<P2pMessage.Text>(withTimeout(MESSAGE_TIMEOUT_MS) { received.await() })
+            val msg = assertIs<P2pMessage.Text>(
+                lanTimeouts.withTimeout(Phase.MESSAGE_RECEIVE, MESSAGE_TIMEOUT_MS) { received.await() }
+            )
             assertEquals("hi from Alice", msg.value)
         }
     }
 
     @Test
     fun largeBinaryPayloadRoundTripsOverTcp() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
             val bobAsSeenByAlice = alice.awaitPeer(bob)
             val outgoingDeferred = async { alice.connect(bobAsSeenByAlice) }
-            val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
+            val incomingSession = lanTimeouts.withTimeout(Phase.HANDSHAKE_INCOMING, HANDSHAKE_TIMEOUT_MS) {
+                bob.incomingSessions.first()
+            }
+            val outgoing = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                outgoingDeferred.await()
+            }
 
             // 200 KB — exercises chunking + reassembly over a real
             // NWConnection. Same payload pattern as the JVM loopback test.
@@ -155,21 +186,27 @@ class IosLanLoopbackTest {
             }
             ready.await()
             incomingSession.send(P2pMessage.Binary(payload))
-            val bin = assertIs<P2pMessage.Binary>(withTimeout(MESSAGE_TIMEOUT_MS) { received.await() })
+            val bin = assertIs<P2pMessage.Binary>(
+                lanTimeouts.withTimeout(Phase.MESSAGE_RECEIVE, MESSAGE_TIMEOUT_MS) { received.await() }
+            )
             assertContentEquals(payload, bin.bytes)
         }
     }
 
     @Test
     fun fileTransferRoundTripsOverTcp() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
             val bobAsSeenByAlice = alice.awaitPeer(bob)
             val outgoingDeferred = async { alice.connect(bobAsSeenByAlice) }
-            val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
+            val incomingSession = lanTimeouts.withTimeout(Phase.HANDSHAKE_INCOMING, HANDSHAKE_TIMEOUT_MS) {
+                bob.incomingSessions.first()
+            }
+            val outgoing = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                outgoingDeferred.await()
+            }
 
             // 5 MiB deterministic payload. Streamed in-memory via kotlinx-io
             // Buffer on both sides; the JVM loopback test uses temp files
@@ -193,15 +230,15 @@ class IosLanLoopbackTest {
                 source = srcBuffer
             )
 
-            val offer = withTimeout(MESSAGE_TIMEOUT_MS) { offerDeferred.await() }
+            val offer = lanTimeouts.withTimeout(Phase.FILE_OFFER, MESSAGE_TIMEOUT_MS) { offerDeferred.await() }
             val incomingTransfer = offer.accept(dstBuffer)
 
-            val senderFinal = withTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+            val senderFinal = lanTimeouts.withTimeout(Phase.TRANSFER_SENDER_TERMINAL, FILE_TRANSFER_TIMEOUT_MS) {
                 transfer.state.first { s ->
                     s is FileTransferState.Completed || s is FileTransferState.Failed
                 }
             }
-            val receiverFinal = withTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+            val receiverFinal = lanTimeouts.withTimeout(Phase.TRANSFER_RECEIVER_TERMINAL, FILE_TRANSFER_TIMEOUT_MS) {
                 incomingTransfer.state.first { s ->
                     s is FileTransferState.Completed || s is FileTransferState.Failed
                 }

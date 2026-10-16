@@ -7,9 +7,6 @@ import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_connection_receive_default
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_connection_send_default
-import kotlin.concurrent.Volatile
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
@@ -29,6 +26,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import platform.Network.nw_connection_cancel
 import platform.Network.nw_connection_copy_current_path
+import platform.Network.nw_connection_set_path_changed_handler
 import platform.Network.nw_connection_set_queue
 import platform.Network.nw_connection_set_state_changed_handler
 import platform.Network.nw_connection_start
@@ -47,6 +45,9 @@ import platform.Network.nw_interface_type_wired
 import platform.Network.nw_path_uses_interface_type
 import platform.darwin.dispatch_queue_t
 import platform.posix.uint8_tVar
+import kotlin.concurrent.Volatile
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /** Non-suspending cancellation ownership required by Network.framework callbacks. */
 internal interface IosConnectionHandle : RawConnection {
@@ -105,7 +106,8 @@ internal class IosRawConnection private constructor(
     private val sendOverride: (suspend (ByteArray) -> Unit)? = null,
     startNativeConnection: Boolean = true,
     initialStateOverride: ConnectionState? = null,
-    private val writeReadyTimeoutMillis: Long = WRITE_READY_TIMEOUT_MILLIS
+    private val writeReadyTimeoutMillis: Long = WRITE_READY_TIMEOUT_MILLIS,
+    private val policy: OrganizationLan? = null
 ) : IosConnectionHandle {
 
     private val _state = MutableStateFlow(
@@ -163,6 +165,13 @@ internal class IosRawConnection private constructor(
 
     init {
         nw_connection_set_queue(connection, queue)
+        if (policy != null) {
+            nw_connection_set_path_changed_handler(connection) {
+                if (_state.value == ConnectionState.Connected && !policy.allowsAppleConnection(connection)) {
+                    cancelNow("organization path changed or became unverifiable")
+                }
+            }
+        }
         nw_connection_set_state_changed_handler(connection) connectionStateHandler@ { st, err ->
             val label = when (st) {
                 nw_connection_state_ready -> "ready"
@@ -178,6 +187,10 @@ internal class IosRawConnection private constructor(
             IosLanDebug.log("conn", "state-changed -> $label" + (errCode?.let { " errCode=$it" } ?: ""))
             when (st) {
                 nw_connection_state_ready -> {
+                    if (policy != null && !policy.allowsAppleConnection(connection)) {
+                        cancelNow("organization path rejected")
+                        return@connectionStateHandler
+                    }
                     if (!closed) _state.value = ConnectionState.Connected
                     // Issue #34: log which interface the established connection
                     // actually uses — reveals whether the dial routed over
@@ -248,6 +261,7 @@ internal class IosRawConnection private constructor(
             return
         }
         writeLock.withLock {
+            if (policy != null) requireAllowedPath()
             // A writer may have queued behind another send while close()
             // cancelled the connection. Recheck after acquiring ownership so
             // no queued write is dispatched on a terminal connection.
@@ -326,7 +340,9 @@ internal class IosRawConnection private constructor(
 
     override fun read(): Flow<ByteArray> = flow {
         IosLanDebug.log("conn", "read: flow collector started")
+        if (policy != null) requireAllowedPath()
         while (!closed) {
+            if (policy != null) requireAllowedPath()
             val chunk: ByteArray? = suspendCancellableCoroutine { cont ->
                 cont.invokeOnCancellation {
                     // Cancelling only the Kotlin continuation does not cancel
@@ -374,13 +390,29 @@ internal class IosRawConnection private constructor(
                 )
             }
             if (chunk == null) break
-            if (chunk.isNotEmpty()) emit(chunk)
+            if (chunk.isNotEmpty()) {
+                if (policy != null && !policy.allowsAppleConnection(connection)) {
+                    cancelNow("organization receive path rejected")
+                    throw NetworkException("Organization LAN receive path cannot be verified")
+                }
+                emit(chunk)
+            }
         }
         IosLanDebug.log("conn", "read: flow collector ending (closed=$closed)")
     }
 
     override suspend fun close() {
         cancelNow("close()")
+    }
+
+    private suspend fun requireAllowedPath() {
+        if (_state.value == ConnectionState.Connecting) {
+            withTimeoutOrNull(writeReadyTimeoutMillis) { _state.first { it != ConnectionState.Connecting } }
+        }
+        if (closed || _state.value != ConnectionState.Connected || policy?.allowsAppleConnection(connection) == false) {
+            cancelNow("organization path unavailable or rejected")
+            throw NetworkException("Organization LAN path cannot be verified")
+        }
     }
 
     /**
@@ -424,8 +456,9 @@ internal class IosRawConnection private constructor(
          */
         const val WRITE_TIMEOUT_MILLIS: Long = 30_000
 
-        fun wrap(connection: nw_connection_t, queue: dispatch_queue_t): IosRawConnection =
-            IosRawConnection(connection, queue)
+        fun wrap(
+            connection: nw_connection_t, queue: dispatch_queue_t, policy: OrganizationLan? = null
+        ): IosRawConnection = IosRawConnection(connection, queue, policy = policy)
 
         /** Deterministic send seam for the write/close ownership tests. */
         internal fun wrapForWriteTest(

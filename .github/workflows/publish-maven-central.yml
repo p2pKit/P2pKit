@@ -6,6 +6,10 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+  deployments: read
 
 concurrency:
   group: maven-central-${{ github.ref }}
@@ -16,37 +20,46 @@ defaults:
     shell: bash
 
 jobs:
-  verify-release:
-    runs-on: macos-15
-    timeout-minutes: 60
+  freeze-applications:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sha256: ${{ steps.freeze.outputs.sha256 }}
+      artifact_id: ${{ steps.frozen.outputs.artifact-id }}
+      qualification_binding: ${{ steps.freeze.outputs.qualification_binding }}
     steps:
-      - name: Check out exact tagged commit
+      - name: Check out exact tagged source for secret-free readiness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Configure Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - name: Freeze the exact qualified main application and evidence set
+        id: freeze
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_QUALIFICATION_BINDING: ${{ vars.RELEASE_QUALIFICATION_BINDING }}
+        run: python3 -I -B -S scripts/release_application_set.py freeze
+      - name: Retain the immutable public application-set record
+        id: frozen
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          distribution: temurin
-          java-version: "17"
+          name: release-application-set-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-release-application-set/release-application-set.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
 
-      - name: Configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+  verify-release:
+    needs: freeze-applications
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          gradle-home-cache-excludes: caches/build-cache-1
-
-      - name: Install pinned XcodeGen
-        run: |
-          xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
-          echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK platforms
-        run: |
-          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
-
-      - name: Validate immutable release identity
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable release identity and coordinate absence
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
@@ -54,41 +67,27 @@ jobs:
           scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag
           scripts/check-release-metadata.sh
           scripts/check-maven-central-version.sh absent
-
-      - name: Verify release tooling
+      - name: Revalidate successful exact-source components without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROZEN_QUALIFICATION_BINDING: ${{ needs.freeze-applications.outputs.qualification_binding }}
         run: |
-          scripts/tests/check-release-tag-test.sh
-          scripts/tests/check-release-identity-test.sh
-          scripts/tests/check-maven-release-environment-test.sh
-          scripts/tests/check-maven-namespace-access-test.sh
-          scripts/tests/check-maven-central-version-test.sh
-          scripts/tests/publish-central-portal-bundle-test.sh
-          scripts/tests/build-central-portal-bundle-test.sh
-          scripts/tests/install-xcodegen-test.sh
-          scripts/tests/release-workflow-test.sh
-
-      - name: Run complete release gate
-        run: scripts/run-release-gate.sh
-
-      - name: Upload verification evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          printf '%s\n' "$FROZEN_QUALIFICATION_BINDING" > "$RUNNER_TEMP/qualification-binding.json"
+          python3 -B scripts/ci_qualification.py verify --source "$GITHUB_SHA" --selection "$RUNNER_TEMP/qualification-binding.json" --output "$RUNNER_TEMP/qualification.json"
+      - name: Upload verified qualification reference
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: maven-central-verification-${{ github.ref_name }}
-          path: |
-            build/reports/release/**
-            build/reports/platform-tests/**
-            build/reports/cyclonedx/bom.*
-            library/p2p-core/api/**
-            library/p2p-transport-lan/api/**
-            library/p2p-network-provisioning-desktop/api/**
-            library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
-          if-no-files-found: warn
+          name: maven-central-verification-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
 
   publish-release:
-    needs: verify-release
-    runs-on: macos-15
-    timeout-minutes: 90
+    needs: [freeze-applications, verify-release]
+    # Same temporary CLI baseline as complete consumers; retires 2026-11-02.
+    runs-on: macos-14
+    timeout-minutes: 150
     environment:
       name: maven-central
       url: https://central.sonatype.com/publishing
@@ -99,6 +98,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Configure Java 21 daemon toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Configure Java 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -108,11 +112,24 @@ jobs:
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          gradle-home-cache-excludes: caches/build-cache-1
+          cache-read-only: true
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            caches/*/kotlin-dsl
+            caches/*/scripts
+            caches/*/groovy-dsl
 
-      - name: Install Android SDK platforms
-        run: |
-          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+      - name: Install reviewed publication CLI platform tools
+        # Assert macOS 14 ARM64/Xcode 16.2; prepare both maintained Android SDKs.
+        run: bash scripts/setup-ci-component.sh consumers
+
+      - name: Revalidate frozen applications and exact owner approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_QUALIFICATION_BINDING: ${{ vars.RELEASE_QUALIFICATION_BINDING }}
+          FROZEN_ARTIFACT: ${{ needs.freeze-applications.outputs.artifact_id }}
+          FROZEN_SHA256: ${{ needs.freeze-applications.outputs.sha256 }}
+        run: python3 -I -B -S scripts/release_application_set.py revalidate --artifact "$FROZEN_ARTIFACT" --sha256 "$FROZEN_SHA256"
 
       - name: Revalidate approved release and credentials
         env:
@@ -152,6 +169,38 @@ jobs:
             --dependency-verification strict --max-workers=2 --no-parallel --console=plain cyclonedxBom
           scripts/check-sbom.sh build/reports/cyclonedx/bom.json build/reports/cyclonedx/bom.xml
 
+      - name: Validate signed originals before retention
+        id: original-bundle
+        run: |
+          VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
+          BASE="build/central/p2pkit-$VERSION-central-bundle"
+          python3 -I -B -S scripts/central_bundle_evidence.py \
+            --bundle "$BASE.zip" --manifest "$BASE.manifest.sha256" \
+            --summary "$BASE.summary.json" --public-key "$BASE.public.asc" \
+            --source-sha "$GITHUB_SHA" --source-tree "$(git rev-parse 'HEAD^{tree}')" --version "$VERSION"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Retain reviewed signed bundle before Central upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-central-signed-bundle-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.original-bundle.outputs.base }}.zip
+            ${{ steps.original-bundle.outputs.base }}.manifest.sha256
+            ${{ steps.original-bundle.outputs.base }}.summary.json
+            ${{ steps.original-bundle.outputs.base }}.public.asc
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+
+      - name: Revalidate original readiness immediately before irreversible upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_QUALIFICATION_BINDING: ${{ vars.RELEASE_QUALIFICATION_BINDING }}
+          FROZEN_ARTIFACT: ${{ needs.freeze-applications.outputs.artifact_id }}
+          FROZEN_SHA256: ${{ needs.freeze-applications.outputs.sha256 }}
+        run: python3 -I -B -S scripts/release_application_set.py revalidate --artifact "$FROZEN_ARTIFACT" --sha256 "$FROZEN_SHA256"
+
       - name: Upload once and wait for publication
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -161,6 +210,24 @@ jobs:
           scripts/publish-central-portal-bundle.sh \
             "build/central/p2pkit-$VERSION-central-bundle.zip" \
             build/reports/maven-central
+
+      - name: Bind original completed Portal publication
+        run: python3 -I -B -S scripts/central_deployment_evidence.py
+
+      - name: Retain original PUBLISHED deployment receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-central-deployment-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/reports/maven-central/deployment-receipt.json
+            build/reports/maven-central/portal-events.jsonl
+            build/reports/maven-central/status.json
+            build/reports/maven-central/bundle.sha256
+            build/reports/maven-central/commit-sha.txt
+            build/reports/maven-central/deployment-id.txt
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
 
       - name: Verify immutable remote bytes and consumers
         run: |
@@ -174,7 +241,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: maven-central-publication-${{ github.ref_name }}
+          name: maven-central-publication-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             build/central/*.zip
             build/central/*.sha256
@@ -183,3 +250,5 @@ jobs:
             build/reports/cyclonedx/bom.xml
             build/reports/maven-central/**
           if-no-files-found: warn
+          retention-days: 14
+          overwrite: false

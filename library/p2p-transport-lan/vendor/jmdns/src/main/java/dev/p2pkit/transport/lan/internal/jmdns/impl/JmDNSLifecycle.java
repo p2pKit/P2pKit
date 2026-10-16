@@ -39,6 +39,7 @@ final class JmDNSLifecycle {
     long normalTaskStarts;
     Attempt attempt;
     Recovery recovery;
+    GoodbyeBudget goodbyeBudget;
     final Set<MulticastSocket> sockets = Collections.newSetFromMap(
             new IdentityHashMap<MulticastSocket, Boolean>());
     final List<OwnedThread> listeners = new ArrayList<>();
@@ -186,11 +187,35 @@ final class JmDNSLifecycle {
         }
     }
 
+    /** One monotonic allowance for all participants in a host cancellation. */
+    static final class GoodbyeBudget {
+        private final long origin;
+
+        GoodbyeBudget() {
+            this(System.nanoTime());
+        }
+
+        GoodbyeBudget(long origin) {
+            this.origin = origin;
+        }
+
+        long remainingMillis() {
+            return remainingMillis(System.nanoTime());
+        }
+
+        long remainingMillis(long now) {
+            long allowance = TimeUnit.MILLISECONDS.toNanos(DNSConstants.CLOSE_TIMEOUT);
+            long remaining = Math.max(0L, allowance - Math.max(0L, now - origin));
+            // Round up only the last fractional millisecond, never reset the origin.
+            return (remaining + 999_999L) / 1_000_000L;
+        }
+    }
+
     /**
      * One 5000ms new-drain budget. The monotonic origin is caller/attempt admission.
      * Remaining time is budget minus nanoTime elapsed, never a new per-resource
      * timeout. Only the existing bounded, non-overridable goodbye waits pause the
-     * owner's clock; they retain their own original CLOSE_TIMEOUT allowance.
+     * owner's clock; all participants share the host's CLOSE_TIMEOUT allowance.
      * Joiners never pause their clock. Retry carries its remaining budget across
      * the old helper barrier into the new attempt.
      */

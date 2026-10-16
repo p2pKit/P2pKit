@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 require_relative "../check-version-input-policy"
+require "open3"
+require "rbconfig"
 
 ROOT = File.expand_path("../..", __dir__)
 CONSUMER = File.read(File.join(ROOT, "scripts/check-published-consumers.sh"))
@@ -122,4 +124,48 @@ count += 1
 VersionInputPolicy.check_netty_lock("# io.netty:netty-codec-http:1.0.0.Final=obsolete\n" + http, minimum)
 VersionInputPolicy.check_netty_lock(http + "other.group:some-module:1.0=fixture\n", minimum)
 
-puts "RESULT: PASS — consumer input and numeric Netty-floor policy; #{count} negative controls"
+abi_entries = %w[abi-tools-api abi-tools kotlin-klib-abi-reader kotlin-metadata-jvm kotlin-stdlib].map do |artifact|
+    "org.jetbrains.kotlin:#{artifact}:2.3.21=kotlinInternalAbiValidation"
+end
+%w[kotlin-metadata-jvm kotlin-stdlib].each do |artifact|
+    %w[androidAbiRuntime androidAbiRuntime,kotlinInternalAbiValidation].each do |configurations|
+        abi_entries << "org.jetbrains.kotlin:#{artifact}:2.3.21=#{configurations}"
+    end
+end
+abi_entries.each do |entry|
+    VersionInputPolicy.check_legacy_kotlin_abi_entry(entry)
+    %w[kotlinCompilerClasspath jvmRuntimeClasspath jvmTestRuntimeClasspath androidRuntimeClasspath
+       androidAbiRuntimeExtra consumerRuntimeClasspath].each do |extra|
+        reject("ABI reader leaks into #{extra}", "escaped the isolated ABI toolchain") do
+            VersionInputPolicy.check_legacy_kotlin_abi_entry("#{entry},#{extra}")
+        end
+        count += 1
+    end
+end
+[
+    "org.jetbrains.kotlin:kotlin-compiler:2.3.21=androidAbiRuntime",
+    "org.jetbrains.kotlin:abi-tools:2.3.21=androidAbiRuntime",
+    "org.jetbrains.kotlin:kotlin-stdlib:2.3.21=jvmRuntimeClasspath",
+    "other.group:kotlin-metadata-jvm:2.3.21=androidAbiRuntime",
+    "org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=",
+    "org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=androidAbiRuntime\n",
+].each do |entry|
+    reject("unreviewed ABI entry", "escaped the isolated ABI toolchain") do
+        VersionInputPolicy.check_legacy_kotlin_abi_entry(entry)
+    end
+    count += 1
+end
+checker = File.join(ROOT, "scripts/check-version-input-policy.rb")
+stdout, stderr, status = Open3.capture3(RbConfig.ruby, checker, "kotlin-abi-entry", abi_entries.last)
+raise "ABI CLI rejects valid isolated reader" unless status.success? && stdout.include?("RESULT: PASS") && stderr.empty?
+stdout, stderr, status = Open3.capture3(RbConfig.ruby, checker, "kotlin-abi-entry", "#{abi_entries.last},jvmRuntimeClasspath")
+raise "ABI CLI accepts runtime leakage" unless !status.success? && stdout.empty? && stderr.include?("escaped")
+count += 1
+
+outer = File.read(File.join(ROOT, "scripts/tests/check-kotlin-toolchain-policy-test.sh"))
+raise "outer policy no longer checks legacy entries" unless outer.lines.any? do |line|
+    line.strip == 'ruby "$ROOT/scripts/check-version-input-policy.rb" kotlin-abi-entry "$legacy_entry" >/dev/null ||'
+end
+
+puts "RESULT: PASS — consumer, Netty-floor and isolated ABI-reader policies; " \
+    "#{count} negative controls; #{abi_entries.length} ABI positive controls"

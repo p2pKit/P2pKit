@@ -33,6 +33,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -87,10 +88,12 @@ class NetworkPathRecoveryTest {
         name: String,
         preStaged: List<RawConnection>,
         recording: P2pLogger,
-        transport: FakeDataTransport = FakeDataTransport(preStagedIncoming = preStaged)
+        transport: FakeDataTransport = FakeDataTransport(preStagedIncoming = preStaged),
+        beforeCommit: (suspend () -> Unit)? = null
     ): P2pKit =
         createTestKit {
             logger = recording
+            beforeSessionCommitForTest = beforeCommit
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {
@@ -105,10 +108,17 @@ class NetworkPathRecoveryTest {
             }
         }
 
+    private suspend fun awaitIncomingCommit(kit: P2pKit) {
+        val incoming = withTimeout(5_000) { kit.sessions.first { it.isNotEmpty() }.single() }
+        assertEquals(ConnectionState.Connected, incoming.state.value)
+    }
+
     @Test
     fun pathUnsatisfiedTransitionsConnectedSessionToReconnecting() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
+        val bobCommitEntered = CompletableDeferred<Unit>()
+        val releaseBobCommit = CompletableDeferred<Unit>()
         withTestKit(
             create = { recorder ->
                 outgoingKit(
@@ -121,18 +131,34 @@ class NetworkPathRecoveryTest {
         ) { alice ->
             withTestKit(
                 create = { recorder ->
-                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                    incomingKit("Bob", listOf(pair.b), recording = recorder, beforeCommit = {
+                        bobCommitEntered.complete(Unit)
+                        releaseBobCommit.await()
+                    })
                 }
             ) { bob ->
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-                assertEquals(ConnectionState.Connected, session.state.value)
+                try {
+                    val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                    assertEquals(ConnectionState.Connected, session.state.value)
+                    withTimeout(5_000) { bobCommitEntered.await() }
+                    assertTrue(bob.sessions.value.isEmpty())
 
-                fake.emit(NetworkPathStatus.Unsatisfied)
+                    // Local connect does not acknowledge Bob's independent commit. Force that
+                    // ordering here: path loss/teardown must not race his still-uncommitted setup.
+                    val remoteReady = async(start = CoroutineStart.UNDISPATCHED) { awaitIncomingCommit(bob) }
+                    assertFalse(remoteReady.isCompleted)
+                    releaseBobCommit.complete(Unit)
+                    remoteReady.await()
 
-                val reconnecting = withTimeout(5_000) {
-                    session.state.first { it == ConnectionState.Reconnecting }
+                    fake.emit(NetworkPathStatus.Unsatisfied)
+
+                    val reconnecting = withTimeout(5_000) {
+                        session.state.first { it == ConnectionState.Reconnecting }
+                    }
+                    assertEquals(ConnectionState.Reconnecting, reconnecting)
+                } finally {
+                    releaseBobCommit.complete(Unit)
                 }
-                assertEquals(ConnectionState.Reconnecting, reconnecting)
             }
         }
     }
@@ -158,6 +184,7 @@ class NetworkPathRecoveryTest {
             ) { bob ->
                 val session = withTimeout(5_000) { alice.connect(targetPeer()) }
                 assertEquals(ConnectionState.Connected, session.state.value)
+                awaitIncomingCommit(bob)
 
                 fake.emit(NetworkPathStatus.Unsatisfied)
 
@@ -200,6 +227,7 @@ class NetworkPathRecoveryTest {
                 ) { bob ->
                     val first = withTimeout(5_000) { alice.connect(targetPeer()) }
                     assertEquals(ConnectionState.Connected, first.state.value)
+                    awaitIncomingCommit(bob)
 
                     fake.emit(NetworkPathStatus.Unsatisfied)
                     assertEquals(
@@ -401,6 +429,7 @@ class NetworkPathRecoveryTest {
             ) { bob ->
                 val session = withTimeout(5_000) { alice.connect(targetPeer()) }
                 assertEquals(ConnectionState.Connected, session.state.value)
+                awaitIncomingCommit(bob)
 
                 // Emit Unknown — must NOT touch the session.
                 fake.emit(NetworkPathStatus.Unknown)

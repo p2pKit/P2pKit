@@ -1,0 +1,426 @@
+name: Optional RPC remaining qualification
+
+# Distinct owner-authorized feature queue. No Foundation/campaign/release jobs.
+# Ordinary feature pushes register this workflow but allocate no runner.
+on:
+  push:
+    branches: [work/rpc-lan-20260927-054728-8b1b11da]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-remaining-qualification-${{ github.ref }}-${{ (contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) && 'admission' || contains(github.event.head_commit.message, '[rpc-intel-qualify]') && 'intel-product' || contains(github.event.head_commit.message, '[rpc-arm-qualify]') && 'arm-product' || 'product' }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    # Historical hosted ARM26 recipes are retained for evidence continuity.
+    # The official October 2 ARM continuation is the local Mac27/Xcode27
+    # controller (docs/rpc/local-arm27-qualification.md), not this old image.
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-native-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-network-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-runtime-investigate]'))
+    name: ${{ matrix.lane }}${{ matrix.investigation && format(' ({0} diagnostic)', matrix.investigation) || '' }} (feature only, not release or capacity)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      # Scoped ART and Apple-diagnostic requests must not repeat unrelated lanes.
+      matrix: ${{ fromJSON(contains(github.event.head_commit.message, '[rpc-intel-investigate]') && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer","investigation":"native"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer","investigation":"cold-boot"}]}' || contains(github.event.head_commit.message, '[rpc-intel-native-investigate]') && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer","investigation":"native"}]}' || contains(github.event.head_commit.message, '[rpc-intel-network-investigate]') && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer","investigation":"network"}]}' || contains(github.event.head_commit.message, '[rpc-intel-runtime-investigate]') && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer","investigation":"runtime"}]}' || (contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]')) && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"}]}' || contains(github.event.head_commit.message, '[rpc-arm-qualify]') && '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"}]}' || contains(github.event.head_commit.message, '[rpc-art]') && '{"include":[{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}' || (contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]')) && '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"}]}' || '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"},{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}') }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      DEVELOPER_DIR: ${{ matrix.developer }}
+      RPC_INTEL_INVESTIGATION: ${{ matrix.investigation || '' }}
+      # The explicit "runtime" diagnostic prepares only its selected runtime's
+      # dyld cache before creating a device. Original full lanes are unchanged;
+      # no --force/--all, hidden boot, readiness retry or extended 120-second gate.
+      RPC_APPLE_LANE: ${{ matrix.lane }}
+      # Same explicit disposable-runner preparation, bound to each native lane.
+      # No x86 substitution for ARM; Android, admission-only and cold-boot stay unchanged.
+      RPC_APPLE_SSH_CONTEXT: 'false'
+      RPC_APPLE_LAUNCHD_CONTEXT: 'false'
+      # Additional explicit diagnostic modifier only; runtime-mode/source checks
+      # reject its use for ordinary Intel, ARM, admission or other inventories.
+      RPC_APPLE_AUDIT_CONTEXT: ${{ contains(github.event.head_commit.message, '[rpc-intel-audit-context]') }}
+      RPC_APPLE_TERMINAL_CONTEXT: ${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot' && !contains(github.event.head_commit.message, '[rpc-intel-audit-context]') && !(contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}
+      # Restore the original advertising Boolean and daemon configuration on
+      # every outcome; never alter TCC/SIP, admission, authentication or routes.
+      RPC_APPLE_BONJOUR_ADVERTISING: ${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot' && !(contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}
+      RPC_ADMISSION_ONLY: ${{ contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') }}
+      RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-native-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-network-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-runtime-investigate]')) }}
+    steps:
+      - name: Check out the exact feature source without stored credentials or tags
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Fetch only complete main and feature history without tags
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          git config remote.origin.tagOpt --no-tags
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/rpc-lan-20260927-054728-8b1b11da:refs/remotes/origin/work/rpc-lan-20260927-054728-8b1b11da
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test -z "$(git for-each-ref --format='%(refname)' refs/tags)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Allocate fresh private job state without restoring caches
+        id: allocate
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          parent=$(mktemp -d "$RUNNER_TEMP/rpc-qualification.XXXXXXXX")
+          mkdir "$parent/java-settings"
+          printf 'RPC_QUALIFICATION_PARENT=%s\n' "$parent" >> "$GITHUB_ENV"
+
+      - name: Install the native Gradle daemon toolchain
+        timeout-minutes: 10
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          settings-path: ${{ env.RPC_QUALIFICATION_PARENT }}/java-settings
+
+      - name: Retain the daemon toolchain selection
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Install the native launcher and library compiler
+        timeout-minutes: 10
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          settings-path: ${{ env.RPC_QUALIFICATION_PARENT }}/java-settings
+
+      - name: Check offline admission and public-evidence controls
+        timeout-minutes: 3
+        run: |
+          python3 scripts/tests/run-rpc-qualification-test.py
+          python3 scripts/tests/rpc-product-diagnostics-test.py
+          python3 scripts/tests/rpc-intel-process-diagnostics-test.py
+          python3 scripts/tests/rpc-intel-inventory-diagnostics-test.py
+          python3 scripts/tests/rpc-intel-service-diagnostics-test.py
+          python3 scripts/tests/rpc-intel-boot-diagnostics-test.py
+          python3 scripts/tests/rpc-apple-network-diagnostics-test.py
+          python3 scripts/tests/rpc-apple-bonjour-environment-test.py
+          python3 scripts/tests/analyze-rpc-capacity-diagnostics-test.py
+          python3 scripts/tests/with-darwin-audit-session-test.py
+          python3 scripts/tests/with-darwin-ssh-context-test.py
+          python3 scripts/tests/with-darwin-launchd-context-test.py
+          python3 scripts/tests/with-darwin-terminal-context-test.py
+          python3 scripts/tests/rpc-apple-runner-context-test.py
+          python3 scripts/tests/rpc-apple-audit-context-test.py
+
+      - name: Observe existing Linux KVM prerequisites without granting access
+        if: ${{ matrix.lane == 'android-art' }}
+        timeout-minutes: 1
+        run: |
+          python3 scripts/tests/kvm-environment-test.py
+          python3 scripts/diagnostics/kvm-environment.py
+
+      - name: Execute source-bound native admission and original bounded gates
+        id: execution
+        timeout-minutes: 325
+        run: |
+          args=()
+          if test "$RPC_ADMISSION_ONLY" = true; then args+=(--admission-only); fi
+          if test -n "$RPC_INTEL_INVESTIGATION"; then args+=(--intel-investigation "$RPC_INTEL_INVESTIGATION"); fi
+          if test '${{ matrix.lane }}' != android-art; then
+            # Process-local session setup drops all setup privilege BEFORE the
+            # unchanged native admission, observer, tests and cleanup execute.
+            if test "$RPC_APPLE_TERMINAL_CONTEXT" = true; then
+              python3 scripts/with-darwin-terminal-context.py --parent "$RPC_QUALIFICATION_PARENT" \
+                --lane '${{ matrix.lane }}' "${args[@]}"
+            elif test "$RPC_APPLE_LAUNCHD_CONTEXT" = true; then
+              python3 scripts/with-darwin-launchd-context.py --parent "$RPC_QUALIFICATION_PARENT" \
+                --lane '${{ matrix.lane }}' "${args[@]}"
+            elif test "$RPC_APPLE_SSH_CONTEXT" = true; then
+              python3 scripts/with-darwin-ssh-context.py --parent "$RPC_QUALIFICATION_PARENT" \
+                --native-session --lane '${{ matrix.lane }}' "${args[@]}"
+            elif test "$RPC_APPLE_AUDIT_CONTEXT" = true; then
+              # Homebrew's normal global site startup reports its opt interpreter.
+              # Match the unprivileged controller's startup, not the -S bootstrap.
+              # -I excludes user/environment hooks; privileged setup still uses -I -S.
+              # The original admission retains byte-for-byte interpreter equality.
+              runtime_python=$(python3 -I -c 'import sys; from pathlib import Path; print(Path(sys.executable).absolute())')
+              "$runtime_python" scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
+                "$runtime_python" "$GITHUB_WORKSPACE/scripts/run-rpc-qualification.py" run --lane '${{ matrix.lane }}' \
+                "${args[@]}" --require-bonjour-advertising
+            else
+              python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
+                python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}' "${args[@]}"
+            fi
+          else
+            python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}' "${args[@]}"
+          fi
+
+      - name: Select only bounded, sanitized counts and source-bound verdicts
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          args=()
+          if test "$RPC_ADMISSION_ONLY" = true; then args+=(--admission-only); fi
+          if test -n "$RPC_INTEL_INVESTIGATION"; then args+=(--intel-investigation "$RPC_INTEL_INVESTIGATION"); fi
+          python3 scripts/run-rpc-qualification.py collect --lane '${{ matrix.lane }}' "${args[@]}"
+
+      - name: Upload only the explicit public summary, never raw evidence or binaries
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-qualification-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}${{ matrix.investigation && format('-intel-{0}', matrix.investigation) || '' }}
+          path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  continuation-offline:
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      (contains(github.event.head_commit.message, '[rpc-continuation-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-arm-plan-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-wrapper-prepare-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-tool-resources-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-signal-environment-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-swift-recheck-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-clock-recheck-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-cli-process-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-ios-policy-offline]'))
+    name: Continuation offline controls (not native, ART or physical qualification)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      RPC_OFFLINE_ONLY_ARM_PLAN: ${{ contains(github.event.head_commit.message, '[rpc-arm-plan-offline]') }}
+      RPC_OFFLINE_ONLY_WRAPPER_PREPARE: ${{ contains(github.event.head_commit.message, '[rpc-wrapper-prepare-offline]') }}
+      RPC_OFFLINE_ONLY_TOOL_RESOURCES: ${{ contains(github.event.head_commit.message, '[rpc-tool-resources-offline]') }}
+      RPC_OFFLINE_ONLY_SIGNAL_ENVIRONMENT: ${{ contains(github.event.head_commit.message, '[rpc-signal-environment-offline]') }}
+      RPC_OFFLINE_ONLY_SWIFT_RECHECK: ${{ contains(github.event.head_commit.message, '[rpc-swift-recheck-offline]') }}
+      RPC_OFFLINE_ONLY_CLOCK_RECHECK: ${{ contains(github.event.head_commit.message, '[rpc-clock-recheck-offline]') }}
+      RPC_OFFLINE_ONLY_CLI_PROCESS: ${{ contains(github.event.head_commit.message, '[rpc-cli-process-offline]') }}
+      RPC_OFFLINE_ONLY_IOS_POLICY: ${{ contains(github.event.head_commit.message, '[rpc-ios-policy-offline]') }}
+    steps:
+      - name: Exact source without stored credentials, tags, dependencies or applications
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Changed offline contracts on the second host kernel
+        id: controls
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          RPC_OFFLINE_DIR="$(mktemp -d "$RUNNER_TEMP/rpc-offline.XXXXXXXX")"
+          export RPC_OFFLINE_DIR
+          printf 'summary=%s/summary.json\n' "$RPC_OFFLINE_DIR" >> "$GITHUB_OUTPUT"
+          python3 -B - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess, sys, time
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RPC_OFFLINE_DIR'])
+          names = ('rpc-local-arm-qualification', 'rpc-local-signal-environment', 'rpc-gradle-distribution', 'rpc-xcodegen-package',
+                   'rpc-mobile-commands', 'authorize-rpc-local-arm', 'rpc-ios-usb', 'rpc-darwin-capacity',
+                   'rpc-mobile-capacity', 'run-rpc-mobile-capacity', 'run-rpc-android-controls',
+                   'run-rpc-phone-ios-controls', 'run-rpc-ios-handoff')
+          if os.environ['RPC_OFFLINE_ONLY_CLI_PROCESS'] == 'true':
+              names = ('rpc-local-arm-qualification', 'authorize-rpc-local-arm', 'rpc-cli-process-controls')
+          elif os.environ['RPC_OFFLINE_ONLY_SWIFT_RECHECK'] == 'true' or os.environ['RPC_OFFLINE_ONLY_CLOCK_RECHECK'] == 'true':
+              names = ('rpc-local-arm-qualification', 'authorize-rpc-local-arm')
+          elif os.environ['RPC_OFFLINE_ONLY_SIGNAL_ENVIRONMENT'] == 'true':
+              names = ('rpc-local-arm-qualification', 'rpc-local-signal-environment')
+          elif os.environ['RPC_OFFLINE_ONLY_TOOL_RESOURCES'] == 'true':
+              names = ('rpc-local-arm-qualification', 'rpc-xcodegen-package',
+                       'rpc-mobile-commands', 'authorize-rpc-local-arm')
+          elif os.environ['RPC_OFFLINE_ONLY_WRAPPER_PREPARE'] == 'true':
+              names = ('rpc-local-arm-qualification', 'rpc-gradle-distribution')
+          elif os.environ['RPC_OFFLINE_ONLY_ARM_PLAN'] == 'true':
+              names = ('rpc-local-arm-qualification',)
+          elif os.environ['RPC_OFFLINE_ONLY_IOS_POLICY'] == 'true':
+              names = ('rpc-ios-usb',)
+          rows = []
+          for name in names:
+              path = root / 'scripts/tests' / (name + '-test.py')
+              log = out / (name + '.log')
+              started = time.monotonic()
+              with log.open('xb') as stream:
+                  try:
+                      code = subprocess.run([sys.executable, '-B', str(path)], stdout=stream,
+                                            stderr=subprocess.STDOUT, timeout=180).returncode
+                  except subprocess.TimeoutExpired:
+                      code = 124
+              raw = log.read_bytes()
+              counts = re.findall(rb'(?m)^Ran ([0-9]+) tests? in ', raw)
+              passed = code == 0 and len(counts) == 1 and raw.rstrip().endswith(b'\nOK')
+              rows.append(dict(test=path.name, sourceSha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                  logSha256=hashlib.sha256(raw).hexdigest(), exitCode=code, passed=passed,
+                  tests=int(counts[0]) if len(counts) == 1 else None,
+                  elapsedMillis=round((time.monotonic() - started) * 1000)))
+              print(name + ': ' + ('PASS' if passed else 'FAIL'))
+          value = dict(schema=1, scope='OFFLINE_CONTINUATION_NOT_NATIVE_ART_USB_LAN_OR_CAPACITY',
+                       sourceSha=os.environ['GITHUB_SHA'], rows=rows, passed=all(r['passed'] for r in rows))
+          (out / 'summary.json').write_text(json.dumps(value, indent=2) + '\n')
+          raise SystemExit(0 if value['passed'] else 1)
+          PY
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Upload only source hashes and numeric offline results
+        if: ${{ always() && steps.controls.outputs.summary != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-continuation-offline-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.controls.outputs.summary }}
+          if-no-files-found: error
+          retention-days: 7
+
+  installed-intel-observation:
+    # Discover whether the separate Intel lane is runnable under the owner's
+    # no-install direction. No product, bootstrap, simulator or tool execution.
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-intel-tools-observe]')
+    name: Installed Intel toolchain availability only (no qualification)
+    runs-on: macos-15-intel
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Observe only existing developer-tool metadata
+        id: observe
+        run: |
+          set -euo pipefail
+          RPC_INTEL_OBSERVATION="$(mktemp "$RUNNER_TEMP/rpc-intel-tools.XXXXXXXX.json")"
+          export RPC_INTEL_OBSERVATION
+          python3 -B - <<'PY'
+          import json, os, pathlib, platform, plistlib, re, shutil, stat
+          def regular(path):
+              try:
+                  s = path.lstat()
+                  return stat.S_ISREG(s.st_mode) and not s.st_mode & (stat.S_ISUID | stat.S_ISGID)
+              except FileNotFoundError:
+                  return False
+          def java(key):
+              value = os.environ.get(key)
+              if not value:
+                  return dict(configured=False, release=None, executablePresent=False)
+              home = pathlib.Path(value)
+              path = home / 'release'
+              release = None
+              if regular(path) and path.stat().st_size <= 16384:
+                  text = path.read_text()
+                  fields = {k: re.findall(r'(?m)^' + k + r'="([a-zA-Z0-9._+\-]+)"$', text)
+                            for k in ('JAVA_VERSION', 'OS_ARCH')}
+                  if all(len(v) == 1 for v in fields.values()):
+                      release = {k: v[0] for k, v in fields.items()}
+              return dict(configured=True, release=release, executablePresent=regular(home / 'bin/java'))
+          xcode = pathlib.Path('/Applications/Xcode_26.3.app/Contents/version.plist')
+          version = None
+          if regular(xcode) and xcode.stat().st_size <= 65536:
+              observed = plistlib.loads(xcode.read_bytes()).get('CFBundleShortVersionString')
+              if isinstance(observed, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,2}', observed):
+                  version = observed
+          sdk = os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT')
+          platforms = {n: bool(sdk) and regular(pathlib.Path(sdk) / 'platforms' / n / 'android.jar')
+                       for n in ('android-36', 'android-37.0')}
+          generator = shutil.which('xcodegen')
+          present = bool(generator) and regular(pathlib.Path(generator).resolve())
+          value = dict(schema=1, scope='INSTALLED_INTEL_METADATA_ONLY_NOT_NATIVE_OR_PRODUCT_ADMISSION',
+              sourceSha=os.environ['GITHUB_SHA'], system=platform.system(), machine=platform.machine(),
+              macos=platform.mac_ver()[0], xcode263Version=version,
+              jdk17=java('JAVA_HOME_17_X64'), jdk21=java('JAVA_HOME_21_X64'), androidPlatforms=platforms,
+              xcodegenPresent=present, installationsRequested=False, bootstrapExecuted=False,
+              simulatorQueried=False, nativeQualified=False)
+          pathlib.Path(os.environ['RPC_INTEL_OBSERVATION']).write_text(json.dumps(value, indent=2) + '\n')
+          print(json.dumps(value, indent=2))
+          PY
+          printf 'path=%s\n' "$RPC_INTEL_OBSERVATION" >> "$GITHUB_OUTPUT"
+
+      - name: Retain bounded public toolchain metadata only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-installed-intel-tools-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.observe.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  alternate-kvm-observation:
+    # October 2: inspect the current maintained ART image without provisioning.
+    # The older Ubuntu22 denial remains historical evidence, not a current-host
+    # probe or permission to change access. This cannot replace any ART gate.
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-kvm-probe]')
+    name: Ubuntu 24 KVM availability only (not Android qualification)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the exact feature source without credentials or tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Complete only main and feature history without tags
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          git config remote.origin.tagOpt --no-tags
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/rpc-lan-20260927-054728-8b1b11da:refs/remotes/origin/work/rpc-lan-20260927-054728-8b1b11da
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test -z "$(git for-each-ref --format='%(refname)' refs/tags)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Read existing KVM metadata without opening it or changing access
+        id: observe
+        run: |
+          set -euo pipefail
+          python3 -B scripts/tests/kvm-environment-test.py
+          observation=$(mktemp "$RUNNER_TEMP/rpc-kvm-observation.XXXXXXXX.json")
+          python3 -B scripts/diagnostics/kvm-environment.py > "$observation"
+          printf 'observation=%s\n' "$observation" >> "$GITHUB_OUTPUT"
+          cat "$observation"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Preserve only the closed read-only observation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-ubuntu24-kvm-observation-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.observe.outputs.observation }}
+          if-no-files-found: error
+          retention-days: 7

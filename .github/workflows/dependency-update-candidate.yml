@@ -1,0 +1,110 @@
+name: Prepare dependency update candidate
+on:
+  workflow_dispatch:
+    inputs:
+      controller_sha:
+        description: Exact reviewed controller commit at this workflow ref
+        required: true
+        type: string
+      controller_tree:
+        description: Exact controller tree
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact reviewed dependency-source candidate commit
+        required: true
+        type: string
+      candidate_tree:
+        description: Exact candidate tree before generation
+        required: true
+        type: string
+      dependency_base_sha:
+        description: Exact ancestor containing the unchanged original locks/checksums
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  generate:
+    if: ${{ github.repository == 'p2pKit/P2pKit' }}
+    # Temporary supported CLI baseline; macos-14 retires 2026-11-02.
+    runs-on: macos-14
+    timeout-minutes: 210
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      DEPENDENCY_UPDATE_REQUEST: ${{ toJSON(inputs) }}
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - name: Validate exact immutable request
+        run: |
+          python3 -B - <<'PY'
+          import json, os, re
+          request = json.loads(os.environ['DEPENDENCY_UPDATE_REQUEST'])
+          assert set(request) == {'controller_sha', 'controller_tree', 'candidate_sha', 'candidate_tree', 'dependency_base_sha'}
+          assert all(type(v) is str and re.fullmatch('[0-9a-f]{40}', v) for v in request.values())
+          assert request['controller_sha'] == os.environ['GITHUB_SHA'] == os.environ['GITHUB_WORKFLOW_SHA']
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write('GRADLE_USER_HOME=' + os.path.join(os.environ['RUNNER_TEMP'], 'dependency-update-gradle-home') + '\n')
+          PY
+      - name: Check out immutable controller without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.controller_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out separate exact candidate without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Configure Java 21 daemon toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Configure Java 17 library toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install reviewed platform tools
+        working-directory: controller
+        run: bash scripts/setup-ci-component.sh dependency-update
+      - name: Run the maintained full generator and encrypt original diagnostics
+        id: generate
+        working-directory: controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B scripts/ci_evidence.py --component dependency-update --timeout-seconds 10800 --source-root "$GITHUB_WORKSPACE/controller" --output-dir "$RUNNER_TEMP/dependency-evidence" --report-glob 'build/reports/dependency-update/**/*' -- python3 -B scripts/dependency_update.py --candidate "$GITHUB_WORKSPACE/candidate" --output "$RUNNER_TEMP/dependency-candidate"
+      - name: Retain encrypted diagnostics including failed generation
+        if: ${{ always() && steps.generate.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dependency-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dependency-evidence/manifest.json
+            ${{ runner.temp }}/dependency-evidence/evidence.tar.gz.gpg
+            ${{ runner.temp }}/dependency-evidence/failure.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+      - name: Retain review-only generated patch and source manifest
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dependency-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dependency-candidate/generated-dependencies.patch
+            ${{ runner.temp }}/dependency-candidate/generated-dependencies.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

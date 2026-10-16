@@ -1,267 +1,84 @@
-name: CI
-
+name: CI — modular qualification
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      component:
+        description: all, one component, or a focused diagnostic (not qualification)
+        default: all
+        type: choice
+        options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, macos-shared, bundle-diagnostic, jmdns-diagnostic, consumers-pom-diagnostic]
+      qualification_selection:
+        description: Optional exact-source selection JSON to aggregate previously successful components without rebuilding
+        default: ''
+        type: string
   schedule:
-    - cron: "17 4 * * 1"
-
+    - cron: '17 4 * * 1'
 permissions:
   contents: read
-
+  actions: read
+# Different components and RPC runs never cancel or block one another.
 concurrency:
-  # Pushes/manual runs must not cancel the weekly default-branch backstop.
-  # Keep ordinary per-ref supersession, but let a running schedule finish.
-  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'schedule' && 'schedule' || 'change' }}
-  cancel-in-progress: ${{ github.event_name != 'schedule' }}
-
+  group: modular-ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.component || 'all' }}
+  cancel-in-progress: false
 jobs:
-  jvm-library-checks:
-    name: JVM libraries (${{ matrix.os }})
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.components.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - id: components
+        env:
+          COMPONENT: ${{ inputs.component || 'all' }}
+        run: echo "matrix=$(python3 -B scripts/ci_component.py --matrix "$COMPONENT")" >> "$GITHUB_OUTPUT"
+  component:
+    if: ${{ inputs.qualification_selection == '' }}
+    needs: plan
+    name: ${{ matrix.component }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            wrapper: ./gradlew
-          - os: windows-latest
-            wrapper: .\gradlew.bat
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/ci-component.yml
+    with:
+      component: ${{ matrix.component }}
+      runner: ${{ matrix.os }}
+      minutes: ${{ matrix.minutes }}
+      job_minutes: ${{ matrix.job_minutes }}
+  qualify:
+    name: Qualify release components
+    needs: [plan, component]
+    if: ${{ always() && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && needs.plan.result == 'success' && (inputs.qualification_selection != '' || ((inputs.component == 'all' || inputs.component == '') && needs.component.result == 'success')) }}
+    runs-on: ubuntu-24.04
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-
-      - name: Configure Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Validate wrapper and configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          gradle-home-cache-excludes: caches/build-cache-1
-
-      - name: Run library JVM tests on the host
-        id: library-tests
-        # Native runner defaults: Bash on Ubuntu, PowerShell on Windows.
-        run: >-
-          ${{ matrix.wrapper }} --no-daemon
-          :p2p-core:jvmTest
-          :p2p-transport-lan:jvmTest
-          :p2p-network-provisioning-desktop:test
-          --continue --no-build-cache --dependency-verification strict
-          --max-workers=2 --no-parallel --console=plain
-
-      - name: Stop Gradle after tests
-        id: stop-gradle
-        if: ${{ always() }}
-        run: ${{ matrix.wrapper }} --stop
-
-      - name: Upload library JVM test evidence
-        id: library-reports
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: jvm-library-tests-${{ matrix.os }}-${{ github.run_attempt }}
-          path: |
-            library/p2p-core/build/test-results/jvmTest/**
-            library/p2p-core/build/reports/tests/jvmTest/**
-            library/p2p-transport-lan/build/test-results/jvmTest/**
-            library/p2p-transport-lan/build/reports/tests/jvmTest/**
-            library/p2p-network-provisioning-desktop/build/test-results/test/**
-            library/p2p-network-provisioning-desktop/build/reports/tests/test/**
-          # Compilation/setup failure can precede report creation; the test
-          # step is blocking even when there is no report to upload.
-          if-no-files-found: warn
-          retention-days: 7
-
-  complete-gate:
-    needs: jvm-library-checks
-    # A skipped required job can otherwise count as successful. Always run
-    # the explicit dependency-result guard, including on failure/cancellation.
-    if: ${{ always() }}
-    runs-on: macos-latest
-    timeout-minutes: 60
-    steps:
-      - name: Require successful Linux and Windows library tests
-        id: require-jvm-checks
-        shell: bash
-        env:
-          JVM_CHECK_RESULT: ${{ needs.jvm-library-checks.result }}
-        run: test "$JVM_CHECK_RESULT" = success
-
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
           fetch-depth: 0
-          persist-credentials: false
-
-      - name: Classify required-check scope
-        id: scope
-        shell: bash
+      - name: Verify exact component artifacts and build an immutable qualification
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: scripts/resolve-ci-scope.sh >> "$GITHUB_OUTPUT"
-
-      - name: Verify committed and local whitespace
+          GH_TOKEN: ${{ github.token }}
+          CI_SELECTION: ${{ inputs.qualification_selection }}
+        run: |
+          python3 -B scripts/ci_qualification.py collect --source "$GITHUB_SHA" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --output "$RUNNER_TEMP/selection.json"
+          python3 -B scripts/ci_qualification.py aggregate --source "$GITHUB_SHA" --selection "$RUNNER_TEMP/selection.json" --output "$RUNNER_TEMP/qualification.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-qualification-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+  complete-gate:
+    needs: [qualify]
+    if: ${{ always() && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name != 'workflow_dispatch' || inputs.component == 'all' || inputs.qualification_selection != '') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require real complete qualification, including all failed/skipped dependencies
         env:
-          BASE_SHA: ${{ steps.scope.outputs.base }}
-          HEAD_SHA: ${{ steps.scope.outputs.head }}
-        run: scripts/check-git-whitespace.sh "$BASE_SHA" "$HEAD_SHA"
-
-      - name: Verify dependency update completeness
-        if: steps.scope.outputs.full == 'true'
-        env:
-          BASE_SHA: ${{ steps.scope.outputs.base }}
-          HEAD_SHA: ${{ steps.scope.outputs.head }}
-        run: |
-          scripts/check-dependency-update.sh "$BASE_SHA" "$HEAD_SHA"
-          scripts/tests/check-dependency-update-policy-test.sh
-
-      - name: Verify lightweight documentation change
-        if: steps.scope.outputs.full != 'true'
-        env:
-          BASE_SHA: ${{ steps.scope.outputs.base }}
-          HEAD_SHA: ${{ steps.scope.outputs.head }}
-        run: |
-          scripts/tests/classify-ci-scope-test.sh
-          scripts/tests/resolve-ci-scope-test.sh
-          ruby scripts/tests/check-ci-scope-policy-test.rb
-          scripts/tests/check-git-whitespace-test.sh
-          scripts/check-release-metadata.sh
-          scripts/tests/check-repository-layout.sh
-          scripts/tests/check-markdown-links.sh
-
-      - name: Configure Java 17
-        if: steps.scope.outputs.full == 'true'
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Validate wrapper and configure Gradle
-        if: steps.scope.outputs.full == 'true'
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          # Kotlin 2.4.10 predates the build-cache deserialization fix. Keep
-          # dependency/wrapper caching, but never persist or restore its local
-          # build-cache metadata across trust boundaries (CVE-2026-53914).
-          gradle-home-cache-excludes: caches/build-cache-1
-
-      - name: Install pinned XcodeGen
-        if: steps.scope.outputs.full == 'true'
-        run: |
-          xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
-          echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK platforms
-        if: steps.scope.outputs.full == 'true'
-        run: |
-          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
-
-      - name: Verify repository entry points
-        if: steps.scope.outputs.full == 'true'
-        run: |
-          scripts/check-gradle-wrapper.sh
-          scripts/tests/check-gradle-wrapper-test.sh
-          scripts/tests/check-lock-write-policy-test.sh
-          scripts/tests/check-release-tag-test.sh
-          scripts/tests/check-release-identity-test.sh
-          scripts/check-release-metadata.sh
-          scripts/tests/check-maven-release-environment-test.sh
-          scripts/tests/check-maven-namespace-access-test.sh
-          scripts/tests/check-maven-central-version-test.sh
-          scripts/tests/publish-central-portal-bundle-test.sh
-          scripts/tests/build-central-portal-bundle-test.sh
-          scripts/tests/install-xcodegen-test.sh
-          scripts/tests/release-workflow-test.sh
-          scripts/tests/check-sample-run-profiles.sh
-          scripts/tests/check-repository-layout.sh
-          scripts/tests/check-osv-lockfile-coverage.sh
-          scripts/tests/check-markdown-links.sh
-          scripts/tests/classify-ci-scope-test.sh
-          scripts/tests/resolve-ci-scope-test.sh
-          scripts/tests/check-git-whitespace-test.sh
-          scripts/tests/check-kotlin-toolchain-policy-test.sh
-          scripts/check-android-abi-guard.sh
-          python3 scripts/tests/ios-project-generation-test.py
-          source scripts/run-ios-app.sh
-          device_json="$(xcrun simctl list -j devices available)"
-          SIM_UDID="$(select_latest_available_simulator_udid "iPhone 17" "$device_json")"
-          export SIM_UDID
-          echo "Selected exact iOS simulator UDID: $SIM_UDID"
-          scripts/run-ios-ui-tests.sh
-          scripts/tests/run-ios-app-test.sh
-
-      - name: Upload iOS UI failure evidence
-        if: ${{ failure() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ios-ui-failure-${{ github.run_attempt }}
-          path: samples/iosApp/build/ios-ui-run.*/DerivedData/Logs/Test/*.xcresult
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Run complete module and platform checks
-        id: platform-tests
-        if: steps.scope.outputs.full == 'true'
-        run: python3 scripts/run-platform-tests.py full
-
-      - name: Stop Gradle after platform tests
-        id: stop-platform-gradle
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        run: ./gradlew --stop
-
-      - name: Upload platform test execution evidence
-        id: platform-reports
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: platform-test-execution-${{ github.run_attempt }}
-          path: build/reports/platform-tests/**
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Verify API, documentation, and SBOM
-        if: steps.scope.outputs.full == 'true'
-        run: |
-          ./gradlew :p2p-core:checkKotlinAbi :p2p-transport-lan:checkKotlinAbi :p2p-network-provisioning-android:checkKotlinAbi :p2p-network-provisioning-desktop:checkKotlinAbi :p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi --console=plain
-          ./gradlew :p2p-core:dokkaGeneratePublicationHtml :p2p-transport-lan:dokkaGeneratePublicationHtml :p2p-network-provisioning-android:dokkaGeneratePublicationHtml :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml --console=plain
-          scripts/check-sbom.sh
-
-      - name: Verify local release artifacts and consumers
-        if: steps.scope.outputs.full == 'true'
-        run: |
-          scripts/check-publish-artifacts.sh
-          scripts/check-published-consumers.sh
-          ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
-          scripts/check-xcframework-minimum-os.sh
-
-      - name: Upload SBOM evidence
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cyclonedx-sbom
-          path: build/reports/cyclonedx/bom.*
-          # `check-sbom.sh` is the blocking content/presence gate. A failure in
-          # an earlier step has no SBOM to upload and must not manufacture a
-          # second, misleading failure in this evidence-only step.
-          if-no-files-found: warn
-
-      - name: Upload XCFramework provenance evidence
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: xcframework-provenance
-          path: library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
-          if-no-files-found: warn
+          QUALIFICATION: ${{ needs.qualify.result }}
+        run: test "$QUALIFICATION" = success

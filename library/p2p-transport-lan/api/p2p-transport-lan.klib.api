@@ -6,6 +6,17 @@
 // - Show declarations: true
 
 // Library unique name: <io.github.apdelrahman1911:p2p-transport-lan>
+final enum class dev.p2pkit.transport.lan/LanRole : kotlin/Enum<dev.p2pkit.transport.lan/LanRole> { // dev.p2pkit.transport.lan/LanRole|null[0]
+    enum entry DialOnly // dev.p2pkit.transport.lan/LanRole.DialOnly|null[0]
+    enum entry Host // dev.p2pkit.transport.lan/LanRole.Host|null[0]
+
+    final val entries // dev.p2pkit.transport.lan/LanRole.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.transport.lan/LanRole> // dev.p2pkit.transport.lan/LanRole.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.transport.lan/LanRole // dev.p2pkit.transport.lan/LanRole.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.transport.lan/LanRole> // dev.p2pkit.transport.lan/LanRole.values|values#static(){}[0]
+}
+
 final class dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager : dev.p2pkit.core.provisioning/NetworkProvisioningManager { // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager|null[0]
     final val events // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.events|{}events[0]
         final fun <get-events>(): kotlinx.coroutines.flow/Flow<dev.p2pkit.core.provisioning/NetworkProvisioningEvent> // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.events.<get-events>|<get-events>(){}[0]
@@ -21,6 +32,22 @@ final class dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager : dev.p
     final suspend fun joinLocalNetwork(dev.p2pkit.core.provisioning/WifiCredentials): dev.p2pkit.core.provisioning/JoinNetworkResult // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.joinLocalNetwork|joinLocalNetwork(dev.p2pkit.core.provisioning.WifiCredentials){}[0]
     final suspend fun startLocalNetwork(dev.p2pkit.core.provisioning/LocalNetworkConfig): dev.p2pkit.core.provisioning/LocalNetworkResult // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.startLocalNetwork|startLocalNetwork(dev.p2pkit.core.provisioning.LocalNetworkConfig){}[0]
     final suspend fun stopLocalNetwork() // dev.p2pkit.transport.lan/IosManualNetworkProvisioningManager.stopLocalNetwork|stopLocalNetwork(){}[0]
+}
+
+final class dev.p2pkit.transport.lan/OrganizationLan { // dev.p2pkit.transport.lan/OrganizationLan|null[0]
+    constructor <init>(kotlin.collections/List<kotlin/String>, kotlin/String, kotlin/String, kotlin/Int = ...) // dev.p2pkit.transport.lan/OrganizationLan.<init>|<init>(kotlin.collections.List<kotlin.String>;kotlin.String;kotlin.String;kotlin.Int){}[0]
+
+    final val allowedSubnets // dev.p2pkit.transport.lan/OrganizationLan.allowedSubnets|{}allowedSubnets[0]
+        final fun <get-allowedSubnets>(): kotlin.collections/List<kotlin/String> // dev.p2pkit.transport.lan/OrganizationLan.allowedSubnets.<get-allowedSubnets>|<get-allowedSubnets>(){}[0]
+    final val interfaceName // dev.p2pkit.transport.lan/OrganizationLan.interfaceName|{}interfaceName[0]
+        final fun <get-interfaceName>(): kotlin/String // dev.p2pkit.transport.lan/OrganizationLan.interfaceName.<get-interfaceName>|<get-interfaceName>(){}[0]
+    final val listenPort // dev.p2pkit.transport.lan/OrganizationLan.listenPort|{}listenPort[0]
+        final fun <get-listenPort>(): kotlin/Int // dev.p2pkit.transport.lan/OrganizationLan.listenPort.<get-listenPort>|<get-listenPort>(){}[0]
+    final val localAddress // dev.p2pkit.transport.lan/OrganizationLan.localAddress|{}localAddress[0]
+        final fun <get-localAddress>(): kotlin/String // dev.p2pkit.transport.lan/OrganizationLan.localAddress.<get-localAddress>|<get-localAddress>(){}[0]
+
+    final fun allows(kotlin/String): kotlin/Boolean // dev.p2pkit.transport.lan/OrganizationLan.allows|allows(kotlin.String){}[0]
+    final fun toString(): kotlin/String // dev.p2pkit.transport.lan/OrganizationLan.toString|toString(){}[0]
 }
 
 final object dev.p2pkit.transport.lan/IosLanDebug { // dev.p2pkit.transport.lan/IosLanDebug|null[0]
@@ -41,9 +68,10 @@ final object dev.p2pkit.transport.lan/IosManualProvisioningFactory : dev.p2pkit.
     final fun build(dev.p2pkit.core.provisioning/ProvisioningContext): dev.p2pkit.core.provisioning/NetworkProvisioningManager // dev.p2pkit.transport.lan/IosManualProvisioningFactory.build|build(dev.p2pkit.core.provisioning.ProvisioningContext){}[0]
 }
 
-final fun dev.p2pkit.transport.lan/createIosOwnedFlowCollection(kotlinx.coroutines.flow/Flow<kotlin/Any?>, kotlinx.coroutines.flow/FlowCollector<kotlin/Any?>): kotlinx.coroutines/Job // dev.p2pkit.transport.lan/createIosOwnedFlowCollection|createIosOwnedFlowCollection(kotlinx.coroutines.flow.Flow<kotlin.Any?>;kotlinx.coroutines.flow.FlowCollector<kotlin.Any?>){}[0]
 final fun (dev.p2pkit.core.dsl/NetworkProvisioningConfigBuilder).dev.p2pkit.transport.lan/iosManualIp() // dev.p2pkit.transport.lan/iosManualIp|iosManualIp@dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder(){}[0]
 final fun (dev.p2pkit.core.dsl/TransportsBuilder).dev.p2pkit.transport.lan/lan() // dev.p2pkit.transport.lan/lan|lan@dev.p2pkit.core.dsl.TransportsBuilder(){}[0]
+final fun (dev.p2pkit.core.dsl/TransportsBuilder).dev.p2pkit.transport.lan/lan(dev.p2pkit.transport.lan/OrganizationLan, dev.p2pkit.transport.lan/LanRole) // dev.p2pkit.transport.lan/lan|lan@dev.p2pkit.core.dsl.TransportsBuilder(dev.p2pkit.transport.lan.OrganizationLan;dev.p2pkit.transport.lan.LanRole){}[0]
 final fun (dev.p2pkit.core/P2pKit).dev.p2pkit.transport.lan/peersSnapshot(): kotlin.collections/List<dev.p2pkit.core/Peer> // dev.p2pkit.transport.lan/peersSnapshot|peersSnapshot@dev.p2pkit.core.P2pKit(){}[0]
 final fun (dev.p2pkit.core/P2pKit).dev.p2pkit.transport.lan/sessionsSnapshot(): kotlin.collections/List<dev.p2pkit.core/P2pSession> // dev.p2pkit.transport.lan/sessionsSnapshot|sessionsSnapshot@dev.p2pkit.core.P2pKit(){}[0]
 final fun (dev.p2pkit.core/P2pSession).dev.p2pkit.transport.lan/stateName(): kotlin/String // dev.p2pkit.transport.lan/stateName|stateName@dev.p2pkit.core.P2pSession(){}[0]
+final fun dev.p2pkit.transport.lan/createIosOwnedFlowCollection(kotlinx.coroutines.flow/Flow<kotlin/Any?>, kotlinx.coroutines.flow/FlowCollector<kotlin/Any?>): kotlinx.coroutines/Job // dev.p2pkit.transport.lan/createIosOwnedFlowCollection|createIosOwnedFlowCollection(kotlinx.coroutines.flow.Flow<kotlin.Any?>;kotlinx.coroutines.flow.FlowCollector<kotlin.Any?>){}[0]

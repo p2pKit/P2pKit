@@ -1,0 +1,1727 @@
+#!/usr/bin/env python3
+"""Pure/model controls by default; --native additionally requires real Windows.
+
+The default result explicitly records NATIVE_WINDOWS_FILES=NOT_RUN. Model passes
+are never Windows ACL/NTFS qualification. Native controls touch only their new
+invocation-owned temporary fixture, with no Gradle/GPG/downloads or private keys.
+"""
+from __future__ import annotations
+
+import argparse
+import ctypes
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from functools import wraps
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import struct
+import sys
+import tarfile
+import tempfile
+import threading
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location("hosted_windows_files", ROOT / "scripts/hosted_windows_files.py")
+files = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = files
+SPEC.loader.exec_module(files)
+USER = "S-1-5-21-1-2-3-1001"
+POLICY = files.AccessPolicy(USER, USER)
+RETENTION = None
+FIXTURE_PARENT = None
+
+
+class NativeRetention:
+    """Optional private hosted journal; never put receipts inside a hostile fixture."""
+    def __init__(self, destination, fixture_parent):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import audit_processes
+        import hosted_windows_evidence
+        self.detail = hosted_windows_evidence._exception_detail
+        state = os.environ.get(audit_processes.STATE_ENV, "")
+        files.require(state and Path(fixture_parent) == Path(state) / "fixtures/native-tmp",
+                      "Native file fixtures must use their exact owning state")
+        a, b = Path(destination), Path(fixture_parent)
+        files.require(a != b and a not in b.parents and b not in a.parents, "Evidence/fixtures overlap")
+        with files.open_private_directory(b) as parent:
+            with parent.snapshot(max_bytes=0, max_members=1) as initial:
+                files.require(set(initial.entries) == {""}, "Native fixture parent must start empty")
+        self.root = files.create_private_directory(a)
+        self.events, self.completed, self.unknown = [], [], False
+
+    def write(self, name, raw):
+        files.require(type(raw) is bytes and len(raw) <= 1024 * 1024, "Native journal bound")
+        with self.root.create_file(name, max_bytes=len(raw)) as stream:
+            stream.write(raw)
+            stream.sync()
+            files.require(stream.verify().size == len(raw), "Native journal size changed")
+
+    def record(self, case, phase, **values):
+        row = {"case": case._testMethodName, "phase": phase, **values}
+        self.events.append(row)
+        try:
+            self.write("event-%04d.json" % len(self.events),
+                       (json.dumps(row, sort_keys=True, ensure_ascii=True) + "\n").encode("ascii"))
+        except BaseException:
+            self.unknown = True
+            case.retirement_unknown = True
+            raise
+
+    def failure(self, case, phase, error):
+        detail = self.detail(error)
+        self.unknown |= detail["retirementUnknown"]
+        case.retirement_unknown |= detail["retirementUnknown"]
+        try:
+            self.record(case, phase, detail=detail)
+        except BaseException as secondary:
+            self.unknown = case.retirement_unknown = True
+            # Do not replace an existing original cause/cancellation. Keep the
+            # secondary detail as a bounded private note and retain the fixture.
+            files._note(error, "Native journal retention UNKNOWN: " +
+                        json.dumps(self.detail(secondary), sort_keys=True)[:32768])
+            raise error
+
+    def original(self, case, label, raw):
+        name = "original-%04d.bin" % (len(self.events) + 1)
+        try:
+            self.write(name, raw)
+            self.record(case, "original-bytes", label=label, path=name, size=len(raw),
+                        sha256=hashlib.sha256(raw).hexdigest())
+        except BaseException:
+            self.unknown = case.retirement_unknown = True
+            raise
+
+
+def stream_record(name="::$DATA", size=0, following=0):
+    raw = name.encode("utf-16-le")
+    return struct.pack("<IIqq", following, len(raw), size, size) + raw
+
+
+def directory_record(name="report.xml", following=0):
+    raw = name.encode("utf-16-le")
+    header = bytearray(104)
+    struct.pack_into("<I", header, 0, following)
+    struct.pack_into("<I", header, 60, len(raw))
+    return bytes(header) + raw
+
+
+def acl(directory=True, protected=True, user=USER):
+    flags = (3 if directory else 0) | (0 if protected else files.INHERITED_ACE)
+    return [(0, flags, files.FILE_ALL_ACCESS, user), (0, flags, files.FILE_ALL_ACCESS, files.SYSTEM_SID)]
+
+
+class PurePolicyTests(unittest.TestCase):
+    def test_normalized_absolute_and_relative_paths(self):
+        self.assertEqual(files.absolute_parts(r"c:\work\state"), ("C:\\", ("work", "state")))
+        self.assertEqual(files.relative_parts("evidence/cli.xml"), ("evidence", "cli.xml"))
+        self.assertEqual(files.final_path_matches(r"\\?\C:\work\State", r"c:\work\state"), r"C:\work\State")
+
+    def test_path_authority_escapes_fail_closed(self):
+        for value in (r"\\server\share\data", r"\\?\C:\data", r"\\.\PhysicalDrive0", "C:data", "C:/data",
+                      "C:\\", "C:\\x\\", "C:\\x\\..\\y", "C:\\x\\.\\y", "C:\\x\\\\y", "C:\\x:secret"):
+            with self.subTest(path=value), self.assertRaises(files.FilesystemError):
+                files.absolute_parts(value)
+
+    def test_component_devices_aliases_and_invalid_encoding_rejected(self):
+        for value in ("NUL", "con.txt", "COM1.log", "LPT²", "CONIN$", "CONOUT$", "CLOCK$", "a ", "a.",
+                      "a:b", "a\x00b", "a\n", "a\x7f", "a*b", "a?b", "a|b", "a<b", "a\"b", "a/b", "a\\b",
+                      "\ud800", "x" * 256):
+            with self.subTest(component=repr(value)), self.assertRaises(files.FilesystemError):
+                files.component(value)
+        self.assertEqual(files.component("COM10.log"), "COM10.log")
+        self.assertEqual(files.component("a" * 255), "a" * 255)
+
+    def test_relative_paths_cannot_choose_a_second_root_or_alias(self):
+        for value in ("/root", "C:/root", "x\\y", "../root", "x/", "x//y", "x/./y", ":stream", ""):
+            with self.subTest(path=value), self.assertRaises(files.FilesystemError):
+                files.relative_parts(value)
+
+    def test_final_path_rejects_short_names_subst_unc_and_unicode_folding_aliases(self):
+        pairs = [(r"\\?\C:\Program Files\x", r"C:\PROGRA~1\x"), (r"\\?\C:\work", r"X:\work"),
+                 (r"\\?\UNC\server\share\x", r"C:\x"), (r"C:\x", r"C:\x"),
+                 ("\\\\?\\C:\\straße", "C:\\strasse")]
+        for actual, requested in pairs:
+            with self.subTest(actual=actual), self.assertRaises(files.FilesystemError):
+                files.final_path_matches(actual, requested)
+
+    def test_acl_at_creation_is_protected_and_only_user_system(self):
+        self.assertEqual(POLICY.sddl(True), f"O:{USER}D:P(A;OICI;FA;;;{USER})(A;OICI;FA;;;S-1-5-18)")
+        self.assertEqual(POLICY.sddl(False), f"O:{USER}D:P(A;;FA;;;{USER})(A;;FA;;;S-1-5-18)")
+        self.assertTrue(files.validate_acl(POLICY, USER, 0x1004, 1, acl(), directory=True))
+        self.assertTrue(files.validate_acl(POLICY, USER, 0x1004, 1, acl(False), directory=False))
+
+    def test_supported_admin_default_owner_is_explicit_not_an_admin_access_ace(self):
+        policy = files.AccessPolicy(USER, files.ADMINISTRATORS_SID)
+        self.assertTrue(policy.sddl(True).startswith("O:S-1-5-32-544D:P"))
+        self.assertNotIn(";;;S-1-5-32-544)", policy.sddl(True))
+        files.validate_acl(policy, files.ADMINISTRATORS_SID, 0x1004, 1, acl(), directory=True)
+        for user, owner in ((files.SYSTEM_SID, files.SYSTEM_SID), (USER, files.SYSTEM_SID),
+                            (files.ADMINISTRATORS_SID, files.ADMINISTRATORS_SID), ("garbage", USER)):
+            with self.subTest(user=user, owner=owner), self.assertRaises(files.FilesystemError):
+                files.AccessPolicy(user, owner)
+
+    def test_inherited_acl_only_below_an_admitted_root(self):
+        with self.assertRaises(files.FilesystemError):
+            files.validate_acl(POLICY, USER, 0x404, 1, acl(protected=False), directory=True)
+        self.assertFalse(files.validate_acl(POLICY, USER, 0x404, 1, acl(protected=False),
+                                            directory=True, inherited_allowed=True))
+        self.assertFalse(files.validate_acl(POLICY, USER, 0x404, 1, acl(False, False),
+                                            directory=False, inherited_allowed=True))
+
+    def test_null_broad_unknown_inherited_and_mixed_aces_rejected(self):
+        bad = [None, [], acl() + [(0, 3, files.FILE_ALL_ACCESS, "S-1-1-0")],
+               [(0, 3, files.FILE_ALL_ACCESS, "S-1-1-0"), acl()[1]], [acl()[0], acl()[0]],
+               [(1, 3, files.FILE_ALL_ACCESS, USER), acl()[1]],
+               [(0, 3, 0x10000000, USER), acl()[1]],
+               [(0, 7, files.FILE_ALL_ACCESS, USER), acl()[1]],
+               [(0, 0x13, files.FILE_ALL_ACCESS, USER), acl()[1]]]
+        for records in bad:
+            with self.subTest(aces=records), self.assertRaises(files.FilesystemError):
+                files.validate_acl(POLICY, USER, 0x1004, 1, records, directory=True, inherited_allowed=True)
+        for owner, control, revision in ((files.SYSTEM_SID, 0x1004, 1), (USER, 0x1000, 1), (USER, 0x1004, 2)):
+            with self.subTest(owner=owner, control=control, revision=revision), self.assertRaises(files.FilesystemError):
+                files.validate_acl(POLICY, owner, control, revision, acl(), directory=True)
+
+    def test_stream_default_and_empty_directory(self):
+        self.assertEqual(files.decode_streams(stream_record(size=7), directory=False, size=7), (("::$DATA", 7),))
+        self.assertEqual(files.decode_streams(None, directory=True, size=0), ())
+        self.assertEqual(files.decode_streams(stream_record(), directory=True, size=0), (("::$DATA", 0),))
+
+    def test_ads_wrong_size_absent_and_duplicate_default_stream_rejected(self):
+        first = stream_record(size=3, following=40)
+        duplicate = first + b"\0" * (40 - len(first)) + stream_record(size=3)
+        for raw, directory, size in ((None, False, 0), (stream_record(":secret:$DATA", 3), False, 3),
+                                     (stream_record(size=2), False, 3), (duplicate, False, 3),
+                                     (stream_record(size=1), True, 1)):
+            with self.subTest(raw=raw), self.assertRaises(files.FilesystemError):
+                files.decode_streams(raw, directory=directory, size=size)
+
+    def test_malformed_native_stream_and_directory_records_rejected(self):
+        for raw in (b"", stream_record()[:-1], struct.pack("<IIqq", 0, 1, 0, 0) + b"x",
+                    stream_record(following=1), stream_record(size=-1), stream_record(following=10000)):
+            with self.subTest(raw=raw), self.assertRaises(files.FilesystemError):
+                files.decode_streams(raw, directory=False, size=0)
+        for raw in (b"", directory_record()[:-1], directory_record("x", 1), directory_record("x", 10000),
+                    directory_record("NUL"), directory_record("child:stream")):
+            with self.subTest(raw=raw), self.assertRaises(files.FilesystemError):
+                files.decode_directory(raw)
+
+    def test_native_directory_records_skip_dot_and_preserve_full_name(self):
+        first = directory_record(".", following=112)
+        raw = first + b"\0" * (112 - len(first)) + directory_record("full long name.xml")
+        self.assertEqual(files.decode_directory(raw), ["full long name.xml"])
+
+    def test_explicit_bounds_and_deadline_not_relaxed(self):
+        for value in (True, -1, 0, 11, 1.0):
+            with self.subTest(bound=value), self.assertRaises(files.FilesystemError):
+                files._bound(value, 10, "test")
+        self.assertEqual(files._bound(0, 10, "test", zero=True), 0)
+        for value in (time.monotonic() - 1, time.monotonic() + 901, float("nan"), float("inf"), True):
+            with self.subTest(deadline=value), self.assertRaises(files.FilesystemError):
+                files._end(value)
+
+
+class NativeCallShapeTests(unittest.TestCase):
+    """Mocked ctypes call arguments/error paths, NOT a Windows ABI/runtime test."""
+    def setUp(self):
+        self.api = object.__new__(files._WinApi)  # Never load a Windows library on the offline host.
+        self.api.policy = POLICY
+        self.events, self.calls = [], []
+        self.native_result, self.native_information = 0, None
+        self.convert_ok, self.fail_free, self.fail_close = True, False, False
+        self.api.checked = lambda result, operation: files.require(result, "Modeled " + operation + " failed")
+        self.api.ConvertStringSecurityDescriptorToSecurityDescriptorW = self.convert
+        self.api.NtCreateFile = self.create
+        self.api.RtlNtStatusToDosError = lambda status: 5
+        self.api._free, self.api.close = self.free, self.close
+
+    def convert(self, text, revision, output, size):
+        self.events.append(("descriptor", text, revision))
+        ctypes.cast(output, ctypes.POINTER(files.PTR)).contents.value = 101
+        return self.convert_ok
+
+    def create(self, output, access, attributes, status, allocation, flags, sharing, disposition, options, ea, ea_size):
+        self.events.append(("create",))
+        attrs = ctypes.cast(attributes, ctypes.POINTER(files._ObjectAttributes)).contents
+        name = attrs.name.contents
+        self.calls.append({"parent": attrs.root, "attributes": attrs.attributes, "security": attrs.security,
+                           "name": ctypes.wstring_at(name.buffer), "length": name.length, "maximum": name.maximum,
+                           "access": access, "flags": flags, "sharing": sharing, "disposition": disposition,
+                           "options": options, "allocation": allocation, "ea": ea, "ea_size": ea_size})
+        ctypes.cast(output, ctypes.POINTER(files.PTR)).contents.value = 202
+        ctypes.cast(status, ctypes.POINTER(files._IoStatus)).contents.information = (
+            self.native_information if self.native_information is not None else disposition)
+        return self.native_result
+
+    def free(self, pointer):
+        if pointer.value is not None:
+            self.events.append(("free", pointer.value))
+            if self.fail_free:
+                raise files.FilesystemError("Modeled LocalFree failure")
+
+    def close(self, handle):
+        self.events.append(("close", handle.value if isinstance(handle, files.PTR) else handle))
+        if self.fail_close:
+            raise files.FilesystemError("Modeled CloseHandle failure")
+
+    def test_exclusive_native_relative_create_has_atomic_acl_and_noninheritable_readonly_sharing(self):
+        handle = self.api.child(17, "private.log", directory=False, create=True, writable=True)
+        self.assertEqual(handle, 202)
+        self.assertEqual(self.calls, [{"parent": 17, "attributes": 0x40, "security": 101, "name": "private.log",
+                                      "length": 22, "maximum": 24, "access": 0x00120082, "flags": 0x80,
+                                      "sharing": 1, "disposition": 2, "options": 0x00200060,
+                                      "allocation": None, "ea": None, "ea_size": 0}])
+        self.assertEqual(self.events, [("descriptor", POLICY.sddl(False), 1), ("create",), ("free", 101)])
+
+    def test_directory_open_is_relative_readonly_nonreparse_and_cannot_replace(self):
+        self.assertEqual(self.api.child(17, "nested", directory=True), 202)
+        self.assertEqual(self.calls[0]["access"], 0x001200A1)
+        self.assertEqual(self.calls[0]["options"], 0x00200021)
+        self.assertEqual(self.calls[0]["disposition"], 1)
+        self.assertIsNone(self.calls[0]["security"])
+        self.assertEqual(self.events, [("create",)])
+
+    def test_kind_probe_uses_attribute_only_nonreparse_open(self):
+        self.api.child(17, "unknown", directory=None)
+        self.assertEqual(self.calls[0]["access"], 0x00120080)
+        self.assertEqual(self.calls[0]["options"], 0x00200020)
+
+    def test_wrong_open_disposition_readback_does_not_transfer_handle(self):
+        self.native_information = 3
+        with self.assertRaisesRegex(files.FilesystemError, "creation/open result differs"):
+            self.api.child(17, "private", directory=True, create=True)
+        self.assertEqual(self.events[-2:], [("free", 101), ("close", 202)])
+
+    def test_descriptor_retirement_failure_closes_a_successfully_created_handle(self):
+        self.fail_free = True
+        with self.assertRaises(files.FilesystemError) as caught:
+            self.api.child(17, "private", directory=True, create=True)
+        self.assertIn("LocalFree", " ".join(caught.exception.__notes__))
+        self.assertEqual(self.events[-2:], [("free", 101), ("close", 202)])
+
+    def test_native_failure_keeps_original_and_attempts_free_and_close_even_if_both_fail(self):
+        self.native_result, self.fail_close, self.fail_free = -1, True, True
+        with self.assertRaisesRegex(files.FilesystemError, "NtCreateFile failed") as caught:
+            self.api.child(17, "private", directory=True, create=True)
+        notes = " ".join(caught.exception.__notes__)
+        self.assertIn("LocalFree", notes)
+        self.assertIn("CloseHandle", notes)
+        self.assertIn("retirement UNKNOWN", notes)
+        self.assertEqual(self.events[-2:], [("free", 101), ("close", 202)])
+
+    def test_failed_descriptor_conversion_also_retires_its_partial_allocation(self):
+        self.convert_ok = False
+        with self.assertRaisesRegex(files.FilesystemError, "Create protected security descriptor failed"):
+            self.api.child(17, "private", directory=True, create=True)
+        self.assertEqual(self.events[-1], ("free", 101))
+        self.assertEqual(self.calls, [])
+
+    def test_wow64_and_translated_native_architectures_are_not_admitted(self):
+        self.api.GetCurrentProcess = lambda: -1
+        for process, native, accepted in ((0, 0x8664, True), (0, 0xAA64, True), (0x8664, 0xAA64, False),
+                                          (0x014C, 0x8664, False), (0, 0x014C, False), (0, 0, False)):
+            def query(handle, process_output, native_output):
+                ctypes.cast(process_output, ctypes.POINTER(files.U16)).contents.value = process
+                ctypes.cast(native_output, ctypes.POINTER(files.U16)).contents.value = native
+                return True
+            self.api.IsWow64Process2 = query
+            with self.subTest(process=process, native=native):
+                if accepted:
+                    self.api._native_architecture()
+                else:
+                    with self.assertRaises(files.FilesystemError):
+                        self.api._native_architecture()
+
+
+@dataclass
+class Node:
+    path: str
+    directory: bool
+    identifier: int
+    private: bool = False
+    protected: bool = True
+    owner: str = USER
+    links: int = 1
+    reparse: bool = False
+    version: int = 1
+    content: bytes = b""
+    extra_stream: bool = False
+    bad_acl: bool = False
+
+
+class ModelApi:
+    """Handle/refcount/control-flow model ONLY, never Windows execution evidence."""
+    def __init__(self):
+        self.policy = POLICY
+        self.nodes = {"C:\\": Node("C:\\", True, 1), r"C:\work": Node(r"C:\work", True, 2)}
+        self.handles, self.events = {}, []
+        self.next_handle, self.next_id = 1, 3
+        self.close_failure = None
+        self.flush_failure = False
+        self.inspect_failure = None
+        self.names_hook = None
+        self.read_sizes, self.write_sizes = [], []
+
+    def _open(self, node, writable=False):
+        handle = self.next_handle
+        self.next_handle += 1
+        self.handles[handle] = [node, 0, writable]
+        self.events.append(("open", handle, node.path))
+        return handle
+
+    def drive(self, drive):
+        return self._open(self.nodes[drive])
+
+    def child(self, parent, name, *, directory, create=False, writable=False):
+        base = self.handles[parent][0]
+        path = base.path + ("" if base.path.endswith("\\") else "\\") + name
+        if create:
+            files.require(path not in self.nodes, "Modeled FILE_CREATE collision")
+            self.nodes[path] = Node(path, directory, self.next_id, private=True)
+            self.next_id += 1
+            base.version += 1
+            self.events.append(("create-with-protected-acl", path, self.policy.sddl(directory)))
+        files.require(path in self.nodes, "Modeled missing child")
+        node = self.nodes[path]
+        files.require(directory is None or node.directory == directory, "Modeled wrong kind")
+        return self._open(node, writable)
+
+    def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
+                live_output_max_bytes=None, live_output_min_bytes=0, strict_streams=False):
+        node = self.handles[handle][0]
+        if self.inspect_failure == node.path:
+            raise files.FilesystemError("Modeled readback failure")
+        files.require(node.path == path and node.directory == directory and not node.reparse and
+                      (directory or node.links == 1), "Modeled identity/kind/link rejection")
+        if strict_streams:
+            files.require(not node.extra_stream, "Modeled public-source ADS rejection")
+        if private:
+            files.require(node.private and not node.extra_stream, "Modeled privacy/ADS rejection")
+            records = acl(directory, node.protected)
+            if node.bad_acl:
+                records.append((0, 3, files.FILE_ALL_ACCESS, "S-1-1-0"))
+            files.validate_acl(self.policy, node.owner, 0x4 | (0x1000 if node.protected else 0), 1, records,
+                               directory=directory, inherited_allowed=inherited_allowed)
+        if live_output_max_bytes is not None:
+            files.require(private and not directory, "Model live output needs a private regular file")
+            files.decode_streams(stream_record("::$DATA", len(node.content)), directory=False,
+                                 size=len(node.content), live_output_max_bytes=live_output_max_bytes,
+                                 live_output_min_bytes=live_output_min_bytes)
+        return files.FileInfo((1, f"{node.identifier:032x}"), directory, len(node.content), node.links,
+                              files.DIRECTORY if directory else 0x20, 100, node.version, node.version,
+                              node.owner if private else None, node.protected if private else None)
+
+    def names(self, handle, maximum, deadline):
+        files._check_time(deadline)
+        path = self.handles[handle][0].path
+        if self.names_hook:
+            self.names_hook(path)
+        prefix = path + "\\"
+        names = [name[len(prefix):] for name in self.nodes if name.startswith(prefix) and "\\" not in name[len(prefix):]]
+        files.require(len(names) <= maximum and len({n.casefold() for n in names}) == len(names), "Modeled inventory bound/alias")
+        return names
+
+    def kind(self, parent, name):
+        path = self.handles[parent][0].path + "\\" + name
+        files.require(not self.nodes[path].reparse, "Modeled reparse kind")
+        return self.nodes[path].directory
+
+    def read(self, handle, count):
+        node, position, _ = self.handles[handle]
+        self.read_sizes.append(count)
+        value = node.content[position:position + count]
+        self.handles[handle][1] += len(value)
+        return value
+
+    def write(self, handle, data):
+        node, position, writable = self.handles[handle]
+        files.require(writable, "Modeled read-only write")
+        self.write_sizes.append(len(data))
+        content = node.content.ljust(position, b"\0")
+        node.content = content[:position] + data + content[position + len(data):]
+        node.version += 1
+        self.handles[handle][1] += len(data)
+        return len(data)
+
+    def seek(self, handle, position, whence):
+        node, current, _ = self.handles[handle]
+        absolute = position + (0 if whence == 0 else current if whence == 1 else len(node.content))
+        self.handles[handle][1] = absolute
+        return absolute
+
+    def flush(self, handle):
+        if self.flush_failure:
+            raise files.FilesystemError("Modeled FlushFileBuffers failure")
+        self.events.append(("flush", handle))
+
+    def close(self, handle):
+        files.require(handle in self.handles, "Modeled duplicate/unknown handle close")
+        self.events.append(("close", handle, self.handles[handle][0].path))
+        del self.handles[handle]
+        if self.close_failure == handle:
+            raise files.FilesystemError("Modeled uncertain CloseHandle result")
+
+
+class StreamQueryModel:
+    """Actual inspector/pin/stream code; only separate Win32 query replies are modeled.
+
+    after_standard schedules one in-memory write AFTER the earlier native result
+    is filled. No native binding, child, thread, fixture or atomicity claim exists.
+    """
+    def __init__(self, api):
+        self.api = api
+        self.after_standard, self.raw_streams, self.flags = {}, {}, {}
+        self.observations, self.queries = [], []
+        self.native = object.__new__(files._WinApi)
+        self.native.policy = api.policy
+        self.native.GetFileType = lambda handle: 1
+        self.native.GetHandleInformation = self.handle_information
+        self.native.GetFileInformationByHandleEx = self.information
+        self.native.GetFinalPathNameByHandleW = self.final_path
+        self.native._security = self.security
+        self.native.checked = lambda value, operation: files.require(value, "Modeled Win32 call failed")
+        api.inspect = self.inspect
+
+    def append_after_standard(self, handle, raw):
+        assert handle not in self.after_standard
+        self.after_standard[handle] = lambda: self.api.write(handle, raw)
+
+    def handle_information(self, handle, output):
+        ctypes.cast(output, ctypes.POINTER(files.U32)).contents.value = self.flags.get(handle, 0)
+        return True
+
+    def information(self, handle, kind, output, capacity):
+        node = self.api.handles[handle][0]
+        self.queries.append((handle, kind, len(node.content)))
+        if kind == 18:
+            row = ctypes.cast(output, ctypes.POINTER(files._FileId)).contents
+            row.volume = 1
+            row.identifier[:] = node.identifier.to_bytes(16, "big")
+        elif kind == 0:
+            row = ctypes.cast(output, ctypes.POINTER(files._Basic)).contents
+            row.created, row.modified, row.changed = 100, node.version, node.version
+            row.attributes = (files.DIRECTORY if node.directory else 0x20) | (files.REPARSE_POINT if node.reparse else 0)
+        elif kind == 1:
+            row = ctypes.cast(output, ctypes.POINTER(files._Standard)).contents
+            row.size, row.allocated, row.links = len(node.content), max(4096, len(node.content)), node.links
+            row.delete_pending, row.directory = 0, int(node.directory)
+            action = self.after_standard.pop(handle, None)
+            if action is not None:
+                action()
+        elif kind == 7:
+            raw = stream_record("::$DATA", len(node.content))
+            if node.extra_stream:
+                raw = stream_record("::$DATA", len(node.content), 40) + stream_record(":hidden:$DATA", 1)
+            raw = self.raw_streams.get(handle, raw)
+            assert len(raw) <= capacity
+            output.raw = raw.ljust(capacity, b"\0")
+        else:
+            raise AssertionError("Unexpected modeled native information class")
+        return True
+
+    def final_path(self, handle, output, capacity, flags):
+        output.value = "\\\\?\\" + self.api.handles[handle][0].path
+        return len(output.value)
+
+    def security(self, handle, *, directory, inherited_allowed):
+        node = self.api.handles[handle][0]
+        records = acl(directory, node.protected)
+        if node.bad_acl or not node.private:
+            records.append((0, 3, files.FILE_ALL_ACCESS, "S-1-1-0"))
+        protected = files.validate_acl(self.api.policy, node.owner,
+            files.SE_DACL_PRESENT | (files.SE_DACL_PROTECTED if node.protected else 0), 1, records,
+            directory=directory, inherited_allowed=inherited_allowed)
+        return node.owner, protected
+
+    def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
+                live_output_max_bytes=None, live_output_min_bytes=0, strict_streams=False):
+        self.observations.append((handle, live_output_max_bytes))
+        # Omit the new keyword in strict calls so the same regression can execute
+        # the original inspector and expose its real pre-repair rejection.
+        options = {} if live_output_max_bytes is None else {"live_output_max_bytes": live_output_max_bytes,
+                                                         "live_output_min_bytes": live_output_min_bytes}
+        if strict_streams:
+            options["strict_streams"] = True
+        return self.native.inspect(handle, path, directory=directory, private=private,
+                                   inherited_allowed=inherited_allowed, **options)
+
+
+class ModelCustodyTests(unittest.TestCase):
+    def setUp(self):
+        self.api = ModelApi()
+        self.root = files._root(r"C:\work\state", self.api, create=True)
+        self.owners = []
+
+    def tearDown(self):
+        for owner in reversed(self.owners):
+            owner.close()
+        self.root.close()
+        self.assertEqual(self.api.handles, {}, "Modeled handles leaked")
+
+    def keep(self, owner):
+        self.owners.append(owner)
+        return owner
+
+    def put(self, name, data=b"original"):
+        with self.root.create_file(name, max_bytes=len(data)) as stream:
+            self.assertFalse(stream.readable())
+            self.assertTrue(stream.writable())
+            self.assertEqual(stream.write(data), len(data))
+        return str(self.root.path) + "\\" + name.replace("/", "\\")
+
+    def test_root_exclusive_creation_retains_existing_on_collision(self):
+        with self.assertRaises(files.FilesystemError):
+            files._root(r"C:\work\state", self.api, create=True)
+        self.root.verify()
+        self.assertEqual(len(self.api.handles), 3)
+        self.assertTrue(any(row[0] == "create-with-protected-acl" for row in self.api.events))
+
+    def test_created_file_reopened_bounded_and_no_overwrite(self):
+        self.put("original.log", b"abc")
+        self.assertEqual(self.root.read_bytes("original.log", max_bytes=3), b"abc")
+        with self.assertRaises(files.FilesystemError):
+            self.root.create_file("original.log", max_bytes=3)
+        with self.assertRaises(files.FilesystemError):
+            self.root.open_file("original.log", max_bytes=2)
+        self.assertEqual(self.root.read_bytes("original.log", max_bytes=3), b"abc")
+
+    def test_child_retains_all_ancestors_after_root_closes(self):
+        child = self.keep(self.root.create_directory("evidence"))
+        stream = self.keep(child.create_file("raw.log", max_bytes=3))
+        pins = set(self.api.handles)
+        self.root.close()
+        child.close()
+        self.assertTrue(pins <= set(self.api.handles))
+        stream.write(b"abc")
+        stream.close()
+        self.assertEqual(self.api.handles, {})
+
+    def test_handle_borrow_is_not_a_crt_descriptor_or_ownership_transfer(self):
+        with self.root.create_file("stream", max_bytes=1) as stream:
+            handle = stream.native_handle
+            self.assertIn(handle, self.api.handles)
+            with self.assertRaises(io.UnsupportedOperation):
+                stream.fileno()
+            stream.write(b"x")
+            stream.verify()
+        with self.assertRaises(files.FilesystemError):
+            _ = stream.native_handle
+        stream.close()
+        self.assertEqual(sum(row[:2] == ("close", handle) for row in self.api.events), 1)
+
+    def test_private_inherited_subtree_accepted_not_standalone_inherited_root(self):
+        child = self.keep(self.root.create_directory("nested"))
+        self.api.nodes[str(child.path)].protected = False
+        child.close()
+        with self.root.open_directory("nested") as reopened:
+            self.assertFalse(reopened.verify().protected_dacl)
+        with self.assertRaises(files.FilesystemError):
+            files._root(r"C:\work\state\nested", self.api, create=False)
+
+    def test_owner_acl_reparse_hardlink_and_ads_changes_rejected(self):
+        path = self.put("raw")
+        original = self.api.nodes[path]
+        for change in ({"owner": files.SYSTEM_SID}, {"bad_acl": True}, {"reparse": True}, {"links": 2},
+                       {"extra_stream": True}, {"directory": True}):
+            with self.subTest(change=change):
+                self.api.nodes[path] = replace(original, **change)
+                with self.assertRaises(files.FilesystemError):
+                    self.root.open_file("raw", max_bytes=8)
+        self.api.nodes[path] = original
+
+    def test_failed_creation_readback_preserves_new_file_and_closes_handles(self):
+        self.api.inspect_failure = r"C:\work\state\bad"
+        before = set(self.api.handles)
+        with self.assertRaises(files.FilesystemError):
+            self.root.create_file("bad", max_bytes=8)
+        self.assertEqual(set(self.api.handles), before)
+        self.assertIn(r"C:\work\state\bad", self.api.nodes)
+        self.api.inspect_failure = None
+
+    def test_root_failed_readback_closes_every_acquired_parent(self):
+        api = ModelApi()
+        api.inspect_failure = r"C:\work\new"
+        with self.assertRaises(files.FilesystemError):
+            files._root(r"C:\work\new", api, create=True)
+        self.assertEqual(api.handles, {})
+        self.assertIn(r"C:\work\new", api.nodes)
+
+    def test_root_readback_failure_keeps_original_when_raw_handle_retirement_also_fails(self):
+        api = ModelApi()
+        api.inspect_failure = r"C:\work\new"
+        api.close_failure = 3
+        with self.assertRaisesRegex(files.FilesystemError, "Modeled readback failure") as caught:
+            files._root(r"C:\work\new", api, create=True)
+        self.assertEqual(api.handles, {})
+        self.assertTrue(any("retirement UNKNOWN" in note for note in caught.exception.__notes__))
+
+    def test_stream_exact_bound_partial_reads_seek_and_chunking(self):
+        value = b"a" * (files.CHUNK + 13)
+        self.put("raw", value)
+        with self.root.open_file("raw", max_bytes=len(value)) as stream:
+            self.assertEqual(stream.read(5), b"a" * 5)
+            self.assertEqual(stream.seek(-3, 1), 2)
+            self.assertEqual(len(stream.read()), len(value) - 2)
+            self.assertEqual(stream.read(1), b"")
+            with self.assertRaises(files.FilesystemError):
+                stream.seek(1, 2)
+        self.assertLessEqual(max(self.api.read_sizes), files.CHUNK)
+        self.assertLessEqual(max(self.api.write_sizes), files.CHUNK)
+
+    def test_one_byte_over_write_bound_is_rejected_before_write(self):
+        with self.root.create_file("raw", max_bytes=3) as stream:
+            stream.write(b"abc")
+            before = list(self.api.write_sizes)
+            with self.assertRaises(files.FilesystemError):
+                stream.write(b"d")
+            self.assertEqual(self.api.write_sizes, before)
+        self.assertEqual(self.root.read_bytes("raw", max_bytes=3), b"abc")
+
+    def test_readall_preserves_aggregate_cap_not_just_each_chunk_limit(self):
+        self.put("raw", b"x" * 20_000)
+        with patch.object(files, "MAX_READ_BYTES", 10_000):
+            with self.root.open_file("raw", max_bytes=20_000) as stream:
+                for materialize in (stream.read, stream.readall):
+                    with self.subTest(method=materialize.__name__), self.assertRaises(files.FilesystemError):
+                        materialize()
+                    self.assertEqual(stream.tell(), 0, "Oversized reads must be rejected before consuming input")
+                stream.seek(10_000)
+                self.assertEqual(stream.readall(), b"x" * 10_000)
+                self.assertEqual(stream.readall(), b"")
+
+    def test_inherited_line_materializers_and_iteration_cannot_escape_binary_read_bound(self):
+        self.put("raw", b"x" * 20_000 + b"\n")
+        with patch.object(files, "MAX_READ_BYTES", 10_000):
+            with self.root.open_file("raw", max_bytes=20_001) as stream:
+                for name, materialize in (("readline", stream.readline), ("readlines", stream.readlines),
+                                           ("list", lambda: list(stream)), ("next", lambda: next(stream))):
+                    with self.subTest(method=name), self.assertRaises(io.UnsupportedOperation):
+                        materialize()
+                    self.assertEqual(stream.tell(), 0)
+                with self.assertRaises(io.UnsupportedOperation):
+                    stream.readline(1)
+                with self.assertRaises(io.UnsupportedOperation):
+                    stream.readlines(1)
+                self.assertEqual(stream.read(1), b"x")
+
+    def test_reader_mutation_and_truncation_remain_failures(self):
+        path = self.put("raw", b"abc")
+        stream = self.keep(self.root.open_file("raw", max_bytes=3))
+        self.api.nodes[path].content = b"a"
+        self.api.nodes[path].version += 1
+        with self.assertRaises(files.FilesystemError):
+            stream.read(3)
+        with self.assertRaises(files.FilesystemError):
+            stream.close()
+        stream.close()
+
+    def test_snapshot_pins_nested_files_can_stream_tar_with_identity_checked_relative_reopens(self):
+        self.keep(self.root.create_directory("nested")).close()
+        self.put("nested/raw.log", b"private-original")
+        self.put("empty", b"")
+        snapshot = self.keep(self.root.snapshot(max_bytes=16, max_members=4))
+        self.root.close()
+        self.assertEqual(set(snapshot.entries), {"", "nested", "nested/raw.log", "empty"})
+        self.assertEqual(snapshot.total_bytes, 16)
+        sink = io.BytesIO()
+        with tarfile.open(fileobj=sink, mode="w|") as archive:
+            for name, info in snapshot.entries.items():
+                if name and not info.is_directory:
+                    entry = tarfile.TarInfo(name)
+                    entry.size = info.size
+                    with snapshot.open_file(name) as stream:
+                        archive.addfile(entry, stream)
+        snapshot.verify()
+        with tarfile.open(fileobj=io.BytesIO(sink.getvalue()), mode="r:") as archive:
+            self.assertEqual(archive.extractfile("nested/raw.log").read(), b"private-original")
+
+    def test_snapshot_byte_and_member_limits_fail_without_leaking_handles(self):
+        self.put("raw", b"abc")
+        for size, members in ((2, 2), (3, 1)):
+            with self.subTest(size=size, members=members):
+                before = set(self.api.handles)
+                with self.assertRaises(files.FilesystemError):
+                    self.root.snapshot(max_bytes=size, max_members=members)
+                self.assertEqual(set(self.api.handles), before)
+
+    def test_snapshot_membership_mutation_rejected_without_deleting_originals(self):
+        path = self.put("raw", b"abc")
+        snapshot = self.keep(self.root.snapshot(max_bytes=3, max_members=3))
+        self.api.nodes[r"C:\work\state\new"] = Node(r"C:\work\state\new", False, 99, private=True)
+        with self.assertRaises(files.FilesystemError):
+            snapshot.verify()
+        self.assertEqual(self.api.nodes[path].content, b"abc")
+
+    def test_snapshot_aliases_and_unclassified_reparse_are_not_ignored(self):
+        path = self.put("raw")
+        self.api.nodes[r"C:\work\state\RAW"] = replace(self.api.nodes[path], path=r"C:\work\state\RAW", identifier=99)
+        with self.assertRaises(files.FilesystemError):
+            self.root.snapshot(max_bytes=16, max_members=3)
+        del self.api.nodes[r"C:\work\state\RAW"]
+        self.api.nodes[path].reparse = True
+        with self.assertRaises(files.FilesystemError):
+            self.root.snapshot(max_bytes=16, max_members=3)
+
+    def test_original_exception_not_replaced_by_flush_failure_and_all_handles_close(self):
+        stream = self.root.create_file("raw", max_bytes=1)
+        self.api.flush_failure = True
+        with self.assertRaisesRegex(RuntimeError, "original product error") as caught:
+            with stream:
+                raise RuntimeError("original product error")
+        self.api.flush_failure = False
+        self.assertTrue(any("finalization" in note for note in caught.exception.__notes__))
+        self.assertTrue(stream.closed)
+        self.assertEqual(len(self.api.handles), 3)
+
+    def test_expired_read_and_finalization_fail_but_retire_handles(self):
+        self.put("raw", b"abc")
+        stream = self.root.open_file("raw", max_bytes=3)
+        stream._deadline = time.monotonic() - 1
+        with self.assertRaises(files.FilesystemError):
+            stream.read()
+        with self.assertRaises(files.FilesystemError):
+            stream.close()
+        self.assertEqual(len(self.api.handles), 3)
+
+    def test_final_close_refuses_slow_second_flush_and_still_retires_all_pins(self):
+        elapsed = [100.0]
+        with patch.object(files, "time", SimpleNamespace(monotonic=lambda: elapsed[0])):
+            stream = self.root.create_file("raw", max_bytes=1, deadline=120.0)
+            stream.write(b"x")
+            self.root.close()
+            flush, calls = self.api.flush, []
+            def slow(handle):
+                flush(handle)
+                calls.append(handle)
+                if len(calls) == 2:  # RawIOBase.close flushes after verify().
+                    elapsed[0] = 120.0
+            with patch.object(self.api, "flush", side_effect=slow):
+                with self.assertRaises(files.FilesystemError) as caught:
+                    stream.close()
+            self.assertEqual(len(calls), 2)
+            self.assertIn("deadline exceeded", " ".join(caught.exception.__notes__))
+            self.assertTrue(stream.closed and stream._retired)
+            self.assertEqual(self.api.handles, {})
+            self.assertEqual(stream._deadline, 120.0)
+
+    def test_late_close_keeps_body_failure_and_records_final_deadline_error(self):
+        elapsed = [100.0]
+        with patch.object(files, "time", SimpleNamespace(monotonic=lambda: elapsed[0])):
+            stream = self.root.create_file("raw", max_bytes=0, deadline=120.0)
+            self.root.close()
+            last, close = stream._pins[0].handle, self.api.close
+            def slow(handle):
+                close(handle)
+                if handle == last:
+                    elapsed[0] = 120.0
+            original = RuntimeError("original product error")
+            with patch.object(self.api, "close", side_effect=slow):
+                with self.assertRaises(RuntimeError) as caught:
+                    with stream:
+                        raise original
+            self.assertIs(caught.exception, original)
+            self.assertIn("deadline exceeded", " ".join(getattr(original, "__notes__", ())))
+            self.assertEqual(self.api.handles, {})
+
+    def test_close_failure_does_not_prevent_other_handles_closing(self):
+        self.api.close_failure = self.root._pins[-1].handle
+        with self.assertRaises(files.FilesystemError) as caught:
+            self.root.close()
+        self.assertEqual(self.api.handles, {})
+        self.assertTrue(any("retirement UNKNOWN" in note for note in caught.exception.__notes__))
+        self.root.close()
+
+    def test_reference_acquisition_failure_rolls_back_prior_refs(self):
+        first = self.root._pins[0]
+        dead = files._Pin(self.api, 999, "dead", first.info, private=False)
+        dead.references = 0
+        before = first.references
+        with self.assertRaises(files.FilesystemError):
+            files._acquire([first, dead])
+        self.assertEqual(first.references, before)
+
+    def test_close_cannot_free_a_handle_during_an_active_stream_read(self):
+        self.put("raw", b"abc")
+        stream = self.root.open_file("raw", max_bytes=3)
+        entered, release, close_started, closed = (threading.Event() for _ in range(4))
+        original_read = self.api.read
+        results, errors = [], []
+
+        def held_read(handle, count):
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError("Modeled read release was not delivered")
+            self.assertIn(handle, self.api.handles)
+            return original_read(handle, count)
+
+        def reader():
+            try:
+                results.append(stream.read(1))
+            except BaseException as error:
+                errors.append(error)
+
+        def closer():
+            close_started.set()
+            try:
+                stream.close()
+                closed.set()
+            except BaseException as error:
+                errors.append(error)
+
+        self.api.read = held_read
+        threads = [threading.Thread(target=reader), threading.Thread(target=closer)]
+        try:
+            threads[0].start()
+            self.assertTrue(entered.wait(2))
+            threads[1].start()
+            self.assertTrue(close_started.wait(2))
+            acquired = stream._operation_lock.acquire(blocking=False)
+            if acquired:
+                stream._operation_lock.release()
+            self.assertFalse(acquired, "The active read must retain its handle lifetime fence")
+            self.assertFalse(closed.is_set())
+        finally:
+            release.set()
+            for thread in threads:
+                if thread.ident is not None:
+                    thread.join(2)
+            self.api.read = original_read
+            stream.close()
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [b"a"])
+        self.assertTrue(closed.is_set())
+
+    def test_live_output_real_inspector_reports_later_size_without_finalizing_or_retrying(self):
+        queries = StreamQueryModel(self.api)
+        stream = self.keep(self.root.create_file("live.bin", max_bytes=32))
+        handle, deadline = stream.native_handle, stream._deadline
+        for before, after in ((0, 1), (1, 8), (8, 16)):
+            queries.queries.clear()
+            queries.append_after_standard(handle, b"G" * (after - before))
+            self.assertEqual(stream.observe_live_output().size, after)
+            self.assertEqual([(kind, size) for h, kind, size in queries.queries if h == handle],
+                             [(18, before), (0, before), (1, before), (7, after)])
+            self.assertIsNone(stream.final_info, "Live observation is not a final verification receipt")
+            self.assertEqual(stream._deadline, deadline)
+        self.assertEqual(stream.verify().size, 16)
+        self.assertEqual(queries.observations[-1], (handle, None), "Final verification must stay strict")
+
+    def test_live_output_default_inspect_and_verify_still_reject_interquery_growth(self):
+        queries = StreamQueryModel(self.api)
+        stream = self.keep(self.root.create_file("strict.bin", max_bytes=32))
+        for operation in (lambda: self.api.inspect(stream.native_handle, str(stream.path),
+                                                   directory=False, private=True), stream.verify):
+            queries.append_after_standard(stream.native_handle, b"G")
+            with self.assertRaisesRegex(files.FilesystemError, "^Alternate data streams are not admitted$"):
+                operation()
+        self.assertEqual(stream.verify().size, 2)
+
+    def test_live_output_bounds_both_queries_and_refuses_interquery_shrink(self):
+        queries = StreamQueryModel(self.api)
+        for before, after in ((8, 33), (33, 8), (16, 8)):
+            with self.subTest(before=before, after=after):
+                stream = self.keep(self.root.create_file(f"bound-{before}-{after}.bin", max_bytes=32))
+                node = self.api.handles[stream.native_handle][0]
+                node.content = b"B" * before
+                queries.after_standard[stream.native_handle] = lambda: setattr(node, "content", b"B" * after)
+                with self.assertRaisesRegex(files.FilesystemError, "Live output stream shrank or exceeded its byte bound"):
+                    stream.observe_live_output()
+                self.assertIsNone(stream.final_info)
+                if after > 32:
+                    with self.assertRaises(files.FilesystemError):
+                        stream.close()
+                    self.assertTrue(stream.closed and stream._retired)
+
+    def test_live_output_refuses_readonly_directory_and_unprivate_pin_authority(self):
+        queries = StreamQueryModel(self.api)
+        self.put("reader.bin", b"original")
+        reader = self.keep(self.root.open_file("reader.bin", max_bytes=32))
+        with self.assertRaises(files.FilesystemError):
+            reader.observe_live_output()
+        with self.assertRaises(files.FilesystemError):
+            reader._pins[-1].observe(live_output_max_bytes=32)
+        with self.assertRaises(files.FilesystemError):
+            self.root._pins[-1].observe(live_output_max_bytes=32)
+        with self.assertRaises(files.FilesystemError):
+            queries.native.inspect(reader.native_handle, str(reader.path), directory=False,
+                                   private=False, live_output_max_bytes=32)
+        with self.assertRaises(files.FilesystemError):
+            files.decode_streams(stream_record("::$DATA", 0), directory=True, size=0, live_output_max_bytes=32)
+        self.assertEqual(reader.verify().size, 8)
+
+    def test_live_output_keeps_stream_name_cardinality_and_binary_schema_closed(self):
+        queries = StreamQueryModel(self.api)
+        bad_streams = (stream_record("::$DATA", 0, 40) + stream_record(":secret:$DATA", 1),
+                       stream_record("::$DATA", 0, 40) + stream_record("::$DATA", 0),
+                       stream_record(":alias:$DATA", 0), stream_record("::$DATA", -1),
+                       struct.pack("<IIqq", 0, 3, 0, 0) + b"odd",
+                       struct.pack("<IIqq", 25, 14, 0, 0) + "::$DATA".encode("utf-16-le"))
+        for index, raw in enumerate(bad_streams):
+            with self.subTest(case=index):
+                stream = self.keep(self.root.create_file(f"schema-{index}.bin", max_bytes=32))
+                queries.raw_streams[stream.native_handle] = raw
+                with self.assertRaises(files.FilesystemError):
+                    stream.observe_live_output()
+                with self.assertRaises(files.FilesystemError):
+                    stream.close()
+                self.assertTrue(stream.closed and stream._retired)
+
+    def test_live_output_preserves_acl_path_identity_and_inheritance_guards(self):
+        queries = StreamQueryModel(self.api)
+        for key, value in (("owner", "S-1-5-21-8-8-8-1001"), ("bad_acl", True), ("reparse", True),
+                           ("identifier", 999), ("path", r"C:\wrong\file"), ("links", 2)):
+            with self.subTest(guard=key):
+                stream = self.keep(self.root.create_file(key + ".bin", max_bytes=32))
+                setattr(self.api.handles[stream.native_handle][0], key, value)
+                with self.assertRaises(files.FilesystemError):
+                    stream.observe_live_output()
+                with self.assertRaises(files.FilesystemError):
+                    stream.close()
+                self.assertTrue(stream.closed and stream._retired)
+        stream = self.keep(self.root.create_file("inheritable.bin", max_bytes=32))
+        queries.flags[stream.native_handle] = 1
+        with self.assertRaisesRegex(files.FilesystemError, "Custody handles must not be inheritable"):
+            stream.observe_live_output()
+        with self.assertRaises(files.FilesystemError):
+            stream.close()
+
+    def test_live_output_original_deadline_closed_state_and_monotonic_observations(self):
+        queries = StreamQueryModel(self.api)
+        stream = self.keep(self.root.create_file("monotonic.bin", max_bytes=32))
+        queries.append_after_standard(stream.native_handle, b"eight888")
+        self.assertEqual(stream.observe_live_output().size, 8)
+        self.api.handles[stream.native_handle][0].content = b"four"
+        with self.assertRaisesRegex(files.FilesystemError, "Live output stream shrank or exceeded its byte bound"):
+            stream.observe_live_output()
+        queries.append_after_standard(stream.native_handle, b"regrown")
+        with self.assertRaisesRegex(files.FilesystemError, "Live output stream shrank or exceeded its byte bound"):
+            stream.observe_live_output()  # Earlier size cannot shrink even if the later size regrows.
+        before = list(queries.observations)
+        with patch.object(files.time, "monotonic", return_value=stream._deadline), \
+                self.assertRaisesRegex(files.FilesystemError, "Native filesystem deadline exceeded"):
+            stream.observe_live_output()
+        self.assertEqual(queries.observations, before)
+        stream.close()
+        with self.assertRaises(files.FilesystemError):
+            stream.observe_live_output()
+        self.assertEqual(self.api.handles.keys(), {pin.handle for pin in self.root._pins})
+
+    def test_live_output_does_not_relax_readers_or_immutable_snapshot_checks(self):
+        queries = StreamQueryModel(self.api)
+        writer = self.root.create_file("immutable.bin", max_bytes=32)
+        queries.append_after_standard(writer.native_handle, b"original")
+        self.assertEqual(writer.observe_live_output().size, 8)
+        writer.close()
+        snapshot = self.root.snapshot(max_bytes=32, max_members=4)
+        reader = snapshot._files["immutable.bin"]
+        node = self.api.handles[reader.native_handle][0]
+        node.content, node.version = b"modified", node.version + 1
+        with self.assertRaises(files.FilesystemError):
+            reader.verify()
+        with self.assertRaises(files.FilesystemError):
+            snapshot.verify()
+        with self.assertRaises(files.FilesystemError):
+            snapshot.close()
+        self.assertTrue(reader.closed and reader._retired)
+
+
+def unknown_retirement(error):
+    """Unittest must never consume uncertain native cleanup as a negative pass."""
+    pending, seen = [error], set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if len(seen) > 64:
+            return True  # An uninspectable exception graph is not disposal authority.
+        if any(isinstance(text, str) and "Native handle retirement UNKNOWN" in text
+               for text in (str(current), *getattr(current, "__notes__", ()))):
+            return True
+        pending.extend((getattr(current, "__cause__", None), getattr(current, "__context__", None)))
+        pending.extend(getattr(current, "exceptions", ()))
+    return False
+
+
+def native_control(method):
+    @wraps(method)
+    def guarded(self):
+        try:
+            result = method(self)
+            if RETENTION is not None:
+                RETENTION.record(self, "body-pass")
+            return result
+        except BaseException as error:
+            self.retirement_unknown |= unknown_retirement(error)
+            if RETENTION is not None:
+                RETENTION.failure(self, "body-failure", error)
+            raise
+    return guarded
+
+
+class DependencySourceModels(unittest.TestCase):
+    """Actual source adapter/inspector; modeled Win32 calls, NOT native qualification."""
+    def setUp(self):
+        self.api = ModelApi()
+        self.api.nodes[r"C:\work\restore"] = Node(r"C:\work\restore", True, 3)
+        self.api.nodes[r"C:\work\restore\Example.jar"] = Node(r"C:\work\restore\Example.jar", False, 4,
+                                                               content=b"synthetic-public-bytes")
+        self.owners = []
+        self.queries = StreamQueryModel(self.api)
+
+    def tearDown(self):
+        for owner in reversed(self.owners):
+            try:
+                owner.close()
+            except files.FilesystemError:
+                pass
+        self.assertEqual(self.api.handles, {}, "Synthetic native handles leaked")
+
+    def source(self):
+        result = files._dependency_source_root(r"C:\work\restore", self.api)
+        self.owners.append(result)
+        return result
+
+    def test_public_acl_is_readable_but_stays_invalid_for_private_custody(self):
+        source = self.source()
+        self.assertEqual(source.names(max_names=10), ("Example.jar",))
+        reader = source.open_file("Example.jar", max_bytes=100)
+        self.owners.append(reader)
+        self.assertEqual(reader.read(100), b"synthetic-public-bytes")
+        self.assertFalse(reader.writable())
+        self.assertFalse(hasattr(source, "create_file"))
+        self.assertFalse(hasattr(source, "create_directory"))
+        self.assertIsNone(reader.initial_info.owner_sid)
+        with self.assertRaises(files.FilesystemError):
+            files._root(r"C:\work\restore", self.api, create=False)
+
+    def test_public_selected_ads_rejected_by_actual_inspector_on_initial_open(self):
+        self.api.nodes[r"C:\work\restore\Example.jar"].extra_stream = True
+        source = self.source()
+        with self.assertRaises(files.FilesystemError):
+            source.open_file("Example.jar", max_bytes=100)
+
+    def test_every_later_public_file_and_ancestor_observation_keeps_ads_rejection(self):
+        source = self.source()
+        reader = source.open_file("Example.jar", max_bytes=100)
+        self.owners.append(reader)
+        for path in ("C:\\", r"C:\work", r"C:\work\restore", r"C:\work\restore\Example.jar"):
+            with self.subTest(path=path):
+                node = self.api.nodes[path]
+                node.extra_stream = True
+                with self.assertRaises(files.FilesystemError):
+                    reader.verify()
+                node.extra_stream = False
+        self.assertEqual(reader.verify(), reader.initial_info)
+
+    def test_public_selected_parent_membership_mutation_defeats_reader_verification(self):
+        source = self.source()
+        reader = source.open_file("Example.jar", max_bytes=100)
+        self.owners.append(reader)
+        self.api.nodes[r"C:\work\restore"].version += 1
+        with self.assertRaises(files.FilesystemError):
+            reader.verify()
+
+    def test_bounded_complete_listing_refuses_changes_aliases_and_truncation(self):
+        source = self.source()
+        self.api.nodes[r"C:\work\restore\second"] = Node(r"C:\work\restore\second", False, 5)
+        with self.assertRaises(files.FilesystemError):
+            source.names(max_names=1)
+        self.api.names_hook = lambda path: setattr(self.api.nodes[path], "version", 99)
+        with self.assertRaises(files.FilesystemError):
+            source.names(max_names=10)
+
+    def test_public_acquisition_failure_preserves_original_and_secondary_close_unknown(self):
+        source = self.source()
+        original = self.api.inspect
+        def fail(handle, path, **kwargs):
+            if path.endswith("Example.jar"):
+                self.api.close_failure = handle
+                raise files.FilesystemError("original synthetic inspect failure")
+            return original(handle, path, **kwargs)
+        self.api.inspect = fail
+        with self.assertRaises(files.FilesystemError) as caught:
+            source.open_file("Example.jar", max_bytes=100)
+        self.assertEqual(str(caught.exception), "original synthetic inspect failure")
+        self.assertTrue(any("UNKNOWN" in note for note in getattr(caught.exception, "__notes__", ())))
+
+    def test_private_listing_addition_does_not_change_private_acl_policy(self):
+        private = files._root(r"C:\work\private", self.api, create=True)
+        self.owners.append(private)
+        self.assertEqual(private.names(max_names=10), ())
+        private.create_directory("child").close()
+        self.assertEqual(private.names(max_names=10), ("child",))
+        self.api.nodes[r"C:\work\private"].bad_acl = True
+        with self.assertRaises(files.FilesystemError):
+            private.names(max_names=10)
+
+
+class NativeWindowsTests(unittest.TestCase):
+    """Selected only by --native; any missing native prerequisite is FAILURE."""
+    def setUp(self):
+        self.parent = Path(tempfile.mkdtemp(prefix="p2pkit-windows-files-control-", dir=FIXTURE_PARENT))
+        self.root_path = self.parent / "private"
+        self.root = None
+        self.retirement_unknown = False
+        self.fixture_readmission_required = False
+        self.addCleanup(self.cleanup_fixture)
+        try:
+            self.root = files.create_private_directory(self.root_path)
+            if RETENTION is not None:
+                RETENTION.record(self, "native-root-created", root=self.root.verify().as_dict(),
+                                 fixtureParent=str(self.parent), rootPath=str(self.root_path))
+        except BaseException as error:
+            self.retirement_unknown |= unknown_retirement(error)
+            if RETENTION is not None:
+                RETENTION.failure(self, "setup-failure", error)
+            raise
+
+    def cleanup_fixture(self):
+        if self.fixture_readmission_required:
+            self.retirement_unknown = True
+        # Attempt every still-owned known root closure even when an earlier
+        # child retirement was uncertain. Never delete that retained fixture.
+        if self.root is not None:
+            try:
+                self.root.close()
+            except BaseException as error:
+                self.retirement_unknown |= unknown_retirement(error)
+                if RETENTION is not None:
+                    RETENTION.failure(self, "root-close-failure", error)
+                raise
+        if self.retirement_unknown:
+            if RETENTION is not None:
+                RETENTION.unknown = True
+                RETENTION.record(self, "preserved-unknown", removed=False)
+            return
+        # Exact per-test fixture only, after every owned native handle is closed.
+        if RETENTION is not None:
+            RETENTION.record(self, "retirement-known-before-disposal", removed=False)
+        try:
+            shutil.rmtree(self.parent)
+        except BaseException as error:
+            self.retirement_unknown = True
+            if RETENTION is not None:
+                RETENTION.failure(self, "fixture-disposal-failure", error)
+            raise
+        if RETENTION is not None:
+            files.require(not self.parent.exists(), "Native fixture removal not observed")
+            RETENTION.record(self, "fixture-disposed", removed=True)
+            RETENTION.completed.append(self._testMethodName)
+
+    @contextmanager
+    def expected_rejection(self, kind):
+        # Ordinary assertRaises would swallow an expected filesystem rejection
+        # even if its cleanup simultaneously reported UNKNOWN handle retirement.
+        try:
+            yield
+        except BaseException as error:
+            if RETENTION is not None:
+                RETENTION.failure(self, "expected-rejection-observed", error)
+            if unknown_retirement(error):
+                self.retirement_unknown = True
+                raise
+            if not isinstance(error, kind):
+                raise
+            return
+        self.fail("Native negative control did not reject its invalid operation")
+
+    def put(self, name, data=b"native-original"):
+        with self.root.create_file(name, max_bytes=len(data)) as stream:
+            stream.write(data)
+            stream.sync()
+            self.assertEqual(stream.verify().size, len(data))
+        if RETENTION is not None:
+            RETENTION.original(self, name, data)
+
+    @contextmanager
+    def unpinned_hardlink_setup(self):
+        # Windows opens the link target's directory with FILE_WRITE_DATA. Our
+        # intentional FILE_SHARE_READ pin must retire before hostile setup;
+        # weakening the production sharing policy would invalidate this test.
+        identity = self.root.verify().identity
+        # Latch before releasing the pin, including cancellation before the
+        # finalizer itself can be entered. This never clears sticky UNKNOWN.
+        self.fixture_readmission_required = True
+        self.root.close()
+
+        def readmit():
+            try:
+                self.root = files.open_private_directory(self.root_path)
+                info = self.root.verify()
+                files.require(info.identity == identity, "Native fixture identity changed while unpinned")
+                if RETENTION is not None:
+                    RETENTION.record(self, "fixture-readmitted", root=info.as_dict())
+                self.fixture_readmission_required = False
+            except BaseException:
+                # Even a known handle close cannot grant deletion authority
+                # over a root whose exact identity was not re-established.
+                self.retirement_unknown = True
+                raise
+
+        # Restore custody on setup failure too, without replacing that original
+        # failure if readmission also fails. A new capability stays cleanup-owned.
+        with files._on_exit(readmit):
+            if RETENTION is not None:
+                RETENTION.record(self, "fixture-unpinned", identity=identity)
+            yield
+
+    def set_fixture_dacl(self, sddl):
+        """Native negative control on this test's new empty directory only."""
+        api = self.root._api
+        self.assertEqual(self.root_path.parent, self.parent)
+        descriptor, dacl = files.PTR(), files.PTR()
+        present, defaulted = ctypes.c_int32(), ctypes.c_int32()
+        get_dacl = api.advapi.GetSecurityDescriptorDacl
+        get_dacl.argtypes = [files.PTR, ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(files.PTR),
+                             ctypes.POINTER(ctypes.c_int32)]
+        get_dacl.restype = ctypes.c_int32
+        set_info = api.advapi.SetNamedSecurityInfoW
+        set_info.argtypes = [ctypes.c_wchar_p, files.U32, files.U32, files.PTR, files.PTR, files.PTR, files.PTR]
+        set_info.restype = files.U32
+        try:
+            if sddl is not None:
+                api.checked(api.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None),
+                            "Native control security descriptor")
+                api.checked(get_dacl(descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)),
+                            "Native control GetSecurityDescriptorDacl")
+                self.assertTrue(present.value)
+            self.assertEqual(set_info(str(self.root_path), 1, 0x80000004, None, None, dacl, None), 0)
+        finally:
+            api._free(descriptor)
+
+    @native_control
+    def test_native_protected_root_owner_readback_reopen_and_exclusive_create(self):
+        info = self.root.verify()
+        self.assertTrue(info.protected_dacl)
+        self.assertEqual(info.owner_sid, self.root._api.policy.owner_sid)
+        with self.expected_rejection(files.FilesystemError):
+            files.create_private_directory(self.root_path)
+        self.root.close()
+        with files.open_private_directory(self.root_path) as reopened:
+            self.assertEqual(reopened.identity, info.identity)
+
+    @native_control
+    def test_native_default_inheritance_is_recognized_under_private_root(self):
+        nested = self.root_path / "inherited"
+        nested.mkdir()
+        (nested / "raw").write_bytes(b"inherited-original")
+        with self.root.open_directory("inherited") as directory:
+            self.assertEqual(directory.read_bytes("raw", max_bytes=18), b"inherited-original")
+            if RETENTION is not None:
+                RETENTION.original(self, "inherited/raw", directory.read_bytes("raw", max_bytes=18))
+        with self.expected_rejection(files.FilesystemError):
+            files.open_private_directory(nested)
+
+    @native_control
+    def test_native_null_and_broad_dacl_rejected_by_real_readback(self):
+        self.root.close()
+        valid = self.root._api.policy.sddl(True)
+        try:
+            for bad in (valid + "(A;OICI;FA;;;WD)", None):
+                self.set_fixture_dacl(bad)
+                with self.expected_rejection(files.FilesystemError):
+                    files.open_private_directory(self.root_path)
+        finally:
+            self.set_fixture_dacl(valid)
+        with files.open_private_directory(self.root_path) as checked:
+            self.assertTrue(checked.verify().protected_dacl)
+
+    @native_control
+    def test_native_parent_and_file_pins_block_rename_and_write(self):
+        self.put("raw")
+        with self.root.snapshot(max_bytes=100, max_members=2) as snapshot:
+            with self.expected_rejection(OSError):
+                os.rename(self.root_path, self.parent / "renamed")
+            with self.expected_rejection(OSError):
+                (self.root_path / "raw").write_bytes(b"replacement")
+            with self.expected_rejection(OSError):
+                os.rename(self.root_path / "raw", self.root_path / "renamed-raw")
+            with snapshot.open_file("raw") as stream:
+                self.assertEqual(stream.read(), b"native-original")
+            snapshot.verify()
+        self.assertEqual(self.root.read_bytes("raw", max_bytes=100), b"native-original")
+
+    @native_control
+    def test_native_hardlink_and_alternate_data_streams_rejected(self):
+        self.put("hard")
+        with self.unpinned_hardlink_setup():
+            os.link(self.root_path / "hard", self.root_path / "hard-alias")
+        with self.expected_rejection(files.FilesystemError):
+            self.root.open_file("hard", max_bytes=100)
+        self.put("ads")
+        with open(str(self.root_path / "ads") + ":hidden", "wb") as stream:
+            stream.write(b"must-not-be-omitted")
+        with self.expected_rejection(files.FilesystemError):
+            self.root.open_file("ads", max_bytes=100)
+
+    @native_control
+    def test_native_symlink_reparse_rejected_without_following_target(self):
+        target = self.parent / "target"
+        target.mkdir()
+        (target / "unrelated").write_bytes(b"untouched")
+        os.symlink(target, self.root_path / "linked", target_is_directory=True)
+        with self.expected_rejection(files.FilesystemError):
+            self.root.open_directory("linked")
+        with self.expected_rejection(files.FilesystemError):
+            files.open_private_directory(self.root_path / "linked")
+        self.assertEqual((target / "unrelated").read_bytes(), b"untouched")
+        if RETENTION is not None:
+            RETENTION.original(self, "outside-sentinel", (target / "unrelated").read_bytes())
+        (self.root_path / "linked").unlink()
+
+    @native_control
+    def test_native_bounded_tar_original_bytes_and_handle_retirement(self):
+        payload = bytes(range(256)) * 513
+        self.put("raw.bin", payload)
+        with self.root.snapshot(max_bytes=len(payload), max_members=2) as snapshot:
+            with snapshot.open_file("raw.bin") as stream:
+                digest = hashlib.sha256()
+                for block in iter(lambda: stream.read(files.CHUNK), b""):
+                    digest.update(block)
+            self.assertEqual(digest.digest(), hashlib.sha256(payload).digest())
+            snapshot.verify()
+        self.root.close()
+        renamed = self.parent / "retired"
+        os.rename(self.root_path, renamed)  # Native pins actually retired, not a model flag.
+        renamed.rename(self.root_path)
+
+
+class NativeFixtureOrchestrationTests(unittest.TestCase):
+    """Only mocked test-fixture control flow; no Windows or real file operations."""
+    def setUp(self):
+        # These methods model native fixture control flow; they never write to
+        # the genuine hosted native journal or inherit its disposal authority.
+        isolated = patch.dict(globals(), {"RETENTION": None, "FIXTURE_PARENT": None})
+        isolated.start()
+        self.addCleanup(isolated.stop)
+
+    def case(self):
+        class RootModel:
+            identity = (1, "synthetic")
+            _api = SimpleNamespace(policy=SimpleNamespace(owner_sid=USER))
+            close_count = 0
+            verify_error = None
+            close_error = None
+
+            def verify(self):
+                if self.verify_error is not None:
+                    raise self.verify_error
+                return SimpleNamespace(identity=self.identity, protected_dacl=True, owner_sid=USER)
+
+            def close(self):
+                self.close_count += 1
+                if self.close_error is not None:
+                    raise self.close_error
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        case = NativeWindowsTests("test_native_protected_root_owner_readback_reopen_and_exclusive_create")
+        case.root = RootModel()
+        case.parent = Path("/synthetic-never-created")
+        case.root_path = case.parent / "private"
+        case.retirement_unknown = False
+        case.fixture_readmission_required = False
+        return case
+
+    def uncertain(self):
+        error = files.FilesystemError("Synthetic expected rejection plus uncertain cleanup")
+        files._note(error, "Native handle retirement UNKNOWN: 202")
+        return error
+
+    @contextmanager
+    def hardlink_fixture(self, *, close_error=None, link_error=None, reopen_error=None,
+                         reopened_identity=(1, "synthetic")):
+        """Model the documented target-directory sharing conflict, not Win32."""
+        case, events = self.case(), []
+        test = self
+
+        class FixtureRoot:
+            def __init__(self, identity, original=False):
+                self.identity, self.original, self.closed = identity, original, False
+
+            def verify(self):
+                test.assertFalse(self.closed)
+                return SimpleNamespace(identity=self.identity)
+
+            def close(self):
+                if self.closed:
+                    return
+                events.append("close-original" if self.original else "close-reopened")
+                if self.original and close_error is not None:
+                    raise close_error
+                self.closed = True
+
+            def open_file(self, name, *, max_bytes):
+                test.assertFalse(self.closed)
+                test.assertFalse(self.original, "Provider rejection requires strict readmission")
+                test.assertEqual(self.identity, original.identity)
+                test.assertEqual(max_bytes, 100)
+                events.append("reject-" + name)
+                raise files.FilesystemError("Modeled hostile file rejection")
+
+        original, reopened = FixtureRoot((1, "synthetic"), True), FixtureRoot(reopened_identity)
+        case.root = original
+
+        def put(name):
+            test.assertFalse(case.root.closed)
+            events.append("put-" + name)
+
+        def link(source, target):
+            test.assertEqual((source, target), (case.root_path / "hard", case.root_path / "hard-alias"))
+            events.append("link")
+            if not original.closed:
+                error = PermissionError("Modeled FILE_WRITE_DATA conflicts with live FILE_SHARE_READ directory")
+                error.winerror = 32
+                raise error
+            if link_error is not None:
+                raise link_error
+
+        def reopen(path):
+            test.assertEqual(path, case.root_path)
+            test.assertTrue(original.closed)
+            events.append("reopen")
+            if reopen_error is not None:
+                raise reopen_error
+            return reopened
+
+        def ads(path, mode):
+            test.assertEqual((path, mode), (str(case.root_path / "ads") + ":hidden", "wb"))
+            test.assertIs(case.root, reopened)
+            events.append("ads")
+            return io.BytesIO()
+
+        with patch.object(case, "put", side_effect=put), patch.object(os, "link", side_effect=link), \
+                patch.object(files, "open_private_directory", side_effect=reopen), \
+                patch("builtins.open", side_effect=ads), patch.object(shutil, "rmtree") as remove:
+            yield SimpleNamespace(case=case, events=events, original=original, reopened=reopened, remove=remove)
+
+    def test_hardlink_setup_retires_directory_pin_then_readmits_identity_before_rejection(self):
+        with self.hardlink_fixture() as model:
+            model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen", "reject-hard",
+                                           "put-ads", "ads", "reject-ads"])
+            self.assertFalse(model.case.retirement_unknown)
+            model.case.cleanup_fixture()
+            self.assertTrue(model.reopened.closed)
+            model.remove.assert_called_once_with(model.case.parent)
+
+    def test_hardlink_setup_close_unknown_stops_mutation_and_preserves_fixture(self):
+        error = self.uncertain()
+        with self.hardlink_fixture(close_error=error) as model:
+            with self.assertRaises(files.FilesystemError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, error)
+            self.assertEqual(model.events, ["put-hard", "close-original"])
+            self.assertTrue(model.case.retirement_unknown)
+            with self.assertRaises(files.FilesystemError):
+                model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+
+    def test_hardlink_creation_failure_remains_original_after_successful_readmission(self):
+        error = PermissionError("Synthetic link creation failure, not provider rejection")
+        with self.hardlink_fixture(link_error=error) as model:
+            with self.assertRaises(PermissionError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, error)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            self.assertFalse(model.case.retirement_unknown)
+            model.case.cleanup_fixture()
+            self.assertTrue(model.reopened.closed)
+            model.remove.assert_called_once_with(model.case.parent)
+
+    def test_hardlink_readmission_failure_cannot_reach_rejection_or_authorize_disposal(self):
+        error = files.FilesystemError("Synthetic strict readmission failure")
+        with self.hardlink_fixture(reopen_error=error) as model:
+            with self.assertRaises(files.FilesystemError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            self.assertTrue(model.case.retirement_unknown)
+            model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+
+    def test_hardlink_identity_change_keeps_new_capability_owned_but_not_disposal_authority(self):
+        with self.hardlink_fixture(reopened_identity=(1, "replacement")) as model:
+            with self.assertRaises(files.FilesystemError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIn("Native fixture identity changed", str(caught.exception.__cause__))
+            self.assertIs(model.case.root, model.reopened)
+            self.assertTrue(model.case.retirement_unknown)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            model.case.cleanup_fixture()
+            self.assertTrue(model.reopened.closed)
+            model.remove.assert_not_called()
+
+    def test_hardlink_setup_error_is_not_replaced_by_failed_readmission(self):
+        original, secondary = PermissionError("Synthetic original link failure"), self.uncertain()
+        with self.hardlink_fixture(link_error=original, reopen_error=secondary) as model:
+            with self.assertRaises(PermissionError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, original)
+            self.assertTrue(unknown_retirement(original))
+            self.assertTrue(model.case.retirement_unknown)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+
+    def test_hardlink_cancellation_before_finalizer_cannot_authorize_disposal(self):
+        error = KeyboardInterrupt("Synthetic cancellation after root close, before finalizer entry")
+        with self.hardlink_fixture() as model:
+            with patch.object(files, "_on_exit", side_effect=error):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, error)
+            self.assertEqual(model.events, ["put-hard", "close-original"])
+            model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+            self.assertTrue(model.case.retirement_unknown)
+
+    def test_expected_rejection_cannot_swallow_unknown_retirement_or_dispose_fixture(self):
+        case, error = self.case(), self.uncertain()
+        with patch.object(files, "create_private_directory", side_effect=error), \
+                patch.object(files, "open_private_directory", return_value=case.root) as reopen, \
+                patch.object(shutil, "rmtree") as remove:
+            with self.assertRaises(files.FilesystemError) as caught:
+                case.test_native_protected_root_owner_readback_reopen_and_exclusive_create()
+            self.assertIs(caught.exception, error)
+            self.assertTrue(case.retirement_unknown)
+            case.cleanup_fixture()
+            self.assertFalse(reopen.called)
+            self.assertFalse(remove.called)
+            self.assertEqual(case.root.close_count, 1, "Known root closure must still be attempted")
+
+    def test_known_expected_rejection_still_passes_and_disposes_only_its_owned_fixture(self):
+        case = self.case()
+        with patch.object(files, "create_private_directory", side_effect=files.FilesystemError("Known collision")), \
+                patch.object(files, "open_private_directory", return_value=case.root), \
+                patch.object(shutil, "rmtree") as remove:
+            case.test_native_protected_root_owner_readback_reopen_and_exclusive_create()
+            case.cleanup_fixture()
+            self.assertFalse(case.retirement_unknown)
+            remove.assert_called_once_with(case.parent)
+
+    def test_unexpected_body_failure_also_records_unknown_and_retains_fixture(self):
+        case, error = self.case(), self.uncertain()
+        case.root.verify_error = error
+        with patch.object(shutil, "rmtree") as remove:
+            with self.assertRaises(files.FilesystemError) as caught:
+                case.test_native_protected_root_owner_readback_reopen_and_exclusive_create()
+            self.assertIs(caught.exception, error)
+            case.cleanup_fixture()
+            self.assertTrue(case.retirement_unknown)
+            self.assertFalse(remove.called)
+            self.assertEqual(case.root.close_count, 1)
+
+    def test_cleanup_unknown_is_an_error_and_never_becomes_disposal_authority(self):
+        case, error = self.case(), self.uncertain()
+        case.root.close_error = error
+        with patch.object(shutil, "rmtree") as remove:
+            with self.assertRaises(files.FilesystemError) as caught:
+                case.cleanup_fixture()
+            self.assertIs(caught.exception, error)
+            self.assertTrue(case.retirement_unknown)
+            self.assertFalse(remove.called)
+
+    def test_setup_unknown_retains_fixture_and_does_not_start_a_body(self):
+        case, error = self.case(), self.uncertain()
+        with patch.object(tempfile, "mkdtemp", return_value=str(case.parent)), \
+                patch.object(files, "create_private_directory", side_effect=error), \
+                patch.object(shutil, "rmtree") as remove:
+            with self.assertRaises(files.FilesystemError) as caught:
+                case.setUp()
+            self.assertIs(caught.exception, error)
+            self.assertIsNone(case.root)
+            self.assertTrue(case.retirement_unknown)
+            case.cleanup_fixture()
+            self.assertFalse(remove.called)
+
+    def test_wrapped_or_grouped_unknown_cleanup_is_not_hidden_from_the_guard(self):
+        case, error = self.case(), self.uncertain()
+        wrapper = files.FilesystemError("Primary failure")
+        wrapper.__cause__ = error
+        self.assertTrue(unknown_retirement(wrapper))
+        grouped = files.FilesystemError("Grouped failure")
+        grouped.exceptions = (error,)
+        self.assertTrue(unknown_retirement(grouped))
+        with self.assertRaises(files.FilesystemError) as caught:
+            with case.expected_rejection(files.FilesystemError):
+                raise wrapper
+        self.assertIs(caught.exception, wrapper)
+        self.assertTrue(case.retirement_unknown)
+
+
+def finalize_retention(retention, result, methods):
+    """Unittest/body failures and late journal closure independently stay failed."""
+    original = None
+    try:
+        passed = result.wasSuccessful() and not result.skipped and not result.expectedFailures and not result.unexpectedSuccesses
+        known = not retention.unknown and sorted(retention.completed) == methods
+        retention.write("summary.json", (json.dumps({"schema": 1, "passed": bool(passed and known),
+                        "nativeMethods": methods, "nativeRetirementKnown": known,
+                        "testsRun": result.testsRun, "failures": len(result.failures), "errors": len(result.errors),
+                        "skipped": len(result.skipped)}, sort_keys=True) + "\n").encode("ascii"))
+        files.require(passed and known, "Native file retention/acceptance incomplete")
+    except BaseException as error:
+        original = error
+    finally:
+        try:
+            retention.root.close()
+        except BaseException as error:
+            retention.unknown = True
+            if original is None:
+                original = error
+            else:
+                files._note(original, "Native journal final close UNKNOWN: " +
+                            json.dumps(retention.detail(error), sort_keys=True)[:32768])
+    if original is not None:
+        raise original
+
+
+def main():
+    global RETENTION, FIXTURE_PARENT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--native", action="store_true", help="Run real NTFS/ACL/handle controls; requires native Windows")
+    parser.add_argument("--evidence-dir", help="New protected private evidence directory, never a fixture descendant")
+    parser.add_argument("--fixture-parent", help="Existing empty owned state/fixtures/native-tmp; does not change TEMP")
+    args = parser.parse_args()
+    if args.native and os.name != "nt":
+        print("NATIVE_WINDOWS_FILES=FAIL: --native requires genuine Windows, not this host", file=sys.stderr)
+        return 2
+    if bool(args.evidence_dir) != bool(args.fixture_parent) or args.evidence_dir and not args.native:
+        parser.error("Both private path arguments require --native")
+    if args.evidence_dir:
+        RETENTION = NativeRetention(args.evidence_dir, args.fixture_parent)
+        FIXTURE_PARENT = args.fixture_parent
+    suite = unittest.TestSuite()
+    loader = unittest.defaultTestLoader
+    for case in (PurePolicyTests, NativeCallShapeTests, ModelCustodyTests, DependencySourceModels,
+                 NativeFixtureOrchestrationTests):
+        suite.addTests(loader.loadTestsFromTestCase(case))
+    if args.native:
+        suite.addTests(loader.loadTestsFromTestCase(NativeWindowsTests))
+    result = unittest.TextTestRunner(verbosity=2, failfast=args.native).run(suite)
+    if RETENTION is not None:
+        finalize_retention(RETENTION, result, loader.getTestCaseNames(NativeWindowsTests))
+    print("NATIVE_WINDOWS_FILES=" + ("PASS" if args.native and result.wasSuccessful() else
+                                     "FAIL" if args.native else "NOT_RUN (offline/model controls only)"))
+    return 0 if result.wasSuccessful() else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

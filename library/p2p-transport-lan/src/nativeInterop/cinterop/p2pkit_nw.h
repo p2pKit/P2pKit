@@ -2,6 +2,7 @@
 #define P2PKIT_NW_H
 
 #include <Network/Network.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <ifaddrs.h>
@@ -29,6 +30,221 @@ static inline nw_parameters_t p2pkit_nw_create_plain_tcp_parameters(void) {
             nw_tcp_options_set_no_delay(options, true);
         }
     );
+}
+
+/* Cinterop may compile this Objective-C header with or without ARC. Created/copied
+ * Network objects need an explicit release under MRC, but never a second release
+ * under ARC. Do not apply this to borrowed callback arguments or returned objects.
+ * The SDK declares concrete Network objects with distinct Objective-C protocols;
+ * known owned Network objects are explicitly cast at each call, without an ownership transfer. */
+static inline void p2pkit_nw_release_owned(nw_object_t object) {
+#if !__has_feature(objc_arc)
+    if (object != NULL) nw_release(object);
+#else
+    (void)object;
+#endif
+}
+
+/* Do not delegate the accepted spelling to libc: Darwin and other hosts need
+ * not reject the same legacy IPv4 forms. Exactly four decimal octets, no leading
+ * zeroes, whitespace, shorthand, DNS or radix aliases are allowed. */
+static inline bool p2pkit_lan_parse_ipv4(const char *text, struct in_addr *output) {
+    if (text == NULL || output == NULL) return false;
+    size_t length = strnlen(text, INET_ADDRSTRLEN);
+    if (length == 0 || length >= INET_ADDRSTRLEN) return false;
+    const char *cursor = text;
+    const char *end = text + length;
+    uint8_t bytes[4];
+    for (size_t index = 0; index < 4; index++) {
+        const char *start = cursor;
+        unsigned int value = 0;
+        while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+            value = value * 10 + (unsigned int)(*cursor++ - '0');
+            if (value > 255 || cursor - start > 3) return false;
+        }
+        if (cursor == start || (cursor - start > 1 && *start == '0')) return false;
+        bytes[index] = (uint8_t)value;
+        if (index < 3) {
+            if (cursor == end || *cursor++ != '.') return false;
+        } else if (cursor != end) {
+            return false;
+        }
+    }
+    memcpy(output, bytes, sizeof(bytes));
+    return true;
+}
+
+static inline bool p2pkit_lan_parse_ipv6(const char *text, struct in6_addr *output) {
+    if (text == NULL || output == NULL) return false;
+    size_t length = strnlen(text, INET6_ADDRSTRLEN);
+    if (length == 0 || length >= INET6_ADDRSTRLEN) return false;
+    const char *last_colon = NULL;
+    bool dotted = false;
+    for (size_t index = 0; index < length; index++) {
+        char c = text[index];
+        if (c == ':') last_colon = &text[index];
+        else if (c == '.') dotted = true;
+        else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
+    }
+    if (last_colon == NULL) return false;
+    struct in_addr ipv4;
+    if (dotted && !p2pkit_lan_parse_ipv4(last_colon + 1, &ipv4)) return false;
+    return inet_pton(AF_INET6, text, output) == 1;
+}
+
+/* No DNS: numeric comparison also tolerates equivalent IPv6 spellings. */
+static inline bool p2pkit_lan_numeric_equal(const char *left, const char *right) {
+    struct in_addr l4, r4;
+    if (p2pkit_lan_parse_ipv4(left, &l4) && p2pkit_lan_parse_ipv4(right, &r4)) {
+        return l4.s_addr == r4.s_addr;
+    }
+    struct in6_addr l6, r6;
+    return p2pkit_lan_parse_ipv6(left, &l6) && p2pkit_lan_parse_ipv6(right, &r6) &&
+        memcmp(&l6, &r6, sizeof(l6)) == 0;
+}
+
+/* Effective NWPath endpoints may be sockaddr-backed, not hostname-backed.
+ * Normalize only literal IPv4/IPv6 values; never resolve DNS or a Bonjour name.
+ * A scoped address is deliberately not stripped into an apparently unscoped one. */
+static inline bool p2pkit_lan_endpoint_numeric(nw_endpoint_t endpoint, char *output, size_t capacity) {
+    if (endpoint == NULL || output == NULL || capacity < INET6_ADDRSTRLEN) return false;
+    nw_endpoint_type_t type = nw_endpoint_get_type(endpoint);
+    if (type == nw_endpoint_type_address) {
+        const struct sockaddr *address = nw_endpoint_get_address(endpoint);
+        if (address == NULL) return false;
+        if (address->sa_family == AF_INET && address->sa_len >= sizeof(struct sockaddr_in)) {
+            return inet_ntop(AF_INET, &((const struct sockaddr_in *)address)->sin_addr, output, capacity) != NULL;
+        }
+        if (address->sa_family == AF_INET6 && address->sa_len >= sizeof(struct sockaddr_in6)) {
+            const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)address;
+            return ipv6->sin6_scope_id == 0 && inet_ntop(AF_INET6, &ipv6->sin6_addr, output, capacity) != NULL;
+        }
+        return false;
+    }
+    if (type != nw_endpoint_type_host) return false;
+    const char *host = nw_endpoint_get_hostname(endpoint);
+    if (host == NULL) return false;
+    struct in_addr ipv4;
+    if (p2pkit_lan_parse_ipv4(host, &ipv4)) {
+        return inet_ntop(AF_INET, &ipv4, output, capacity) != NULL;
+    }
+    struct in6_addr ipv6;
+    return p2pkit_lan_parse_ipv6(host, &ipv6) && inet_ntop(AF_INET6, &ipv6, output, capacity) != NULL;
+}
+
+static inline bool p2pkit_lan_endpoint_numeric_equal(nw_endpoint_t endpoint, const char *expected) {
+    char numeric[INET6_ADDRSTRLEN];
+    return p2pkit_lan_endpoint_numeric(endpoint, numeric, sizeof(numeric)) &&
+        p2pkit_lan_numeric_equal(numeric, expected);
+}
+
+static inline bool p2pkit_lan_selected_address_is_live(const char *name, const char *address) {
+    if (name == NULL || address == NULL) return false;
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) != 0 || interfaces == NULL) return false;
+    bool found = false;
+    for (struct ifaddrs *entry = interfaces; entry != NULL; entry = entry->ifa_next) {
+        if (entry->ifa_addr == NULL || entry->ifa_name == NULL || strcmp(name, entry->ifa_name) != 0) continue;
+        unsigned int flags = entry->ifa_flags;
+        if ((flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING) ||
+            (flags & (IFF_LOOPBACK | IFF_POINTOPOINT)) != 0) continue;
+        char numeric[INET6_ADDRSTRLEN];
+        const void *bytes = NULL;
+        int family = entry->ifa_addr->sa_family;
+        if (family == AF_INET) bytes = &((struct sockaddr_in *)entry->ifa_addr)->sin_addr;
+        if (family == AF_INET6) bytes = &((struct sockaddr_in6 *)entry->ifa_addr)->sin6_addr;
+        if (bytes != NULL && inet_ntop(family, bytes, numeric, sizeof(numeric)) != NULL &&
+            p2pkit_lan_numeric_equal(numeric, address)) found = true;
+    }
+    freeifaddrs(interfaces);
+    return found;
+}
+
+/* Bind both the actual NWInterface and local endpoint. Never infer an interface from an IP prefix. */
+static inline bool p2pkit_nw_restrict_lan_parameters(
+    nw_parameters_t parameters, nw_path_t path, const char *name, const char *local, const char *port
+) {
+    if (parameters == NULL || path == NULL || nw_path_get_status(path) != nw_path_status_satisfied ||
+        !p2pkit_lan_selected_address_is_live(name, local)) return false;
+    __block bool found = false;
+    nw_path_enumerate_interfaces(path, ^bool(nw_interface_t interface) {
+        const char *candidate = nw_interface_get_name(interface);
+        nw_interface_type_t type = nw_interface_get_type(interface);
+        if (candidate != NULL && strcmp(candidate, name) == 0 &&
+            (type == nw_interface_type_wifi || type == nw_interface_type_wired)) {
+            nw_parameters_require_interface(parameters, interface);
+            found = true;
+            return false;
+        }
+        return true;
+    });
+    if (!found) return false;
+    nw_parameters_set_include_peer_to_peer(parameters, false);
+    nw_parameters_prohibit_interface_type(parameters, nw_interface_type_cellular);
+    nw_parameters_prohibit_interface_type(parameters, nw_interface_type_other);
+    nw_parameters_prohibit_interface_type(parameters, nw_interface_type_loopback);
+    if (port != NULL) {
+        nw_endpoint_t endpoint = nw_endpoint_create_host(local, port);
+        if (endpoint == NULL) return false;
+        nw_parameters_set_local_endpoint(parameters, endpoint);
+        p2pkit_nw_release_owned((nw_object_t)endpoint);
+    }
+    return true;
+}
+
+/* TXT queries must use the same actual required interface as their admitted browser.
+ * A name lookup alone is not physical-interface authority. Recheck the selected local
+ * address and original required NWInterface each time; zero never means "Any" here. */
+static inline uint32_t p2pkit_nw_required_lan_interface_index(
+    nw_parameters_t parameters, const char *name, const char *local
+) {
+    if (parameters == NULL || name == NULL || local == NULL ||
+        nw_parameters_get_include_peer_to_peer(parameters) ||
+        !p2pkit_lan_selected_address_is_live(name, local)) return 0;
+    __attribute__((objc_precise_lifetime))
+    nw_interface_t interface = nw_parameters_copy_required_interface(parameters);
+    uint32_t result = 0;
+    if (interface != NULL) {
+        const char *actual_name = nw_interface_get_name(interface);
+        nw_interface_type_t type = nw_interface_get_type(interface);
+        uint32_t index = nw_interface_get_index(interface);
+        if (actual_name != NULL && strcmp(actual_name, name) == 0 &&
+            (type == nw_interface_type_wifi || type == nw_interface_type_wired) &&
+            index != 0 && index <= INT32_MAX && if_nametoindex(name) == index) result = index;
+    }
+    p2pkit_nw_release_owned((nw_object_t)interface);
+    return result;
+}
+
+/* Called before I/O and on NWConnection path changes; opaque/unverifiable endpoints fail closed. */
+static inline bool p2pkit_nw_lan_path_is_allowed(
+    nw_connection_t connection, const char *name, const char *local,
+    bool (^remote_allowed)(const char *address)
+) {
+    if (connection == NULL || remote_allowed == NULL || !p2pkit_lan_selected_address_is_live(name, local)) return false;
+    __attribute__((objc_precise_lifetime))
+    nw_path_t path = nw_connection_copy_current_path(connection);
+    __attribute__((objc_precise_lifetime)) nw_endpoint_t source = NULL;
+    __attribute__((objc_precise_lifetime)) nw_endpoint_t destination = NULL;
+    bool allowed = false;
+    if (path == NULL || nw_path_get_status(path) != nw_path_status_satisfied ||
+        nw_path_uses_interface_type(path, nw_interface_type_cellular) ||
+        nw_path_uses_interface_type(path, nw_interface_type_other) ||
+        nw_path_uses_interface_type(path, nw_interface_type_loopback) ||
+        !(nw_path_uses_interface_type(path, nw_interface_type_wifi) ||
+          nw_path_uses_interface_type(path, nw_interface_type_wired))) goto cleanup;
+    source = nw_path_copy_effective_local_endpoint(path);
+    destination = nw_path_copy_effective_remote_endpoint(path);
+    if (!p2pkit_lan_endpoint_numeric_equal(source, local)) goto cleanup;
+    {
+        char remote[INET6_ADDRSTRLEN];
+        allowed = p2pkit_lan_endpoint_numeric(destination, remote, sizeof(remote)) && remote_allowed(remote);
+    }
+cleanup:
+    p2pkit_nw_release_owned((nw_object_t)destination);
+    p2pkit_nw_release_owned((nw_object_t)source);
+    p2pkit_nw_release_owned((nw_object_t)path);
+    return allowed;
 }
 
 /**
@@ -241,6 +457,9 @@ static inline void p2pkit_nw_connection_send_default(
 ) {
     dispatch_data_t data = dispatch_data_create(buffer, size, NULL, NULL);
     nw_connection_send(connection, data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, is_complete, completion);
+#if !__has_feature(objc_arc)
+    if (data != NULL) dispatch_release(data);
+#endif
 }
 
 /**
@@ -278,6 +497,9 @@ static inline void p2pkit_nw_connection_receive_default(
                 dispatch_data_t mapped = dispatch_data_create_map(content, &buffer, &buffer_size);
                 completion(buffer, buffer_size, is_complete, error);
                 (void)mapped;
+#if !__has_feature(objc_arc)
+                if (mapped != NULL) dispatch_release(mapped);
+#endif
             } else {
                 completion(NULL, 0, is_complete, error);
             }

@@ -33,7 +33,7 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import quoteattr
 
 
-# Independent narrow publication-shape policy; review together with the 15
+# Independent narrow publication-shape policy; review together with the 21
 # check() calls/expanded iOS loop in scripts/check-publish-artifacts.sh. Do not
 # replace this with a scan that trusts any file found in a Maven repository.
 PUBLICATIONS = {
@@ -49,6 +49,12 @@ PUBLICATIONS = {
     "p2p-transport-lan-iosarm64": ".klib",
     "p2p-transport-lan-iossimulatorarm64": ".klib",
     "p2p-transport-lan-iosx64": ".klib",
+    "p2p-rpc": ".jar",
+    "p2p-rpc-jvm": ".jar",
+    "p2p-rpc-android": ".aar",
+    "p2p-rpc-iosarm64": ".klib",
+    "p2p-rpc-iossimulatorarm64": ".klib",
+    "p2p-rpc-iosx64": ".klib",
     "p2p-network-provisioning-android": ".jar",
     "p2p-network-provisioning-android-android": ".aar",
     "p2p-network-provisioning-desktop": ".jar",
@@ -63,9 +69,12 @@ NATIVE_ARTIFACT_SUFFIXES = {
     "p2p-transport-lan-iosarm64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
     "p2p-transport-lan-iossimulatorarm64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
     "p2p-transport-lan-iosx64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
+    "p2p-rpc-iosarm64": ("-metadata.jar",),
+    "p2p-rpc-iossimulatorarm64": ("-metadata.jar",),
+    "p2p-rpc-iosx64": ("-metadata.jar",),
 }
 # Gradle verifies GMM files by logical name, not their Maven URL basename. These
-# 18 aliases name existing required inputs, not additional files or metadata-
+# 24 aliases name existing required inputs, not additional files or metadata-
 # supplied trust. Keep both spellings for GMM and POM/fallback consumers. Review
 # this exact policy when publication naming changes; never infer arbitrary aliases.
 LOGICAL_ARTIFACT_ALIASES = {
@@ -77,12 +86,17 @@ LOGICAL_ARTIFACT_ALIASES = {
         ("p2p-transport-lan-metadata-{version}.jar", ".jar"),
         ("p2p-transport-lan-kotlin-{version}-sources.jar", "-sources.jar"),
     ),
+    "p2p-rpc": (
+        ("p2p-rpc-metadata-{version}.jar", ".jar"),
+        ("p2p-rpc-kotlin-{version}-sources.jar", "-sources.jar"),
+    ),
     "p2p-network-provisioning-android": (
         ("p2p-network-provisioning-android-metadata-{version}.jar", ".jar"),
         ("p2p-network-provisioning-android-kotlin-{version}-sources.jar", "-sources.jar"),
     ),
     "p2p-core-android": (("p2p-core.aar", ".aar"),),
     "p2p-transport-lan-android": (("p2p-transport-lan.aar", ".aar"),),
+    "p2p-rpc-android": (("p2p-rpc.aar", ".aar"),),
     "p2p-network-provisioning-android-android": (("p2p-network-provisioning-android.aar", ".aar"),),
     "p2p-core-iosarm64": (("p2p-core-iosArm64Main-{version}.klib", ".klib"),),
     "p2p-core-iossimulatorarm64": (("p2p-core-iosSimulatorArm64Main-{version}.klib", ".klib"),),
@@ -99,10 +113,13 @@ LOGICAL_ARTIFACT_ALIASES = {
         ("p2p-transport-lan-iosX64Main-{version}.klib", ".klib"),
         ("p2p-transport-lan-iosX64Cinterop-p2pkit_nwMain-{version}.klib", "-cinterop-p2pkit_nw.klib"),
     ),
+    "p2p-rpc-iosarm64": (("p2p-rpc-iosArm64Main-{version}.klib", ".klib"),),
+    "p2p-rpc-iossimulatorarm64": (("p2p-rpc-iosSimulatorArm64Main-{version}.klib", ".klib"),),
+    "p2p-rpc-iosx64": (("p2p-rpc-iosX64Main-{version}.klib", ".klib"),),
 }
 # This admission remains complete/source-local only. The supplemental local
 # lan-jvm-android shell profile cannot use this helper or the audit executor;
-# it must never reduce the fifteen-publication or native-consumer contract.
+# it must never reduce the complete-publication or native-consumer contract.
 CONSUMER_TASKS = [
     ":coreJvm:compileKotlin",
     ":coreJvm:compileJava",
@@ -123,6 +140,8 @@ CONSUMER_TASKS = [
     ":androidConsumer:assembleCoexistDebug",
     ":androidConsumer:assembleCoexistRelease",
     ":androidConsumer:verifyEmbeddedJmdnsPackaging",
+    ":rpcJvm:compileKotlin",
+    ":rpcJvm:runPublishedRpcApiSmoke",
 ]
 NAMESPACE = "https://schema.gradle.org/dependency-verification"
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -438,7 +457,7 @@ def inspect_repository(context):
         # KMP emits one tooling sidecar for each root publication. Like Maven
         # housekeeping, bind these bytes for the final unchanged-repository check
         # without adding them to the dependency-verification allowlist.
-        if artifact in ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android"):
+        if artifact in ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android"):
             optional.add((directory / f"{artifact}-{version}-kotlin-tooling-metadata.json").as_posix())
     allowed_files = set(required) | optional
     allowed_dirs = {"."}
@@ -483,6 +502,8 @@ def inspect_repository(context):
             component_module = "p2p-core"
         elif artifact.startswith("p2p-transport-lan-"):
             component_module = "p2p-transport-lan"
+        elif artifact.startswith("p2p-rpc-"):
+            component_module = "p2p-rpc"
         elif artifact == "p2p-network-provisioning-android-android":
             component_module = "p2p-network-provisioning-android"
         component = module.get("component", {})

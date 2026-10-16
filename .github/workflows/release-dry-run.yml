@@ -17,8 +17,13 @@ permissions:
 
 jobs:
   local-release:
-    runs-on: macos-15
-    timeout-minutes: 60
+    # Qualification already executed the actual platform tests and packages.
+    # A dry run verifies that exact result, ancestry and coordinate availability.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_SHA: ${{ inputs.release_sha }}
@@ -27,59 +32,27 @@ jobs:
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-
       - name: Check out exact approved commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Configure Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: "17"
-      - name: Validate wrapper and configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          gradle-home-cache-excludes: caches/build-cache-1
-      - name: Install pinned XcodeGen
-        run: |
-          xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
-          echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
-      - name: Install Android SDK platforms
-        run: |
-          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
       - name: Validate immutable release identity
         run: |
           scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" allow-missing-tag
           scripts/check-release-metadata.sh
           scripts/check-maven-central-version.sh absent
-
-      - name: Verify release tooling
-        run: |
-          scripts/tests/check-release-tag-test.sh
-          scripts/tests/check-release-identity-test.sh
-          scripts/tests/check-maven-release-environment-test.sh
-          scripts/tests/check-maven-namespace-access-test.sh
-          scripts/tests/check-maven-central-version-test.sh
-          scripts/tests/publish-central-portal-bundle-test.sh
-          scripts/tests/build-central-portal-bundle-test.sh
-          scripts/tests/install-xcodegen-test.sh
-          scripts/tests/release-workflow-test.sh
-      - name: Run local release gate
-        run: scripts/run-release-gate.sh
-      - name: Upload local release evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Verify current exact-source qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_QUALIFICATION_BINDING: ${{ vars.RELEASE_QUALIFICATION_BINDING }}
+        run: python3 -B scripts/ci_qualification.py verify --source "$RELEASE_SHA" --output "$RUNNER_TEMP/qualification.json"
+      - name: Retain secret-free qualification reference
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: release-evidence-${{ env.RELEASE_TAG }}
-          path: |
-            build/reports/release/**
-            build/reports/platform-tests/**
-            build/reports/cyclonedx/bom.*
-            library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
-            library/p2p-core/api/**
-            library/p2p-transport-lan/api/**
-            library/p2p-network-provisioning-desktop/api/**
+          name: release-evidence-${{ env.RELEASE_TAG }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification.json
           if-no-files-found: error
+          retention-days: 14
+          overwrite: false

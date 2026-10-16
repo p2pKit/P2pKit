@@ -8,14 +8,14 @@ are mandatory; another host's tests are not selected or counted as native eviden
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes
 import errno
 import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import signal
 import shutil
 import stat
@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import uuid
@@ -32,6 +33,7 @@ sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import hosted_windows_files as windows_files
 
 SPEC = importlib.util.spec_from_file_location("audit_runner", SCRIPTS / "run-audit-command.py")
 assert SPEC is not None and SPEC.loader is not None
@@ -41,6 +43,67 @@ EXECUTOR = SCRIPTS / "run-audit-command.py"
 PYTHON = str(Path(sys.executable).resolve())
 EVIDENCE_ROOT = None
 CASE_EVIDENCE = None
+FIXTURE_PARENT = None
+WINDOWS_RETAINED_STORAGE = sys.platform == "win32"
+
+
+def retained_directory(path, *, parents=False, exist_ok=False):
+    """Create private retained storage before writing, not then repair its ACL.
+
+    Windows Python's mkdir(0700) uses a different DACL from our exact user and
+    SYSTEM policy. Keep temporary fixtures unchanged; only retained storage
+    uses this adapter. Native creation pins physical ancestors, is exclusive,
+    and validates the protected DACL before returning. A failed create/close
+    is never retried as an open, chmod, or weaker path operation.
+    """
+    if not WINDOWS_RETAINED_STORAGE:
+        path.mkdir(mode=0o700, parents=parents, exist_ok=exist_ok)
+        return path
+    windows_files.absolute_parts(path)
+    runner.reject_symlinks(path)
+    if runner.existing_lstat(path) is not None:
+        if not exist_ok:
+            raise FileExistsError(errno.EEXIST, "Retained evidence directory already exists", os.fspath(path))
+        with windows_files.open_private_directory(path):
+            return path
+    if parents and runner.existing_lstat(path.parent) is None:
+        retained_directory(path.parent, parents=True)
+    with windows_files.create_private_directory(path):
+        return path
+
+
+def allocate_evidence_root(value):
+    if value:
+        candidate = runner.absolute_path(value, exists=False)
+    elif os.environ.get(processes.STATE_ENV):
+        state = runner.absolute_path(os.environ[processes.STATE_ENV])
+        candidate = state / "evidence" / f"executor-fixtures-{uuid.uuid4().hex}"
+    elif WINDOWS_RETAINED_STORAGE:
+        # mkdtemp also delegates to mkdir(0700). Choose a fresh name, then let
+        # the native exclusive creator install the right DACL atomically.
+        candidate = Path(tempfile.gettempdir()).resolve() / f"p2pkit-executor-fixture-evidence-{uuid.uuid4().hex}"
+    else:
+        return Path(tempfile.mkdtemp(prefix="p2pkit-executor-fixture-evidence-")).resolve()
+    return retained_directory(candidate)
+
+
+def validated_fixture_parent(value, evidence_root):
+    """Bind explicit fixture allocation without changing any process environment."""
+    if value is None:
+        return None
+    runner.require(evidence_root is not None, "--fixture-parent requires an explicit separate evidence directory")
+    state_value = os.environ.get(processes.STATE_ENV)
+    runner.require(state_value, "--fixture-parent requires the current owned audit state")
+    state = runner.absolute_path(state_value)
+    parent = runner.absolute_path(value)
+    runner.require(parent == state / "fixtures/native-tmp" and runner.physical_directory_present(parent),
+                   "Fixture parent must be the current state's physical fixtures/native-tmp directory")
+    evidence = runner.absolute_path(evidence_root, exists=False)
+    runner.require(not runner.within(evidence, parent) and not runner.within(parent, evidence),
+                   "Retained evidence and temporary fixture parent must not overlap")
+    with os.scandir(parent) as entries:
+        runner.require(next(entries, None) is None, "Fixture parent must start empty")
+    return parent
 
 
 def property_spellings(expression):
@@ -60,7 +123,7 @@ def archive_fixture_file(source, destination, budget, *, count_entry=True):
         budget["entries"] += 1
     runner.require(budget["entries"] <= runner.MAX_ARCHIVE_FILES, "Fixture evidence entry count exceeds its bound")
     runner.reject_symlinks(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    retained_directory(destination.parent, parents=True, exist_ok=True)
     size = 0
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     with os.fdopen(os.open(source, flags), "rb") as input_stream, runner.new_file(destination) as output_stream:
@@ -101,7 +164,7 @@ def archive_fixture_tree(source, destination, errors, budget=None):
             runner.require(budget["entries"] <= runner.MAX_ARCHIVE_FILES,
                            "Fixture evidence entry count exceeds its bound")
             runner.reject_symlinks(target)
-            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            retained_directory(target, parents=True, exist_ok=True)
             with os.scandir(parent) as entries:
                 for entry in entries:
                     try:
@@ -125,6 +188,41 @@ def archive_fixture_tree(source, destination, errors, budget=None):
         except Exception as error:
             errors.append(f"Fixture evidence directory {parent}: {type(error).__name__}: {error}")
     return records
+
+
+def finalize_fixture_scope(scope, completed, label, grace, attempt, *, before_close=None):
+    """Process finalization is separate from repeatable failed evidence disposal.
+
+    Reuse only a positively drained, closed instance with an unchanged launch
+    ledger. Never ask a closed adapter (whose capabilities were released) to
+    rediscover processes. This does not clear independent retention obligations.
+    """
+    launches = runner.digest(runner.json_bytes(scope.launches))
+    previous = completed.get(scope)
+    if previous is not None:
+        runner.require(previous["launchesSha256"] == launches and not scope.discovery_errors,
+                       "Finalized fixture scope changed; previous retirement is not reusable")
+        return {**previous, "reusedVerifiedFinalization": True}
+
+    result = {"id": uuid.uuid4().hex, "launchesSha256": launches, "completedUtc": None,
+              "reusedVerifiedFinalization": False,
+              "survivors": attempt(label + " drain", lambda: scope.drain(grace=grace, kill_wait=5)),
+              "discoveryErrors": attempt(label + " discovery status", lambda: sorted(scope.discovery_errors))}
+    # Windows still needs its process handle to collect an exit status. Preserve
+    # capture-before-close ordering on every backend; repeat disposal need not
+    # poll an already closed process handle or overwrite its completed capture.
+    result["captureComplete"] = before_close is None or attempt(label + " capture", before_close) is not None
+
+    def close():
+        scope.close()
+        return True
+
+    result["closed"] = attempt(label + " close", close) is True
+    if result["survivors"] == [] and result["discoveryErrors"] == [] and result["closed"] and result["captureComplete"]:
+        result["completedUtc"] = runner.utc()
+        completed[scope] = dict(result)
+    return result
+
 
 FIXTURE = r'''import json, os, pathlib, signal, subprocess, sys, time
 state = pathlib.Path(os.environ["P2PKIT_AUDIT_STATE_DIR"])
@@ -191,7 +289,7 @@ class Capture:
         self.directory = None
         if CASE_EVIDENCE is not None:
             self.directory = CASE_EVIDENCE / f"controller-{uuid.uuid4().hex}"
-            self.directory.mkdir(mode=0o700)
+            retained_directory(self.directory)
             (self.directory / "start.json").write_text(json.dumps({"pid": child.pid}) + "\n")
         for source, destination, label in ((child.stdout, self.out, "stdout"), (child.stderr, self.err, "stderr")):
             log = (self.directory / f"{label}.log").open("xb", buffering=0) if self.directory else None
@@ -250,6 +348,80 @@ class StatFields:
 
 
 @contextmanager
+def modeled_retained_directories():
+    """Tiny real files with modeled Windows creation/ACLs; no native API/thread.
+
+    The ordinary mkdir boundary models CPython3.13's documented three ACEs.
+    The separate native-creator boundary models the existing protected two-ACE
+    policy. Actual validate_acl decides acceptance; neither is Windows proof.
+    All monkeypatches are scoped to these models, never the fixture executor.
+    """
+    policy = windows_files.AccessPolicy("S-1-5-21-1-2-3-1001", "S-1-5-21-1-2-3-1001")
+    proper = [(0, 3, windows_files.FILE_ALL_ACCESS, sid) for sid in (policy.user_sid, windows_files.SYSTEM_SID)]
+    python_acl = [(0, 3, windows_files.FILE_ALL_ACCESS, sid) for sid in
+                  (windows_files.SYSTEM_SID, windows_files.ADMINISTRATORS_SID, "S-1-3-4")]
+    with tempfile.TemporaryDirectory(prefix="retained-directory-model-", dir=FIXTURE_PARENT) as temporary:
+        model = SimpleNamespace(base=Path(temporary).resolve(), acls={}, events=[], close_error=None)
+        real_mkdir, real_open = Path.mkdir, Path.open
+
+        def check(path):
+            windows_files.require(path.is_dir() and path in model.acls and model.acls[path] is not None,
+                                  "Modeled directory is not private")
+            windows_files.validate_acl(policy, policy.owner_sid,
+                windows_files.SE_DACL_PRESENT | windows_files.SE_DACL_PROTECTED, 1, model.acls[path], directory=True)
+
+        class Directory:
+            def __init__(self, path):
+                self.path = path
+
+            def __enter__(self):
+                check(self.path)
+                return self
+
+            def __exit__(self, kind, value, trace):
+                model.events.append(("close", self.path))
+                if model.close_error is not None:
+                    raise model.close_error
+
+        def mkdir(path, mode=0o777, parents=False, exist_ok=False):
+            present = path.exists()
+            real_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+            if not present:
+                model.acls[path] = python_acl if mode == 0o700 else None
+                model.events.append(("python-mkdir", path))
+
+        def create(path):
+            model.events.append(("native-create", path))
+            real_mkdir(path, mode=0o700)  # Exclusive; bypass only the modeled Python ACL boundary.
+            model.acls[path] = proper
+            return Directory(path)
+
+        def open_directory(path):
+            model.events.append(("native-open", path))
+            check(path)
+            return Directory(path)
+
+        def open_file(path, mode="r", *args, **kwargs):
+            if any(flag in mode for flag in "wax") and model.acls.get(path.parent) is not None:
+                check(path.parent)  # Refuse modeled broad retained storage before a payload write.
+                model.events.append(("write", path))
+            return real_open(path, mode, *args, **kwargs)
+
+        def absolute(path):
+            # Local fixture paths have this host's spelling, not native Windows
+            # spelling. The real parser's rejection is tested separately below.
+            windows_files.require(path.is_absolute() and ".." not in path.parts, "Invalid modeled absolute path")
+
+        model.check = check
+        with mock.patch.dict(globals(), WINDOWS_RETAINED_STORAGE=True), \
+                mock.patch.object(Path, "mkdir", new=mkdir), mock.patch.object(Path, "open", new=open_file), \
+                mock.patch.object(windows_files, "absolute_parts", side_effect=absolute), \
+                mock.patch.object(windows_files, "create_private_directory", side_effect=create), \
+                mock.patch.object(windows_files, "open_private_directory", side_effect=open_directory):
+            yield model
+
+
+@contextmanager
 def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None,
                      entry_fields=None, child_error=None, blocked_scan=None, leaf_fields=None):
     """Real tiny tree with modeled stat boundaries; never a native Windows claim.
@@ -258,7 +430,7 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
     path-stat device. Keep type/reparse classification independent of that full
     observation so the tests cannot hide a removed no-follow or device guard.
     """
-    with tempfile.TemporaryDirectory(prefix="audit cleanup metadata ") as temporary:
+    with tempfile.TemporaryDirectory(prefix="audit cleanup metadata ", dir=FIXTURE_PARENT) as temporary:
         root = Path(temporary).resolve() / "output"
         child, deeper = root / "nested", root / "nested/deeper"
         deeper.mkdir(parents=True)
@@ -314,6 +486,202 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
 
 
 class PurePolicyTests(unittest.TestCase):
+    def test_retained_archive_uses_native_private_directories(self):
+        with modeled_retained_directories() as model:
+            source = model.base / "source"
+            (source / "nested").mkdir(parents=True)
+            (source / "nested/report.txt").write_bytes(b"SYNTHETIC-RETAINED-REPORT\n")
+            destination = model.base / "retained"
+            errors = []
+            records = archive_fixture_tree(source, destination, errors)
+            self.assertEqual(errors, [])
+            self.assertEqual(len(records), 1)
+            for directory in (destination, destination / "nested"):
+                model.check(directory)
+                self.assertIn(("native-create", directory), model.events)
+                self.assertNotIn(("python-mkdir", directory), model.events)
+            self.assertEqual((destination / "nested/report.txt").read_bytes(), b"SYNTHETIC-RETAINED-REPORT\n")
+
+    def test_retained_directory_parents_existing_policy_and_exclusive_creation(self):
+        with modeled_retained_directories() as model:
+            leaf = model.base / "first/second/leaf"
+            self.assertEqual(retained_directory(leaf, parents=True), leaf)
+            for path in (model.base / "first", model.base / "first/second", leaf):
+                model.check(path)
+            with self.assertRaises(FileExistsError):
+                retained_directory(leaf)
+            self.assertEqual(retained_directory(leaf, exist_ok=True), leaf)
+            broad = model.base / "python0700"
+            broad.mkdir(mode=0o700)
+            with self.assertRaises(windows_files.FilesystemError):
+                retained_directory(broad, exist_ok=True)
+            regular = model.base / "file"
+            regular.write_bytes(b"UNCHANGED")
+            with self.assertRaises(windows_files.FilesystemError):
+                retained_directory(regular, exist_ok=True)
+            self.assertEqual(regular.read_bytes(), b"UNCHANGED")
+
+    def test_retained_directory_create_and_close_failure_have_no_fallback(self):
+        with modeled_retained_directories() as model:
+            target = model.base / "failed-create"
+            failure = windows_files.FilesystemError("SYNTHETIC original create failure")
+            with mock.patch.object(windows_files, "create_private_directory", side_effect=failure), \
+                    self.assertRaises(windows_files.FilesystemError) as caught:
+                retained_directory(target, exist_ok=True)
+            self.assertIs(caught.exception, failure)
+            self.assertFalse(target.exists())
+            self.assertEqual(model.events, [])
+            failure = windows_files.FilesystemError("SYNTHETIC native handle retirement UNKNOWN")
+            model.close_error = failure
+            with self.assertRaises(windows_files.FilesystemError) as caught:
+                retained_directory(target)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(model.events, [("native-create", target), ("close", target)])
+            self.assertEqual(list(target.iterdir()), [])
+
+    def test_retained_directory_windows_path_and_reparse_guards_precede_creation(self):
+        with mock.patch.dict(globals(), WINDOWS_RETAINED_STORAGE=True), \
+                mock.patch.object(runner, "reject_symlinks") as physical, \
+                mock.patch.object(windows_files, "create_private_directory") as create, \
+                mock.patch.object(windows_files, "open_private_directory") as reopen:
+            for path in ("relative", r"C:relative", r"\\server\share\evidence", r"C:\x\..\evidence",
+                         r"C:\evidence:stream", r"C:\NUL"):
+                with self.subTest(path=path), self.assertRaises(windows_files.FilesystemError):
+                    retained_directory(PureWindowsPath(path), parents=True, exist_ok=True)
+            physical.assert_not_called()
+            physical.side_effect = runner.AuditError("SYNTHETIC reparse ancestor")
+            with self.assertRaises(runner.AuditError):
+                retained_directory(PureWindowsPath(r"C:\safe\evidence"), exist_ok=True)
+            create.assert_not_called()
+            reopen.assert_not_called()
+
+    def test_retained_root_all_windows_allocation_modes_use_native_creation(self):
+        with modeled_retained_directories() as model:
+            explicit = allocate_evidence_root(str(model.base / "explicit"))
+            (model.base / "state/evidence").mkdir(parents=True)
+            with mock.patch.dict(os.environ, {processes.STATE_ENV: str(model.base / "state")}):
+                state_root = allocate_evidence_root(None)
+            environment = {key: value for key, value in os.environ.items() if key != processes.STATE_ENV}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(tempfile, "gettempdir", return_value=str(model.base)), \
+                    mock.patch.object(tempfile, "mkdtemp", side_effect=AssertionError("Not private Windows creation")):
+                standalone = allocate_evidence_root(None)
+            self.assertEqual(state_root.parent, model.base / "state/evidence")
+            self.assertEqual(standalone.parent, model.base)
+            self.assertTrue(standalone.name.startswith("p2pkit-executor-fixture-evidence-"))
+            for path in (explicit, state_root, standalone):
+                model.check(path)
+                self.assertIn(("native-create", path), model.events)
+
+    def test_retained_capture_directory_is_private_before_any_output_write(self):
+        class InlineThread:
+            def __init__(self, target, args, daemon):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)  # Deliberate synchronous model; not thread evidence.
+
+            def join(self, timeout):
+                pass
+
+            def is_alive(self):
+                return False
+
+        with modeled_retained_directories() as model:
+            case = retained_directory(model.base / "case")
+            child = SimpleNamespace(pid=17, stdout=io.BytesIO(b"OUT\n"), stderr=io.BytesIO(b"ERR\n"), poll=lambda: 0)
+            with mock.patch.dict(globals(), CASE_EVIDENCE=case), mock.patch.object(threading, "Thread", InlineThread):
+                capture = Capture(child)
+                self.assertEqual(capture.finish(mock.Mock()), (0, b"OUT\n", b"ERR\n"))
+            model.check(capture.directory)
+            create = model.events.index(("native-create", capture.directory))
+            close = model.events.index(("close", capture.directory))
+            writes = [index for index, event in enumerate(model.events)
+                      if event[0] == "write" and event[1].parent == capture.directory]
+            self.assertTrue(writes)
+            self.assertTrue(all(create < close < index for index in writes))
+
+    def test_retained_directory_posix_mode_and_flags_are_unchanged(self):
+        path = mock.Mock()
+        with mock.patch.dict(globals(), WINDOWS_RETAINED_STORAGE=False), \
+                mock.patch.object(windows_files, "create_private_directory") as create, \
+                mock.patch.object(windows_files, "open_private_directory") as reopen:
+            self.assertIs(retained_directory(path, parents=True, exist_ok=True), path)
+        path.mkdir.assert_called_once_with(mode=0o700, parents=True, exist_ok=True)
+        create.assert_not_called()
+        reopen.assert_not_called()
+
+    def test_repeat_disposal_uses_only_unchanged_complete_closed_scope_finalization(self):
+        class Scope:
+            launches = [{"pid": 123, "created": True}]
+            discovery_errors = set()
+            closed = False
+
+            def drain(self, **_kwargs):
+                if self.closed:
+                    raise AssertionError("A closed scope cannot perform a fresh drain")
+                return []
+
+            def close(self):
+                self.closed = True
+
+        scope, completed, errors = Scope(), {}, ["independent whole-chain retention remains pending"]
+        calls = []
+
+        def attempt(label, action):
+            calls.append(label)
+            return action()
+
+        first = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+        self.assertTrue(first["closed"])
+        self.assertIsNotNone(first["completedUtc"])
+        self.assertFalse(first["reusedVerifiedFinalization"])
+        again = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+        self.assertEqual(again["id"], first["id"])
+        self.assertTrue(again["reusedVerifiedFinalization"])
+        self.assertEqual(calls, ["guard drain", "guard discovery status", "guard close"])
+        self.assertEqual(errors, ["independent whole-chain retention remains pending"])
+        scope.launches = [*scope.launches, {"pid": 124, "created": True}]
+        with self.assertRaisesRegex(runner.AuditError, "previous retirement is not reusable"):
+            finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+
+    def test_failed_or_uncertain_scope_finalization_is_never_cached(self):
+        for failure in ("drain", "discovery", "close"):
+            with self.subTest(failure=failure):
+                scope, completed = mock.Mock(), {}
+                scope.launches = []
+                scope.discovery_errors = {"unresolved"} if failure == "discovery" else set()
+                scope.drain.return_value = None if failure == "drain" else []
+                if failure == "close":
+                    scope.close.side_effect = OSError("injected closure failure")
+
+                def attempt(_label, action):
+                    try:
+                        return action()
+                    except OSError:
+                        return None
+
+                result = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+                self.assertIsNone(result["completedUtc"])
+                self.assertEqual(completed, {})
+
+    def test_scope_capture_completes_before_handle_close_and_is_not_repeated(self):
+        scope, completed, order = mock.Mock(), {}, []
+        scope.launches, scope.discovery_errors = [], set()
+        scope.drain.side_effect = lambda **_kwargs: (order.append("drain") or [])
+        scope.close.side_effect = lambda: order.append("close")
+
+        def capture():
+            self.assertNotIn("close", order)
+            order.append("capture")
+            return 0, b"", b""
+
+        attempt = lambda _label, action: action()
+        for _ in range(2):
+            result = finalize_fixture_scope(scope, completed, "sentinel", .1, attempt, before_close=capture)
+            self.assertTrue(result["captureComplete"])
+        self.assertEqual(order, ["drain", "capture", "close"])
+
     def test_readonly_retry_is_only_windows_exact_unlink_access_denied(self):
         denied = PermissionError(errno.EACCES, "synthetic original failure")
         denied.winerror = 5
@@ -607,7 +975,7 @@ class PurePolicyTests(unittest.TestCase):
                 super().flush()
                 delivered.set()
 
-        with tempfile.TemporaryDirectory(prefix="audit tee prefix ") as temporary, LiveOutput() as live:
+        with tempfile.TemporaryDirectory(prefix="audit tee prefix ", dir=FIXTURE_PARENT) as temporary, LiveOutput() as live:
             destination = Path(temporary).resolve() / "stderr.log"
             read_fd, write_fd = os.pipe()
             with os.fdopen(read_fd, "rb", buffering=0) as source, os.fdopen(write_fd, "wb", buffering=0) as writer:
@@ -619,7 +987,7 @@ class PurePolicyTests(unittest.TestCase):
                     self.assertTrue(delivered.wait(timeout=3), "Reader did not deliver the prefix live")
                     tee.finish()  # Keep the real writer open through the bounded failure path.
                     self.assertTrue(tee.thread.is_alive())
-                    self.assertEqual(errors, ["Owned pipe did not reach EOF after worker drain"])
+                    self.assertEqual(errors, ["Owned stream retirement UNKNOWN: worker start/completion not acknowledged after drain"])
                     self.assertEqual(live.getvalue(), prefix)
                     self.assertEqual(destination.read_bytes(), prefix)
                 finally:
@@ -628,7 +996,7 @@ class PurePolicyTests(unittest.TestCase):
                     self.assertFalse(tee.thread.is_alive(), "Fixture reader did not retire after EOF")
 
     def test_tee_reports_evidence_flush_failure_and_continues_draining(self):
-        with tempfile.TemporaryDirectory(prefix="audit tee flush ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit tee flush ", dir=FIXTURE_PARENT) as temporary:
             destination = Path(temporary).resolve() / "stderr.log"
             with runner.new_file(destination) as output, io.BytesIO(b"\x00\xff" * 40000) as source, \
                     io.BytesIO() as live:
@@ -659,7 +1027,7 @@ class PurePolicyTests(unittest.TestCase):
         for newline in ("\n", "\r\n"):
             for arguments, stop_status, expected_status, marker in cases:
                 with self.subTest(newline=repr(newline), arguments=arguments, stop_status=stop_status), \
-                        tempfile.TemporaryDirectory(prefix="audit fixture newline ") as temporary:
+                        tempfile.TemporaryDirectory(prefix="audit fixture newline ", dir=FIXTURE_PARENT) as temporary:
                     stdout_bytes, stderr_bytes = io.BytesIO(), io.BytesIO()
                     with io.TextIOWrapper(io.BufferedWriter(stdout_bytes), encoding="utf-8", newline=newline) as stdout, \
                             io.TextIOWrapper(io.BufferedWriter(stderr_bytes), encoding="utf-8", newline=newline) as stderr:
@@ -809,7 +1177,7 @@ class PurePolicyTests(unittest.TestCase):
     def test_report_root_and_descendant_scan_errors_are_not_empty_success(self):
         # Deliberate function-level faults, not claims of native permissions or
         # a Gradle execution. PermissionError is injected even when running as root.
-        with tempfile.TemporaryDirectory(prefix="audit report scan fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report scan fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             module = root / "library"
@@ -829,7 +1197,7 @@ class PurePolicyTests(unittest.TestCase):
                         runner.report_snapshot(root, state, [])
 
     def test_source_and_evidence_lstat_failures_are_not_treated_as_absence(self):
-        with tempfile.TemporaryDirectory(prefix="audit report stat fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report stat fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             (root / "library").mkdir(parents=True)
@@ -846,7 +1214,7 @@ class PurePolicyTests(unittest.TestCase):
                         runner.report_snapshot(root, state, [])
 
     def test_report_entry_bound_counts_empty_directories_not_just_files(self):
-        with tempfile.TemporaryDirectory(prefix="audit report bound fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report bound fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             for name in ("one", "two", "three", "four"):
@@ -890,13 +1258,36 @@ class PurePolicyTests(unittest.TestCase):
                 processes.parse_procargs2(malformed)
 
     def test_restricted_batch_grammar_rejects_expansion_and_control(self):
-        for value in ("%PATH%", "bang!", 'quote"', "pipe|", "and&", "lt<", "gt>", "caret^", "paren(", "line\n"):
-            with self.subTest(value=value), self.assertRaises(processes.OwnershipError):
-                processes.batch_command_line(r"C:\Windows\System32\cmd.exe", [r"C:\root\gradlew.bat", value])
-        command = processes.batch_command_line(r"C:\Windows\System32\cmd.exe",
-                                               [r"C:\space root\gradlew.bat", "two words", "Ω", "", "tail\\"])
-        self.assertIn('/d /s /v:off /c ""', command)
-        self.assertIn('""', command)
+        cmd, wrapper = r"C:\Windows\System32\cmd.exe", r"C:\root\gradlew.bat"
+        rejected = [*(chr(value) for value in range(32)), "%PATH%", "%1", "%*", "!PATH!", 'quote"',
+                    "pipe|", "and&", "lt<", "gt>", "caret^", ") & echo injected (", 'paren(")', "paren(^)"]
+        for value in rejected:
+            for position in ("cmd", "executable", "argument"):
+                with self.subTest(value=value, position=position), self.assertRaises(processes.OwnershipError):
+                    processes.batch_command_line(cmd + value if position == "cmd" else cmd,
+                        [wrapper + value, "ordinary"] if position == "executable" else
+                        [wrapper, value if position == "argument" else "ordinary"])
+        # The interpreter is not force-quoted by the argv formatter. Keep its
+        # original grammar, even though parentheses in argv are now literals.
+        for interpreter in (r"C:\Win(dows)\cmd.exe", r"C:\Win(dows\cmd.exe", r"C:\Windows)\cmd.exe"):
+            with self.subTest(interpreter=interpreter), self.assertRaises(processes.OwnershipError):
+                processes.batch_command_line(interpreter, [wrapper])
+        with self.assertRaises(processes.OwnershipError):
+            processes.batch_command_line(cmd, [])
+
+    def test_batch_sdk_parentheses_have_exact_fully_quoted_framing(self):
+        command = processes.batch_command_line(r"C:\Windows\System32\cmd.exe", [
+            r"C:\Program Files (x86)\Android\android-sdk\cmdline-tools\latest\bin\sdkmanager.bat",
+            r"--sdk_root=C:\Program Files (x86)\Android\android-sdk", "platforms;android-36", "platforms;android-37.0"])
+        self.assertEqual(command, 'C:\\Windows\\System32\\cmd.exe /d /s /v:off /c "'
+            '"C:\\Program Files (x86)\\Android\\android-sdk\\cmdline-tools\\latest\\bin\\sdkmanager.bat" '
+            '"--sdk_root=C:\\Program Files (x86)\\Android\\android-sdk" "platforms;android-36" "platforms;android-37.0""')
+
+    def test_batch_literal_parentheses_preserve_empty_unicode_and_backslash_arguments(self):
+        command = processes.batch_command_line(r"C:\Windows\System32\cmd.exe", [
+            r"C:\space root\gradlew.bat", "two words", "Ω(x)", "", "(", ")", "paren(", "paren)", "tail(\\", "tail)\\\\"])
+        self.assertEqual(command, 'C:\\Windows\\System32\\cmd.exe /d /s /v:off /c "'
+            '"C:\\space root\\gradlew.bat" "two words" "Ω(x)" "" "(" ")" "paren(" "paren)" "tail(\\\\" "tail)\\\\\\\\""')
 
     def test_structure_layouts_are_explicit_not_native_acceptance(self):
         self.assertEqual(tuple(ctypes.sizeof(kind) for kind in (processes.DarwinBsdInfo, processes.DarwinUniqueInfo,
@@ -907,6 +1298,1799 @@ class PurePolicyTests(unittest.TestCase):
                 processes.ProcessInformation, processes.StartupInfo, processes.StartupInfoEx,
                 processes.JobBasicLimits, processes.IoCounters, processes.JobExtendedLimits)),
                 (24, 24, 104, 112, 64, 48, 144))
+
+
+class ReportRetentionPosixTests(unittest.TestCase):
+    """Tiny retained-report files, not native owners or a product invocation.
+
+    These POSIX-only controls are a separate current-host selection. They do not
+    change or stand in for the Windows native ACL/backend controls. Keep their
+    originals in the fixture evidence root, including after a failed assertion.
+    """
+
+    def setUp(self):
+        self.assertEqual(os.name, "posix", "This class requires an actual POSIX filesystem")
+        self.base = Path(tempfile.mkdtemp(prefix="report-parent-", dir=EVIDENCE_ROOT or FIXTURE_PARENT)).resolve()
+        self.payload = b"SYNTHETIC report bytes; no application execution\n"
+
+    def case(self, name, *, label="build/reports/one/two/result.xml", evidence=True):
+        base = self.base / name
+        base.mkdir(mode=0o700)
+        root, state, retained = base / "source", base / "state", base / "evidence"
+        root.mkdir(mode=0o700)
+        state.mkdir(mode=0o700)
+        if evidence:
+            retained.mkdir(mode=0o700)
+        output = root / label
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(self.payload)
+        return root, state, retained, output
+
+    def retain(self, root, state, evidence, before=None, original=None):
+        # Only the fixture may set a process-local umask or prepare permissions.
+        # Production must create private parents without changing either.
+        with mock.patch.object(os, "umask", side_effect=AssertionError("production changed umask")), \
+                mock.patch.object(os, "chmod", side_effect=AssertionError("production changed mode")), \
+                mock.patch.object(os, "fchmod", side_effect=AssertionError("production changed fd mode")):
+            return runner.retain_reports(root, state, original or ["help", "--console=plain"],
+                                         {} if before is None else before, evidence)
+
+    def private_parents(self, evidence, relative):
+        current = evidence
+        directories = [current]
+        for name in Path(relative).parts[:-1]:
+            current = current / name
+            current.mkdir(mode=0o700)
+            directories.append(current)
+        return directories
+
+    def unchanged(self, path):
+        info = path.lstat()
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def assert_private_readback(self, evidence, row, payload):
+        import hosted_dependency_seed_files as files
+        current = evidence
+        for name in (None, *Path(row["retained"]).parts[:-1]):
+            if name is not None:
+                current = current / name
+            info = current.lstat()
+            self.assertTrue(stat.S_ISDIR(info.st_mode))
+            self.assertEqual(stat.S_IMODE(info.st_mode), 0o700)
+            self.assertEqual(info.st_uid, os.getuid())
+        path = evidence / row["retained"]
+        self.assertEqual(stat.S_IMODE(path.lstat().st_mode), 0o600)
+        self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(row["bytes"], len(payload))
+        self.assertEqual(row["sha256"], runner.digest(payload))
+        handles = []
+        deadline = time.monotonic() + 5
+        try:
+            directory = files.private_root(evidence)
+            handles.append(directory)
+            for name in Path(row["retained"]).parts[:-1]:
+                directory = directory.open_directory(name, deadline=deadline)
+                handles.append(directory)
+            reader = directory.open_file(path.name, max_bytes=len(payload), deadline=deadline)
+            handles.append(reader)
+            self.assertEqual(reader.read(len(payload)), payload)
+            self.assertEqual(reader.read(1), b"")
+            self.assertEqual(reader.verify(), reader.initial_info)
+        finally:
+            for handle in reversed(handles):
+                handle.close()
+        self.assertTrue(all(handle.closed for handle in handles))
+
+    def test_nested_reports_are_private_and_strictly_readable_under_original_umasks(self):
+        for mask in (0o000, 0o002, 0o022, 0o077):
+            with self.subTest(umask=oct(mask)):
+                root, state, evidence, output = self.case("mask-" + format(mask, "03o"))
+                previous = os.umask(mask)
+                try:
+                    rows = self.retain(root, state, evidence)
+                finally:
+                    observed = os.umask(previous)
+                self.assertEqual(observed, mask)
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["classification"], "changed-since-admission")
+                self.assertEqual(rows[0]["source"], output.relative_to(root).as_posix())
+                self.assert_private_readback(evidence, rows[0], self.payload)
+
+    def test_unchanged_reports_are_metadata_only_without_retained_parents(self):
+        root, state, evidence, _output = self.case("unchanged")
+        before = runner.report_snapshot(root, state, ["help"])
+        rows = self.retain(root, state, evidence, before)
+        self.assertEqual(rows, [{"source": name, **item, "classification": "preexisting-unchanged"}
+                                for name, item in before.items()])
+        self.assertFalse((evidence / "reports").exists())
+        self.assertEqual(runner.read_json(evidence / "report-manifest.json")["records"], rows)
+
+    def test_mixed_rows_keep_original_labels_bytes_classifications_and_manifest(self):
+        root, state, evidence, output = self.case("mixed")
+        stable = output.with_name("stable.xml")
+        stable.write_bytes(b"unchanged synthetic bytes")
+        before = runner.report_snapshot(root, state, ["help"])
+        output.write_bytes(self.payload + b"changed")
+        added = output.with_name("added.xml")
+        added.write_bytes(b"new synthetic bytes")
+        rows = self.retain(root, state, evidence, before)
+        self.assertEqual([row["source"] for row in rows], sorted(row["source"] for row in rows))
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            source = root / row["source"]
+            self.assertEqual(row["bytes"], source.stat().st_size)
+            self.assertEqual(row["sha256"], runner.digest(source.read_bytes()))
+            if source == stable:
+                self.assertEqual(row["classification"], "preexisting-unchanged")
+                self.assertNotIn("retained", row)
+                self.assertFalse((evidence / "reports" / row["source"]).exists())
+            else:
+                self.assertEqual(row["classification"], "changed-since-admission")
+                self.assertEqual(row["retained"], "reports/" + row["source"])
+                self.assert_private_readback(evidence, row, source.read_bytes())
+        self.assertEqual(runner.read_json(evidence / "report-manifest.json"), {
+            "schema": 1, "records": rows,
+            "limitation": "Changed bytes are not proof of test execution; use the unchanged product assessor."})
+
+    def test_existing_private_parents_keep_identity_and_mode(self):
+        root, state, evidence, output = self.case("private-existing")
+        relative = "reports/" + output.relative_to(root).as_posix()
+        directories = self.private_parents(evidence, relative)
+        original = [(path, self.unchanged(path)[:4]) for path in directories]
+        rows = self.retain(root, state, evidence)
+        self.assertEqual([(path, self.unchanged(path)[:4]) for path in directories], original)
+        self.assert_private_readback(evidence, rows[0], self.payload)
+
+    def test_broad_anchor_is_refused_before_creating_any_report_parent(self):
+        root, state, evidence, _output = self.case("broad-anchor")
+        evidence.chmod(0o750)
+        original = self.unchanged(evidence)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(evidence), original)
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_broad_selected_intermediate_is_refused_without_mutation(self):
+        for mode in (0o701, 0o710, 0o750, 0o775):
+            with self.subTest(mode=oct(mode)):
+                root, state, evidence, _output = self.case("broad-" + format(mode, "03o"))
+                (evidence / "reports").mkdir(mode=0o700)
+                broad = evidence / "reports/build"
+                broad.mkdir(mode=0o700)
+                broad.chmod(mode)
+                original = self.unchanged(broad)
+                with self.assertRaises(runner.AuditError):
+                    self.retain(root, state, evidence)
+                self.assertEqual(self.unchanged(broad), original)
+                self.assertEqual(list(broad.iterdir()), [])
+                self.assertFalse((evidence / "report-manifest.json").exists())
+
+    def test_symlink_intermediate_is_refused_before_writing_into_its_target(self):
+        root, state, evidence, _output = self.case("linked-intermediate")
+        outside = self.base / "outside-intermediate"
+        outside.mkdir(mode=0o700)
+        sentinel = outside / "sentinel"
+        sentinel.write_bytes(b"must remain untouched")
+        linked = evidence / "reports"
+        linked.symlink_to(outside, target_is_directory=True)
+        before = self.unchanged(outside), self.unchanged(sentinel), self.unchanged(linked)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual((self.unchanged(outside), self.unchanged(sentinel), self.unchanged(linked)), before)
+        self.assertEqual([path.name for path in outside.iterdir()], ["sentinel"])
+        self.assertEqual(sentinel.read_bytes(), b"must remain untouched")
+
+    def test_symlink_anchor_is_not_followed_or_replaced(self):
+        root, state, evidence, _output = self.case("linked-anchor", evidence=False)
+        outside = self.base / "outside-anchor"
+        outside.mkdir(mode=0o700)
+        evidence.symlink_to(outside, target_is_directory=True)
+        before = self.unchanged(outside), self.unchanged(evidence)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual((self.unchanged(outside), self.unchanged(evidence)), before)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_non_directory_intermediate_is_refused_without_replacement(self):
+        root, state, evidence, _output = self.case("file-intermediate")
+        path = evidence / "reports"
+        path.write_bytes(b"preserve existing file")
+        before = self.unchanged(path)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(path), before)
+        self.assertEqual(path.read_bytes(), b"preserve existing file")
+
+    def test_missing_evidence_anchor_is_not_created(self):
+        root, state, evidence, _output = self.case("missing-anchor", evidence=False)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertFalse(evidence.exists())
+
+    def test_wrong_owner_observation_refuses_without_impersonating_getuid(self):
+        root, state, evidence, _output = self.case("wrong-owner-model")
+        real_lstat = Path.lstat
+
+        def observe(path):
+            info = real_lstat(path)
+            if path == evidence:
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=os.getuid() + 1)
+            return info
+
+        with mock.patch.object(Path, "lstat", new=observe), self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_mkdir_permission_error_is_preserved_without_retry(self):
+        root, state, evidence, _output = self.case("mkdir-failure")
+        target = evidence / "reports"
+        original = PermissionError("synthetic mkdir refusal")
+        real_mkdir = Path.mkdir
+        calls = []
+
+        def create(path, *args, **kwargs):
+            if path == target:
+                calls.append(path)
+                raise original
+            return real_mkdir(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "mkdir", new=create), self.assertRaises(PermissionError) as caught:
+            self.retain(root, state, evidence)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(calls, [target])
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_lstat_permission_error_is_not_treated_as_absence(self):
+        root, state, evidence, _output = self.case("lstat-failure")
+        original = PermissionError("synthetic lstat refusal")
+        real_lstat = Path.lstat
+
+        def observe(path):
+            if path == evidence:
+                raise original
+            return real_lstat(path)
+
+        with mock.patch.object(Path, "lstat", new=observe), self.assertRaises(PermissionError) as caught:
+            self.retain(root, state, evidence)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_file_exists_race_is_revalidated_before_descent(self):
+        for kind in ("private", "broad", "file", "link"):
+            with self.subTest(kind=kind):
+                root, state, evidence, _output = self.case("race-" + kind)
+                target = evidence / "reports"
+                outside = self.base / ("race-target-" + kind)
+                outside.mkdir(mode=0o700)
+                real_mkdir = Path.mkdir
+                real_chmod = os.chmod
+                calls = []
+
+                def create(path, *args, **kwargs):
+                    if path == target:
+                        calls.append(path)
+                        if kind in ("private", "broad"):
+                            real_mkdir(path, mode=0o700)
+                            if kind == "broad":
+                                # Fixture-injected racing mode, independent of
+                                # the incoming umask; production chmod stays forbidden.
+                                real_chmod(path, 0o755)
+                        elif kind == "file":
+                            path.write_bytes(b"racing existing file")
+                        else:
+                            path.symlink_to(outside, target_is_directory=True)
+                        raise FileExistsError("synthetic exclusive mkdir race")
+                    return real_mkdir(path, *args, **kwargs)
+
+                with mock.patch.object(Path, "mkdir", new=create):
+                    if kind == "private":
+                        rows = self.retain(root, state, evidence)
+                        self.assert_private_readback(evidence, rows[0], self.payload)
+                    else:
+                        with self.assertRaises(runner.AuditError):
+                            self.retain(root, state, evidence)
+                        self.assertFalse((evidence / "report-manifest.json").exists())
+                self.assertEqual(calls, [target])
+                self.assertEqual(list(outside.iterdir()), [])
+                if kind == "broad":
+                    self.assertEqual(list(target.iterdir()), [])
+                if kind == "file":
+                    self.assertEqual(target.read_bytes(), b"racing existing file")
+
+    def test_existing_payload_is_never_replaced(self):
+        root, state, evidence, output = self.case("payload-collision")
+        relative = "reports/" + output.relative_to(root).as_posix()
+        self.private_parents(evidence, relative)
+        target = evidence / relative
+        target.write_bytes(b"earlier retained bytes")
+        before = self.unchanged(target)
+        with self.assertRaises(FileExistsError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(target), before)
+        self.assertEqual(target.read_bytes(), b"earlier retained bytes")
+        self.assertFalse((evidence / "report-manifest.json").exists())
+
+    def test_existing_manifest_is_never_replaced(self):
+        root, state, evidence, _output = self.case("manifest-collision")
+        target = evidence / "report-manifest.json"
+        target.write_bytes(b"earlier original manifest")
+        before = self.unchanged(target)
+        with self.assertRaises(FileExistsError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(target), before)
+        self.assertEqual(target.read_bytes(), b"earlier original manifest")
+
+    def test_report_depth_keeps_output_prefixes_outside_original_256_limit(self):
+        for depth in (256, 257):
+            with self.subTest(depth=depth):
+                label = "library/demo/build/reports/" + "d/" * depth + "result.xml"
+                root, state, evidence, _output = self.case("depth-" + str(depth), label=label)
+                if depth == 257:
+                    with self.assertRaisesRegex(runner.AuditError, "directory depth exceeds"):
+                        self.retain(root, state, evidence)
+                    self.assertEqual(list(evidence.iterdir()), [])
+                else:
+                    rows = self.retain(root, state, evidence)
+                    self.assertEqual(len(rows), 1)
+                    self.assertEqual(rows[0]["source"], label)
+                    self.assertEqual(rows[0]["retained"], "reports/" + label)
+                    self.assertEqual((evidence / rows[0]["retained"]).read_bytes(), self.payload)
+                    # No assertion of the separate native reader's depth/member
+                    # admission, and no descriptor per directory for this case.
+
+    def test_external_owned_project_retention_keeps_its_original_label(self):
+        root, state, evidence, output = self.case("external", label="not-a-report.txt")
+        fixture = state / "work/consumer"
+        report = fixture / "build/test-results/test/result.xml"
+        report.parent.mkdir(parents=True)
+        report.write_bytes(self.payload)
+        rows = self.retain(root, state, evidence, original=["help", "-p", str(fixture)])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "external/work/consumer/build/test-results/test/result.xml")
+        self.assert_private_readback(evidence, rows[0], self.payload)
+        self.assertEqual(output.read_bytes(), self.payload)
+
+
+class CapturePolicyTests(unittest.TestCase):
+    """Tiny streams/threads and modeled execute ownership; never native/product evidence."""
+
+    OVERFLOW = "Evidence stream byte limit exceeded; retained prefix only"
+
+    class Source:
+        def __init__(self, chunks):
+            self.chunks, self.requests, self.close_count = list(chunks), [], 0
+
+        def read(self, count):
+            self.requests.append(count)
+            value = self.chunks.pop(0) if self.chunks else b""
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        def close(self):
+            self.close_count += 1
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.base = Path(self.stack.enter_context(tempfile.TemporaryDirectory(
+            prefix="audit capture policy ", dir=FIXTURE_PARENT))).resolve()
+        self.tees, self.releases = [], []
+        self.addCleanup(self.retire_threads)
+        for module, name in ((runner, "make_scope"), (processes, "make_scope"), (runner, "git")):
+            self.stack.enter_context(mock.patch.object(module, name,
+                side_effect=AssertionError("NO_NATIVE_OR_GIT_IN_CAPTURE_MODELS")))
+
+    def retire_threads(self):
+        for release in self.releases:
+            release.set()
+        for tee in self.tees:
+            if tee._start_attempted:
+                tee.thread.join(timeout=5)
+                self.assertFalse(tee.thread.is_alive(), "Test-owned capture thread did not retire")
+            else:
+                tee.finish()
+
+    def capture(self, chunks, *, maximum=None, live=None):
+        source = self.Source(chunks)
+        destination = self.base / (uuid.uuid4().hex + ".log")
+        live = io.BytesIO() if live is None else live
+        errors = []
+        options = {} if maximum is None else {"max_bytes": maximum}
+        tee = runner.Tee(source, destination, live, errors, False, **options)
+        self.tees.append(tee)
+        tee.start()
+        tee.finish()
+        self.assertFalse(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 1)
+        self.assertTrue(tee.output.closed)
+        return SimpleNamespace(source=source, destination=destination, live=live, errors=errors, tee=tee)
+
+    def execute_model(self, *, product=(b"product\x00\xff\n", b""), stop=(b"stop\r\n", b""),
+                      maximum=None, file_failure=False, fail_if_repoll=False, product_code=0,
+                      stop_pending=False, cancellation=None, live_failure=False, late_close=False,
+                      scope_close_error=None, handler_error=None):
+        """Actual execute/Tee/lock/receipt flow; source/native/report/signal suppliers are models."""
+        invocation_base = self.base / uuid.uuid4().hex
+        invocation_base.mkdir()
+        root, state = invocation_base / "root", invocation_base / "state"
+        root.mkdir()
+        (state / "gradle-home").mkdir(parents=True)
+        (state / "evidence").mkdir()
+        (state / "cancellations").mkdir()
+        wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        wrapper.write_bytes(b"NONFUNCTIONAL_OFFLINE_FIXTURE_NEVER_EXECUTE\n")
+        policy = b"# synthetic context, not Java admission\n"
+        (state / "gradle-home/gradle.properties").write_bytes(policy)
+        source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": runner.digest(b"")}
+        context = {"id": "c" * 32, "root": str(root), "gradleHome": str(state / "gradle-home"),
+                   "source": source, "gradlePropertiesSha256": runner.digest(policy)}
+        (state / "context.json").write_bytes(runner.json_bytes(context))
+        invocation = "d" * 32
+        calls, streams, violations, cancel_calls = [], [], [], []
+        case = self
+        close_release = threading.Event()
+        self.releases.append(close_release)
+
+        class LateCloseSource(self.Source):
+            def close(self):
+                case.assertTrue(close_release.wait(timeout=5), "Modeled stop did not release the test source")
+                super().close()
+                raise OSError(errno.EIO, "MODELED_LATE_CAPTURE_CLOSE_FAILURE")
+
+        class Scope:
+            def __init__(self):
+                self.launches, self.drains, self.closed = [], 0, False
+
+            def spawn(self, argv, cwd, env):
+                is_stop = len(self.launches) == 1
+                case.assertEqual(cwd, str(root))
+                case.assertEqual(env[processes.STATE_ENV], str(state))
+                case.assertEqual(env["GRADLE_USER_HOME"], str(state / "gradle-home"))
+                expected = ([str(wrapper), "--stop", "--console=plain", "--no-parallel", "--max-workers=2",
+                             "-Dorg.gradle.jvmargs=" + runner.JVM_ARGUMENTS] if is_stop else
+                            [str(wrapper), *runner.gradle_arguments(["help", "--console=plain"])])
+                case.assertEqual(argv, expected)
+                self.launches.append({"requestedArgv": list(argv), "scope": "MODELED_NOT_A_NATIVE_LAUNCH"})
+                calls.append("stop-spawn" if is_stop else "product-spawn")
+                if is_stop:
+                    close_release.set()
+                output, error = stop if is_stop else product
+                count = 0
+
+                def poll():
+                    nonlocal count
+                    for tee in streams:
+                        if late_close and not is_stop:
+                            continue  # Product exits before its modeled source finally closes.
+                        tee.thread.join(timeout=2)
+                        case.assertFalse(tee.thread.is_alive())
+                    count += 1
+                    calls.append("stop-poll" if is_stop else "product-poll")
+                    if not is_stop and fail_if_repoll and count > 1 and self.drains == 0:
+                        violations.append("PRODUCT_REPOLLED_AFTER_CAPTURE_FAILURE_BEFORE_DRAIN")
+                        return product_code
+                    if count == 1 and ((is_stop and stop_pending) or (not is_stop and fail_if_repoll)):
+                        return None
+                    return 0 if is_stop else product_code
+
+                output_source = LateCloseSource if late_close and not is_stop else case.Source
+                return SimpleNamespace(pid=200 + len(self.launches), stdout=output_source([output]),
+                                       stderr=case.Source([error]), poll=poll)
+
+            def discover(self):
+                calls.append("discover")
+                return []
+
+            def drain(self):
+                self.drains += 1
+                calls.append("drain")
+                return []
+
+            def description(self):
+                return {"backend": "MODELED_NOT_NATIVE", "launches": list(self.launches), "discoveryErrors": []}
+
+            def close(self):
+                self.closed = True
+                calls.append("scope-close")
+                if scope_close_error is not None:
+                    raise scope_close_error
+
+        scope = Scope()
+        original_tee, original_file = runner.Tee, runner.new_file
+
+        def tee_factory(*args, **kwargs):
+            if maximum is not None:
+                kwargs["max_bytes"] = maximum
+            tee = original_tee(*args, **kwargs)
+            streams.append(tee)
+            self.tees.append(tee)
+            return tee
+
+        def new_file(path):
+            output = original_file(path)
+            if file_failure and path.name == "product.stdout.log":
+                proxy = mock.Mock(wraps=output)
+                proxy.write.side_effect = OSError(errno.EIO, "modeled evidence write failure")
+                return proxy
+            return output
+
+        def check_cancel(*_args):
+            cancel_calls.append(len(scope.launches))
+            calls.append("cancel-" + str(len(scope.launches)))
+            if cancellation is not None and len(scope.launches) == 1 and streams:
+                raise cancellation
+
+        class FailedLive(io.BytesIO):
+            def write(self, _block):
+                raise OSError(errno.EIO, "modeled live write failure")
+
+        def text_stream(*, fail=False):
+            messages = io.StringIO()
+            return SimpleNamespace(buffer=FailedLive() if fail else io.BytesIO(),
+                                   write=messages.write, flush=messages.flush)
+
+        handler_calls = []
+
+        def set_handler(number, handler):
+            handler_calls.append((number, handler))
+            if handler_error is not None and scope.closed:
+                raise handler_error
+
+        interruption = None
+        with ExitStack() as patches:
+            patches.enter_context(mock.patch.dict(os.environ, {processes.STATE_ENV: str(state)}, clear=True))
+            for name, value in (("context_at", lambda _value: (state, context)), ("source_snapshot", lambda _root: source),
+                                ("host_role", lambda: "MODELED_NOT_HOST_ADMISSION"), ("report_snapshot", lambda *_args: {}),
+                                ("retain_reports", lambda *_args: []), ("make_scope", lambda *_args: scope),
+                                ("cancellation_requested", check_cancel), ("Tee", tee_factory), ("new_file", new_file)):
+                patches.enter_context(mock.patch.object(runner, name, value))
+            patches.enter_context(mock.patch.object(signal, "getsignal", return_value=object()))
+            patches.enter_context(mock.patch.object(signal, "signal", side_effect=set_handler))
+            patches.enter_context(mock.patch.object(sys, "stdout", text_stream(fail=live_failure)))
+            patches.enter_context(mock.patch.object(sys, "stderr", text_stream()))
+            try:
+                result = runner.execute(SimpleNamespace(cwd=str(root), wrapper=str(wrapper), id=invocation,
+                    purpose="offline-capture-model", kind="gradle", argv=["help", "--console=plain"],
+                    receipt=None, timeout=2.0, stop_timeout=2.0))
+            except BaseException as error:
+                if error is not cancellation:
+                    raise
+                result, interruption = None, error
+        evidence = state / "evidence" / invocation
+        receipt = json.loads((evidence / "receipt.json").read_bytes())
+        self.assertTrue(scope.closed)
+        self.assertEqual(len(scope.launches), 2)
+        self.assertEqual(calls.count("stop-spawn"), 1)
+        self.assertTrue(all(tee._complete.is_set() for tee in streams))
+        return SimpleNamespace(result=result, receipt=receipt, evidence=evidence, calls=calls,
+                               scope=scope, violations=violations, cancel_calls=cancel_calls, streams=streams,
+                               interruption=interruption, handler_calls=handler_calls)
+
+    def test_default_capture_limit_enforced_without_a_caller_option(self):
+        # Constant memory: repeated immutable block and counted discard sinks,
+        # not a64MiB disk/memory fixture, download or native product.
+        maximum = 64 * 1024 * 1024
+
+        class RepeatingSource(self.Source):
+            def __init__(self):
+                super().__init__([])
+                self.remaining = maximum + 1
+
+            def read(self, count):
+                self.requests.append(count)
+                size = min(count, self.remaining)
+                self.remaining -= size
+                return b"x" * size
+
+        class Counter:
+            def __init__(self):
+                self.bytes, self.closed = 0, False
+
+            def write(self, block):
+                self.bytes += len(block)
+                return len(block)
+
+            def flush(self):
+                pass
+
+            def fileno(self):
+                return -1  # fsync is explicitly modeled, never called with this value.
+
+            def close(self):
+                self.closed = True
+
+        source, output, live, errors = RepeatingSource(), Counter(), Counter(), []
+        with mock.patch.object(runner, "new_file", return_value=output), mock.patch.object(os, "fsync"):
+            tee = runner.Tee(source, self.base / "modeled-count-only", live, errors, False)
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+        self.assertEqual((output.bytes, live.bytes), (maximum, maximum))
+        self.assertEqual(errors, [self.OVERFLOW])
+        self.assertEqual(source.remaining, 0)
+        self.assertTrue(all(0 < count <= 65536 for count in source.requests))
+        self.assertEqual(source.close_count, 1)
+        self.assertTrue(output.closed)
+
+    def test_evidence_short_write_fails_but_live_and_drain_continue(self):
+        original_file = runner.new_file
+        writes = []
+
+        def limited(path):
+            output = original_file(path)
+            proxy = mock.Mock(wraps=output)
+
+            def write(block):
+                writes.append(block)
+                return output.write(block[:1])
+
+            proxy.write.side_effect = write
+            return proxy
+
+        with mock.patch.object(runner, "new_file", side_effect=limited):
+            value = self.capture([b"abc", b"def"])
+        self.assertEqual(value.errors, ["Evidence stream write failed: AuditError"])
+        self.assertEqual(writes, [b"abc"])
+        self.assertEqual(value.destination.read_bytes(), b"a")
+        self.assertEqual(value.live.getvalue(), b"abcdef")
+        self.assertEqual(len(value.source.requests), 3)
+
+    def test_live_short_write_fails_but_evidence_and_drain_continue(self):
+        class ShortLive(io.BytesIO):
+            calls = 0
+
+            def write(self, block):
+                self.calls += 1
+                return super().write(block[:1])
+
+        live = ShortLive()
+        value = self.capture([b"abc", b"def"], live=live)
+        self.assertEqual(value.errors, ["Product stream delivery failed: AuditError"])
+        self.assertEqual(live.calls, 1)
+        self.assertEqual(live.getvalue(), b"a")
+        self.assertEqual(value.destination.read_bytes(), b"abcdef")
+        self.assertEqual(len(value.source.requests), 3)
+
+    def test_product_capture_failure_enters_drain_before_a_second_wait_poll(self):
+        value = self.execute_model(file_failure=True, fail_if_repoll=True)
+        self.assertEqual(value.violations, [])
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertLess(value.calls.index("drain"), value.calls.index("stop-spawn"))
+        self.assertIn("Evidence stream write failed: OSError", value.receipt["errors"])
+
+    def test_cap_validation_precedes_allocation_and_caller_source_acquisition(self):
+        class IntSubclass(int):
+            pass
+
+        for maximum in (True, False, -1, 64 * 1024 * 1024 + 1, None, 0.0, 1.5,
+                        float("nan"), float("inf"), "1", object(), IntSubclass(1)):
+            with self.subTest(type=type(maximum).__name__, maximum=repr(maximum)):
+                source, errors = self.Source([b"unchanged"]), []
+                with mock.patch.object(runner, "new_file") as allocate, \
+                        mock.patch.object(threading, "Thread") as thread, \
+                        mock.patch.object(threading, "Event") as event:
+                    with self.assertRaisesRegex(runner.AuditError, "only shorten"):
+                        runner.Tee(source, self.base / "absent", None, errors, False, max_bytes=maximum)
+                allocate.assert_not_called()
+                thread.assert_not_called()
+                event.assert_not_called()
+                self.assertEqual((source.requests, source.close_count, errors), ([], 0, []))
+                self.assertEqual(source.chunks, [b"unchanged"])
+                self.assertFalse((self.base / "absent").exists())
+
+    def test_cap_is_keyword_only_and_maximum_empty_stream_is_admitted(self):
+        source = self.Source([])
+        with mock.patch.object(runner, "new_file") as allocate, self.assertRaises(TypeError):
+            runner.Tee(source, self.base / "absent", None, [], False, 1)
+        allocate.assert_not_called()
+        self.assertEqual(source.close_count, 0)
+        value = self.capture([], maximum=64 * 1024 * 1024)
+        self.assertEqual(value.errors, [])
+        self.assertEqual(value.destination.read_bytes(), b"")
+        self.assertEqual(value.source.requests, [65536])
+
+    def test_zero_below_and_exact_limit_eof_preserve_original_binary_bytes(self):
+        binary = b"N\x00\xff\r\n"
+        for chunks, maximum in (([], 0), ([], 1), ([binary], len(binary) + 1),
+                                ([binary[:2], binary[2:]], len(binary))):
+            with self.subTest(chunks=chunks, maximum=maximum):
+                value = self.capture(chunks, maximum=maximum)
+                self.assertEqual(value.errors, [])
+                self.assertEqual(value.destination.read_bytes(), b"".join(chunks))
+                self.assertEqual(value.live.getvalue(), b"".join(chunks))
+                self.assertEqual(value.source.requests, [65536] * (len(chunks) + 1))
+
+    def test_first_excess_in_same_or_next_block_retains_only_prefix_and_drains(self):
+        cases = (([b"N\x00\xff\r\ntail", b"later", b"last"], 5, b"N\x00\xff\r\n"),
+                 ([b"abc", b"d", b"tail"], 3, b"abc"), ([b"x", b"tail"], 0, b""))
+        for chunks, maximum, prefix in cases:
+            with self.subTest(maximum=maximum, chunks=chunks):
+                value = self.capture(chunks, maximum=maximum)
+                self.assertEqual(value.errors, [self.OVERFLOW])
+                self.assertEqual(value.destination.read_bytes(), prefix)
+                self.assertEqual(value.live.getvalue(), prefix)
+                self.assertEqual(value.source.requests, [65536] * (len(chunks) + 1))
+                self.assertEqual(value.source.chunks, [])
+
+    def test_original_allowance_survives_mutable_aliases_and_supplier_constant_changes(self):
+        case, holder = self, {}
+
+        class MutatingSource(self.Source):
+            def read(self, count):
+                tee = holder["tee"]
+                tee.max_bytes, tee.remaining, tee.retained_bytes = 999999, 999999, 0
+                runner.MAX_STREAM_BYTES = 999999999
+                return super().read(count)
+
+        class MutatingLive(io.BytesIO):
+            def write(self, block):
+                holder["tee"].remaining = 999999
+                case.assertLessEqual(len(block), 4)
+                return super().write(block)
+
+        source, live, errors = MutatingSource([b"abc", b"def", b"tail"]), MutatingLive(), []
+        destination = self.base / "immutable-prefix"
+        with mock.patch.object(runner, "MAX_STREAM_BYTES", runner.MAX_STREAM_BYTES):
+            tee = runner.Tee(source, destination, live, errors, False, max_bytes=4)
+            holder["tee"] = tee
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+        self.assertEqual((destination.read_bytes(), live.getvalue()), (b"abcd", b"abcd"))
+        self.assertEqual(errors, [self.OVERFLOW])
+        self.assertEqual(source.requests, [65536] * 4)
+        self.assertEqual(source.close_count, 1)
+
+    def test_each_tee_has_its_own_prefix_allowance(self):
+        first = self.capture([b"abcdef"], maximum=2)
+        second = self.capture([b"abcdef"], maximum=4)
+        self.assertEqual((first.destination.read_bytes(), second.destination.read_bytes()), (b"ab", b"abcd"))
+        self.assertEqual((first.live.getvalue(), second.live.getvalue()), (b"ab", b"abcd"))
+        self.assertEqual((first.errors, second.errors), ([self.OVERFLOW], [self.OVERFLOW]))
+
+    def test_observed_overflow_precedes_all_sinks_and_no_tail_is_written(self):
+        case, errors, calls = self, [], []
+        destination = self.base / "ordered-prefix"
+        output = runner.new_file(destination)
+        self.addCleanup(lambda: None if output.closed else output.close())
+        proxy = mock.Mock(wraps=output)
+
+        def write(block):
+            case.assertEqual(errors, [case.OVERFLOW])
+            calls.append(("evidence", block))
+            return output.write(block)
+
+        def flush():
+            case.assertEqual(errors, [case.OVERFLOW])
+            calls.append(("flush",))
+            output.flush()
+
+        class Live(io.BytesIO):
+            def write(self, block):
+                case.assertEqual(errors, [case.OVERFLOW])
+                case.assertEqual(destination.read_bytes(), b"abc")
+                calls.append(("live", block))
+                return super().write(block)
+
+        proxy.write.side_effect, proxy.flush.side_effect = write, flush
+        source, live = self.Source([b"abcde", b"tail", b"more"]), Live()
+        with mock.patch.object(runner, "new_file", return_value=proxy):
+            tee = runner.Tee(source, destination, live, errors, False, max_bytes=3)
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+        self.assertEqual(calls, [("evidence", b"abc"), ("flush",), ("live", b"abc"), ("flush",)])
+        self.assertEqual((destination.read_bytes(), live.getvalue()), (b"abc", b"abc"))
+        self.assertEqual(source.requests, [65536] * 4)
+        self.assertEqual(source.close_count, 1)
+        self.assertTrue(output.closed)
+
+    def test_falsey_nonbytes_mutable_subclass_and_oversized_reads_fail_without_retry(self):
+        class BytesSubclass(bytes):
+            pass
+
+        malformed = (None, "", bytearray(), bytearray(b"x"), memoryview(b"x"), 0, False,
+                     BytesSubclass(), BytesSubclass(b"x"), b"x" * 65537)
+        for invalid in malformed:
+            with self.subTest(type=type(invalid).__name__):
+                value = self.capture([b"p", invalid, b"unread"], maximum=1)
+                self.assertEqual((value.destination.read_bytes(), value.live.getvalue()), (b"p", b"p"))
+                self.assertEqual(value.errors, [
+                    "Owned stream read failed: AuditError: Owned stream read violated byte/chunk contract"])
+                self.assertEqual(value.source.requests, [65536, 65536])
+                self.assertEqual(value.source.chunks, [b"unread"])
+
+    def test_invalid_evidence_ack_disables_only_evidence_and_cannot_refill_budget(self):
+        class IntSubclass(int):
+            pass
+
+        for block, answer in ((b"abc", 0), (b"abc", -1), (b"abc", 4), (b"abc", None),
+                              (b"x", True), (b"x", 1.0), (b"abc", "3"), (b"abc", IntSubclass(3))):
+            with self.subTest(block=block, answer=repr(answer)):
+                original_file, writes, outputs = runner.new_file, [], []
+
+                def limited(path):
+                    output = original_file(path)
+                    outputs.append(output)
+                    proxy = mock.Mock(wraps=output)
+
+                    def write(part):
+                        writes.append(part)
+                        output.write(part[:1])  # Explicit actual physical effect, regardless of bad ack.
+                        return answer
+
+                    proxy.write.side_effect = write
+                    return proxy
+
+                with mock.patch.object(runner, "new_file", side_effect=limited):
+                    value = self.capture([block, b"def", b"tail"], maximum=4)
+                self.assertEqual(value.errors, ["Evidence stream write failed: AuditError", self.OVERFLOW])
+                self.assertEqual(writes, [block])
+                self.assertEqual(value.destination.read_bytes(), block[:1])
+                self.assertEqual(value.live.getvalue(), (block + b"def")[:4])
+                self.assertEqual(value.source.requests, [65536] * 4)
+                self.assertTrue(all(output.closed for output in outputs))
+
+    def test_evidence_write_and_flush_exceptions_disable_only_that_sink(self):
+        for action in ("write", "flush"):
+            for error_type in (OSError, ValueError):
+                with self.subTest(action=action, error=error_type.__name__):
+                    original_file, outputs = runner.new_file, []
+
+                    def failing(path):
+                        output = original_file(path)
+                        proxy = mock.Mock(wraps=output)
+                        outputs.append((output, proxy))
+                        if action == "write":
+                            proxy.write.side_effect = error_type("modeled evidence write failure")
+                        else:
+                            def flush():
+                                if proxy.flush.call_count == 1:
+                                    raise error_type("modeled evidence flush failure")
+                                output.flush()
+                            proxy.flush.side_effect = flush
+                        return proxy
+
+                    with mock.patch.object(runner, "new_file", side_effect=failing):
+                        value = self.capture([b"abc", b"def", b"tail"], maximum=4)
+                    self.assertEqual(value.errors, ["Evidence stream write failed: " + error_type.__name__, self.OVERFLOW])
+                    self.assertEqual(value.destination.read_bytes(), b"" if action == "write" else b"abc")
+                    self.assertEqual(value.live.getvalue(), b"abcd")
+                    self.assertEqual(outputs[0][1].write.call_count, 1)
+                    self.assertTrue(outputs[0][0].closed)
+                    self.assertEqual(value.source.requests, [65536] * 4)
+
+    def test_invalid_live_ack_disables_only_live_and_cannot_refill_budget(self):
+        class IntSubclass(int):
+            pass
+
+        for block, answer in ((b"abc", 0), (b"abc", -1), (b"abc", 4), (b"abc", None),
+                              (b"x", True), (b"x", 1.0), (b"abc", "3"), (b"abc", IntSubclass(3))):
+            with self.subTest(block=block, answer=repr(answer)):
+                class BadLive(io.BytesIO):
+                    calls = 0
+
+                    def write(self, part):
+                        self.calls += 1
+                        super().write(part[:1])
+                        return answer
+
+                live = BadLive()
+                value = self.capture([block, b"def", b"tail"], maximum=4, live=live)
+                self.assertEqual(value.errors, ["Product stream delivery failed: AuditError", self.OVERFLOW])
+                self.assertEqual(value.destination.read_bytes(), (block + b"def")[:4])
+                self.assertEqual(live.getvalue(), block[:1])
+                self.assertEqual(live.calls, 1)
+                self.assertEqual(value.source.requests, [65536] * 4)
+
+    def test_live_write_and_flush_exceptions_leave_bounded_evidence_and_drain(self):
+        for action in ("write", "flush"):
+            for error_type in (OSError, ValueError):
+                with self.subTest(action=action, error=error_type.__name__):
+                    class BadLive(io.BytesIO):
+                        calls = 0
+
+                        def write(self, block):
+                            self.calls += 1
+                            if action == "write":
+                                raise error_type("modeled live write failure")
+                            return super().write(block)
+
+                        def flush(self):
+                            if action == "flush":
+                                raise error_type("modeled live flush failure")
+                            return super().flush()
+
+                    live = BadLive()
+                    value = self.capture([b"abc", b"def", b"tail"], maximum=4, live=live)
+                    self.assertEqual(value.errors, ["Product stream delivery failed: " + error_type.__name__, self.OVERFLOW])
+                    self.assertEqual(value.destination.read_bytes(), b"abcd")
+                    self.assertEqual(live.getvalue(), b"" if action == "write" else b"abc")
+                    self.assertEqual(live.calls, 1)
+                    self.assertEqual(value.source.requests, [65536] * 4)
+
+    def test_read_failure_and_worker_interruption_preserve_prefix_and_first_error(self):
+        class FalseyInterruption(BaseException):
+            def __bool__(self):
+                return False
+
+        for failure in (OSError("modeled read failure"), FalseyInterruption("modeled worker interruption")):
+            with self.subTest(failure=type(failure).__name__):
+                uncaught = []
+                with mock.patch.object(threading, "excepthook", side_effect=uncaught.append):
+                    value = self.capture([b"abcd", failure, b"unread"], maximum=2)
+                self.assertEqual((value.destination.read_bytes(), value.live.getvalue()), (b"ab", b"ab"))
+                self.assertEqual(value.errors[0], self.OVERFLOW)
+                self.assertEqual(len(value.errors), 2)
+                self.assertIn("Owned stream read failed: " + type(failure).__name__, value.errors[1])
+                self.assertEqual(value.source.chunks, [b"unread"])
+                if isinstance(failure, Exception):
+                    self.assertEqual(uncaught, [])
+                else:
+                    self.assertEqual(len(uncaught), 1)
+                    self.assertIs(uncaught[0].exc_value, failure)
+
+    def test_first_errors_survive_both_sink_and_once_only_retirement_failures(self):
+        class FailingSource(self.Source):
+            def close(self):
+                super().close()
+                raise OSError("modeled source close failure")
+
+        destination = self.base / "multiple-failures"
+        output = runner.new_file(destination)
+        self.addCleanup(lambda: None if output.closed else output.close())
+        proxy = mock.Mock(wraps=output)
+        proxy.write.side_effect = OSError("modeled evidence write failure")
+        proxy.flush.side_effect = ValueError("modeled final flush failure")
+
+        def close():
+            output.close()
+            raise OSError("modeled output close failure")
+
+        proxy.close.side_effect = close
+        source, errors = FailingSource([b"abc", b"tail"]), ["PRIOR_ORIGINAL_ERROR"]
+        live = mock.Mock()
+        live.write.side_effect = OSError("modeled live write failure")
+        with mock.patch.object(runner, "new_file", return_value=proxy), \
+                mock.patch.object(os, "fsync", side_effect=OSError("modeled fsync failure")) as sync:
+            tee = runner.Tee(source, destination, live, errors, False, max_bytes=2)
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+            tee.finish()
+        self.assertEqual(errors[:4], ["PRIOR_ORIGINAL_ERROR", self.OVERFLOW,
+                         "Evidence stream write failed: OSError", "Product stream delivery failed: OSError"])
+        self.assertEqual(len(errors), 8)
+        for prefix, error in zip(("Owned stream close failed; retirement UNKNOWN:",
+                                  "Evidence stream flush failed:", "Evidence stream sync failed:",
+                                  "Evidence stream close failed; retirement UNKNOWN:"), errors[4:]):
+            self.assertTrue(error.startswith(prefix), error)
+        self.assertEqual((source.close_count, proxy.write.call_count, proxy.flush.call_count,
+                          sync.call_count, proxy.close.call_count, live.write.call_count), (1, 1, 1, 1, 1, 1))
+        self.assertTrue(output.closed)
+        self.assertEqual(source.requests, [65536] * 3)
+
+    def test_no_eof_keeps_three_second_unknown_without_owner_race_close_or_second_budget(self):
+        release, blocked = threading.Event(), threading.Event()
+        self.releases.append(release)
+        case, close_threads = self, []
+
+        class BlockedSource(self.Source):
+            def read(self, count):
+                if self.chunks:
+                    return super().read(count)
+                self.requests.append(count)
+                blocked.set()
+                case.assertTrue(release.wait(timeout=10), "Test-owned blocked source was not released")
+                return b""
+
+            def close(self):
+                close_threads.append(threading.get_ident())
+                super().close()
+
+        source, live, errors = BlockedSource([b"abcde"]), io.BytesIO(), []
+        destination = self.base / "bounded-unknown"
+        tee = runner.Tee(source, destination, live, errors, False, max_bytes=3)
+        self.tees.append(tee)
+        tee.start()
+        self.assertTrue(blocked.wait(timeout=2))
+        started = time.monotonic()
+        tee.finish()
+        elapsed = time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 2.9)
+        self.assertLess(elapsed, 5)
+        self.assertTrue(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 0)
+        self.assertFalse(tee.output.closed)
+        self.assertEqual(errors, [self.OVERFLOW,
+            "Owned stream retirement UNKNOWN: worker start/completion not acknowledged after drain"])
+        self.assertEqual((destination.read_bytes(), live.getvalue()), (b"abc", b"abc"))
+        with mock.patch.object(tee._complete, "wait", side_effect=AssertionError("No second finish allowance")):
+            tee.finish()
+        release.set()
+        tee.thread.join(timeout=3)
+        self.assertFalse(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 1)
+        self.assertEqual(close_threads, [tee.thread.ident])
+        self.assertNotEqual(close_threads[0], threading.get_ident())
+        self.assertTrue(tee.output.closed)
+        self.assertEqual(len(errors), 2)  # Test cleanup does not erase the original UNKNOWN.
+
+    def test_valid_short_cap_allocation_failure_does_not_claim_the_source(self):
+        source, errors = self.Source([b"unread"]), []
+        failure = OSError("modeled allocation refusal")
+        with mock.patch.object(runner, "new_file", side_effect=failure), \
+                mock.patch.object(threading, "Thread") as thread, self.assertRaises(OSError) as caught:
+            runner.Tee(source, self.base / "not-created", None, errors, False, max_bytes=1)
+        self.assertIs(caught.exception, failure)
+        thread.assert_not_called()
+        self.assertEqual((source.close_count, source.requests, errors), (0, [], []))
+
+    def test_short_cap_thread_allocation_failure_closes_only_the_new_output(self):
+        source, errors = self.Source([b"unread"]), []
+        destination = self.base / "thread-allocation"
+        output = runner.new_file(destination)
+        self.addCleanup(lambda: None if output.closed else output.close())
+        failure = OSError("modeled thread allocation refusal")
+        with mock.patch.object(runner, "new_file", return_value=output), \
+                mock.patch.object(threading, "Thread", side_effect=failure), self.assertRaises(OSError) as caught:
+            runner.Tee(source, destination, None, errors, False, max_bytes=1)
+        self.assertIs(caught.exception, failure)
+        self.assertTrue(output.closed)
+        self.assertEqual((source.close_count, source.requests, errors), (0, [], []))
+
+    def test_deferred_short_cap_retirement_is_once_only_without_source_reads(self):
+        source, errors = self.Source([b"unread"]), []
+        tee = runner.Tee(source, self.base / "unstarted", None, errors, False, max_bytes=1)
+        self.tees.append(tee)
+        tee.finish()
+        tee.finish()
+        with self.assertRaisesRegex(runner.AuditError, "cannot start twice or after retirement"):
+            tee.start()
+        self.assertEqual((source.close_count, source.requests, errors), (1, [], []))
+        self.assertTrue(tee.output.closed)
+        self.assertTrue(tee._complete.is_set())
+        self.assertFalse(tee.thread.is_alive())
+
+    def test_eager_post_entry_start_error_preserves_pending_tee_and_worker_owned_close(self):
+        close_threads = []
+
+        class TrackingSource(self.Source):
+            def close(self):
+                close_threads.append(threading.get_ident())
+                super().close()
+
+        source, errors = TrackingSource([b"abcd"]), []
+        failure = OSError("modeled uncertain start return after actual worker entry")
+        original_start = threading.Thread.start
+
+        def entered(thread):
+            original_start(thread)
+            raise failure
+
+        with mock.patch.object(threading.Thread, "start", entered), self.assertRaises(OSError) as caught:
+            runner.Tee(source, self.base / "pending-start", None, errors, max_bytes=2)
+        self.assertIs(caught.exception, failure)
+        tee = failure._p2pkit_pending_tee
+        self.tees.append(tee)
+        self.assertFalse(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 1)
+        self.assertEqual(close_threads, [tee.thread.ident])
+        self.assertNotEqual(close_threads[0], threading.get_ident())
+        self.assertTrue(tee.output.closed)
+        self.assertEqual(errors, [self.OVERFLOW])
+        tee.finish()
+        self.assertEqual(source.close_count, 1)
+
+    def test_modeled_clean_and_expected_red_products_keep_exact_stop_and_exit(self):
+        for code in (0, 7):
+            with self.subTest(product_code=code):
+                value = self.execute_model(product=(b"p\x00\xff\r\n", b"err"), stop=(b"s", b""),
+                                           maximum=5, product_code=code)
+                self.assertEqual(value.result, code)
+                self.assertEqual(value.receipt["finalExitCode"], code)
+                self.assertEqual(value.receipt["productExitCode"], code)
+                self.assertEqual(value.receipt["stopExitCode"], 0)
+                self.assertEqual(value.receipt["errors"], [])
+                self.assertEqual(value.scope.drains, 1)
+                self.assertTrue(value.receipt["sourceUnchanged"])
+                for name, raw in (("product.stdout.log", b"p\x00\xff\r\n"), ("product.stderr.log", b"err"),
+                                  ("stop.stdout.log", b"s"), ("stop.stderr.log", b"")):
+                    self.assertEqual((value.evidence / name).read_bytes(), raw)
+
+    def test_product_error_callback_observes_original_errors_even_with_polled_zero(self):
+        value = self.execute_model(file_failure=True)
+        self.assertEqual(value.result, 125)
+        self.assertIn("AuditError: Product stream capture failed", value.receipt["errors"])
+        self.assertEqual(value.receipt["productExitCode"], 0)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(value.scope.drains, 2)
+        self.assertLess(value.calls.index("cancel-1"), value.calls.index("drain"))
+
+    def test_product_stdout_or_stderr_overflow_enters_original_drain_and_stop(self):
+        for product in ((b"12345", b"x"), (b"x", b"12345")):
+            with self.subTest(product=product):
+                value = self.execute_model(product=product, stop=(b"s", b""), maximum=4, fail_if_repoll=True)
+                self.assertEqual(value.result, 125)
+                self.assertEqual(value.violations, [])
+                self.assertEqual(value.receipt["errors"].count(self.OVERFLOW), 1)
+                self.assertIn("AuditError: Product stream capture failed", value.receipt["errors"])
+                self.assertEqual(value.scope.drains, 2)
+                self.assertLess(value.calls.index("drain"), value.calls.index("stop-spawn"))
+                self.assertEqual(value.receipt["stopExitCode"], 0)
+                self.assertEqual((value.evidence / "product.stdout.log").read_bytes(), product[0][:4])
+                self.assertEqual((value.evidence / "product.stderr.log").read_bytes(), product[1][:4])
+
+    def test_product_live_failure_enters_drain_while_evidence_is_preserved(self):
+        value = self.execute_model(product=(b"abc", b""), stop=(b"s", b""), maximum=3,
+                                   live_failure=True, fail_if_repoll=True)
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.violations, [])
+        self.assertIn("Product stream delivery failed: OSError", value.receipt["errors"])
+        self.assertEqual(value.scope.drains, 2)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual((value.evidence / "product.stdout.log").read_bytes(), b"abc")
+
+    def test_stop_pending_then_zero_is_not_aborted_by_prior_product_capture_failure(self):
+        value = self.execute_model(product=(b"overflow", b""), stop=(b"s", b""), maximum=3,
+                                   fail_if_repoll=True, stop_pending=True)
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.violations, [])
+        self.assertEqual(value.calls.count("stop-poll"), 2)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertFalse(any("Wrapper stop/finalizer failed" in error for error in value.receipt["errors"]))
+        self.assertEqual(value.receipt["errors"].count("AuditError: Product stream capture failed"), 1)
+
+    def test_stop_stdout_or_stderr_overflow_remains_final_failure_without_aborting_stop(self):
+        for stop in ((b"12345", b"x"), (b"x", b"12345")):
+            with self.subTest(stop=stop):
+                value = self.execute_model(product=(b"p", b""), stop=stop, maximum=4, stop_pending=True)
+                self.assertEqual(value.result, 125)
+                self.assertEqual(value.receipt["errors"], [self.OVERFLOW])
+                self.assertEqual(value.receipt["stopExitCode"], 0)
+                self.assertEqual(value.calls.count("stop-poll"), 2)
+                self.assertEqual(value.scope.drains, 1)
+                self.assertEqual((value.evidence / "stop.stdout.log").read_bytes(), stop[0][:4])
+                self.assertEqual((value.evidence / "stop.stderr.log").read_bytes(), stop[1][:4])
+
+    def test_late_product_capture_close_failure_cannot_become_success(self):
+        value = self.execute_model(product=(b"p", b""), stop=(b"s", b""), maximum=1, late_close=True)
+        self.assertEqual(value.result, 125)
+        self.assertEqual((value.receipt["productExitCode"], value.receipt["stopExitCode"]), (0, 0))
+        self.assertEqual(value.scope.drains, 1)  # No claim that an unavailable earlier error was observed.
+        self.assertEqual(len(value.receipt["errors"]), 1)
+        self.assertIn("Owned stream close failed; retirement UNKNOWN:", value.receipt["errors"][0])
+        self.assertIn("MODELED_LATE_CAPTURE_CLOSE_FAILURE", value.receipt["errors"][0])
+        self.assertEqual((value.evidence / "product.stdout.log").read_bytes(), b"p")
+
+    def test_original_falsey_cancellation_precedes_capture_check_and_survives_later_failures(self):
+        class FalseyCancellation(BaseException):
+            def __bool__(self):
+                return False
+
+        failure = FalseyCancellation("MODELED_ORIGINAL_CANCELLATION")
+        value = self.execute_model(file_failure=True, cancellation=failure,
+                                   scope_close_error=OSError("MODELED_LATER_OWNER_CLOSE"),
+                                   handler_error=ValueError("MODELED_LATER_HANDLER_RESTORE"))
+        self.assertIs(value.interruption, failure)
+        self.assertIsNone(value.result)
+        self.assertEqual(value.receipt["finalExitCode"], 125)
+        self.assertIn("Evidence stream write failed: OSError", value.receipt["errors"])
+        self.assertIn("FalseyCancellation: MODELED_ORIGINAL_CANCELLATION", value.receipt["errors"])
+        self.assertNotIn("AuditError: Product stream capture failed", value.receipt["errors"])
+        self.assertTrue(any("MODELED_LATER_OWNER_CLOSE" in error for error in value.receipt["errors"]))
+        self.assertTrue(any("MODELED_LATER_HANDLER_RESTORE" in error for error in value.receipt["errors"]))
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(value.scope.drains, 2)
+
+
+class DeadlinePolicyTests(unittest.TestCase):
+    """Local fake-clock waits and modeled execute, not native/shared-clock evidence."""
+
+    class Clock:
+        def __init__(self, now=100.0):
+            self.now, self.readings, self.sleeps = now, [], []
+
+        def monotonic(self):
+            self.readings.append(self.now)
+            return self.now
+
+        def sleep(self, seconds):
+            self.sleeps.append(seconds)
+            self.now += seconds
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.base = Path(self.stack.enter_context(tempfile.TemporaryDirectory(
+            prefix="audit deadline policy ", dir=FIXTURE_PARENT))).resolve()
+        for module, name in ((runner, "make_scope"), (processes, "make_scope"), (runner, "git")):
+            self.stack.enter_context(mock.patch.object(module, name,
+                side_effect=AssertionError("NO_NATIVE_OR_GIT_IN_DEADLINE_MODELS")))
+
+    def wait_model(self, *, code=0, codes=None, clock=None, timeout=1.0, advance=None,
+                   callback=None, cancelled=None, stop=False, options=None, hooks=None):
+        clock = self.Clock() if clock is None else clock
+        calls, advance = [], {} if advance is None else dict(advance)
+        pending = list(codes or [])
+        hooks = dict(hooks or {})
+        self.last_wait = SimpleNamespace(calls=calls, clock=clock)
+
+        def event(name):
+            calls.append(name)
+            if name in advance:
+                clock.now += advance[name]
+            if name in hooks:
+                hooks[name]()
+
+        def poll():
+            event("poll")
+            return pending.pop(0) if pending else code
+
+        def check():
+            event("callback")
+            if callback is not None:
+                callback()
+
+        child = SimpleNamespace(poll=poll)
+        scope = SimpleNamespace(discover=lambda: event("discover"))
+        with mock.patch.object(runner.time, "monotonic", clock.monotonic), \
+                mock.patch.object(runner.time, "sleep", clock.sleep):
+            result = runner.wait_process(scope, child, timeout, [] if cancelled is None else cancelled,
+                                         check, stop=stop, **({} if options is None else options))
+        return SimpleNamespace(result=result, calls=calls, clock=clock)
+
+    def execute_model(self, *, advance=None, hooks=None, product_code=0, stop_code=0,
+                      product_pending=0, stop_pending=0, kind="gradle", timeout=1.0,
+                      stop_timeout=1.0, initial=100.0):
+        """Actual execute/wait/receipt code; scope, Tee, source, lease and clocks modeled."""
+        advance, hooks = dict(advance or {}), dict(hooks or {})
+        clock = self.Clock(initial)
+        root, state = self.base / uuid.uuid4().hex, self.base / uuid.uuid4().hex
+        root.mkdir()
+        (state / "gradle-home").mkdir(parents=True)
+        (state / "evidence").mkdir()
+        (state / "cancellations").mkdir()
+        wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        wrapper.write_bytes(b"OFFLINE_MODEL_NOT_AN_EXECUTABLE_WRAPPER\n")
+        properties = b"# modeled admission, not qualified Java\n"
+        (state / "gradle-home/gradle.properties").write_bytes(properties)
+        source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": runner.digest(b"")}
+        context = {"id": "c" * 32, "root": str(root), "gradleHome": str(state / "gradle-home"),
+                   "source": source, "gradlePropertiesSha256": runner.digest(properties)}
+        (state / "context.json").write_bytes(runner.json_bytes(context))
+        args = SimpleNamespace(cwd=str(root), wrapper=str(wrapper), id="d" * 32,
+            purpose="offline-deadline-model", kind=kind, argv=["help", "--console=plain"],
+            receipt=None, timeout=timeout, stop_timeout=stop_timeout)
+        calls, waits, streams, children, leases = [], [], [], [], []
+        case = self
+
+        def event(name):
+            calls.append((name, clock.now))
+            if name in advance:
+                clock.now += advance[name]
+            if name in hooks:
+                hooks[name](SimpleNamespace(clock=clock, args=args, calls=calls, waits=waits,
+                                           streams=streams, children=children, scope=scope))
+
+        class Source:
+            def __init__(self, label):
+                self.label, self.closes = label, 0
+
+            def close(self):
+                self.closes += 1
+
+        class Scope:
+            def __init__(self):
+                self.launches, self.drains, self.closed, self.phase = [], 0, False, "product"
+
+            def spawn(self, argv, cwd, env):
+                self.phase = "product" if not self.launches else "stop"
+                phase = self.phase
+                case.assertEqual(cwd, str(root))
+                case.assertEqual(env[processes.STATE_ENV], str(state))
+                case.assertEqual(env["GRADLE_USER_HOME"], context["gradleHome"])
+                expected = ([str(wrapper), "--stop", "--console=plain", "--no-parallel", "--max-workers=2",
+                             "-Dorg.gradle.jvmargs=" + runner.JVM_ARGUMENTS] if phase == "stop" else
+                            [str(wrapper), *runner.gradle_arguments(args.argv)] if kind == "gradle" else args.argv)
+                case.assertEqual(argv, expected)
+                self.launches.append({"requestedArgv": list(argv), "scope": "MODELED_NOT_NATIVE"})
+                event(phase + "-spawn")
+                pending = product_pending if phase == "product" else stop_pending
+                code = product_code if phase == "product" else stop_code
+
+                def poll():
+                    nonlocal pending
+                    event(phase + "-poll")
+                    if pending:
+                        pending -= 1
+                        return None
+                    return code
+
+                child = SimpleNamespace(pid=100 + len(self.launches), poll=poll,
+                    stdout=Source(phase + "-stdout"), stderr=Source(phase + "-stderr"))
+                children.append(child)
+                return child
+
+            def discover(self):
+                event(self.phase + "-discover")
+                return []
+
+            def drain(self):
+                self.drains += 1
+                event("drain-" + str(self.drains))
+                return []
+
+            def description(self):
+                return {"backend": "MODELED_NOT_NATIVE", "launches": self.launches, "discoveryErrors": []}
+
+            def close(self):
+                self.closed = True
+                event("scope-close")
+
+        class Tee:
+            def __init__(self, source, destination, live, errors, start=True):
+                case.assertFalse(start, "Canonical capture must still register before start")
+                self.source, self.starts, self.finishes = source, 0, 0
+                streams.append(self)
+                event(source.label + "-allocate")
+
+            def start(self):
+                self.starts += 1
+                event(self.source.label + "-start")
+
+            def finish(self):
+                self.finishes += 1
+                self.source.close()
+                event(self.source.label + "-finish")
+
+        class Lease:
+            def __init__(self, supplied):
+                case.assertEqual(supplied, state)
+                self.held, self.closes = False, 0
+                leases.append(self)
+
+            def acquire(self, *values, **options):
+                event("lease-acquire")
+                self.held = True
+
+            def close(self):
+                self.closes += 1
+                self.held = False
+                event("lease-close")
+
+        scope = Scope()
+        original_wait = runner.wait_process
+
+        def wait_spy(*values, **options):
+            waits.append({"budget": values[2], "stop": options.get("stop", False),
+                          "localDeadline": options.get("local_deadline"), "entered": clock.now})
+            return original_wait(*values, **options)
+
+        def check_cancel(*_values):
+            event(scope.phase + "-callback")
+
+        messages = lambda: SimpleNamespace(buffer=io.BytesIO(), write=lambda _value: None, flush=lambda: None)
+        interruption = None
+        with ExitStack() as patches:
+            patches.enter_context(mock.patch.dict(os.environ, {processes.STATE_ENV: str(state)}, clear=True))
+            for name, value in (("context_at", lambda _value: (state, context)),
+                                ("source_snapshot", lambda _root: source),
+                                ("host_role", lambda: "MODELED_NOT_HOST_ADMISSION"),
+                                ("report_snapshot", lambda *_values: {}), ("retain_reports", lambda *_values: []),
+                                ("make_scope", lambda *_values: scope), ("Tee", Tee), ("LeafLock", Lease),
+                                ("wait_process", wait_spy), ("cancellation_requested", check_cancel),
+                                ("cancel_nested_leaves", lambda *_values: event("nested-model-only"))):
+                patches.enter_context(mock.patch.object(runner, name, value))
+            patches.enter_context(mock.patch.object(runner.time, "monotonic", clock.monotonic))
+            patches.enter_context(mock.patch.object(runner.time, "sleep", clock.sleep))
+            patches.enter_context(mock.patch.object(signal, "getsignal", return_value=object()))
+            patches.enter_context(mock.patch.object(signal, "signal", side_effect=lambda *_values: event("handler")))
+            patches.enter_context(mock.patch.object(sys, "stdout", messages()))
+            patches.enter_context(mock.patch.object(sys, "stderr", messages()))
+            try:
+                result = runner.execute(args)
+            except BaseException as error:
+                if isinstance(error, Exception):
+                    raise
+                result, interruption = None, error
+        evidence = state / "evidence" / args.id
+        receipt = json.loads((evidence / "receipt.json").read_bytes())
+        self.assertTrue(scope.closed)
+        self.assertTrue(all(stream.finishes == 1 and stream.source.closes == 1 for stream in streams))
+        self.assertTrue(all(lease.closes == 1 and not lease.held for lease in leases))
+        return SimpleNamespace(result=result, receipt=receipt, calls=calls, waits=waits, clock=clock,
+            scope=scope, args=args, streams=streams, children=children, interruption=interruption)
+
+    def test_exact_expiry_cannot_accept_product_zero(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(advance={"poll": 1.0})
+
+    def test_late_expected_red_exit_cannot_pass(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(code=7, advance={"poll": 2.0})
+
+    def test_callback_time_cannot_escape_exit_deadline(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(advance={"callback": 1.0})
+
+    def test_product_spawn_time_cannot_renew_relative_wait(self):
+        value = self.execute_model(advance={"product-spawn": 1.0})
+        self.assertEqual(value.result, 125)
+        self.assertTrue(any("Product command timed out" in error for error in value.receipt["errors"]))
+        self.assertEqual(len(value.scope.launches), 2)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+
+    def test_stop_stream_setup_cannot_renew_relative_wait(self):
+        value = self.execute_model(advance={"stop-stderr-start": 1.0})
+        self.assertEqual(value.result, 125)
+        self.assertTrue(any("Wrapper stop timed out" in error for error in value.receipt["errors"]))
+        self.assertEqual(len(value.scope.launches), 2)
+        self.assertEqual(value.receipt["productExitCode"], 0)
+
+    def test_legacy_equal_and_shortened_ends_keep_on_time_zero_and_red(self):
+        for code in (0, 7):
+            for options in ({}, {"local_deadline": 101}, {"local_deadline": 100.5}):
+                with self.subTest(code=code, options=options):
+                    value = self.wait_model(code=code, advance={"poll": .25}, options=options)
+                    self.assertEqual(value.result, code)
+                    self.assertEqual(value.calls, ["poll", "discover", "callback"])
+
+    def test_local_end_is_keyword_only(self):
+        with self.assertRaises(TypeError):
+            runner.wait_process(None, None, 1, [], lambda: None, False, 101)
+
+    def test_invalid_numeric_inputs_refuse_before_process_suppliers(self):
+        class IntSubclass(int):
+            pass
+
+        class FloatSubclass(float):
+            pass
+
+        class Coercible:
+            def __float__(self):
+                raise AssertionError("COERCION_MUST_NOT_RUN")
+
+        common = [True, False, "1", Coercible(), IntSubclass(1), FloatSubclass(1),
+                  float("nan"), float("inf"), float("-inf"), 10 ** 10000]
+        for index, value in enumerate([None, 0, -1, *common]):
+            with self.subTest(field="timeout", index=index):
+                with self.assertRaises(runner.AuditError):
+                    self.wait_model(timeout=value)
+                self.assertEqual(self.last_wait.calls, [])
+        for index, value in enumerate(common):
+            with self.subTest(field="local_deadline", index=index):
+                with self.assertRaises(runner.AuditError):
+                    self.wait_model(options={"local_deadline": value})
+                self.assertEqual(self.last_wait.calls, [])
+
+    def test_later_end_is_rejected_not_silently_clamped(self):
+        with self.assertRaises(runner.AuditError):
+            self.wait_model(options={"local_deadline": 101.25})
+        self.assertEqual(self.last_wait.calls, [])
+
+    def test_known_expiry_never_polls_or_reopens_after_callback_clock_recovery(self):
+        for stop in (False, True):
+            with self.subTest(stop=stop):
+                clock = self.Clock()
+                with self.assertRaisesRegex(runner.AuditError, "timed out"):
+                    self.wait_model(clock=clock, stop=stop, options={"local_deadline": 99},
+                                    callback=lambda: setattr(clock, "now", 0.0))
+                self.assertEqual(self.last_wait.calls, ["callback"])
+                self.assertEqual(clock.readings, [100.0])
+
+    def test_product_cancellation_precedes_exit_and_known_expiry_but_stop_ignores_list(self):
+        for code in (0, 7):
+            for options in ({}, {"local_deadline": 99}):
+                with self.subTest(code=code, options=options):
+                    with self.assertRaisesRegex(runner.AuditError, "Invocation cancellation requested"):
+                        self.wait_model(code=code, cancelled=[9], options=options)
+        for code in (0, 7):
+            self.assertEqual(self.wait_model(code=code, cancelled=[9], stop=True).result, code)
+
+    def test_original_callback_failure_identity_precedes_timeout_and_later_bad_clock(self):
+        class FalseyCancel(KeyboardInterrupt):
+            def __bool__(self):
+                return False
+
+        for original in (runner.AuditError("CAPTURE_FIRST"), FalseyCancel(), SystemExit(9)):
+            for stop in (False, True):
+                for options in ({}, {"local_deadline": 99}):
+                    with self.subTest(error=type(original).__name__, stop=stop, options=options):
+                        clock = self.Clock()
+
+                        def fail():
+                            clock.now = float("nan")
+                            raise original
+
+                        try:
+                            self.wait_model(clock=clock, stop=stop, options=options, callback=fail)
+                        except BaseException as actual:
+                            self.assertIs(actual, original)
+                        else:
+                            self.fail("Original callback failure was lost")
+                        self.assertEqual(clock.readings, [100.0])
+
+    def test_discovery_time_is_checked_after_original_callback(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(advance={"discover": 1.0})
+        self.assertEqual(self.last_wait.calls, ["poll", "discover", "callback"])
+
+    def test_original_poll_and_discovery_exceptions_stop_later_suppliers(self):
+        for stage, expected in (("poll", ["poll"]), ("discover", ["poll", "discover"])):
+            for original in (OSError(errno.EIO, "ORIGINAL_SUPPLIER"), KeyboardInterrupt()):
+                with self.subTest(stage=stage, error=type(original).__name__):
+                    clock = self.Clock()
+
+                    def fail():
+                        clock.now = 101.0
+                        raise original
+
+                    try:
+                        self.wait_model(clock=clock, hooks={stage: fail})
+                    except BaseException as actual:
+                        self.assertIs(actual, original)
+                    else:
+                        self.fail("Original supplier failure was lost")
+                    self.assertEqual(self.last_wait.calls, expected)
+                    self.assertEqual(clock.readings, [100.0])
+
+    def test_invalid_or_backward_observed_clock_is_not_retried(self):
+        class ScriptClock(self.Clock):
+            def __init__(self, values):
+                super().__init__()
+                self.values = list(values)
+
+            def monotonic(self):
+                value = self.values.pop(0)
+                self.readings.append(value)
+                if isinstance(value, BaseException):
+                    raise value
+                return value
+
+        for position in ("entry", "after-callback"):
+            bad_values = [True, None, "100", float("nan"), float("inf"), 10 ** 10000]
+            if position == "after-callback":
+                bad_values.append(99.0)
+            for index, bad in enumerate(bad_values):
+                with self.subTest(position=position, index=index):
+                    clock = ScriptClock([bad, 100.0] if position == "entry" else [100.0, bad, 100.0])
+                    with self.assertRaises(runner.AuditError):
+                        self.wait_model(clock=clock)
+                    self.assertEqual(clock.values, [100.0])
+                    self.assertEqual(self.last_wait.calls, [] if position == "entry" else
+                                     ["poll", "discover", "callback"])
+        original = KeyboardInterrupt()
+        clock = ScriptClock([100.0, original, 100.0])
+        try:
+            self.wait_model(clock=clock)
+        except BaseException as actual:
+            self.assertIs(actual, original)
+        else:
+            self.fail("Original clock interruption was lost")
+        self.assertEqual(clock.values, [100.0])
+
+    def test_equal_negative_origin_and_subminimum_remaining_values_are_admitted(self):
+        self.assertEqual(self.wait_model().result, 0)
+        self.assertEqual(self.wait_model(clock=self.Clock(-5.0),
+                         options={"local_deadline": -4.5}, advance={"poll": .25}).result, 0)
+        self.assertEqual(self.wait_model(timeout=.001).result, 0)
+
+    def test_unrepresentable_future_end_expires_without_epsilon_extension(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(clock=self.Clock(1e300), timeout=1.0)
+        self.assertEqual(self.last_wait.calls, ["callback"])
+        with self.assertRaises(runner.AuditError):
+            self.wait_model(clock=self.Clock(1e308), timeout=1e308)
+        self.assertEqual(self.last_wait.calls, [])
+
+    def test_none_polls_and_sleep_share_one_end_and_expiry_stops_new_polling(self):
+        value = self.wait_model(codes=[None, None, 0], timeout=.25)
+        self.assertEqual(value.result, 0)
+        self.assertEqual(value.calls, ["poll", "discover", "callback"] * 3)
+        self.assertEqual(value.clock.sleeps, [.1, .1])
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(codes=[None, 0], timeout=.1)
+        self.assertEqual(self.last_wait.calls, ["poll", "discover", "callback", "callback"])
+        self.assertEqual(self.last_wait.clock.sleeps, [.1])
+
+    def test_remaining_product_and_stop_setup_positions_spend_original_launch_ends(self):
+        for label in ("product-stdout-allocate", "product-stderr-start", "stop-spawn", "stop-stdout-allocate"):
+            with self.subTest(label=label):
+                value = self.execute_model(advance={label: 1.0})
+                self.assertEqual(value.result, 125)
+                self.assertEqual(len(value.scope.launches), 2)
+                expected = "Product command timed out" if label.startswith("product") else "Wrapper stop timed out"
+                self.assertTrue(any(expected in error for error in value.receipt["errors"]))
+                self.assertEqual([row["budget"] for row in value.waits], [1.0, 1.0])
+                self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 102.0] if
+                                 label.startswith("product") else [101.0, 101.0])
+
+    def test_original_admitted_budgets_are_not_reloaded_after_spawn_mutation(self):
+        def mutate(value):
+            value.args.timeout = 10.0
+            value.args.stop_timeout = 10.0
+
+        value = self.execute_model(advance={"product-spawn": 1.0}, hooks={"product-spawn": mutate})
+        self.assertEqual(value.result, 125)
+        self.assertEqual([row["budget"] for row in value.waits], [1.0, 1.0])
+        self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 102.0])
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+
+    def test_stop_anchor_is_after_original_pre_stop_drain_and_lease(self):
+        value = self.execute_model(kind="command", advance={
+            "nested-model-only": 3.0, "drain-1": 3.0, "lease-acquire": 2.0})
+        self.assertEqual(value.result, 0)
+        self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 109.0])
+        self.assertEqual([row["entered"] for row in value.waits], [100.0, 108.0])
+        labels = [label for label, _now in value.calls]
+        self.assertLess(labels.index("drain-1"), labels.index("lease-acquire"))
+        self.assertLess(labels.index("lease-acquire"), labels.index("stop-spawn"))
+
+    def test_expired_product_still_drains_and_runs_one_pending_stop_with_its_own_end(self):
+        value = self.execute_model(advance={"product-spawn": 1.0}, stop_pending=1)
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(len(value.scope.launches), 2)
+        self.assertEqual(value.scope.drains, 2)
+        self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 102.0])
+        labels = [label for label, _now in value.calls]
+        self.assertLess(labels.index("drain-1"), labels.index("stop-spawn"))
+        self.assertEqual(labels.count("stop-spawn"), 1)
+        self.assertEqual(labels.count("stop-poll"), 2)
+
+    def test_late_stop_final_zero_cannot_erase_timeout(self):
+        value = self.execute_model(advance={"stop-callback": 1.0})
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.receipt["productExitCode"], 0)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertTrue(any("Wrapper stop timed out" in error for error in value.receipt["errors"]))
+        self.assertEqual(len(value.scope.launches), 2)
+
+    def test_invalid_product_anchor_does_not_fabricate_a_launch_or_stop_attempt(self):
+        value = self.execute_model(hooks={"product-callback": lambda value: setattr(value.clock, "now", False)})
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.scope.launches, [])
+        self.assertEqual(value.waits, [])
+        self.assertIsNone(value.receipt["productExitCode"])
+        self.assertIsNone(value.receipt["stopExitCode"])
+
+    def test_attempted_spawn_keeps_one_stop_and_original_interruption_through_finalizers(self):
+        class FalseyCancel(KeyboardInterrupt):
+            def __bool__(self):
+                return False
+
+        original = FalseyCancel()
+
+        def fail_spawn(_value):
+            raise original
+
+        def fail_restoration(value):
+            if value.scope.closed:
+                raise OSError(errno.EIO, "MODELED_RESTORATION_FAILURE")
+
+        value = self.execute_model(hooks={"product-spawn": fail_spawn, "handler": fail_restoration})
+        self.assertIs(value.interruption, original)
+        self.assertEqual(value.receipt["finalExitCode"], 125)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(len(value.scope.launches), 2)
+        labels = [label for label, _now in value.calls]
+        self.assertEqual(labels.count("stop-spawn"), 1)
+        self.assertEqual(value.scope.drains, 2)
+
+class LinuxObservationTests(unittest.TestCase):
+    """Scripted /proc transitions; no kernel or native-host acceptance claims."""
+
+    def setUp(self):
+        self.scope = processes.LinuxScope.__new__(processes.LinuxScope)
+        self.scope.job, self.scope.invocation = "a" * 32, "b" * 32
+        self.scope.state, self.scope.home = "/fixture-state", "/fixture-home"
+        self.scope.known, self.scope.handles = {}, {}
+        self.scope.leaders, self.scope.launches = [], []
+        self.scope.discovery_errors, self.scope.baseline = set(), set()
+        self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
+        self.identity = {"pid": 43210, "uid": 1000, "parentPid": 4000, "group": 43210,
+                         "session": 4000, "startTicks": 99, "live": True}
+        self.current = dict(self.identity)
+        self.scope._identity = mock.Mock(side_effect=lambda _pid, **_kwargs:
+                                        None if self.current is None else dict(self.current))
+        self.scope._pids = lambda: [self.identity["pid"]]
+        self.scope._environment = mock.Mock(side_effect=PermissionError(errno.EACCES, "scripted access denial"))
+        self.scope._acquire = mock.Mock(return_value=7)
+        self.scope._send = mock.Mock()
+
+    def discover(self):
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True):
+            return self.scope.discover()
+
+    def test_live_denial_and_missing_census_never_admit_cleanup_or_signaling(self):
+        self.assertEqual(self.discover(), [])
+        self.scope._pids = lambda: []
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+        with mock.patch.object(processes.PosixScope, "drain", return_value=[]), \
+                self.assertRaisesRegex(processes.OwnershipError, "Unclassified Linux"):
+            self.scope.drain()
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_verified_end_nonrunning_or_replacement_reconciles_only_the_recorded_lifetime(self):
+        for current, outcome in ((None, "lifetime-ended"), ({**self.identity, "live": False}, "nonrunning"),
+                                 ({**self.identity, "startTicks": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.assertEqual(self.discover(), [])
+                self.current = current
+                self.scope._pids = lambda: []
+                self.scope._environment.side_effect = None
+                self.scope._environment.return_value = {}
+                self.assertEqual(self.discover(), [])
+                self.assertFalse(self.scope.discovery_errors)
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], outcome)
+                self.scope._acquire.assert_not_called()
+                self.scope._send.assert_not_called()
+
+    def test_later_positive_environment_observation_can_resolve_owned_or_foreign_process(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                self.setUp()
+                self.assertEqual(self.discover(), [])
+                env = processes.ownership_environment({}, self.scope.job, self.scope.invocation,
+                                                      self.scope.state, self.scope.home) if owned else {}
+                self.scope._environment.side_effect = None
+                self.scope._environment.return_value = {key.encode(): value.encode() for key, value in env.items()}
+                self.assertEqual(self.discover(), [self.identity] if owned else [])
+                self.assertFalse(self.scope.discovery_errors)
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "owned" if owned else "unmarked")
+                self.assertEqual(self.scope._acquire.call_count, int(owned))
+                self.scope._send.assert_not_called()
+
+    def test_pending_identity_denial_or_uid_change_is_not_verified_exit(self):
+        self.assertEqual(self.discover(), [])
+        self.current["uid"] = 0
+        self.assertEqual(self.discover(), [])
+        self.assertTrue(self.scope.pending_discoveries)
+        self.scope._identity = processes.LinuxScope._identity.__get__(self.scope)
+        with mock.patch.object(Path, "read_bytes", side_effect=PermissionError(errno.EACCES, "scripted stat denial")), \
+                self.assertRaisesRegex(processes.OwnershipError, "recorded Linux"):
+            self.scope._identity(self.identity["pid"])
+        self.assertTrue(self.scope.discovery_errors)
+        self.scope._send.assert_not_called()
+
+    def test_positive_exit_cannot_clear_structural_failure_or_exceed_record_bound(self):
+        self.assertEqual(self.discover(), [])
+        self.scope._environment.side_effect = processes.OwnershipError("scripted structural failure")
+        self.assertEqual(self.discover(), [])
+        self.current = None
+        self.scope._pids = lambda: []
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(self.scope.discovery_errors,
+                         {f"Cannot inspect new same-uid process {self.identity['pid']}: OwnershipError"})
+        self.scope.discovery_reconciliations = [{}] * 1024
+        with self.assertRaisesRegex(processes.OwnershipError, "evidence exceeds"):
+            self.scope._discovery_failed(self.identity, PermissionError(errno.EACCES, "scripted"))
+        self.scope._send.assert_not_called()
+
+    def test_positive_candidate_identity_rechecks_require_readability_and_release_failed_handle(self):
+        with self.assertRaises(PermissionError):
+            self.scope._inspect_environment(self.identity)
+        self.scope._identity.assert_called_with(self.identity["pid"], required=True)
+        acquire = processes.LinuxScope._acquire.__get__(self.scope)
+        for observed, error in ((None, None), ({**self.identity, "startTicks": 100}, None),
+                                (None, processes.OwnershipError("scripted identity denial"))):
+            with self.subTest(error=error), mock.patch.object(processes.os, "pidfd_open", return_value=7, create=True), \
+                    mock.patch.object(processes.os, "close") as close:
+                self.scope._identity = mock.Mock(return_value=observed, side_effect=error)
+                with self.assertRaises((ProcessLookupError, processes.OwnershipError)):
+                    acquire(self.identity)
+                close.assert_called_once_with(7)
+                self.scope._send.assert_not_called()
 
 
 class DarwinObservationTests(unittest.TestCase):
@@ -921,12 +3105,23 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.discovery_errors, self.scope.baseline = set(), set()
         self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
         self.scope.observation_reconciliations = []
+        self.scope.drain_reconciliations, self.scope.active_drain = [], None
+
+        self.scope.identity_history, self.scope.ownership_proofs = {}, {}
+        self.scope.foreign_sessions, self.scope.controller_session = {}, 42
+        self.scope.pipe_fds, self.scope.pipe_marker = (7, 8), (101, 102, 103)
+        self.scope._has_pipe = mock.Mock(return_value=False)
+        self.scope._audit_session = mock.Mock(return_value=self.scope.controller_session)
         self.scope.self_port, self.scope.argmax = 7, 4096
-        self.scope.system, self.scope.proc = mock.Mock(), mock.Mock()
-        self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 1, "group": 43210,
-                         "uniqueId": 99, "parentUniqueId": 1, "pidVersion": 3,
+        self.scope.system, self.scope.proc, self.scope.bsm = mock.Mock(), mock.Mock(), mock.Mock()
+        self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 4000, "group": 43210,
+                         "uniqueId": 99, "parentUniqueId": 91, "pidVersion": 3, "originalParentPidVersion": 2,
                          "startSeconds": 123, "startMicroseconds": 456,
                          "status": 2, "flags": 4, "live": True}
+        self.parent = {**self.identity, "pid": 4000, "uniqueId": 91, "parentUniqueId": 0,
+                       "startSeconds": 1, "parentPid": 0}
+        self.scope._remember_identity(self.parent)
+        self.scope.baseline.add(self.scope._key(self.parent))
         self.current = dict(self.identity)
         self.scope._identity = mock.Mock(side_effect=lambda _pid, **_kwargs:
                                         None if self.current is None else dict(self.current))
@@ -945,6 +3140,122 @@ class DarwinObservationTests(unittest.TestCase):
         with mock.patch.object(processes.time, "monotonic", side_effect=lambda: self.elapsed), \
                 mock.patch.object(processes.time, "sleep", side_effect=sleep):
             yield
+
+    def test_pending_context_is_redacted_recorded_data_and_cannot_resolve_ownership(self):
+        self.fail_environment_census()
+        key = self.scope._key(self.identity)
+        self.scope.diagnostic_roles = {key: 'xcodebuild'}
+        original_errors = set(self.scope.discovery_errors)
+        original_pending = dict(self.scope.pending_discoveries)
+        self.scope.proc.reset_mock()
+        self.scope.system.reset_mock()
+        self.scope._identity.reset_mock()
+        for owned, expected in ((False, 'BASELINE'), (True, 'OWNED')):
+            if owned:
+                self.scope.known[self.scope._key(self.parent)] = self.parent
+            actual = self.scope._pending_context()
+            self.assertEqual(actual, {'scope': 'RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT',
+                'roles': {'xcodebuild': 1}, 'parentage': {expected: 1}})
+            self.assertEqual(self.scope.discovery_errors, original_errors)
+            self.assertEqual(self.scope.pending_discoveries, original_pending)
+            self.assertNotIn(key, self.scope.known)
+            self.assertNotIn(key, self.scope.handles)
+        self.scope.proc.assert_not_called()
+        self.assertEqual(self.scope.proc.mock_calls, [])
+        self.assertEqual(self.scope.system.mock_calls, [])
+        self.scope._identity.assert_not_called()
+
+    def test_pending_failure_class_transitions_replace_only_current_message(self):
+        other = "Cannot inspect new same-uid process 43211: DiscoveryUncertain"
+        self.scope.discovery_errors.add(other)
+        errors = [processes.DarwinObservationExhausted("first observation"),
+                  processes.DiscoveryUncertain("missing parent"),
+                  processes.DarwinObservationExhausted("later observation")]
+        for count, error in enumerate(errors, 1):
+            message = self.scope._discovery_failed(self.identity, error)
+            record = self.scope.pending_discoveries[self.identity["pid"]]
+            self.assertEqual(self.scope.discovery_errors, {other, message})
+            self.assertEqual(record["message"], message)
+            self.assertEqual(record["firstFailure"], "first observation")
+            self.assertEqual((record["failures"], record["outcome"]), (count, "unresolved"))
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.handles)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_changed_pending_error_clears_on_exit_but_not_structural_or_other_errors(self):
+        for terminal, outcome in ((None, "lifetime-ended"),
+                                  ({**self.identity, "status": 5, "live": False}, "nonrunning"),
+                                  ({**self.identity, "uniqueId": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.scope._discovery_failed(self.identity, processes.DarwinObservationExhausted("first"))
+                self.scope._discovery_failed(self.identity, processes.DiscoveryUncertain("second"))
+                structural = self.scope._discovery_failed(self.identity, processes.OwnershipError("structural"))
+                other = "Cannot inspect new same-uid process 43211: DiscoveryUncertain"
+                self.scope.discovery_errors.add(other)
+                self.current = terminal
+                self.scope._pids = lambda: []
+                with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                        mock.patch.object(self.scope, "_inspect_environment", return_value={}), \
+                        mock.patch.object(self.scope, "_acquire") as acquire:
+                    self.assertEqual(self.scope.discover(), [])
+                self.assertEqual(self.scope.discovery_errors, {structural, other})
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], outcome)
+                acquire.assert_not_called()
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_changed_pending_error_clears_on_positive_foreign_lineage_only(self):
+        self.scope._discovery_failed(self.identity, processes.DarwinObservationExhausted("first"))
+        self.scope._discovery_failed(self.identity, processes.DiscoveryUncertain("second"))
+        other = "Cannot inspect new same-uid process 43211: DarwinObservationExhausted"
+        self.scope.discovery_errors.add(other)
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_inspect_environment", return_value={}), \
+                mock.patch.object(self.scope, "_acquire") as acquire:
+            self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(self.scope.discovery_errors, {other})
+        self.assertFalse(self.scope.pending_discoveries)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unmarked")
+        self.assertFalse(self.scope.known)
+        acquire.assert_not_called()
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_changed_pending_error_preserves_live_unknown_drain_failure(self):
+        self.scope._discovery_failed(self.identity, processes.DarwinObservationExhausted("first"))
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_inspect_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                self.scope.drain(grace=.1, kill_wait=.1)
+        record = self.scope.pending_discoveries[self.identity["pid"]]
+        self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.assertTrue(record["message"].endswith(": DiscoveryUncertain"))
+        self.assertEqual(record["firstFailure"], "first")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.handles)
+        send.assert_not_called()
+
+    def test_pending_context_does_not_promote_missing_traced_or_invalid_parentage(self):
+        self.fail_environment_census()
+        for parent, flags, expected in ((999, 0, 'UNOBSERVED'), (91, 2, 'TRACED'), (99, 0, 'INVALID')):
+            self.scope.pending_discoveries[self.identity['pid']]['lastIdentity'] = {
+                **self.identity, 'parentUniqueId': parent, 'flags': flags}
+            actual = self.scope._pending_context()
+            self.assertEqual(actual['parentage'], {expected: 1})
+            self.assertEqual(actual['roles'], {'UNRECORDED': 1})
+            self.assertTrue(self.scope.discovery_errors)
+            self.assertEqual(self.scope.handles, {})
+
+    def test_kernel_role_labels_do_not_export_paths_private_names_or_truncated_guesses(self):
+        for name in (b'PRIVATE_SECRET', b'/private/java', b'com.apple.CoreSi', b'python-private', b'OTHER', b''):
+            self.assertEqual(processes.darwin_diagnostic_role(name), 'OTHER')
+        for name in (b'Python', b'Python3', b'python3.14'):
+            self.assertEqual(processes.darwin_diagnostic_role(name), 'python')
+        self.assertEqual(processes.darwin_diagnostic_role(b'xctest'), 'xctest')
 
     def test_exiting_task_name_error_reconciles_to_terminal_not_inexit(self):
         for terminal in (None, {**self.identity, "status": 5, "live": False}):
@@ -1102,6 +3413,370 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.proc.proc_signal_with_audittoken.assert_not_called()
         self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "replaced")
 
+    def test_original_parent_proof_survives_parent_exit_and_numeric_reparenting(self):
+        self.scope.baseline.clear()
+        self.scope.known[self.scope._key(self.parent)] = {**self.parent, "live": False, "status": 5}
+        child = {**self.identity, "parentPid": 9876, "group": 9876}
+        proof = self.scope._ownership_proof(child, {})
+        self.assertEqual(proof, {"kind": "kernel-original-parent", "ancestors": [list(self.scope._key(self.parent))]})
+
+    def test_same_pid_or_process_group_is_not_original_parent_ownership(self):
+        self.scope.baseline.clear()
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        self.current.update(parentPid=self.parent["pid"], parentUniqueId=999, group=self.parent["group"])
+        with self.assertRaises(processes.DiscoveryUncertain):
+            self.scope._ownership_proof(self.current, {})
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_foreign_baseline_parent_is_positive_nonownership(self):
+        self.assertIsNone(self.scope._ownership_proof(self.identity, {}))
+        self.assertFalse(self.scope.known)
+
+    def test_reaper_unique_id_and_original_parent_version_cannot_prove_nonownership(self):
+        reaper = {**self.parent, "pid": 1, "uniqueId": 1}
+        self.scope._remember_identity(reaper)
+        self.scope.baseline.add(self.scope._key(reaper))
+        for version in (self.parent["pidVersion"], reaper["pidVersion"], -1):
+            with self.subTest(version=version):
+                child = {**self.identity, "parentPid": 1, "parentUniqueId": 1,
+                         "originalParentPidVersion": version}
+                with self.assertRaises(processes.DiscoveryUncertain):
+                    self.scope._ownership_proof(child, {})
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.foreign_sessions)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_pipe_proof_survives_missing_and_reaper_ancestry(self):
+        self.scope.identity_history.clear()
+        self.scope._has_pipe.return_value = True
+        self.assertEqual(self.scope._ownership_proof(self.identity, {}), {"kind": "inherited-pipe-capability"})
+        self.scope._audit_session.assert_not_called()
+
+    def test_different_audit_session_is_nonownership_not_signal_authority(self):
+        self.scope.identity_history.clear()
+        self.scope._audit_session.return_value = 43
+        self.assertIsNone(self.scope._ownership_proof(self.identity, {}))
+        self.assertEqual(self.scope.description()["foreignAuditSessions"], [{
+            "identity": list(self.scope._key(self.identity)), "kind": "different-kernel-audit-session",
+            "signalAuthority": False}])
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.handles)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_same_or_unassigned_audit_session_does_not_prove_ownership_or_nonownership(self):
+        self.scope.identity_history.clear()
+        for controller, observed in ((42, 42), (42, 0), (42, 0xffffffff), (0, 42), (0xffffffff, 42)):
+            with self.subTest(controller=controller, observed=observed):
+                self.scope.controller_session = controller
+                self.scope._audit_session.return_value = observed
+                with self.assertRaises(processes.DiscoveryUncertain):
+                    self.scope._ownership_proof(self.identity, {})
+        self.assertFalse(self.scope.foreign_sessions)
+
+    def test_unclassified_session_reason_uses_existing_read_without_conveying_authority(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}):
+            self.assertEqual(self.scope.discover(), [])
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "SAME_VALID_SESSION")
+        self.assertEqual(record["firstFailure"], "Darwin non-reaper original-parent lifetime was not observed")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.scope._audit_session.assert_called_once_with(self.current)
+        self.scope._has_pipe.assert_called_once_with(self.current)
+        self.assertTrue(self.scope.discovery_errors)
+        self.assertEqual(self.scope.known, {})
+        self.assertEqual(self.scope.handles, {})
+        self.assertEqual(self.scope.foreign_sessions, {})
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_unadmitted_session_reasons_remain_unclassified_and_export_no_session_numbers(self):
+        self.current["parentUniqueId"] = 999
+        cases = ((42, 0, "UNADMITTED_TARGET_SESSION"), (42, 0xffffffff, "UNADMITTED_TARGET_SESSION"),
+                 (0, 42, "UNADMITTED_CONTROLLER_SESSION"), (0xffffffff, 42, "UNADMITTED_CONTROLLER_SESSION"),
+                 (0, 0xffffffff, "UNADMITTED_CONTROLLER_SESSION"))
+        for controller, observed, reason in cases:
+            with self.subTest(controller=controller, observed=observed), \
+                    mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                    mock.patch.object(self.scope, "_environment", return_value={}):
+                self.scope.controller_session = controller
+                self.scope._audit_session.reset_mock()
+                self.scope._audit_session.return_value = observed
+                self.assertEqual(self.scope.discover(), [])
+                record = self.scope.pending_discoveries[self.current["pid"]]
+                self.assertEqual(record["auditSessionExclusion"], reason)
+                self.assertEqual(set(record), {"identity", "message", "firstFailure", "failures", "outcome",
+                                               "lastIdentity", "lastFailure", "auditSessionExclusion"})
+                self.scope._audit_session.assert_called_once_with(self.current)
+                self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+                self.assertTrue(self.scope.discovery_errors)
+                self.assertEqual(self.scope.known, {})
+                self.assertEqual(self.scope.handles, {})
+                self.assertEqual(self.scope.foreign_sessions, {})
+
+    def test_session_reason_does_not_survive_a_later_unobserved_token_failure(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}):
+            self.scope.discover()
+            self.assertEqual(self.scope.pending_discoveries[self.current["pid"]]["auditSessionExclusion"],
+                             "SAME_VALID_SESSION")
+            self.scope._audit_session.side_effect = processes.DarwinObservationExhausted("scripted token denial")
+            self.scope.discover()
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "NOT_RECORDED")
+        self.assertEqual(record["lastFailure"], "scripted token denial")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.assertTrue(self.scope.discovery_errors)
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+
+    def test_session_diagnostic_is_bounded_and_unknown_values_are_not_exported(self):
+        error = processes.DiscoveryUncertain("scripted missing parent")
+        error.audit_session_exclusion = "private-unreviewed-session-value"
+        for _ in range(100):
+            self.scope._discovery_failed(self.current, error)
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "NOT_RECORDED")
+        self.assertEqual(record["failures"], 100)
+        self.assertEqual(len(self.scope.pending_discoveries), 1)
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        self.assertNotIn("private-unreviewed-session-value", json.dumps(self.scope.description()))
+        self.scope.discovery_reconciliations = [record] * 1024
+        with self.assertRaisesRegex(processes.OwnershipError, "discovery evidence exceeds"):
+            self.scope._discovery_failed({**self.current, "pid": self.current["pid"] + 1}, error)
+        self.scope._audit_session.assert_not_called()
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_traced_parent_edge_is_not_ownership_evidence(self):
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        with self.assertRaisesRegex(processes.DiscoveryUncertain, "traced"):
+            self.scope._ownership_proof({**self.identity, "flags": self.identity["flags"] | 2}, {})
+
+    def test_pipe_native_layout_and_identity_validation(self):
+        self.assertEqual([ctypes.sizeof(kind) for kind in (processes.DarwinFileInfo, processes.DarwinVinfoStat,
+            processes.DarwinPipeInfo, processes.DarwinFdInfo)], [24, 136, 184, 8])
+
+        def observed(pid, fd, flavor, pointer, size):
+            self.assertEqual((pid, fd, flavor, size), (43210, 17, 6, 184))
+            value = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinPipeInfo)).contents
+            value.handle, value.peer, value.stat.ino = self.scope.pipe_marker
+            value.stat.mode = 0o010600
+            return size
+
+        self.scope.proc.proc_pidfdinfo.side_effect = observed
+        self.assertEqual(self.scope._pipe_identity(43210, 17), self.scope.pipe_marker)
+        self.scope.proc.proc_pidfdinfo.side_effect = None
+        self.scope.proc.proc_pidfdinfo.return_value = 183
+        with self.assertRaisesRegex(processes.OwnershipError, "Unsupported"):
+            self.scope._pipe_identity(43210, 17)
+        self.scope.proc.proc_pidfdinfo.return_value = 0
+        for error in (errno.EBADF, errno.ENOENT, errno.EINVAL):
+            ctypes.set_errno(error)
+            self.scope.proc.proc_pidfdinfo.side_effect = lambda *_args, error=error: (ctypes.set_errno(error) or 0)
+            self.assertIsNone(self.scope._pipe_identity(43210, 17))
+        self.scope.proc.proc_pidfdinfo.side_effect = lambda *_args: (ctypes.set_errno(errno.EPERM) or 0)
+        with self.assertRaises(processes.DarwinObservationError):
+            self.scope._pipe_identity(43210, 17)
+
+    def test_descriptor_marker_is_checked_against_held_capability_and_current_lifetime(self):
+        self.scope._has_pipe = processes.DarwinScope._has_pipe.__get__(self.scope)
+
+        def census(pid, flavor, arg, pointer, size):
+            self.assertEqual((pid, flavor, arg), (self.identity["pid"], 1, 0))
+            rows = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinFdInfo))
+            rows[0].fd, rows[0].type = 18, 1  # A nonpipe descriptor is never inspected as a pipe.
+            rows[1].fd, rows[1].type = 19, 6
+            return 16
+
+        self.scope.proc.proc_pidinfo.side_effect = census
+        for marker, expected in ((self.scope.pipe_marker, True), ((901, 902, 903), False), (None, False)):
+            with self.subTest(markerPresent=expected), self.clock(), \
+                    mock.patch.object(self.scope, "_pipe_identity", side_effect=lambda pid, _fd:
+                                      self.scope.pipe_marker if pid == os.getpid() else marker) as inspect:
+                self.assertEqual(self.scope._has_pipe(self.identity), expected)
+                self.assertEqual(inspect.call_args_list, [mock.call(os.getpid(), 8), mock.call(43210, 19)])
+        for lost in (None, (901, 902, 903)):
+            with mock.patch.object(self.scope, "_pipe_identity", return_value=lost), \
+                    self.assertRaisesRegex(processes.OwnershipError, "held pipe capability"):
+                self.scope._has_pipe(self.identity)
+
+    def test_pipe_census_bounds_and_permission_failures_do_not_authorize_signaling(self):
+        self.scope._has_pipe = processes.DarwinScope._has_pipe.__get__(self.scope)
+        with mock.patch.object(self.scope, "_pipe_identity", return_value=self.scope.pipe_marker), self.clock():
+            self.scope.proc.proc_pidinfo.return_value = 7
+            with self.assertRaisesRegex(processes.OwnershipError, "Unsupported Darwin descriptor census"):
+                self.scope._has_pipe(self.identity)
+            self.scope.proc.proc_pidinfo.side_effect = lambda _pid, _flavor, _arg, _ptr, size: size
+            with mock.patch.object(processes, "MAX_PROCESS_FDS", 256), \
+                    self.assertRaisesRegex(processes.OwnershipError, "exceeds its bound"):
+                self.scope._has_pipe(self.identity)
+            self.scope.proc.proc_pidinfo.side_effect = lambda *_args: (ctypes.set_errno(errno.EPERM) or 0)
+            with self.assertRaises(processes.DiscoveryUncertain):
+                self.scope._ownership_proof(self.identity, {})
+        self.assertFalse(self.scope.known)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_only_verified_inherited_pipe_descriptors_are_passed_not_reused_or_closed_fds(self):
+        ids = ["a" * 32, "b" * 32, "c" * 32]
+        records = [{"id": identifier, "fd": 8 + index, "digest": self.scope._pipe_digest(self.scope.pipe_marker)}
+                   for index, identifier in enumerate(ids)]
+        environment = {processes.CHAIN_ENV: ":".join(ids), processes.PIPE_ENV: json.dumps(records)}
+        with mock.patch.object(self.scope, "_pipe_identity", side_effect=[self.scope.pipe_marker, None, (9, 9, 9)]):
+            self.assertEqual(self.scope._inherited_pipes(environment), records[:1])
+
+    def test_malformed_and_duplicate_pipe_bindings_fail_without_descriptor_access(self):
+        valid = {"id": self.scope.invocation, "fd": 8, "digest": self.scope._pipe_digest(self.scope.pipe_marker)}
+        records = [None, {}, [valid] * 33, [valid, valid], [{**valid, "id": "c" * 32}],
+                   [{**valid, "fd": True}], [{**valid, "fd": 2}], [{**valid, "digest": "x"}]]
+        with mock.patch.object(self.scope, "_pipe_identity") as inspect:
+            for record in records:
+                with self.subTest(record=record), self.assertRaises(processes.OwnershipError):
+                    self.scope._inherited_pipes({processes.CHAIN_ENV: self.scope.invocation,
+                                                 processes.PIPE_ENV: json.dumps(record)})
+            with self.assertRaisesRegex(processes.OwnershipError, "Duplicate"):
+                self.scope._inherited_pipes({processes.PIPE_ENV: '[{"id":"a","id":"b"}]'})
+            inspect.assert_not_called()
+
+    def test_native_audit_session_decoder_must_match_bound_pid_and_credentials(self):
+        self.scope._audit_session = processes.DarwinScope._audit_session.__get__(self.scope)
+        token = processes.AuditToken()
+        self.scope.bsm.audit_token_to_pid.return_value = self.identity["pid"]
+        self.scope.bsm.audit_token_to_euid.return_value = self.identity["uid"]
+        self.scope.bsm.audit_token_to_asid.return_value = 42
+        with mock.patch.object(self.scope, "_acquire", return_value=token):
+            self.assertEqual(self.scope._audit_session(self.identity), 42)
+            self.scope.bsm.audit_token_to_asid.assert_called_once_with(token)
+            self.scope.bsm.audit_token_to_euid.return_value = 0
+            with self.assertRaisesRegex(processes.OwnershipError, "decoder/identity mismatch"):
+                self.scope._audit_session(self.identity)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_close_releases_only_own_pipe_references_and_is_idempotent(self):
+        with mock.patch.object(processes.os, "close") as close:
+            self.scope.close()
+            self.scope.close()
+            self.assertEqual(close.call_args_list, [mock.call(7), mock.call(8)])
+        self.assertFalse(self.scope.description()["inheritedPipeBound"])
+
+    def test_missing_intermediary_blocks_drain_without_signaling_unknown_process(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            self.assertEqual(self.scope.discover(), [])
+            self.assertEqual(len(self.scope.pending_discoveries), 1)
+            with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                self.scope.drain(grace=.01, kill_wait=.01)
+            send.assert_not_called()
+            self.current = None
+            self.assertEqual(self.scope.discover(), [])
+            self.assertEqual(self.scope.discovery_errors, set())
+            self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "lifetime-ended")
+
+    def test_pending_lifetime_is_not_a_quiet_drain_sample_before_verified_exit(self):
+        self.current["parentUniqueId"] = 999
+        self.on_sleep = lambda: setattr(self, "current", None) if self.elapsed >= .6 else None
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            self.assertEqual(self.scope.drain(), [])
+            self.assertGreaterEqual(self.elapsed, .6)
+            self.assertLess(self.elapsed, 5, "Use the existing grace, not an extended cleanup deadline")
+            send.assert_not_called()
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_errors, set())
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "lifetime-ended")
+
+    def test_pending_lifetime_recovered_as_owned_is_drained_only_after_positive_proof(self):
+        self.current["parentUniqueId"] = 999
+        self.scope._has_pipe.side_effect = lambda _identity: self.elapsed >= .6
+        token = processes.AuditToken()
+
+        def retire(identity, handle, signum):
+            self.assertGreaterEqual(self.elapsed, .6)
+            self.assertEqual(identity, self.current)
+            self.assertIs(handle, token)
+            self.assertEqual(signum, processes.SIG_TERM)
+            self.assertEqual(self.scope.ownership_proofs[self.scope._key(identity)]["kind"],
+                             "inherited-pipe-capability")
+            self.current = None
+
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_acquire", return_value=token) as acquire, \
+                mock.patch.object(self.scope, "_send", side_effect=retire) as send, self.clock():
+            self.assertEqual(self.scope.drain(), [])
+            acquire.assert_called_once()
+            send.assert_called_once()
+            self.assertLess(self.elapsed, 5)
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "owned")
+
+    def test_pending_lifetime_must_still_fail_after_original_grace_and_kill_wait(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                self.scope.drain(grace=1, kill_wait=1)
+            self.assertGreaterEqual(self.elapsed, 2)
+            self.assertLess(self.elapsed, 2.21)
+            send.assert_not_called()
+        self.assertEqual(len(self.scope.pending_discoveries), 1)
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+
+    def test_complete_census_resolves_child_before_its_intermediate_parent(self):
+        self.scope.baseline.clear()
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        middle = {**self.identity, "pid": 43211, "uniqueId": 98}
+        child = {**self.identity, "parentUniqueId": 98}
+        rows = {row["pid"]: row for row in (child, middle, self.parent)}
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_pids", return_value=[child["pid"], middle["pid"]]), \
+                mock.patch.object(self.scope, "_identity", side_effect=lambda pid, **_kwargs: rows.get(pid)), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_acquire", return_value=processes.AuditToken()):
+            self.assertEqual({row["pid"] for row in self.scope.discover()}, set(rows))
+        proof = self.scope.ownership_proofs[self.scope._key(child)]
+        self.assertEqual(proof["kind"], "kernel-original-parent")
+        self.assertEqual(proof["ancestors"], [list(self.scope._key(middle)), list(self.scope._key(self.parent))])
+
+    def test_lineage_collision_cycle_and_history_bound_are_refused(self):
+        self.scope._remember_identity(self.identity)
+        with self.assertRaisesRegex(processes.OwnershipError, "bound lifetime"):
+            self.scope._remember_identity({**self.identity, "startMicroseconds": 999})
+        with mock.patch.object(processes, "MAX_PROCESSES", len(self.scope.identity_history)):
+            with self.assertRaisesRegex(processes.OwnershipError, "history exceeds"):
+                self.scope._remember_identity({**self.identity, "uniqueId": 100})
+        self.scope.baseline.clear()
+        self.scope.identity_history[self.parent["uniqueId"]]["parentUniqueId"] = self.identity["uniqueId"]
+        with self.assertRaisesRegex(processes.OwnershipError, "Cyclic"):
+            self.scope._ownership_proof(self.identity, {})
+
+    def test_bad_domain_cannot_be_hidden_by_positive_kernel_ancestry(self):
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        bad = {processes.CHAIN_ENV.encode(): self.scope.invocation.encode()}
+        with self.assertRaisesRegex(processes.OwnershipError, "lacks its ancestor"):
+            self.scope._ownership_proof(self.identity, bad)
+
+    def test_exec_gate_requires_exact_release_and_closes_both_descriptors(self):
+        spec = importlib.util.spec_from_file_location("gate_fixture", SCRIPTS / "audit_exec_gate.py")
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        for ready, release, execute in (([], b"G", False), ([8], b"", False), ([8], b"X", False), ([8], b"G", True)):
+            with self.subTest(ready=ready, release=release), \
+                    mock.patch.object(gate.sys, "argv", ["gate", "7", "8", "/exact/command", "two words"]), \
+                    mock.patch.object(gate.os, "write", return_value=1), \
+                    mock.patch.object(gate.select, "select", return_value=(ready, [], [])), \
+                    mock.patch.object(gate.os, "read", return_value=release), \
+                    mock.patch.object(gate.os, "close") as close, mock.patch.object(gate.os, "execv") as execv:
+                self.assertEqual(gate.main(), 125)  # Mock exec cannot replace this test process.
+                self.assertEqual(close.call_args_list, [mock.call(7), mock.call(8)])
+                self.assertEqual(execv.call_count, int(execute))
+                if execute:
+                    execv.assert_called_once_with("/exact/command", ["/exact/command", "two words"])
+
     def test_token_retries_release_ports_and_revalidate_exec_versions(self):
         for failure in ("task-name", "task-info", "token-size", "exec-version"):
             with self.subTest(failure=failure):
@@ -1145,8 +3820,11 @@ class DarwinObservationTests(unittest.TestCase):
 
         self.scope.system.task_name_for_pid.side_effect = task_name
         self.scope.system.mach_port_deallocate.side_effect = failed_release
-        with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "Cannot release"):
+        with self.clock(), self.assertRaisesRegex(processes.DarwinObservationError, "task-name access unavailable") as caught:
             self.scope._acquire(self.identity)
+        detail = processes.retirement_details(caught.exception)
+        self.assertEqual(detail["status"], "UNKNOWN")
+        self.assertIn("Cannot release", detail["resources"][0]["error"])
         self.assertEqual(self.elapsed, 0)
         self.assertEqual(self.scope.system.task_name_for_pid.call_count, 1)
         self.assertEqual(self.scope.system.mach_port_deallocate.call_count, 1)
@@ -1198,7 +3876,8 @@ class DarwinObservationTests(unittest.TestCase):
                                           ("startusec", "startMicroseconds")):
                         setattr(value.bsd, native, terminal[field])
                     for native, field in (("uniqueid", "uniqueId"), ("parentuniqueid", "parentUniqueId"),
-                                          ("pidversion", "pidVersion")):
+                                          ("pidversion", "pidVersion"),
+                                          ("parentpidversion", "originalParentPidVersion")):
                         setattr(value.unique, native, terminal[field])
                     return ctypes.sizeof(value)
 
@@ -1338,11 +4017,444 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.proc.proc_signal_with_audittoken.assert_not_called()
         self.scope.system.task_name_for_pid.assert_not_called()
 
+    def known_drain_process(self):
+        key = self.scope._key(self.identity)
+        self.scope.known[key] = dict(self.identity)
+        self.scope.handles[key] = processes.AuditToken()
+        # A known lifetime must be rechecked even without a process-list entry.
+        self.scope._pids = lambda: []
+        return self.scope.handles[key]
+
+    def recover_drain_token(self, *, exec_change=False):
+        tokens, sent = [], []
+
+        def task_name(_self, _pid, port):
+            if self.elapsed <= 0.25:
+                return 5
+            ctypes.cast(port, ctypes.POINTER(processes.U32)).contents.value = 81
+            return 0
+
+        def task_info(_port, _flavor, token, _count):
+            tokens.append(token._obj)
+            if exec_change and len(tokens) == 1:
+                self.current["pidVersion"] += 1
+            return 0
+
+        def signal_token(token, signum):
+            sent.append((token._obj, signum, self.elapsed))
+            return 0
+
+        self.scope.system.task_name_for_pid.side_effect = task_name
+        self.scope.system.task_info.side_effect = task_info
+        self.scope.proc.proc_signal_with_audittoken.side_effect = signal_token
+        return tokens, sent
+
+    def test_known_signal_drain_reconciles_only_positive_terminal_observation(self):
+        for terminal, outcome in ((None, "absent"),
+                                  ({**self.identity, "status": 5, "live": False}, "nonrunning"),
+                                  ({**self.identity, "uniqueId": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.known_drain_process()
+                self.on_sleep = lambda: setattr(self, "current", terminal) if self.elapsed >= 0.30 else None
+                with self.clock():
+                    self.assertEqual(self.scope.drain(), [])
+                self.assertGreaterEqual(self.elapsed, 0.5)
+                self.assertLess(self.elapsed, 5)
+                event = self.scope.description()["drainReconciliations"][-1]
+                self.assertEqual(event["outcome"], "retired")
+                record = event["signalReconciliations"][0]
+                self.assertEqual((record["outcome"], record["lastIdentity"]), (outcome, terminal))
+                self.assertEqual(record["identity"], self.identity)
+                self.assertIn("Mach result 5", record["firstFailure"])
+                self.assertEqual(self.scope.observation_reconciliations[0]["outcome"], "unresolved")
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_known_signal_drain_recovers_fresh_exec_token_without_declaring_live_process_retired(self):
+        cached = self.known_drain_process()
+        tokens, sent = self.recover_drain_token(exec_change=True)
+        self.on_sleep = lambda: setattr(self, "current", None) if self.elapsed >= 0.8 else None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertGreaterEqual(self.elapsed, 1.0)
+        self.assertGreaterEqual(len(tokens), 2)
+        self.assertIsNot(sent[0][0], cached)
+        self.assertIsNot(sent[0][0], tokens[0], "The pre-exec token must not authorize the signal")
+        self.assertIs(sent[0][0], tokens[1])
+        self.assertEqual(self.scope.system.mach_port_deallocate.call_count, len(tokens))
+        event = self.scope.description()["drainReconciliations"][-1]
+        self.assertEqual(event["signalReconciliations"][0]["outcome"], "signal-succeeded")
+        self.assertEqual(self.scope.observation_reconciliations[0]["outcome"], "unresolved")
+
+    def test_known_signal_drain_persistent_denial_is_unknown_with_fixed_phase_deadlines(self):
+        for status, flags in ((2, 0), (2, 16436), (4, 0)):
+            with self.subTest(status=status, flags=flags):
+                self.setUp()
+                self.current.update(status=status, flags=flags)
+                self.known_drain_process()
+                starts = []
+                send = self.scope._send
+
+                def tracked_send(identity, handle, signum):
+                    starts.append((signum, self.elapsed))
+                    return send(identity, handle, signum)
+
+                with self.clock(), mock.patch.object(self.scope, "_send", side_effect=tracked_send), \
+                        self.assertRaisesRegex(processes.DarwinObservationExhausted, "drain.*unresolved"):
+                    self.scope.drain()
+                self.assertGreaterEqual(self.elapsed, 10)
+                self.assertLessEqual(self.elapsed, 10.250001)
+                for signum, started in starts:
+                    self.assertLess(started, 5 if signum == processes.SIG_TERM else 10)
+                self.assertEqual({item[0] for item in starts}, {processes.SIG_TERM, processes.SIG_KILL})
+                event = self.scope.description()["drainReconciliations"][-1]
+                self.assertEqual(event["outcome"], "unresolved")
+                self.assertEqual([item["deadlineMonotonic"] for item in event["phases"]], [5, 10])
+                self.assertEqual(event["signalReconciliations"][0]["outcome"], "unresolved")
+                self.assertGreater(event["signalReconciliations"][0]["failures"], 1)
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_known_signal_drain_changed_credentials_are_not_absence(self):
+        for field in ("uid", "realUid"):
+            with self.subTest(field=field):
+                self.setUp()
+                self.known_drain_process()
+                self.on_sleep = lambda: self.current.update({field: 0}) if self.elapsed >= 0.30 else None
+                with self.clock(), self.assertRaisesRegex(processes.DarwinObservationExhausted, "drain.*unresolved"):
+                    self.scope.drain()
+                record = self.scope.description()["drainReconciliations"][-1]["signalReconciliations"][0]
+                self.assertEqual(record["outcome"], "unresolved")
+                self.assertEqual(record["lastIdentity"][field], 0)
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_known_signal_drain_pending_identity_denial_remains_fatal(self):
+        for error in (0, errno.EPERM, errno.EACCES):
+            with self.subTest(errno=error):
+                self.setUp()
+                self.known_drain_process()
+                original = self.scope._identity
+
+                def identity(pid, *, required=False):
+                    if self.elapsed >= 0.3:
+                        raise processes.DarwinObservationError(f"bound identity errno {error}")
+                    return original(pid, required=required)
+
+                self.scope._identity = identity
+                with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "bound identity errno"):
+                    self.scope.drain()
+                record = self.scope.description()["drainReconciliations"][-1]
+                self.assertNotEqual(record["outcome"], "retired")
+                self.assertEqual(record["signalReconciliations"][0]["outcome"], "unresolved")
+
+    def test_known_signal_drain_denial_does_not_prevent_other_owned_signals(self):
+        self.known_drain_process()
+        other = {**self.identity, "pid": self.identity["pid"] + 1, "uniqueId": 101}
+        peers = {self.identity["pid"]: self.current, other["pid"]: other}
+        self.scope.known[self.scope._key(other)] = dict(other)
+        self.scope.handles[self.scope._key(other)] = processes.AuditToken()
+        self.scope._identity = lambda pid, **_kw: None if peers[pid] is None else dict(peers[pid])
+        tokens, signals = {}, []
+
+        def task_name(_self, pid, port):
+            if pid == self.identity["pid"]:
+                return 5
+            ctypes.cast(port, ctypes.POINTER(processes.U32)).contents.value = 81
+            return 0
+
+        def task_info(_port, _flavor, token, _count):
+            tokens[id(token._obj)] = other["pid"]
+            return 0
+
+        def signal_token(token, _signum):
+            pid = tokens[id(token._obj)]
+            signals.append(pid)
+            peers[pid] = None
+            return 0
+
+        self.scope.system.task_name_for_pid.side_effect = task_name
+        self.scope.system.task_info.side_effect = task_info
+        self.scope.proc.proc_signal_with_audittoken.side_effect = signal_token
+        self.on_sleep = lambda: peers.update({self.identity["pid"]: None}) if self.elapsed >= 0.30 else None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertEqual(signals, [other["pid"]])
+
+    def test_known_signal_drain_signal_esrch_does_not_retire_live_lifetime(self):
+        self.known_drain_process()
+        self.recover_drain_token()
+        self.scope.proc.proc_signal_with_audittoken.side_effect = None
+        self.scope.proc.proc_signal_with_audittoken.return_value = errno.ESRCH
+        self.on_sleep = lambda: setattr(self, "current", None) if self.elapsed >= 0.8 else None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertGreaterEqual(self.elapsed, 1.0)
+        self.assertGreater(self.scope.proc.proc_signal_with_audittoken.call_count, 1)
+        record = self.scope.description()["drainReconciliations"][-1]["signalReconciliations"][0]
+        self.assertEqual(record["outcome"], "absent")
+
+    def test_known_signal_drain_structural_failures_cannot_be_resolved_by_later_exit(self):
+        for failure in ("port-release", "signal-authority", "observation-overflow"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.known_drain_process()
+                self.recover_drain_token()
+                if failure == "port-release":
+                    self.scope.system.mach_port_deallocate.return_value = 5
+                elif failure == "signal-authority":
+                    self.scope.proc.proc_signal_with_audittoken.side_effect = None
+                    self.scope.proc.proc_signal_with_audittoken.return_value = errno.EPERM
+                else:
+                    self.scope.observation_reconciliations = [{} for _ in range(1024)]
+                with self.clock(), self.assertRaises(processes.OwnershipError) as failure_context:
+                    self.scope.drain()
+                if failure == "observation-overflow":
+                    self.assertIsInstance(failure_context.exception, processes.DarwinObservationExhausted)
+                    self.assertEqual(processes.retirement_details(failure_context.exception)["status"], "UNKNOWN")
+                else:
+                    self.assertNotIsInstance(failure_context.exception, processes.DarwinObservationExhausted)
+                first = json.loads(json.dumps(self.scope.description()["drainReconciliations"][-1]))
+                self.current = None
+                with self.clock():
+                    if failure in ("port-release", "observation-overflow"):
+                        with self.assertRaises(processes.OwnershipError) as repeated:
+                            self.scope.drain()
+                        self.assertIs(repeated.exception, failure_context.exception)
+                        self.assertEqual(processes.retirement_details(repeated.exception)["status"], "UNKNOWN")
+                        self.assertEqual(len(self.scope.drain_reconciliations), 1)
+                    else:
+                        self.assertEqual(self.scope.drain(), [])
+                self.assertEqual(self.scope.description()["drainReconciliations"][0], first)
+                self.assertEqual(first["outcome"], "failed")
+
+    def test_known_signal_drain_later_success_does_not_rewrite_original_unknown(self):
+        self.known_drain_process()
+        with self.clock(), self.assertRaises(processes.DarwinObservationExhausted):
+            self.scope.drain()
+        first = json.loads(json.dumps(self.scope.description()["drainReconciliations"][-1]))
+        self.current = None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertEqual(self.scope.description()["drainReconciliations"][0], first)
+        self.assertEqual(first["outcome"], "unresolved")
+        self.assertEqual(self.scope.description()["drainReconciliations"][1]["outcome"], "retired")
+
+    def test_known_signal_outside_drain_still_raises_exhausted_observation(self):
+        self.known_drain_process()
+        with self.clock(), self.assertRaises(processes.DarwinObservationExhausted):
+            self.scope.signal_all(processes.SIG_TERM)
+        self.assertEqual(self.scope.drain_reconciliations, [])
+
+    def test_known_signal_drain_no_success_without_three_quiet_censuses(self):
+        self.scope._pids = lambda: []
+        for grace, kill_wait in ((0, 0), (0.05, 0.05)):
+            with self.subTest(grace=grace, kill_wait=kill_wait):
+                self.elapsed = 0
+                with self.clock(), mock.patch.object(self.scope, "discover", return_value=[]) as discover, \
+                        self.assertRaisesRegex(processes.OwnershipError, "quiet"):
+                    self.scope.drain(grace=grace, kill_wait=kill_wait)
+                self.assertLessEqual(discover.call_count, 2)
+                self.assertLessEqual(self.elapsed, grace + kill_wait)
+
+    def test_known_signal_drain_final_snapshot_is_conservative_without_late_census(self):
+        self.known_drain_process()
+        self.recover_drain_token()
+        starts = []
+        original = self.scope.discover
+
+        def discover():
+            starts.append(self.elapsed)
+            return original()
+
+        with self.clock(), mock.patch.object(self.scope, "discover", side_effect=discover):
+            self.assertEqual(self.scope.drain(), [self.identity])
+        self.assertTrue(all(start < 10 for start in starts))
+        self.assertEqual(self.scope.description()["drainReconciliations"][-1]["outcome"], "last-observed-live")
+
+    def test_known_signal_drain_evidence_overflow_is_not_a_retry(self):
+        self.known_drain_process()
+        self.scope.drain_reconciliations = [{} for _ in range(1024)]
+        with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "drain evidence"):
+            self.scope.drain()
+        self.scope.system.task_name_for_pid.assert_not_called()
+
+
+class SupervisorMergeTests(unittest.TestCase):
+    """Focused merge-contract models; Darwin callbacks below are NOT native proof."""
+
+    def test_backend_interfaces_and_no_shadowing(self):
+        import ast
+        import inspect
+        tree = ast.parse((SCRIPTS / 'audit_processes.py').read_text())
+        for cls in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+            names = [node.name for node in cls.body if isinstance(node, ast.FunctionDef)]
+            self.assertEqual(len(names), len(set(names)), cls.name)
+        for backend in (processes.PosixScope, processes.LinuxScope,
+                        processes.DarwinScope, processes.WindowsScope):
+            inspect.signature(backend.drain).bind(None, grace=1, kill_wait=1, deadline=3)
+            inspect.signature(backend.spawn).bind(None, [], '/', {}, stdin=None, stdout=None, stderr=None)
+        child = processes.PosixProcess(mock.Mock(pid=1, stdout=None, stderr=None, returncode=0))
+        self.assertEqual(child.returncode, 0)
+        child.process.poll.assert_not_called()
+
+    def test_linux_original_deadline_and_pending_refusal_are_both_retained(self):
+        model = LinuxObservationTests(); model.setUp(); scope = model.scope
+        for deadline in (None, 42.5):
+            with mock.patch.object(processes.PosixScope, 'drain', return_value=[]) as drain:
+                self.assertEqual(scope.drain(.2, .3, deadline=deadline), [])
+                if deadline is None:
+                    drain.assert_called_once_with(.2, .3)
+                else:
+                    drain.assert_called_once_with(.2, .3, deadline=42.5)
+                scope.pending_discoveries[1] = {'identity': model.identity}
+                with self.assertRaisesRegex(processes.OwnershipError, 'Unclassified Linux'):
+                    scope.drain(.2, .3, deadline=deadline)
+                scope.pending_discoveries.clear()
+
+    def test_linux_retirement_uncertainty_is_not_transient_access_denial(self):
+        model = LinuxObservationTests(); model.setUp(); scope = model.scope
+        error = PermissionError(errno.EACCES, 'modeled failed pidfd close')
+        error._p2pkit_retirement = {'status': 'UNKNOWN', 'resources': [], 'omitted': 1}
+        scope._discovery_failed(model.identity, error)
+        self.assertFalse(scope.pending_discoveries)
+        self.assertTrue(scope.discovery_errors)
+
+    def test_proof_resolution_never_discards_original_retirement_uncertainty(self):
+        for cls in (processes.DiscoveryUncertain, ProcessLookupError):
+            with self.subTest(boundary="discovery", error=cls.__name__):
+                model = DarwinObservationTests(); model.setUp(); scope = model.scope
+                original = cls("modeled ownership observation failed")
+                original._p2pkit_retirement = {"status": "UNKNOWN", "resources": [], "omitted": 1}
+                scope._inspect_environment = mock.Mock(return_value={})
+                scope._ownership_proof = mock.Mock(side_effect=original)
+                scope._discovery_resolved = mock.Mock()
+                with mock.patch.object(processes.os, 'getuid', return_value=1000), \
+                        self.assertRaises(cls) as caught:
+                    scope.discover()
+                self.assertIs(caught.exception, original)
+                scope._discovery_resolved.assert_not_called()
+                self.assertFalse(scope.pending_discoveries)
+        model = DarwinObservationTests(); model.setUp(); scope = model.scope
+        original = processes.DarwinObservationExhausted("modeled observation and retirement failed")
+        original._p2pkit_retirement = {"status": "UNKNOWN", "resources": [], "omitted": 1}
+        scope._has_pipe.side_effect = original
+        with self.assertRaises(processes.DarwinObservationExhausted) as caught:
+            scope._ownership_proof(model.identity, {})
+        self.assertIs(caught.exception, original)
+        scope._discovery_failed(model.identity, original)
+        self.assertFalse(scope.pending_discoveries)
+        self.assertTrue(scope.discovery_errors)
+
+    def test_darwin_close_attempts_all_originals_and_preserves_sticky_failure(self):
+        model = DarwinObservationTests(); model.setUp(); scope = model.scope
+        original = OSError('modeled first pipe close failed')
+        calls = []
+        def close(fd):
+            calls.append(fd)
+            if fd == 7:
+                raise original
+        with mock.patch.object(processes.os, 'close', side_effect=close):
+            with self.assertRaises(OSError) as caught:
+                scope.close()
+            self.assertIs(caught.exception, original)
+            self.assertEqual(calls, [7, 8])
+            self.assertEqual(scope.pipe_fds, ())
+            self.assertIsNone(scope.pipe_marker)
+            with self.assertRaises(OSError) as caught:
+                scope.close()
+            self.assertIs(caught.exception, original)
+            self.assertEqual(calls, [7, 8])
+            self.assertTrue(processes.retirement_details(original))
+
+    @contextmanager
+    def darwin_spawn(self, *, fail_admission=False, fail_close=False, borrowed=False):
+        import inspect
+        model = DarwinObservationTests(); model.setUp(); scope = model.scope
+        owner = {**model.parent, 'pid': os.getpid(), 'uniqueId': 501,
+                 'uid': os.getuid(), 'realUid': os.getuid()}
+        identity = {**model.identity, 'parentPid': owner['pid'], 'parentUniqueId': owner['uniqueId'],
+                    'uid': os.getuid(), 'realUid': os.getuid()}
+        scope._identity.side_effect = lambda pid, **kwargs: owner if pid == owner['pid'] else identity
+        scope._inherited_pipes = mock.Mock(return_value=[])
+        scope._pipe_identity = mock.Mock(return_value=scope.pipe_marker)
+        scope._has_pipe = mock.Mock(return_value=not fail_admission)
+        scope._acquire = mock.Mock(return_value='modeled-token')
+        env = processes.ownership_environment({}, scope.job, scope.invocation, scope.state, scope.home)
+        streams = [mock.Mock(), mock.Mock()]
+        if fail_close:
+            streams[0].close.side_effect = OSError('modeled first stream close failure')
+        popen = mock.Mock(pid=identity['pid'], stdout=None if borrowed else streams[0],
+                          stderr=None if borrowed else streams[1], returncode=None)
+        signature = inspect.signature(subprocess.Popen)
+        def create(*args, **kwargs):
+            signature.bind(*args, **kwargs)
+            return popen
+        with mock.patch.object(processes, 'resolve_executable', return_value=[PYTHON, '-c', 'pass']), \
+                mock.patch.object(processes.subprocess, 'Popen', side_effect=create) as spawn, \
+                mock.patch.object(processes.os, 'pipe', side_effect=[(20, 21), (22, 23)]), \
+                mock.patch.object(processes.os, 'close') as close, \
+                mock.patch.object(processes.os, 'read', return_value=b'R'), \
+                mock.patch.object(processes.os, 'write', return_value=1), \
+                mock.patch.object(processes.select, 'select', return_value=([20], [], [])):
+            yield scope, env, spawn, close, streams
+
+    def test_darwin_direct_gate_preserves_borrowed_stream_contract(self):
+        with tempfile.TemporaryDirectory(prefix='merge-input-') as temporary:
+            root = Path(temporary); (root / 'input').write_bytes(b'public modeled input')
+            with (root / 'input').open('rb') as source, (root / 'out').open('wb') as out, \
+                    (root / 'err').open('wb') as err, self.darwin_spawn(borrowed=True) as model:
+                scope, env, spawn, close, _ = model
+                child = scope.spawn([PYTHON, '-c', 'pass'], '/', env, stdin=source, stdout=out, stderr=err)
+                kwargs = spawn.call_args.kwargs
+                self.assertEqual(kwargs['stdin'], source.fileno())
+                self.assertIs(kwargs['stdout'], out)
+                self.assertIs(kwargs['stderr'], err)
+                self.assertEqual(kwargs['pass_fds'], (8, 21, 22))
+                self.assertTrue(scope.launches[-1]['gateReleased'])
+                self.assertEqual(scope.ownership_proofs[scope._key(scope.known[next(iter(scope.known))])]['kind'],
+                                 'direct-spawn-gate')
+                self.assertIsNone(child.stdout)
+                self.assertFalse(source.closed or out.closed or err.closed)
+                self.assertEqual([call.args[0] for call in close.call_args_list], [21, 22, 20, 23])
+        with self.darwin_spawn() as model:
+            scope, env, spawn, _, _ = model
+            with self.assertRaisesRegex(processes.OwnershipError, 'Both owned'):
+                scope.spawn([PYTHON], '/', env, stdout=object())
+            spawn.assert_not_called()
+            with self.assertRaises(processes.OwnershipError):
+                scope.spawn([PYTHON], '/', env, stdin=subprocess.PIPE)
+            spawn.assert_not_called()
+
+    def test_darwin_failed_gate_closes_each_original_despite_stream_failure(self):
+        with self.darwin_spawn(fail_admission=True, fail_close=True) as model:
+            scope, env, spawn, close, streams = model
+            with self.assertRaisesRegex(processes.OwnershipError, 'did not inherit') as caught:
+                scope.spawn([PYTHON], '/', env)
+            self.assertFalse(scope.launches[-1]['gateReleased'])
+            self.assertEqual(len(scope.leaders), 1)
+            for stream in streams:
+                stream.close.assert_called_once()
+            self.assertEqual([call.args[0] for call in close.call_args_list], [21, 22, 20, 22 + 1])
+            self.assertTrue(processes.retirement_details(caught.exception))
+
+    def test_darwin_failed_construction_attempts_both_pipe_closes(self):
+        def initialize(scope, *args):
+            scope.handles, scope.leaders, scope.known = {}, [], {}
+            scope._closed, scope._retirement_error = False, None
+        close_error = OSError('modeled constructor first close failure')
+        with mock.patch.object(processes.PosixScope, '__init__', new=initialize), \
+                mock.patch.object(processes.os, 'pipe', return_value=(20, 21)), \
+                mock.patch.object(processes.DarwinScope, '_pipe_identity', return_value=None), \
+                mock.patch.object(processes.os, 'close', side_effect=[close_error, None]) as close:
+            with self.assertRaisesRegex(processes.OwnershipError, 'Cannot bind') as caught:
+                processes.DarwinScope('job', 'id', '/state', '/home')
+            self.assertEqual(close.call_args_list, [mock.call(20), mock.call(21)])
+            self.assertTrue(processes.retirement_details(caught.exception))
+
 
 class ExecutorFixtureTests(unittest.TestCase):
     def setUp(self):
         global CASE_EVIDENCE
-        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit audit fixture ")
+        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit audit fixture ", dir=FIXTURE_PARENT)
         # On an unexpected ownership/archive failure leave the private fixture for
         # inspection; only explicit successful cleanup may delete its generated data.
         self.temporary._finalizer.detach()
@@ -1352,11 +4464,12 @@ class ExecutorFixtureTests(unittest.TestCase):
         self.root.mkdir()
         self.state = self.base / "state"
         self.sentinel_scopes = []
+        self.fixture_native_finalizations = {}
         self.fixture_retention_errors = []
         self.fixture_archivists = []
         if EVIDENCE_ROOT is not None:
             case = EVIDENCE_ROOT / self._testMethodName
-            case.mkdir(mode=0o700)
+            retained_directory(case)
             CASE_EVIDENCE = case
             (case / "case.json").write_text(json.dumps({"source": str(self.root), "state": str(self.state)}) + "\n")
         (self.root / ".gitignore").write_text("build/\n!**/src/**/build/\nsamples/iosApp/p2pkit-sample.xcodeproj/\n",
@@ -1371,6 +4484,7 @@ class ExecutorFixtureTests(unittest.TestCase):
         source_build = self.root / "buildSrc/src/main/java/dev/p2pkit/build"
         source_build.mkdir(parents=True)
         (source_build / "Source.java").write_text("// source, never disposable\n", encoding="utf-8")
+        self.additional_fixture_sources()
         for command in (["init", "-q"], ["config", "user.email", "fixture@example.invalid"],
                         ["config", "user.name", "Audit Fixture"], ["config", "core.autocrlf", "false"],
                         ["add", "."], ["commit", "-qm", "Fixture baseline"]):
@@ -1398,6 +4512,9 @@ class ExecutorFixtureTests(unittest.TestCase):
                                                   str(self.state), self.context["gradleHome"], allow_new_context=True)
         self.wrapper = self.root / ("gradlew.bat" if os.name == "nt" else "gradlew")
 
+    def additional_fixture_sources(self):
+        """Native-specific fixtures must be written before immutable initialization."""
+
     def _cleanup_fixture(self):
         errors = list(getattr(self, "fixture_retention_errors", []))
         fatal = []
@@ -1417,26 +4534,31 @@ class ExecutorFixtureTests(unittest.TestCase):
                 return None
 
         if hasattr(self, "scope"):
-            record["guardSurvivors"] = attempt("Fixture guard drain", lambda: self.scope.drain(grace=.5, kill_wait=5))
+            finalization = attempt("Fixture guard finalization", lambda: finalize_fixture_scope(
+                self.scope, self.fixture_native_finalizations, "Fixture guard", .5, attempt))
+            record["guardFinalization"] = finalization
+            record["guardSurvivors"] = None if finalization is None else finalization["survivors"]
             if record["guardSurvivors"] is None:
                 errors.append("Fixture guard worker retirement is unproven; retain the generated fixture")
             if record["guardSurvivors"]:
                 errors.append(f"Fixture-owned survivors: {record['guardSurvivors']}")
-            discovery = attempt("Fixture guard discovery status", lambda: sorted(self.scope.discovery_errors))
+            discovery = None if finalization is None else finalization["discoveryErrors"]
             if discovery:
                 errors.append(f"Fixture ownership uncertainty: {discovery}")
-            attempt("Fixture guard close", self.scope.close)
         else:
             errors.append("Fixture ownership guard was not established; retain the unadmitted generated fixture")
         for number, (sentinel_scope, capture) in enumerate(getattr(self, "sentinel_scopes", [])):
-            survivors = attempt(f"Fixture sentinel {number} drain", lambda: sentinel_scope.drain(grace=.2, kill_wait=5))
-            record["sentinels"].append({"index": number, "survivors": survivors})
+            finalization = attempt(f"Fixture sentinel {number} finalization", lambda: finalize_fixture_scope(
+                sentinel_scope, self.fixture_native_finalizations, f"Fixture sentinel {number}", .2, attempt,
+                before_close=lambda: capture.finish(sentinel_scope, timeout=5)))
+            survivors = None if finalization is None else finalization["survivors"]
+            record["sentinels"].append({"index": number, "survivors": survivors, "finalization": finalization})
             if survivors is None:
                 errors.append(f"Separately-owned sentinel {number} retirement is unproven")
             if survivors:
                 errors.append(f"Separately-owned sentinel {number} survived teardown")
-            attempt(f"Fixture sentinel {number} capture", lambda: capture.finish(sentinel_scope, timeout=5))
-            attempt(f"Fixture sentinel {number} close", sentinel_scope.close)
+            if finalization is not None and finalization["discoveryErrors"]:
+                errors.append(f"Separately-owned sentinel {number} discovery remains unresolved")
         for number, archivist in enumerate(getattr(self, "fixture_archivists", [])):
             retained = attempt(f"Dependent fixture evidence {number}", archivist)
             if retained is not None:
@@ -1450,7 +4572,7 @@ class ExecutorFixtureTests(unittest.TestCase):
             candidate = EVIDENCE_ROOT / self._testMethodName / f"teardown-{record['id']}"
             def create_destination():
                 runner.reject_symlinks(candidate)
-                candidate.mkdir(parents=True, mode=0o700)
+                retained_directory(candidate, parents=True)
                 return candidate
             destination = attempt("Fixture archive directory creation", create_destination)
         else:
@@ -1483,7 +4605,9 @@ class ExecutorFixtureTests(unittest.TestCase):
                     lambda: runner.write_new_json(destination / "cleanup-before-disposal.json", record))
         if hasattr(self, "temporary") and not errors:
             def dispose():
-                self.temporary.cleanup()
+                # cleanup() is a no-op after finalizer detachment on Python 3.9.
+                # Use its remover explicitly, retaining read-only-file handling.
+                self.temporary._rmtree(self.temporary.name)
                 runner.require(runner.existing_lstat(self.base) is None, "Generated fixture directory still exists")
                 record["fixtureDataRemoved"] = True
             attempt("Generated fixture disposal", dispose)
@@ -1545,14 +4669,14 @@ class ExecutorFixtureTests(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, "Real fixture child did not establish readiness")
             time.sleep(.05)
 
-    def sentinel(self):
+    def sentinel(self, command=None):
         identifier = uuid.uuid4().hex
         # Sibling of this fixture guard, not its descendant: the leaf must not stop
         # it, but the real outer controller's domains remain intact for cancellation.
         environment = processes.ownership_environment(dict(os.environ), self.context["id"], identifier,
             str(self.state), self.context["gradleHome"], allow_new_context=True)
         scope = processes.make_scope(self.context["id"], identifier, str(self.state), self.context["gradleHome"])
-        child = scope.spawn([PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), environment)
+        child = scope.spawn(command or [PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), environment)
         self.sentinel_scopes.append((scope, Capture(child)))
         return child
 
@@ -2529,7 +5653,7 @@ class PosixNativeTests(ExecutorFixtureTests):
         base = runner.absolute_path(created["fixtureBase"])
         runner.require(base != temporary and runner.within(base, temporary), "Consumer fixture escaped owned TMPDIR")
         destination = evidence / f"dependent-state-archive-{uuid.uuid4().hex}"
-        destination.mkdir(mode=0o700)
+        retained_directory(destination)
         errors, records = [], []
         budget = {"entries": 0, "bytes": 0}
         # These are the producer's two explicit fixture contexts, not a search
@@ -2544,7 +5668,7 @@ class PosixNativeTests(ExecutorFixtureTests):
                 if not present:
                     continue
                 target = destination / name
-                target.mkdir(mode=0o700)
+                retained_directory(target)
                 for relative in ("context.json", "gradle-home/gradle.properties"):
                     source = state / relative
                     present = runner.existing_lstat(source) is not None
@@ -2753,6 +5877,10 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertFalse(record["cleanupComplete"])
         self.assertFalse(record["fixtureDataRemoved"])
         self.assertEqual(record["guardSurvivors"], [])
+        self.assertTrue(record["guardFinalization"]["closed"])
+        self.assertIsNotNone(record["guardFinalization"]["completedUtc"])
+        self.assertFalse(record["guardFinalization"]["reusedVerifiedFinalization"])
+        self.assertEqual(self.fixture_native_finalizations[self.scope]["id"], record["guardFinalization"]["id"])
         self.assertTrue(set(primary["retentionReasons"]).issubset(record["errors"]))
         self.assertTrue(self.base.is_dir())
         self.assertTrue(temporary.is_dir())
@@ -2875,14 +6003,16 @@ class PosixNativeTests(ExecutorFixtureTests):
             ":lanJvm:runEmbeddedJmdnsCoexistenceUpstreamFirstSmoke", ":lanJvm:runEmbeddedJmdnsPomSmoke",
             ":androidConsumer:assembleDebug", ":androidConsumer:assembleRelease",
             ":androidConsumer:assembleCoexistDebug", ":androidConsumer:assembleCoexistRelease",
-            ":androidConsumer:verifyEmbeddedJmdnsPackaging"])
+            ":androidConsumer:verifyEmbeddedJmdnsPackaging", ":rpcJvm:compileKotlin", ":rpcJvm:runPublishedRpcApiSmoke"])
         self.assertEqual(receipts["consumer-publish"]["reports"], [])
-        self.assertEqual(len(build["reports"]), 2)
+        self.assertEqual(len(build["reports"]), 3)
         packaging_path = paths["consumerWorkDir"] / "consumer/androidConsumer/build/reports/embedded-jmdns/packaging.txt"
+        rpc_path = paths["consumerWorkDir"] / "consumer/rpcJvm/build/reports/rpc-api/smoke.txt"
         report_source = "external/" + paths["fixtureReport"].relative_to(child_state).as_posix()
         packaging_source = "external/" + packaging_path.relative_to(child_state).as_posix()
+        rpc_source = "external/" + rpc_path.relative_to(child_state).as_posix()
         reports = {report["source"]: report for report in build["reports"]}
-        self.assertEqual(set(reports), {report_source, packaging_source})
+        self.assertEqual(set(reports), {report_source, packaging_source, rpc_source})
         report = reports[report_source]
         expected = b'{"fixtureOnly":true,"result":"synthetic-consumer-report-not-compilation"}\n'
         self.assertEqual(report["source"], "external/" + paths["fixtureReport"].relative_to(child_state).as_posix())
@@ -2899,6 +6029,13 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertEqual(packaging["bytes"], len(expected_packaging))
         self.assertEqual(packaging_path.read_bytes(), expected_packaging)
         self.assertEqual((Path(build["evidenceDirectory"]) / packaging["retained"]).read_bytes(), expected_packaging)
+        rpc = reports[rpc_source]
+        expected_rpc = b"PASS: published RPC JVM API values; no network or capacity claim\n"
+        self.assertEqual(rpc["classification"], "changed-since-admission")
+        self.assertEqual(rpc["sha256"], runner.digest(expected_rpc))
+        self.assertEqual(rpc["bytes"], len(expected_rpc))
+        self.assertEqual(rpc_path.read_bytes(), expected_rpc)
+        self.assertEqual((Path(build["evidenceDirectory"]) / rpc["retained"]).read_bytes(), expected_rpc)
         optional = list(child_state.glob("consumer-receipts.*"))
         self.assertEqual(len(optional), 1)
         self.assertEqual({path.name for path in optional[0].iterdir()}, {"consumer-publish.json", "consumer-build.json"})
@@ -2922,11 +6059,58 @@ class PosixNativeTests(ExecutorFixtureTests):
             "schema": 1, "outerReceipt": outer["evidenceDirectory"], "childState": str(child_state),
             "realNativeReceiptIds": [receipt["id"] for receipt in receipts.values()],
             "retainedReportSha256": report["sha256"], "unrelatedSentinelSurvived": True,
+            "retainedRpcSmokeSha256": rpc["sha256"],
             "scope": "Native executor/caller/report integration with synthetic tools; not product compilation or Apple approval.",
         })
 
 
 class LinuxNativeTests(PosixNativeTests):
+    def test_real_lifetime_reconciles_scripted_visibility_denial_only_after_verified_exit(self):
+        # The access denial is injected; the process/exit observation and guard
+        # ownership are real. This is not a claim about the host's /proc policy.
+        probe = processes.make_scope(self.context["id"], uuid.uuid4().hex, str(self.state), self.context["gradleHome"])
+        ready, release = self.state / "linux-observer-ready", self.state / "linux-observer-release"
+        code = """import pathlib, sys, time
+ready, release = map(pathlib.Path, sys.argv[1:])
+ready.write_text('ready')
+end = time.monotonic() + 10
+while not release.exists():
+    if time.monotonic() >= end: raise SystemExit(7)
+    time.sleep(.02)
+"""
+        child = self.scope.spawn([PYTHON, "-c", code, str(ready), str(release)], str(self.root), self.env)
+        capture = Capture(child)
+        original = probe._environment
+        def visibility(pid):
+            if pid == child.pid:
+                raise PermissionError(errno.EACCES, "scripted visibility denial for real lifetime")
+            return original(pid)
+        try:
+            self.ready(ready)
+            with mock.patch.object(probe, "_environment", side_effect=visibility):
+                self.assertNotIn(child.pid, {row["pid"] for row in probe.discover()})
+                self.assertIn(child.pid, probe.pending_discoveries)
+                self.assertIsNone(child.poll())
+                with self.assertRaisesRegex(processes.OwnershipError, "Unclassified Linux"):
+                    probe.drain(grace=.2, kill_wait=1)
+                self.assertIsNone(child.poll(), "The denied observation cannot authorize signaling")
+                release.write_text("release")
+                self.assertEqual(capture.finish(self.scope)[0], 0)
+                self.assertNotIn(child.pid, {row["pid"] for row in probe.discover()})
+            self.assertFalse(probe.pending_discoveries)
+            self.assertFalse(probe.discovery_errors)
+            entries = [row for row in probe.discovery_reconciliations if row["identity"]["pid"] == child.pid]
+            self.assertEqual(len(entries), 1)
+            self.assertIn(entries[0]["outcome"], ("lifetime-ended", "nonrunning"))
+            runner.write_new_json(CASE_EVIDENCE / "linux-real-lifetime-reconciliation.json", {
+                "scope": "Real process/exit with scripted visibility denial; no host access-policy claim",
+                "nativeLifetimeObserved": True, "denialConferredSignalAuthority": False,
+                "reconciliation": entries[0], "finalOwnership": probe.description(),
+            })
+        finally:
+            release.touch(exist_ok=True)
+            probe.close()
+
     def test_real_pidfd_stale_handle_cannot_signal_unrelated_sentinel(self):
         child = self.scope.spawn([PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), self.env)
         capture = Capture(child)
@@ -2946,6 +6130,247 @@ class LinuxNativeTests(PosixNativeTests):
 
 
 class DarwinNativeTests(PosixNativeTests):
+    def test_terminal_command_shell_retirement_uses_actual_native_lifetime_and_closed_negative_controls(self):
+        # Compile the actual helper on this architecture, not a Python or x86
+        # substitution. Its native child is within the unchanged executor scope.
+        sentinel = self.sentinel()
+        binary = self.state / "terminal-retirement-controls"
+        architecture = {"macos-x64": "x86_64", "macos-arm64": "arm64"}[processes.host_role()]
+        command = ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-Wall", "-Wextra", "-Werror",
+                   "-fobjc-arc", "-fblocks", "-arch", architecture, "-mmacosx-version-min=15.0",
+                   "-framework", "AppKit", str(SCRIPTS / "tests/fixtures/apple-terminal-retirement.m"),
+                   "-o", str(binary)]
+        for argv in (command, [str(binary)]):
+            code, out, err, receipt = self.run_leaf(argv, kind="command")
+            self.assertEqual(code, 0, err.decode(errors="replace"))
+            self.assertEqual([receipt[k] for k in ("productExitCode", "stopExitCode", "finalExitCode")], [0, 0, 0])
+            self.assertEqual(receipt["ownedSurvivors"], [])
+            self.assertEqual(receipt["errors"], [])
+            self.assertTrue(receipt["sourceUnchanged"])
+        self.assertEqual(out, b"PASS: native shell result-before-exit, positive retirement and fail-closed observation controls\n")
+        self.assertIsNone(sentinel.poll())
+
+    def test_system_shell_and_term_resistant_utility_are_owned_but_sibling_is_not(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        ready, pidfile = self.state / "shell-ready", self.state / "utility-pid"
+        script = 'trap "" TERM; /bin/sleep 120 & printf "%s" "$!" > "$1"; : > "$2"; wait'
+        child = self.scope.spawn(["/bin/bash", "--noprofile", "--norc", "-c", script,
+                                  "ownership-fixture", str(pidfile), str(ready)], str(self.root), self.env)
+        capture = Capture(child)
+        self.ready(ready)
+        utility_pid = int(pidfile.read_text())
+        live = {row["pid"]: row for row in self.scope.discover()}
+        self.assertIn(child.pid, live)
+        self.assertIn(utility_pid, live)
+        self.assertNotIn(sentinel.pid, live)
+        self.assertEqual(live[utility_pid]["parentUniqueId"], live[child.pid]["uniqueId"])
+        proof = self.scope.ownership_proofs[self.scope._key(live[child.pid])]
+        self.assertEqual(proof["kind"], "direct-spawn-gate")
+        observed = self.scope._inspect_environment(live[utility_pid])
+        if not self.scope._ours(observed):
+            self.assertEqual(self.scope.ownership_proofs[self.scope._key(live[utility_pid])]["kind"],
+                             "inherited-pipe-capability")
+        runner.write_new_json(CASE_EVIDENCE / "system-tools-control.json", {
+            "shellIdentity": live[child.pid], "utilityIdentity": live[utility_pid],
+            "utilityMarkersObservable": self.scope._ours(observed),
+            "sameExecutableSentinelExcluded": True})
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertEqual(capture.finish(self.scope)[0], -signal.SIGKILL)
+        self.assertIsNone(sentinel.poll())
+
+    def test_exited_system_shell_leaves_reparented_system_utility_identifiable(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        pidfile = self.state / "reparented-system-pid"
+        script = '/bin/sleep 120 </dev/null >/dev/null 2>&1 & printf "%s" "$!" > "$1"'
+        child = self.scope.spawn(["/bin/sh", "-c", script, "ownership-fixture", str(pidfile)],
+                                 str(self.root), self.env)
+        capture = Capture(child)
+        self.assertEqual(capture.finish(self.scope)[0], 0)
+        worker_pid = int(pidfile.read_text())
+        bound = self.scope.launches[-1]["boundIdentity"]
+        worker = self.scope._identity(worker_pid, required=True)
+        self.assertIsNotNone(worker)
+        self.assertNotEqual(worker["parentPid"], child.pid)
+        self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertIsNone(sentinel.poll())
+        runner.write_new_json(CASE_EVIDENCE / "reparented-system-control.json", {
+            "leaderIdentity": bound, "reparentedWorkerIdentity": worker, "sameExecutableSentinelSurvived": True})
+
+    def test_system_utility_exec_after_reparent_is_owned_without_inventing_original_parent(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        pidfile = self.state / "after-reparent-exec-pid"
+        producer = r'''import os, pathlib, sys, time
+parent = os.getpid()
+worker = os.fork()
+if worker:
+    pathlib.Path(sys.argv[1]).write_text(str(worker))
+    os._exit(0)
+fd = os.open('/dev/null', os.O_RDWR)
+for target in (0, 1, 2): os.dup2(fd, target)
+os.close(fd)
+end = time.monotonic() + 5
+while os.getppid() == parent:
+    if time.monotonic() > end: os._exit(125)
+    time.sleep(.001)
+os.execl('/bin/sleep', 'sleep', '120')
+'''
+        child = self.scope.spawn([PYTHON, "-c", producer, str(pidfile)], str(self.root), self.env)
+        capture = Capture(child)
+        # No census until the real worker has reparented AND executed. This
+        # prevents a lucky early environment observation from satisfying proof.
+        self.assertEqual(child.wait(timeout=5), 0)
+        worker_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while True:
+            worker = self.scope._identity(worker_pid, required=True)
+            self.assertIsNotNone(worker)
+            if worker["parentPid"] == 1 and worker["parentUniqueId"] == 1:
+                break
+            self.assertLess(time.monotonic(), deadline, "Worker did not execute after actual reparenting")
+            time.sleep(.01)
+        self.assertNotIn(self.scope._key(worker), self.scope.known)
+        self.assertTrue(self.scope._has_pipe(worker))
+        observed = self.scope._inspect_environment(worker)
+        self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+        proof = self.scope.ownership_proofs[self.scope._key(worker)]
+        if not self.scope._ours(observed):
+            self.assertEqual(proof["kind"], "inherited-pipe-capability")
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertEqual(capture.finish(self.scope)[0], 0)
+        self.assertIsNone(sentinel.poll())
+        runner.write_new_json(CASE_EVIDENCE / "reparent-before-exec-control.json", {
+            "leaderIdentity": self.scope.launches[-1]["boundIdentity"], "workerIdentity": worker,
+            "environmentHidden": not self.scope._ours(observed), "ownershipProof": proof,
+            "sameExecutableSentinelSurvived": True})
+
+    def test_fast_system_command_has_preexec_binding_and_truthful_launch_trace(self):
+        code, out, err, receipt = self.run_leaf(["/usr/bin/true"], kind="command")
+        self.assertEqual((code, out, err), (0, b"", b""))
+        launch = receipt["ownership"]["launches"][receipt["productLaunchIndex"]]
+        self.assertTrue(launch["gateReleased"])
+        self.assertEqual(launch["boundIdentity"]["pid"], receipt["productPid"])
+        self.assertEqual(launch["resolvedArgv"], ["/usr/bin/true"])
+        self.assertEqual(launch["bootstrapArgv"][1:3], ["-I", "-S"])
+        self.assertEqual(launch["bootstrapArgv"][-1], "/usr/bin/true")
+        self.assertEqual(Path(launch["bootstrapArgv"][3]), SCRIPTS / "audit_exec_gate.py")
+        self.assertEqual(receipt["ownership"]["discoveryErrors"], [])
+
+    def test_failed_gate_token_admission_cannot_start_the_product(self):
+        forbidden = self.state / "unadmitted-product"
+        with mock.patch.object(self.scope, "_acquire", side_effect=processes.OwnershipError("fixture token denial")):
+            with self.assertRaisesRegex(processes.OwnershipError, "fixture token denial"):
+                self.scope.spawn([PYTHON, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", str(forbidden)],
+                                 str(self.root), self.env)
+        gate = self.scope.leaders[-1]
+        self.assertEqual(gate.wait(timeout=5), 125)
+        self.assertFalse(forbidden.exists())
+        self.assertFalse(self.scope.launches[-1]["gateReleased"])
+
+    def test_missing_or_foreign_launch_domain_is_rejected_before_popen(self):
+        before = len(self.scope.leaders)
+        for env in ({}, {**self.env, processes.CHAIN_ENV: uuid.uuid4().hex}):
+            with self.subTest(environment="missing" if not env else "foreign"):
+                with self.assertRaisesRegex(processes.OwnershipError, "bound inherited"):
+                    self.scope.spawn(["/usr/bin/true"], str(self.root), env)
+        self.assertEqual(len(self.scope.leaders), before)
+
+    def test_cancellation_drains_system_shell_and_utility_without_pipe_leak(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        invocation = uuid.uuid4().hex
+        ready = self.state / "cancel-system-ready"
+        script = 'trap "" TERM; /bin/sleep 120 & : > "$1"; wait'
+        capture, receipt_path = self.start(["/bin/bash", "--noprofile", "--norc", "-c", script,
+                                           "ownership-fixture", str(ready)], kind="command", invocation=invocation)
+        self.ready(ready)
+        cancel = Capture(self.scope.spawn([PYTHON, str(EXECUTOR), "request-cancel", "--state", str(self.state),
+            "--id", invocation], str(self.root), self.env))
+        self.assertEqual(cancel.finish(self.scope)[0], 0)
+        self.assertEqual(capture.finish(self.scope)[0], 125)
+        receipt = runner.read_json(receipt_path)
+        self.assertTrue(receipt["cancelRequested"])
+        self.assertEqual(receipt["stopExitCode"], 0)
+        self.assertEqual(receipt["ownedSurvivors"], [])
+        self.assertEqual(receipt["ownership"]["discoveryErrors"], [])
+        self.assertEqual(receipt["errors"], ["AuditError: Invocation cancellation requested",
+                                            "Invocation cancellation cannot be a successful product result"])
+        self.assertIsNone(sentinel.poll())
+
+    def test_unobserved_double_fork_fails_closed_until_hidden_child_exits(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        release, pidfile = self.state / "fork-release", self.state / "unobserved-child"
+        producer = r'''import json, os, pathlib, sys, time
+release, result = map(pathlib.Path, sys.argv[1:])
+deadline = time.monotonic() + 5
+while not release.exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit(125)
+    time.sleep(.01)
+read, write = os.pipe()
+middle = os.fork()
+if middle == 0:
+    os.close(read)
+    parent = os.getpid()
+    if os.fork() == 0:
+        os.write(write, str(os.getpid()).encode())
+        os.close(write)
+        # Deliberately remove every inherited optional pipe marker as well as
+        # losing the unobserved intermediary. Missing all proof must fail closed.
+        for binding in json.loads(os.environ.get('P2PKIT_AUDIT_DARWIN_PIPES', '[]')):
+            os.close(binding['fd'])
+        end = time.monotonic() + 5
+        while os.getppid() == parent:
+            if time.monotonic() > end: os._exit(125)
+            time.sleep(.001)
+        os.execl('/bin/sleep', 'sleep', '3')
+    os._exit(0)
+os.close(write)
+worker = os.read(read, 64)
+os.close(read)
+os.waitpid(middle, 0)
+result.write_bytes(worker)
+'''
+        child = self.scope.spawn([PYTHON, "-c", producer, str(release), str(pidfile)], str(self.root), self.env)
+        capture = Capture(child)
+        release.touch()
+        # Deliberately do not census while the real intermediate forks/exits.
+        # This tests missing evidence, not a synthesized positive ancestry.
+        self.assertEqual(child.wait(timeout=5), 0)
+        worker_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while True:
+            worker = self.scope._identity(worker_pid, required=True)
+            self.assertIsNotNone(worker)
+            if worker["parentPid"] == 1 and worker["parentUniqueId"] == 1:
+                break
+            self.assertLess(time.monotonic(), deadline, "Unobserved worker did not execute after reparenting")
+            time.sleep(.01)
+        self.assertNotIn(self.scope._key(worker), self.scope.known)
+        self.assertFalse(self.scope._has_pipe(worker))
+        observed = self.scope._inspect_environment(worker)
+        hidden = not self.scope._ours(observed)
+        if hidden:
+            with mock.patch.object(self.scope, "_send", wraps=self.scope._send) as send:
+                self.assertNotIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+                with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                    self.scope.drain(grace=.01, kill_wait=.01)
+                send.assert_not_called()
+            deadline = time.monotonic() + 5
+            while self.scope.pending_discoveries:
+                self.assertLess(time.monotonic(), deadline, "Natural child exit was not reconciled")
+                time.sleep(.05)
+                self.scope.discover()
+        else:
+            # A host exposing the genuine inherited domain has positive ownership;
+            # do not manufacture a hidden environment to claim SIP coverage there.
+            self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertEqual(capture.finish(self.scope)[0], 0)
+        self.assertIsNone(sentinel.poll())
+        runner.write_new_json(CASE_EVIDENCE / "unobserved-intermediary-control.json", {
+            "childIdentity": worker, "environmentHidden": hidden, "unprovenChildWasNotSignaled": hidden,
+            "sameExecutableSentinelSurvived": True})
+
     def test_real_opaque_task_token_and_stale_token_leave_sentinel_alive(self):
         self.assertIsInstance(self.scope, processes.DarwinScope)
         # Framework Python can re-exec after Popen returns. Bind the saved token
@@ -2988,6 +6413,79 @@ class DarwinNativeTests(PosixNativeTests):
 
 
 class WindowsNativeTests(ExecutorFixtureTests):
+    def test_retained_directory_native_acl_precedes_payload_and_accepts_inherited_file(self):
+        # Current Windows only: validate real native ACLs while every directory
+        # is still empty, then inspect an ordinary file's inherited ACL/bytes.
+        root = EVIDENCE_ROOT / self._testMethodName / "native-directory-policy"
+        retained_directory(root / "nested/before", parents=True)
+        with windows_files.open_private_directory(root) as private:
+            with private.snapshot(max_bytes=0, max_members=3) as before:
+                self.assertEqual(set(before.entries), {"", "nested", "nested/before"})
+                self.assertTrue(all(row.is_directory and row.protected_dacl for row in before.entries.values()))
+            raw = b"SYNTHETIC-NATIVE-ACL-CONTROL\n"
+            (root / "nested/before/marker.txt").write_bytes(raw)
+            with private.snapshot(max_bytes=len(raw), max_members=4) as after:
+                self.assertFalse(after.entries["nested/before/marker.txt"].protected_dacl)
+                with after.open_file("nested/before/marker.txt") as stream:
+                    self.assertEqual(stream.read(), raw)
+
+    def additional_fixture_sources(self):
+        if self._testMethodName not in {"test_windows_sdk_style_batch_parentheses_roundtrip",
+                                       "test_windows_sdk_style_batch_rejects_expansion_before_launch"}:
+            return
+        self.sdk_fixture = self.root / "Program Files (x86)/Android/android-sdk"
+        self.sdk_manager_fixture = self.sdk_fixture / "cmdline-tools/latest/bin/sdkmanager.bat"
+        self.sdk_manager_fixture.parent.mkdir(parents=True)
+        # Synthetic SDK-shaped caller only, not a copy of the installed SDK.
+        # Six parents lead back to the committed argv reporter without embedding
+        # the Unicode fixture path in the batch file's console-codepage text.
+        self.sdk_manager_fixture.write_bytes(('@echo off\r\n"' + PYTHON +
+            '" "%~dp0..\\..\\..\\..\\..\\..\\fixture.py" argv %*\r\nexit /b %errorlevel%\r\n').encode("utf-8"))
+
+    def test_windows_sdk_style_batch_parentheses_roundtrip(self):
+        arguments = [str(self.sdk_manager_fixture), "--sdk_root=" + str(self.sdk_fixture),
+                     "platforms;android-36", "platforms;android-37.0", "Ω(x)", "", "(", ")", "paren(", "paren)",
+                     "tail(\\", "tail)\\\\"]
+        before = self.sdk_manager_fixture.read_bytes()
+        code, out, err, receipt = self.run_leaf(arguments, kind="command")
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        self.assertEqual(json.loads(out), ["argv", *arguments[1:]])
+        self.assertEqual(receipt["requestedArgv"], arguments)
+        self.assertEqual(receipt["executedArgv"], arguments)
+        self.assertEqual([receipt[key] for key in ("productExitCode", "stopExitCode", "finalExitCode")], [0, 0, 0])
+        self.assertTrue(receipt["sourceUnchanged"])
+        self.assertEqual(self.sdk_manager_fixture.read_bytes(), before)
+        self.assertEqual(receipt["errors"], [])
+        self.assertEqual(receipt["ownedSurvivors"], [])
+        launches = receipt["ownership"]["launches"]
+        self.assertEqual(len(launches), 2)
+        product = launches[receipt["productLaunchIndex"]]
+        self.assertEqual(product["applicationName"], self.scope.api.cmd())
+        self.assertTrue(product["batch"] and product["created"] and product["resumed"])
+        self.assertTrue(product["jobAssignedBeforeResume"])
+        self.assertEqual(product["requestedArgv"], arguments)
+        self.assertEqual(product["resolvedArgv"], arguments)
+        self.assertEqual(self.calls()[0]["argv"], ["argv", *arguments[1:]])
+        self.assertIn("--stop", self.calls()[1]["argv"])
+        self.assertEqual({call["home"] for call in self.calls()}, {self.context["gradleHome"]})
+
+    def test_windows_sdk_style_batch_rejects_expansion_before_launch(self):
+        sentinel = self.state / "must-not-be-created"
+        for value in ("paren(%PATH%)", "paren(!PATH!)", ") & echo injected>" + str(sentinel), 'paren(")'):
+            with self.subTest(value=value):
+                count = len(self.calls())
+                code, _, _, receipt = self.run_leaf([str(self.sdk_manager_fixture), value], kind="command")
+                self.assertEqual(code, 125)
+                self.assertIsNone(receipt["productExitCode"])
+                self.assertEqual(receipt["stopExitCode"], 0)
+                self.assertEqual(receipt["ownedSurvivors"], [])
+                self.assertIn("OwnershipError: Unsupported batch argument expansion/control character", receipt["errors"])
+                product = receipt["ownership"]["launches"][receipt["productLaunchIndex"]]
+                self.assertFalse(product["created"] or product["resumed"])
+                self.assertEqual(len(self.calls()), count + 1)
+                self.assertIn("--stop", self.calls()[-1]["argv"])
+                self.assertFalse(sentinel.exists())
+
     def test_windows_readonly_nested_launcher_cleanup_preserves_source_and_outside_sentinel(self):
         code, _, err, receipt = self.run_leaf(["report"])
         self.assertEqual(0, code, err.decode(errors="replace"))
@@ -3191,29 +6689,31 @@ os._exit(0)
         self.assertNotIn(pid, {row["pid"] for row in self.scope.discover()}, "Kill-on-controller-close did not drain its job")
 
 def main():
-    global EVIDENCE_ROOT
+    global EVIDENCE_ROOT, FIXTURE_PARENT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-host", choices=runner.HOSTS, default=processes.host_role())
     parser.add_argument("--evidence-root", "--evidence-dir", dest="evidence_root")
+    parser.add_argument("--fixture-parent", help="Existing empty owned state/fixtures/native-tmp; not process TEMP")
     args = parser.parse_args()
     if args.expected_host != processes.host_role():
         parser.error("Requested host does not match this native interpreter")
-    if args.evidence_root:
-        EVIDENCE_ROOT = runner.absolute_path(args.evidence_root, exists=False)
-        EVIDENCE_ROOT.mkdir(mode=0o700)
-    elif os.environ.get(processes.STATE_ENV):
-        state = runner.absolute_path(os.environ[processes.STATE_ENV])
-        EVIDENCE_ROOT = state / "evidence" / f"executor-fixtures-{uuid.uuid4().hex}"
-        EVIDENCE_ROOT.mkdir(mode=0o700)
-    else:
-        EVIDENCE_ROOT = Path(tempfile.mkdtemp(prefix="p2pkit-executor-fixture-evidence-")).resolve()
+    FIXTURE_PARENT = validated_fixture_parent(args.fixture_parent, args.evidence_root)
+    EVIDENCE_ROOT = allocate_evidence_root(args.evidence_root)
     native = {"Linux": LinuxNativeTests, "Darwin": DarwinNativeTests, "Windows": WindowsNativeTests}.get(
         __import__("platform").system())
     if native is None:
         parser.error("No native ownership fixture suite for this host")
     suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(PurePolicyTests),
+                               unittest.defaultTestLoader.loadTestsFromTestCase(CapturePolicyTests),
+                               unittest.defaultTestLoader.loadTestsFromTestCase(DeadlinePolicyTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(DarwinObservationTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(native)])
+    if os.name == "posix":
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ReportRetentionPosixTests))
+
+    if native is LinuxNativeTests:
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(LinuxObservationTests))
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(SupervisorMergeTests))
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)
     print(f"Retained fixture receipts/logs: {EVIDENCE_ROOT}", flush=True)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1

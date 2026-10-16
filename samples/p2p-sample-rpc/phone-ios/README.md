@@ -1,0 +1,375 @@
+# Foreground RPC phone lab
+
+The interactive app is evolving toward [shared application feature parity](../../../docs/rpc/application-samples.md).
+Ordinary hosts now also register typed user/item/message examples. Clients offer the same application
+buttons and bounded request-detail history on Android, iOS and JVM. Automatic discovery, explicit first-use
+approval, saved trust and selected-host reconnect are implemented in the shared application flow.
+Physical interoperability remains unverified; historical qualification results below do not validate this newer UI.
+
+This is a separate **test application**, not the existing P2P iOS sample, a
+business server, or a capacity claim. The [RPC lab execution](../../../docs/rpc/vps-lab-runtime-20260929.md)
+records ten actual supplemental API-24 controls, nine real Android shell-file
+checks and nine earlier iPhone simulator XCTest methods,
+plus the produced APKs/unsigned device app and exact source bindings. Consult the
+[qualification record](../../../docs/rpc/qualification.md) for remaining gates.
+An unsigned device build is **not an installable iPhone package**: physical
+installation needs the owner's development team/signing and
+device access. Never supply Apple credentials or provisioning material to Git.
+The [device-testing handoff](../../../docs/rpc/device-testing-handoff.md) records
+the verified owner bundle, matching prepared JVM driver, source/hash verification, safe Android installation
+and the remaining physical-device checklist. An unsigned iPhone package still
+requires owner signing. The [mobile USB coordinator candidates](../../../docs/rpc/mobile-capacity.md)
+implement phone telemetry/control contracts but have not run on a physical USB
+device. Same-host JVM results cannot substitute for actual mobile telemetry.
+On official [Mac27/Xcode27](../../../docs/rpc/local-arm27-qualification.md), source
+`77aed5dcf5a7c96980affb61f5e828dac7973320` passed **13 application-hosted unit methods
+plus two UI methods**, including resources and sealed-file controls. Its unsigned
+ARM64 app and matching JVM driver retain that exact source/artifact binding;
+see the [verified checkpoint](../../../docs/rpc/mac27-continuation-status.md).
+Do not rerun these completed simulator methods for unrelated changes. Real wired
+CoreDevice behavior, signed installation, USB timing and physical resource series
+remain unverified. The earlier nine-method result keeps its historical scope.
+
+The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
+keeps its qualification factories limited to the two fixed synthetic echo procedures;
+its separate application factories also register the shared typed examples. This Swift UI and the
+Android debug-only `RpcLabActivity` use the same
+AppId, procedure descriptors, identity binding and trust semantics. Existing
+P2P behavior, its launchers and the Android release dependency graph are unchanged.
+
+## Current application flow (Android, iPhone and Desktop)
+
+1. Join the approved private LAN and choose **Host** or **Client**. The normal application observes an
+   eligible network automatically and uses an OS-assigned port. There is no **Use this Wi-Fi** confirmation
+   or manual address step in the normal flow. Unavailable/ambiguous networking is an error, not a fallback.
+2. The Client lists nearby advisory Host records. Select the intended Host, review its fingerprint and
+   explicitly confirm first-use trust. The Host shows the authenticated request with **Approve/Reject**.
+   Discovery, device names and addresses do not establish trust.
+3. After approval, only the explicitly selected, durably trusted Host reconnects automatically when its
+   matching identity is rediscovered. Offline, ambiguous or revoked identities do not select a replacement.
+   Authenticated access denial requires explicit **Request approval again**, not an automatic enrollment loop.
+4. Use the typed user/item/message forms and open **Request history** for previews, elapsed time, request
+   IDs and business/RPC outcomes. Host/client counters update automatically. Diagnostics and payload-bearing
+   request details have separate explicit Copy actions. Echo remains a diagnostic, not the main workflow.
+5. **Trusted devices** shows saved fingerprints and observed presence; **Revoke/Forget** requires new
+   approval. Stop retires network work while preserving protected identity/trust and window-owned history.
+   See the [parity guide](../../../docs/rpc/application-samples.md) for lifecycle limits and remaining device tests.
+
+## Legacy invitation/manual qualification flow
+
+The following instructions describe the retained explicit/manual qualification flows and older installed
+builds, **not** the default nearby application flow above. Do not require users of the new application
+screen to enter network settings or exchange invitations. Historical tests keep their original scope.
+
+1. Join your authorized Wi-Fi and open **P2pKit RPC**. Review the detected local
+   address, interface and private subnet, then tap **Use this Wi-Fi**. No CIDR,
+   interface or IP typing is needed on an unambiguous private IPv4 Wi-Fi network;
+   the host port defaults to `48123`. Detection reads the ordinary default path
+   and this device's actual address/netmask; it does not assume `en0` or `/24`.
+   iOS may offer additional Wi-Fi interfaces with no IPv4 address. Only the single
+   actually addressed Wi-Fi interface is considered; additional addressed choices,
+   aliases or unreadable Wi-Fi address/mask rows still fail closed. No interface is
+   forced, and a second public/invalid address is not silently discarded.
+   Repeated path entries are counted once only when their name **and** interface
+   index agree with each other and the current `if_nametoindex` lookup. Conflicting
+   or missing identities still block setup. Check details show bounded interface
+   names/indices and repetition counts, never SSIDs or pairing information.
+   Confirmation does **not** start RPC, trust a peer or prove multicast works.
+   Changing the detected network clears confirmation and stops the active role.
+   An ordinary idle-action role may survive a short app switch as described below;
+   other background transitions clear confirmation and require an explicit restart.
+   The shared strict LAN admission and original RPC deadlines remain unchanged.
+   If **Use this Wi-Fi** is disabled, the explanation beside it identifies the
+   current failed check, pending observation, already-confirmed state or active
+   RPC lifecycle. **Check Wi-Fi again** retires the old observer and passively
+   re-reads the default path and addresses while idle. It clears Wi-Fi confirmation,
+   not invitation/capacity inputs; it never starts RPC or changes network settings.
+   **Wi-Fi check details** shows the app's path/transport, IPv4 availability,
+   interface/address counts and numeric decoder errors without SSIDs or raw
+   rejected addresses. A visible Wi-Fi icon or working internet is not proof that
+   this app has an eligible private IPv4 Wi-Fi path. These observations are not
+   persistent telemetry, a permission reset or a multicast test.
+   **Advanced → Enter network settings manually** retains the original explicit
+   CIDR/interface/address configuration for approved setups such as IPv6 ULA or
+   routed private VLANs. Automatic setup refuses public, cellular/VPN, ambiguous,
+   noncontiguous-mask and point-to-point candidates rather than guessing. Neither
+   mode bypasses network permission or routing checks. Capacity and USB controls
+   are optional and collapsed; leave them empty for ordinary pairing. Invalid
+   setup displays **Cannot start RPC** and status beside the role buttons.
+2. Start exactly one host. Create a two-minute, one-use invitation on its local
+   administrator UI. Reveal it only on a trusted local display. The iPhone host
+   can render a QR locally; these minimal test UIs accept invitation text and do
+   not yet implement camera scanning. Treat the invitation as secret: use only
+   a trusted private transfer, never public posts, logs or clipboard sync.
+   On iPhone, **Copy invitation** works while the invitation remains hidden;
+   it never turns on **Reveal**. The active host must have a live invitation and
+   no operation in flight. Reveal remains a separate opt-in for text/QR display.
+   iOS uses a device-local,
+   expiring pasteboard item; Android marks the copy sensitive and attempts to
+   clear only its unchanged copy on expiry, replacement or role retirement.
+   Android cannot guarantee clipboard erasure after process death. Copying never
+   restarts the invitation's two-minute lifetime. An ordinary role with no action
+   or operation in flight can allow **up to 25 seconds** to switch apps for a
+   trusted transfer. Return before the limit and before tapping Pair or echo;
+   iOS may refuse or end background time earlier. Stop, capacity runs and busy
+   operations do not gain this allowance. Clipboard copying alone does not
+   transfer or approve a peer.
+3. Tap **Start client** on the other iPhone (or create the other platform's
+   client) and submit that host invitation. Starting a client does not connect it.
+   On the host, pending requests appear automatically. Verify the complete client
+   fingerprint locally, then approve **that exact** request. Enrollment-only connections
+   cannot invoke procedures. Reconnection requires the durable host pin and
+   the same independently policy-validated numeric endpoint.
+4. Try **users.get**, **items.list** or **message.send**, then inspect **Request history**.
+   The legacy **Diagnostic 1 KiB echo** is under **Reconnect or run a larger test**.
+   The separate 20 × 1 MiB request/reply
+   experiment at concurrency two is under **Reconnect or run a larger test**.
+   The UI reports counts, elapsed time and typed
+   infrastructure/execution evidence, never payload contents or raw exceptions.
+   These small interactive experiments do not run the 30-minute workload.
+5. Exercise explicit cancellation, Stop, restart, revoked trust and permission
+   denial. A timeout, disconnect or cancellation may leave a remote outcome
+   unknown and never authorizes an unsafe automatic replay.
+
+The optional 128-pin import replaces this test host's approved synthetic-client
+set **only after an explicit local administrator acknowledgement**. It requires
+exactly 128 distinct well-formed public fingerprints, not private keys. Never
+import production/custodian identities. Test provisioning and telemetry for a
+physical capacity run still require the approved coordinator and actual
+host-process measurements; filling this field is not a capacity test.
+
+For the candidate iPhone USB flow, enter a **new** run label and press
+**Prepare new USB slot (RPC stays stopped)**. This publishes the compiled source
+and actual installed signed-executable hash, not trust or a listener. The Mac
+coordinator copies bounded input and an exact name/length/SHA-256 seal into
+staging names. The app alone validates and atomically creates canonical input;
+raw `devicectl` copies are not assumed atomic or create-only. After coordination,
+load the slot, review the network and all 128 pins, explicitly approve, then
+start the host. Never reuse a label or overwrite an old slot. Stop/closed records
+must prove native closure and pin retirement; retain the private files as evidence.
+Real wired-device schema, transfer timing and signed-artifact matching remain
+unverified until an owner-selected iPhone is available.
+
+## Simple Android setup
+
+The debug-only **P2pKit RPC** launcher now follows the same setup flow: review
+the detected network, tap **Use this Wi-Fi**, then explicitly choose **Start
+host** or **Start client**. Port `48123` is the default. No IP, CIDR or interface
+typing is required for an unambiguous private IPv4 Wi-Fi default network.
+**Advanced** retains manual setup, capacity provisioning and USB sessions;
+**Reconnect or run a larger test** contains the optional larger echo controls.
+Invalid setup shows **Cannot start RPC** without creating a runtime.
+
+Android reads `ConnectivityManager`'s current default network and its real
+`LinkProperties` address/prefix, cross-checking the named system interface and
+its IPv4 address/prefix. It does not assume `wlan0` or `/24`, scan for SSIDs,
+request location, bind the process to another network or change network settings.
+Cellular/VPN/mixed paths, aliases, mismatched addresses, public addresses and
+unsupported host ranges fail closed. Network identity is part of confirmation,
+even when a replacement network has the same local address. Refresh is passive;
+network changes clear automatic confirmation and retire the active role. Only
+the bounded ordinary app-switch allowance below preserves an idle-action role;
+other background transitions retire it. Manual/USB configuration remains
+separate and explicitly reviewed.
+
+**Wi-Fi check details** explains the app's default transport, interface and
+address-count checks, not peer connectivity or multicast. Neither confirmation
+nor client creation trusts or connects a peer; the invitation/approval flow
+above remains required. These deliberately English debug-harness controls are
+not a localized production release. They retain the secure Android window and
+existing API 37 local-network permission request; no permission is auto-granted.
+
+Focused regression classes are `RpcLabWifiTest`, `RpcLabNetworkSetupTest`,
+`AndroidRpcLabWifiObserverTest` and the existing `RpcLabRuntimeOwnerTest` under
+`samples/p2p-sample-android/src/testDebug`. Run them with
+`:p2p-sample-android:testDebugUnitTest --tests '<fully-qualified-class>'`; build
+the installable debug sample with `:p2p-sample-android:assembleDebug`. Host tests
+do not establish device Wi-Fi, pairing, LAN or ART qualification.
+
+## Security and lifecycle
+
+- iPhone identity uses the existing device-only OS store. Approval records use
+  non-synchronizable, `WhenUnlockedThisDeviceOnly` Keychain items, scoped by
+  AppId/purpose. Android approval records use an Android Keystore AES-GCM key
+  and fsynced atomic files under `noBackupFilesDir`. Corrupt, inaccessible or
+  missing-key records fail closed; ordinary UI actions never silently erase them.
+- Wi-Fi suggestions require a separate local confirmation and are rechecked at
+  confirmation, startup and resuming a retained role. Monitoring is retained only
+  during the bounded ordinary app-switch allowance, otherwise retired off-foreground;
+  callbacks from an old observation cannot configure a later session. No SSID/location access,
+  probe packets, automatic trust or new network/security entitlement is added.
+- No process arguments, URLs/intents, preferences or logs configure peers or
+  import invitations. No cloud endpoint or general DNS fallback is added.
+- These are interactive test apps, not unlimited background servers. An ordinary
+  role with no action or operation in flight may retain its existing state for
+  one non-renewing **25-second** app switch. The original two-minute invitation
+  deadline never restarts. iOS uses a finite OS background task, with no new
+  background entitlement; refusal, earlier native expiry or protected-data loss
+  retires the role. Busy, starting and capacity/USB runs still retire on leaving.
+  Stop and Wi-Fi changes also end retention; no new role or action starts in the
+  background. Screens conceal invitations while inactive. Permission prompts may
+  still require selecting the role again after granting access.
+- Android retention requires the same confirmed automatic Wi-Fi and a visible,
+  finite foreground service (the short-service type on API 34+). Manual setup,
+  screen-off/keyguard, activity destruction or service failure retires the role;
+  no notification permission is silently granted and no stopped role restarts.
+- Swift retains the actual Kotlin cancellation handle. Cancelling a Swift
+  `Task` alone is not enough. The run owner awaits late-created resources and
+  native close, rejects new roles until cleanup finishes, and retains ownership
+  after a failed close. Android likewise joins startup and closes late results.
+- iOS obscures inactive app snapshots; unlike Android's `FLAG_SECURE`, it cannot
+  generally prevent user screenshots. Treat the local administrator display
+  accordingly. Immutable strings cannot promise guaranteed memory zeroization.
+- iOS requires local-network permission. The maintained secure Bonjour
+  declaration remains in the XcodeGen spec even though this lab does not
+  advertise/discover. Android API 37 permission handling remains separate from
+  older-API ART controls. Neither app requests firewall/security exceptions.
+
+## Build and reproducible verification
+
+Use an explicitly authorized, admitted native execution context with a clean
+committed source candidate and the repository's strict locks/checksums. The
+feature's public framework is not a downloaded or published substitute.
+
+The iPhone XcodeGen source is `project.yml` here. Generate with the absolute
+`samples/p2p-sample-rpc/build/phone-ios` directory as **both** `--project-root`
+and `--project`, and the absolute `project.yml` path as `--spec`;
+generated projects/plists must not replace tracked source. Both Xcode schemes
+run [`check-xcframework.sh`](check-xcframework.sh), which invokes the existing
+typed Gradle provenance task for the sample's **Debug** XCFramework, checks its
+clean commit binding and refuses stale binaries. This lab build configuration
+must be recorded for any future physical measurement.
+When `P2PKIT_GRADLE_EXECUTOR` selects the native executor, also bind
+`P2PKIT_PYTHON3` to the owner's absolute installed Python executable. The phone
+runner does this automatically; Xcode's modified `PATH` must not select an
+unrelated interpreter for the mandatory nested verifier.
+
+[`run-rpc-phone-ios-controls.py`](../../../scripts/run-rpc-phone-ios-controls.py)
+requires owner authorization, an admitted native owner, installed XcodeGen and
+an explicit installed simulator runtime. It generates and checks the actual
+project's framework/plist references and first establishes one **new** exact
+simulator's cold readiness within the original bound, before compiling the
+current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
+round-trip/namespace/revocation/retirement control, the resource/Mach-right
+retirement control, six private-file/sealed-input controls, and six UI controls.
+The current **77-unit/7-UI** inventory includes rejection of LF/CRLF-suffixed run
+labels before a USB slot is created, four input-feedback controls, and ten
+Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
+explicit confirmation, changed/stale observations, manual-mode isolation,
+startup revalidation, pre-factory Stop and actual monitor retirement. Five more
+regressions cover exact path/address rejection reasons, candidate/reason consistency,
+passive refresh, input preservation, retired callbacks and lifecycle guards.
+Two additional unit regressions distinguish extra unaddressed Wi-Fi interfaces
+from genuinely ambiguous or incompletely decoded address lists. Four more cover
+verified repeated interface identities, conflicting mappings, unchanged address/path
+rejections, and opt-in diagnostic output without network addresses. Twelve further
+app-switch controls cover native allowance refusal,
+native/timer expiry, synchronous and late callbacks, unchanged monotonic deadlines,
+exactly-once task retirement, all busy/capacity eligibility combinations, and
+unchanged idle/starting cleanup plus protected-data-loss retirement. These injected controls do not promise
+that iOS grants background time on every physical device. Two masked-copy
+regressions cover live original-deadline
+availability and unchanged idle/client-startup/Stop/background admission. Copy
+does not require or enable Reveal; local-only clipboard and expiry policy remain
+unchanged. UI checks
+require hidden technical fields on launch and immediately visible explanations
+for unconfirmed Wi-Fi and empty manual setup on both role buttons, plus visible
+Wi-Fi diagnostics and refresh without approval or role selection. These English
+test-app screens do not claim a localized production UI. Earlier results do not
+cover the new regressions; deterministic injected address tests do not qualify
+physical Wi-Fi or multicast behavior.
+
+For an authorized local investigation, a **Debug** app launched with
+`--rpc-wifi-diagnostic` emits `RPC_WIFI_DIAGNOSTIC` JSON to its attached console
+when its Wi-Fi observation changes. This includes the compiled source SHA,
+sanitized check details and current confirmation-enabled state, not IP addresses,
+subnets, invitations or peer data. Normal launches emit nothing, and Release
+builds omit this diagnostic. It only observes: it never confirms Wi-Fi, chooses
+a role, sends a packet or changes settings. An available observation is not a
+peer-connectivity or multicast pass.
+
+The runner assesses individual actual xcresult methods
+(no skips), prepares an **unsigned**
+arm64 device app, hashes artifacts and verifies exact simulator Shutdown and
+deletion of only the newly created device.
+Native ownership finalization is an additional prerequisite for accepting its
+result. Simulator results do not satisfy the separate supported-host matrix,
+dedicated ARM cancellation gate, physical interoperability or capacity gates.
+
+The real Keychain control must run in the application-hosted XCTest process.
+An unbundled Kotlin/Native test executable has no application Keychain
+entitlement (the observed OS status is `errSecMissingEntitlement`, `-34018`).
+It is not a mocked/skipped passing Native test. The fixed synthetic-only Kotlin
+control creates its own fresh namespace; it cannot select or erase the UI's
+stable approvals. Failure of this required XCTest still fails the phone gate.
+
+On Android, build both `:p2p-sample-android:assembleDebug` and
+`:p2p-sample-android:assembleDebugAndroidTest` in one successful source-bound
+producer. The app adds a separate **P2pKit RPC Lab** debug launcher.
+[`run-rpc-android-controls.py`](../../../scripts/run-rpc-android-controls.py)
+requires that finalized producer, an already installed API 24 x86_64 image and
+the native executor. Installed SDK command-line tools and build-tools are also
+required: `apkanalyzer` must inspect the **actual test APK**, including both
+explicit instrumentation entries, before an emulator starts. AGP injects the
+configured default into the first manifest entry, so the maintained API-37
+runner must remain first and the supplemental RPC runner second; do not change
+the maintained default or weaken the binary-manifest guard.
+
+The supplemental driver creates a new software AVD with 2-GiB userdata and a
+private loopback ADB server,
+executes all ten explicit RPC/Keystore/Activity/resource/file controls, and verifies cleanup.
+This does not replace the maintained API 37/24/25 ART suite, API 37 LAN-permission
+gate or real Android hosting tests. No phone pass follows from merely installing
+an APK or compiling JVM tests.
+
+The produced Android APK is debug-signed. Do not silently uninstall an existing
+sample, erase its approvals, or reuse production signing material if Android
+rejects an update signed by a different test key. Use a fresh owner-approved
+test device/profile or explicitly coordinate any data-destructive replacement.
+
+Run logs, source/tool hashes, xcresults and app manifests stay in the newly owned
+private evidence location. Share only reviewed sanitized summaries. All Release
+Foundation **NOT_READY**, HOLDs and external gates remain unchanged.
+
+### Role feedback and safe event logs
+
+The main screen always identifies **Host**, **Client**, or **No active role**. Use
+one host and one client. After **Pair** on the client, keep both apps open; the host
+shows pending requests automatically. **Refresh status and pairing requests** is
+an optional recheck. Approve only the request
+whose fingerprint you independently verify on the client. The connecting message
+is an instruction, not proof that the host has received a request; already trusted
+peers can connect without a new approval. Only a connected client should send echo.
+
+**Copy diagnostics** exports the compiled source SHA, up to 64 memory-only events
+and the last failure code. Refresh and Stop do not erase that failure. Entries contain fixed action names,
+allowlisted states/failure codes and numeric counters; never invitation contents,
+peer identities, network addresses, payloads or raw exception descriptions. There
+is no event-log file or system telemetry. Logs reset when the app process exits
+and are not qualification evidence. Copy is explicit, device-local and expires
+after two minutes; it replaces the clipboard, including an earlier invitation.
+Copy the still-live invitation again if needed. **Recent events** is selectable
+in-app. Host refresh includes observed pending requests; client refresh does not
+misrepresent the host-only connected-client count as client connectivity.
+
+For the ordered two-phone pairing walkthrough, see [manual testing](../MANUAL-TESTING.md).
+
+### Live foreground status
+
+**Live RPC status** passively samples the current ordinary role every 500 ms while
+the app is foreground. Host cards show **Clients**, **Pending**, **Completed** and
+**Queued**; client cards show **Connected** (1 only for observed Ready), **In flight**,
+**Completed** and **Queued**. Before observation, dashes mean unknown—not zero
+clients or proof of connectivity. Pending rows appear and disappear automatically;
+every approval still requires your explicit verification and tap.
+
+The observer stops on backgrounding, Stop and role retirement, including during the
+existing bounded app-switch allowance. Foreground return revalidates Wi-Fi before
+resuming observation. A generation guard rejects late callbacks; unchanged samples
+do not repeatedly update the view or log. Read failures clear stale cards and pending
+approval rows and record only a typed error. Recovery restores the current sample.
+Observation never overwrites action/error status, sends RPC, approves peers, extends
+timeouts or polls in the background. USB capacity sessions retain their separate
+existing controls and are not enrolled in this automatic UI poller.
+Their panel explicitly marks live cards unavailable; an explicit Refresh still
+updates the diagnostic status/log without inventing a manual pending-request count.

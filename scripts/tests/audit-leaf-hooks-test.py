@@ -33,7 +33,7 @@ BASH = os.environ.get("P2PKIT_TEST_BASH", "bash")
 HEAD = "1234567890abcdef1234567890abcdef12345678"
 UDID = "11111111-1111-1111-1111-111111111111"
 SLICES = ("ios-arm64", "ios-arm64_x86_64-simulator")
-PROJECTS = ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android")
+PROJECTS = ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android")
 EDGES = ("compileAndroidMain", "buildAndroidAbi", "checkAndroidAbi")
 PROVENANCE_TASK = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
 TAIL = ["--no-daemon", "--max-workers=2", "--console=plain"]
@@ -152,8 +152,22 @@ if entrypoint == "lock":
         label = "indirect"
     elif selector == ["help", "--write-locks", "--dry-run"]:
         label = "ordinary-write"
+    elif selector == [":p2p-core:resolveDokkaMigrationLocks", "--dry-run"]:
+        label = "dokka-owner-without-writer"
+    elif selector == [":p2p-core:resolveDokkaMigrationLocks", "--write-locks", "--dry-run"]:
+        label = "dokka-owner-partial-write"
     elif selector == ["rALl", "--write-locks", "--dry-run", "--configure-on-demand"]:
         label = "configure-on-demand-write"
+    elif selector[:4] == ["rALl", "--write-locks", "--dry-run", "--init-script"]:
+        assert len(selector) == 5, selector
+        event["initScript"] = Path(selector[4]).read_text(encoding="utf-8")
+        label = Path(selector[4]).name.removesuffix(".init.gradle.kts")
+        assert label in ("dokka-unresolvable", "dokka-consumable"), label
+        assert 'tasks.named("dokkaHtml").get()' in event["initScript"]
+        assert 'configurations.getByName("dokkaHtmlRuntime")' in event["initScript"]
+        assert "configurations.create" not in event["initScript"]
+        assert ("live.isCanBeResolved = false" if label == "dokka-unresolvable"
+                else "live.isCanBeConsumed = true") in event["initScript"]
     else:
         assert selector == ["rALl", "--write-locks", "--dry-run"], selector
         label = "authorized"
@@ -164,7 +178,11 @@ if entrypoint == "lock":
         "abbreviated": "resolveAndLockAll must be invoked with --write-locks",
         "indirect": "resolveAndLockAll must be invoked with --write-locks",
         "ordinary-write": "--write-locks may only be used with resolveAndLockAll",
+        "dokka-owner-without-writer": "Dokka migration lock refresh requires resolveAndLockAll",
+        "dokka-owner-partial-write": "--write-locks may only be used with resolveAndLockAll",
         "configure-on-demand-write": "--write-locks requires --no-configure-on-demand",
+        "dokka-unresolvable": "Dokka migration lock refresh requires a resolvable, non-consumable configuration",
+        "dokka-consumable": "Dokka migration lock refresh requires a resolvable, non-consumable configuration",
     }
     mutation = os.environ.get("LEAF_FAKE_POLICY_MUTATION", "")
     if label != "authorized":
@@ -182,6 +200,19 @@ if entrypoint == "lock":
         output = ":resolveAndLockAll SKIPPED\n"
         output += "".join(":" + module + ":check SKIPPED\n"
                           for module in modules if module != "iosApp")
+        docs = ("p2p-core", "p2p-transport-lan", "p2p-rpc",
+                "p2p-network-provisioning-android", "p2p-network-provisioning-desktop")
+        output += "".join(":" + module + ":dokkaGeneratePublicationHtml SKIPPED\n" for module in docs)
+        output += "".join(":" + module + ":resolveDokkaMigrationLocks SKIPPED\n" for module in docs)
+        output += ":cyclonedxBom SKIPPED\n"
+        if mutation == "missing-dokka-owner":
+            output = output.replace(":p2p-core:resolveDokkaMigrationLocks SKIPPED\n", "")
+        if mutation == "missing-rpc-dokka":
+            output = output.replace(":p2p-rpc:dokkaGeneratePublicationHtml SKIPPED\n", "")
+        if mutation == "missing-sbom":
+            output = output.replace(":cyclonedxBom SKIPPED\n", "")
+        if mutation in ("selected-dokkaHtml", "selected-dokkaJavadoc"):
+            output += ":p2p-rpc:" + mutation.removeprefix("selected-") + " SKIPPED\n"
         if mutation == "missing-authorized-task":
             output = output.replace(":resolveAndLockAll SKIPPED\n", "")
         if mutation == "missing-module-check":
@@ -189,13 +220,13 @@ if entrypoint == "lock":
         if mutation == "changed-lockfile":
             (root / "fixture.gradle.lockfile").write_text("unexpected mutation\n", encoding="utf-8")
 elif entrypoint == "abi":
-    expected = [":p2p-core:check", ":p2p-transport-lan:check",
+    expected = [":p2p-core:check", ":p2p-transport-lan:check", ":p2p-rpc:check",
                 ":p2p-network-provisioning-android:check", "--dependency-verification=strict",
                 "--dry-run", "--console=plain"]
     assert arguments == expected, arguments
     if kind == "executor":
         assert options["--purpose"] == "android-abi-graph", options
-    for module in ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android"):
+    for module in ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android"):
         for task in ("compileAndroidMain", "buildAndroidAbi", "checkAndroidAbi"):
             line = ":" + module + ":" + task + " SKIPPED\n"
             if line.rstrip("\n") != os.environ.get("LEAF_FAKE_MISSING_EDGE"):
@@ -518,9 +549,9 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
         self.assertEqual(event["pid"], event["lock"]["worker"])
         self.assertNotEqual(event["lock"]["owner"], event["pid"])
 
-    def test_lock_policy_default_and_adapter_preserve_all_five_leaves(self):
+    def test_lock_policy_default_and_adapter_preserve_all_nine_leaves(self):
         expected_labels = ["abbreviated", "indirect", "ordinary-write",
-                           "configure-on-demand-write", "authorized"]
+                           "dokka-owner-without-writer", "dokka-owner-partial-write", "configure-on-demand-write", "dokka-unresolvable", "dokka-consumable", "authorized"]
         baseline = {path: path.read_bytes() for path in self.lockfiles}
         vectors = []
         for adapter in (False, True):
@@ -531,21 +562,24 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
                 self.assertIn("RESULT: PASS", result.stdout)
                 leaves = self.leaves()
                 self.assertEqual(expected_labels, [leaf["label"] for leaf in leaves])
-                self.assertEqual([1, 1, 1, 1, 0], [leaf["productExitCode"] for leaf in leaves])
-                self.assertEqual(["executor" if adapter else "wrapper"] * 5,
+                self.assertEqual([1, 1, 1, 1, 1, 1, 1, 1, 0], [leaf["productExitCode"] for leaf in leaves])
+                self.assertEqual(["executor" if adapter else "wrapper"] * 9,
                                  [leaf["kind"] for leaf in leaves])
-                self.assertEqual(0 if adapter else 5,
+                self.assertEqual(0 if adapter else 9,
                                  sum(bool(event.get("stop")) for event in self.events()))
                 normalized = []
                 for leaf in leaves:
                     self.assertEqual(str(self.repo), leaf["actualCwd"])
                     self.assertEqual(TAIL, leaf["argv"][-3:])
                     argv = list(leaf["argv"])
-                    if leaf["label"] == "indirect":
+                    if leaf["label"] == "indirect" or leaf["label"] in ("dokka-unresolvable", "dokka-consumable"):
                         init = Path(argv[argv.index("--init-script") + 1])
                         self.assertIn(" ", str(init))
                         self.assertIn("Ω", str(init))
-                        self.assertIn('tasks.register("indirectLockRefresh")', leaf["initScript"])
+                        if leaf["label"] == "indirect":
+                            self.assertIn('tasks.register("indirectLockRefresh")', leaf["initScript"])
+                        else:
+                            self.assertIn('configurations.getByName("dokkaHtmlRuntime")', leaf["initScript"])
                         argv[argv.index("--init-script") + 1] = "<owned-init-script>"
                     normalized.append(argv)
                     if adapter:
@@ -554,8 +588,8 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
                         self.assertEqual(leaf["argv"], receipt["requestedArgv"])
                         self.assertEqual(0, receipt["stopExitCode"])
                 vectors.append(normalized)
-                self.assertIn("--configure-on-demand", leaves[3]["argv"])
-                self.assertNotIn("--no-configure-on-demand", leaves[3]["argv"])
+                self.assertIn("--configure-on-demand", leaves[5]["argv"])
+                self.assertNotIn("--no-configure-on-demand", leaves[5]["argv"])
                 self.assertNotIn(":iosApp:check SKIPPED", leaves[-1]["productStdout"])
                 modules = re.findall(r'^include\(":([^"\n]+)"\)$',
                                      (self.repo / "settings.gradle.kts").read_text(), re.M)
@@ -565,8 +599,10 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
                 self.assertEqual(baseline, {path: path.read_bytes() for path in self.lockfiles})
         self.assertEqual(vectors[0], vectors[1])
 
-    def test_all_four_policy_diagnostics_and_preexecution_rejections_remain_required(self):
-        labels = ["abbreviated", "indirect", "ordinary-write", "configure-on-demand-write"]
+    def test_all_eight_policy_diagnostics_and_preexecution_rejections_remain_required(self):
+        labels = ["abbreviated", "indirect", "ordinary-write", "dokka-owner-without-writer",
+                  "dokka-owner-partial-write", "configure-on-demand-write",
+                  "dokka-unresolvable", "dokka-consumable"]
         for index, label in enumerate(labels):
             for mutation, expected in (("wrong-diagnostic-", "did not report"),
                                        ("project-task-", "executed a project task")):
@@ -582,6 +618,11 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
         for mutation, expected in (
             ("missing-authorized-task", "did not select resolveAndLockAll"),
             ("missing-module-check", "lock refresh omitted :p2p-core:check"),
+            ("missing-rpc-dokka", "lock refresh omitted :p2p-rpc:dokkaGeneratePublicationHtml"),
+            ("missing-dokka-owner", "lock refresh omitted :p2p-core:resolveDokkaMigrationLocks"),
+            ("missing-sbom", "lock refresh omitted :cyclonedxBom"),
+            ("selected-dokkaHtml", "lock refresh selected disabled compatibility task :p2p-rpc:dokkaHtml"),
+            ("selected-dokkaJavadoc", "lock refresh selected disabled compatibility task :p2p-rpc:dokkaJavadoc"),
             ("changed-lockfile", "modified a dependency lockfile"),
         ):
             with self.subTest(mutation=mutation):
@@ -589,7 +630,7 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
                 result = self.lock_policy(adapter=True, LEAF_FAKE_POLICY_MUTATION=mutation)
                 self.assert_status(result, 1)
                 self.assertIn(expected, result.stderr)
-                self.assertEqual(5, len(self.leaves()))
+                self.assertEqual(9, len(self.leaves()))
                 self.assertNotIn("RESULT: PASS", result.stdout)
 
     def test_expected_red_never_hides_failed_or_unbound_executor_receipts(self):
@@ -622,8 +663,8 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
         self.assertFalse((work / "locks-before").exists())
         self.assertFalse((work / "locks-after").exists())
         leaves = self.leaves()
-        self.assertEqual(5, len(leaves))
-        self.assertEqual([1, 1, 1, 1, 0], [leaf["productExitCode"] for leaf in leaves])
+        self.assertEqual(9, len(leaves))
+        self.assertEqual([1, 1, 1, 1, 1, 1, 1, 1, 0], [leaf["productExitCode"] for leaf in leaves])
         for leaf in leaves:
             self.assertEqual(str(work), leaf["workDirectory"])
             log = work / (leaf["label"] + ".log")
@@ -632,6 +673,10 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
             receipt = work / (leaf["label"] + ".log.receipt.json")
             self.assertEqual(json.dumps(leaf["receipt"]).encode("utf-8"), receipt.read_bytes())
         self.assertEqual(leaves[1]["initScript"].encode("utf-8"), (work / "indirect.init.gradle.kts").read_bytes())
+        for leaf in leaves:
+            if leaf["label"] in ("dokka-unresolvable", "dokka-consumable"):
+                self.assertEqual(leaf["initScript"].encode("utf-8"),
+                                 (work / (leaf["label"] + ".init.gradle.kts")).read_bytes())
         self.assertEqual(self.env["LEAF_FAKE_WORK_SENTINEL"].encode("utf-8"),
                          (work / "adapter-owned-sentinel.txt").read_bytes())
         self.assertFalse((work / "gradle-stop.log").exists(), "Only the real adapter may stop its owned leaf")
@@ -833,7 +878,7 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
                 result = self.abi(adapter=adapter, LEAF_FAKE_PRODUCT_STATUS="42")
                 self.assert_status(result, 1)
                 self.assertIn("task graph dry-run failed", result.stderr)
-                self.assertEqual(9, len(self.leaves()[0]["productStdout"].splitlines()))
+                self.assertEqual(12, len(self.leaves()[0]["productStdout"].splitlines()))
                 self.assertNotIn("RESULT: PASS", result.stdout)
 
     def test_posix_provenance_default_and_adapter_preserve_verification_and_head(self):

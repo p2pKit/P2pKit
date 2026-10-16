@@ -8,6 +8,9 @@ public final class DiagnosticDirectoryLockProbe {
     private DiagnosticDirectoryLockProbe() {}
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 2 && !args[1].equals(System.getProperty("p2pkit.test.nativeLockProbe.option"))) {
+            throw new IllegalStateException("The appended JVM option did not reach the native lock probe");
+        }
         try (RandomAccessFile file = new RandomAccessFile(args[0], "rw")) {
             FileLock claim = file.getChannel().tryLock();
             if (claim == null) {

@@ -110,7 +110,8 @@ import java.io.File
 class P2pKitViewModel internal constructor(
     application: Application,
     private val kitFactories: SampleKitFactories?,
-    cleanupDispatcher: CoroutineDispatcher
+    cleanupDispatcher: CoroutineDispatcher,
+    private val processOwner: SampleProcessOwner = SampleProcessOwnership.owner,
 ) : AndroidViewModel(application) {
     constructor(application: Application) : this(application, null, Dispatchers.Default)
 
@@ -127,6 +128,11 @@ class P2pKitViewModel internal constructor(
     val localPairingInfo: StateFlow<LocalPairingInfo?> = _localPairingInfo.asStateFlow()
 
     // --- lifecycle ---------------------------------------------------------
+
+    private val rpcNavigationNotice = MutableStateFlow<String?>(null)
+    internal val rpcNavigationMessage: StateFlow<String?> = rpcNavigationNotice.asStateFlow()
+    private val activeRpcSection = MutableStateFlow<SampleRpcSectionToken?>(null)
+    internal val rpcSection: StateFlow<SampleRpcSectionToken?> = activeRpcSection.asStateFlow()
 
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
@@ -290,6 +296,8 @@ class P2pKitViewModel internal constructor(
 
     // --- internals --------------------------------------------------------
 
+    @Volatile
+    private var ordinaryProcessToken: SampleProcessOwner.Token? = null
     private val roomKit = MutableStateFlow<P2pKit?>(null)
     private val smokeKit = MutableStateFlow<SampleSmokeKitOwner?>(null)
     private var kit: P2pKit?
@@ -335,9 +343,15 @@ class P2pKitViewModel internal constructor(
             SampleRunAdmission(running, starting, stopping, cleanupPending, smokeBusy)
         },
         roomKit,
-        smokeKit
-    ) { admission, ownedRoom, ownedSmoke ->
-        admission.copy(roomOwnsKit = ownedRoom != null, smokeOwnsKit = ownedSmoke != null)
+        smokeKit,
+        activeRpcSection,
+        sampleRpcRuntimeOccupancy(),
+    ) { admission, ownedRoom, ownedSmoke, rpcEntry, rpcOccupied ->
+        admission.copy(roomOwnsKit = ownedRoom != null, smokeOwnsKit = ownedSmoke != null,
+            rpcOwnsSection = rpcEntry != null, rpcRuntimeOccupied = rpcOccupied)
+    }.combine(processOwner.state) { admission, processOwner ->
+        admission.copy(anotherProcessOwner = processOwner != null &&
+            processOwner !== ordinaryProcessToken && processOwner !== activeRpcSection.value)
     }.distinctUntilChanged()
 
     /** Actions read synchronously; a not-yet-recomposed button must not bypass admission. */
@@ -348,8 +362,55 @@ class P2pKitViewModel internal constructor(
         cleanupPending = _cleanupPending.value,
         smokeBusy = _kmpSmokeBusy.value,
         roomOwnsKit = kit != null,
-        smokeOwnsKit = smokeKit.value != null
+        smokeOwnsKit = smokeKit.value != null,
+        rpcOwnsSection = activeRpcSection.value != null,
+        rpcRuntimeOccupied = sampleRpcRuntimeOccupied(),
+        anotherProcessOwner = processOwner.state.value.let { owner ->
+            owner != null && owner !== ordinaryProcessToken && owner !== activeRpcSection.value
+        },
     )
+
+    /** Reserve synchronously: a queued Room/KMP action must fail before the old UI is disposed. */
+    internal fun enterRpcSection(): SampleRpcSectionToken? {
+        if (viewModelCleared || !appForeground || !currentRunAdmission().canEnterRpc) return null
+        val entry = processOwner.acquire(SampleProcessOwner.Lane.RpcSection) ?: return null
+        check(activeRpcSection.compareAndSet(null, entry))
+        rpcNavigationNotice.value = null
+        return entry
+    }
+
+    /** Fixed navigation request only. It cannot start a role, retry later, import settings, or approve trust. */
+    internal fun openRpcFromNavigation() {
+        if (activeRpcSection.value != null) return
+        if (enterRpcSection() == null) {
+            rpcNavigationNotice.value = "RPC was not opened. A sample owner still holds this process. " +
+                "Stop Room or KMP smoke and finish cleanup before retrying; " +
+                "failed final cleanup may require app restart."
+        }
+    }
+
+    /** Invoked only by the entry's verified-cleanup completion, never a generic navigation button. */
+    internal fun leaveRpcSection(entry: SampleRpcSectionToken): Boolean {
+        if (viewModelCleared || !appForeground) return false
+        if (!activeRpcSection.compareAndSet(entry, null)) return false
+        check(processOwner.release(entry))
+        return true
+    }
+
+    private fun reserveOrdinaryProcess(): SampleProcessOwner.Token? {
+        // Cleanup publishes terminal flags before releasing its lease; stale UI callbacks must fail closed.
+        if (ordinaryProcessToken != null) return null
+        return processOwner.acquire(SampleProcessOwner.Lane.Ordinary, ::sampleRpcRuntimeOccupied)
+            ?.also { ordinaryProcessToken = it }
+    }
+
+    /** Failed close retains both the kit reference and this process lease, including after VM destruction. */
+    private fun releaseOrdinaryProcessIfIdle() {
+        val token = ordinaryProcessToken ?: return
+        if (kit != null || smokeKit.value != null || _isStarting.value || _isStopping.value ||
+            _kmpSmokeBusy.value) return
+        if (processOwner.release(token) && ordinaryProcessToken === token) ordinaryProcessToken = null
+    }
 
     // --- intents from the UI ----------------------------------------------
 
@@ -476,6 +537,7 @@ class P2pKitViewModel internal constructor(
         }
         if (!currentRunAdmission().canRunKmpSmoke) return
         val episode = foregroundEpisodeForAction() ?: return
+        val processToken = reserveOrdinaryProcess() ?: return
         _kmpSmokeBusy.value = true
         _kmpSmokeResult.value = "Running KMP advertise/discover/connect/send/close/stop…"
         pendingSmokeJob = viewModelScope.launch {
@@ -511,6 +573,13 @@ class P2pKitViewModel internal constructor(
                 }
                 _kmpSmokeBusy.value = false
             }
+        }.also { job ->
+            job.invokeOnCompletion {
+                if (ordinaryProcessToken === processToken) {
+                    _kmpSmokeBusy.value = false
+                    releaseOrdinaryProcessIfIdle()
+                }
+            }
         }
     }
 
@@ -533,6 +602,7 @@ class P2pKitViewModel internal constructor(
                     .onFailure { _kmpSmokeResult.value = KMP_CLEANUP_UNRESOLVED }
             } finally {
                 _kmpSmokeBusy.value = false
+                releaseOrdinaryProcessIfIdle()
             }
         }
     }
@@ -587,6 +657,7 @@ class P2pKitViewModel internal constructor(
             return
         }
         deviceName = trimmedName
+        val processToken = reserveOrdinaryProcess() ?: return
         _isStarting.value = true
         val choice = reconnectChoice
         val ctx = getApplication<Application>().applicationContext
@@ -669,6 +740,7 @@ class P2pKitViewModel internal constructor(
         } catch (t: Throwable) {
             releaseDiagnosticInstrumentation()
             _isStarting.value = false
+            releaseOrdinaryProcessIfIdle()
             Log.e(LOG_TAG, "kit create failed; errorType=${SampleConsole.failure(t)}")
             appendSystemMessage("start failed: ${t.message ?: t::class.simpleName}")
             return
@@ -830,6 +902,13 @@ class P2pKitViewModel internal constructor(
                 scope.cancel()
             } finally {
                 _isStarting.value = false
+                releaseOrdinaryProcessIfIdle()
+            }
+        }.invokeOnCompletion {
+            // start(); stop() can cancel startup before its body/finally has ever entered.
+            if (ordinaryProcessToken === processToken) {
+                _isStarting.value = false
+                releaseOrdinaryProcessIfIdle()
             }
         }
 
@@ -1974,6 +2053,7 @@ class P2pKitViewModel internal constructor(
             } finally {
                 releaseDiagnosticInstrumentation()
                 _isStopping.value = false
+                releaseOrdinaryProcessIfIdle()
             }
         }
     }
@@ -1983,6 +2063,9 @@ class P2pKitViewModel internal constructor(
         appForeground = false
         foregroundEpisode += 1
         provisioningUi.detach()
+        // Retire only the UI lease. Existing RpcLabProcessRuntime still blocks ordinary acquisition until close.
+        val rpcEntry = activeRpcSection.value
+        if (rpcEntry != null && activeRpcSection.compareAndSet(rpcEntry, null)) processOwner.release(rpcEntry)
         retireForegroundRestore()
         releaseDiagnosticInstrumentation()
         diagnostics.shutdown()
@@ -2023,6 +2106,8 @@ class P2pKitViewModel internal constructor(
                     }
             }
             _kmpSmokeBusy.value = false
+            _isStarting.value = false
+            releaseOrdinaryProcessIfIdle()
         }
         finalCleanup.invokeOnCompletion { cleanupScope.cancel() }
     }

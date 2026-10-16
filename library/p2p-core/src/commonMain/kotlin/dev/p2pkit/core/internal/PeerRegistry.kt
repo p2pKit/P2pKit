@@ -114,6 +114,24 @@ internal class PeerRegistry(
     fun internalPeer(peerId: PeerId): InternalPeer? =
         registryState.value.tracked[peerId]?.internalPeer
 
+    /** Never mix a manual application's pin/name with an untrusted discovery contribution. */
+    fun discoveryClaim(peerId: PeerId): dev.p2pkit.core.PeerDiscoveryClaim? {
+        val snapshot = registryState.value
+        if (snapshot.closed) return null
+        val now = monotonicClock()
+        val live = snapshot.tracked[peerId]?.discoveredBy?.values?.filter {
+            it.internalPeer.discoveryLifetime() == DiscoveryLifetime.TransportManaged ||
+                now - it.observedAtMonotonicMillis <= staleTimeoutMillis
+        }.orEmpty()
+        if (live.isEmpty()) return null
+        val claims = live.map {
+            (it.internalPeer.authenticationHint as? PeerAuthenticationHint.UntrustedDiscoveryClaim)?.fingerprint
+        }.distinct()
+        val pin = claims.singleOrNull() ?: return null
+        return dev.p2pkit.core.PeerDiscoveryClaim(live.first().internalPeer.publicPeer, pin,
+            live.maxOf { it.lastSeenAtMillis })
+    }
+
     fun start() {
         discoveryTransports.forEachIndexed { sourceIndex, transport ->
             scope.launch {

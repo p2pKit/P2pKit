@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Offline isolation/admission controls, not a namespace, JVM, network or capacity test."""
+import ast
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('same_host', ROOT / 'scripts/run-rpc-same-host-lab.py')
+lab = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lab)
+
+
+def topology(role='host'):
+    return {
+        'links': [{'ifname': 'lo'}, {'ifname': lab.INTERFACE, 'linkinfo': {'info_kind': 'veth'},
+                                   'flags': ['UP', 'LOWER_UP', 'MULTICAST']}],
+        'routes': [{'dst': lab.SUBNET, 'dev': lab.INTERFACE}],
+        'addresses': [{'ifname': 'lo', 'addr_info': [{'local': '127.0.0.1', 'prefixlen': 8, 'family': 'inet'},
+                                                    {'local': '::1', 'prefixlen': 128, 'family': 'inet6'}]},
+                      {'ifname': lab.INTERFACE, 'addr_info': [
+                          {'local': lab.ADDRESSES[role], 'prefixlen': 30, 'family': 'inet'},
+                          {'local': 'fe80::1', 'prefixlen': 64, 'family': 'inet6'}]}],
+        'role': role,
+    }
+
+
+class IsolationTests(unittest.TestCase):
+    def test_namespace_runtime_requires_real_supported_apis_without_calling_them(self):
+        with patch.object(lab.sys, 'platform', 'linux'), patch.object(lab.sys, 'version_info', (3, 12, 0)), \
+             patch.object(lab.os, 'setns', create=True) as enter, \
+             patch.object(lab.os, 'pidfd_open', create=True) as acquire, \
+             patch.object(lab.signal, 'pidfd_send_signal', create=True) as signal, \
+             patch.object(lab.os, 'CLONE_NEWNET', 0x40000000, create=True):
+            lab.namespace_runtime_admission()
+            for version in ((3, 10, 12), (3, 11, 14)):
+                with patch.object(lab.sys, 'version_info', version), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                    lab.namespace_runtime_admission()
+            for target, name in ((lab.os, 'setns'), (lab.os, 'pidfd_open'), (lab.signal, 'pidfd_send_signal')):
+                with patch.object(target, name, None), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                    lab.namespace_runtime_admission()
+            with patch.object(lab.os, 'CLONE_NEWNET', 0), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                lab.namespace_runtime_admission()
+            with patch.object(lab.sys, 'platform', 'darwin'), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                lab.namespace_runtime_admission()
+            enter.assert_not_called()
+            acquire.assert_not_called()
+            signal.assert_not_called()
+
+    def test_missing_namespace_runtime_stops_before_privileged_setup_or_worker_start(self):
+        with patch.object(lab, 'namespace_runtime_admission', side_effect=RuntimeError('unsupported interpreter')), \
+             patch.object(lab, 'isolated_controller_admission') as controller, \
+             patch.object(lab.subprocess, 'Popen') as launch, self.assertRaisesRegex(RuntimeError, 'unsupported interpreter'):
+            lab.setup(SimpleNamespace())
+        controller.assert_not_called()
+        launch.assert_not_called()
+
+    def test_hosted_setup_selects_only_the_original_nonroot_context_owner(self):
+        state = SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=1001, st_gid=1001))
+        with patch.object(lab.pwd, 'getpwuid', return_value=SimpleNamespace(pw_gid=1001)):
+            self.assertEqual(lab.invoking_account(state, 0, 0, {'SUDO_UID': '1001', 'SUDO_GID': '1001'}), (1001, 1001))
+            for env in ({}, {'SUDO_UID': '1002', 'SUDO_GID': '1001'}, {'SUDO_UID': '1001', 'SUDO_GID': '0'}):
+                with self.assertRaises(RuntimeError):
+                    lab.invoking_account(state, 0, 0, env)
+            with self.assertRaises(RuntimeError):
+                lab.invoking_account(state, 1001, 1001, {'SUDO_UID': '1001', 'SUDO_GID': '1001'})
+        state = SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=0, st_gid=0))
+        with patch.object(lab.pwd, 'getpwuid', return_value=SimpleNamespace(pw_gid=0)):
+            self.assertEqual(lab.invoking_account(state, 0, 0, {}), (0, 0))
+
+    def test_permanent_product_drop_preserves_all_original_capability_guards(self):
+        command = lab.drop_command(1001, 1001)
+        self.assertEqual(command[:len(lab.DROP)], lab.DROP)
+        self.assertEqual(command[len(lab.DROP):], ['--reuid=1001', '--regid=1001', '--init-groups'])
+        for uid, gid in ((True, 1001), (1001, '1001'), (-1, 1001)):
+            with self.assertRaises(RuntimeError):
+                lab.drop_command(uid, gid)
+
+    def test_credentials_and_groups_are_verified_before_any_observer_or_workload(self):
+        args = SimpleNamespace(invoking_uid=1001, invoking_gid=1001)
+        with patch.object(lab.os, 'getuid', return_value=1001), patch.object(lab.os, 'geteuid', return_value=1001), \
+             patch.object(lab.os, 'getgid', return_value=1001), patch.object(lab.os, 'getegid', return_value=1001), \
+             patch.object(lab.os, 'getgroups', return_value=[1001, 999]), \
+             patch.object(lab.os, 'getgrouplist', return_value=[1001, 999]), \
+             patch.object(lab.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='runner')):
+            lab.invoking_credentials_admission(args)
+            for name in ('getuid', 'geteuid', 'getgid', 'getegid'):
+                with patch.object(lab.os, name, return_value=0), self.assertRaises(RuntimeError):
+                    lab.invoking_credentials_admission(args)
+            with patch.object(lab.os, 'getgroups', return_value=[0, 1001]), self.assertRaises(RuntimeError):
+                lab.invoking_credentials_admission(args)
+
+    def test_file_credentials_restore_even_after_setup_error_without_chowning_anything(self):
+        with patch.object(lab.os, 'getuid', return_value=0), patch.object(lab.os, 'geteuid', return_value=0), \
+             patch.object(lab.os, 'getegid', return_value=0), patch.object(lab.os, 'seteuid') as uid, \
+             patch.object(lab.os, 'setegid') as gid:
+            with self.assertRaises(ValueError):
+                with lab.setup_file_credentials(1001, 1001):
+                    raise ValueError('preserve original setup failure')
+            self.assertEqual([c.args for c in uid.call_args_list], [(1001,), (0,)])
+            self.assertEqual([c.args for c in gid.call_args_list], [(1001,), (0,)])
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        self.assertNotIn('os.chown', source)
+        self.assertIn('invoking_credentials_admission(args)', source.split('def worker(args):', 1)[1].split('os.write', 1)[0])
+
+    def test_attempts_have_distinct_bounded_create_only_paths(self):
+        self.assertEqual(lab.mode_label(SimpleNamespace(mode='steady', attempt=1)), 'steady')
+        self.assertEqual(lab.mode_label(SimpleNamespace(mode='steady', attempt=2)), 'steady-2')
+        self.assertEqual(lab.mode_label(SimpleNamespace(mode='large', attempt=99)), 'large-99')
+        for invalid in (0, -1, 100, True, '2'):
+            with self.assertRaises(RuntimeError):
+                lab.mode_label(SimpleNamespace(mode='steady', attempt=invalid))
+
+    def test_cpu_placement_is_forwarded_to_both_workers_and_the_coordinator_without_touching_admission(self):
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        self.assertEqual(source.count('"--cpu-placement", args.cpu_placement'), 3)
+        self.assertIn('result["cpuPlacementPolicy"] = args.cpu_placement', source)
+        self.assertIn('choices=("inherited", "split-guest-cores"), default="inherited"', source)
+        self.assertNotIn('sched_setaffinity', source)
+
+    def test_full_idle_retention_checks_resources_not_a_forced_rss_reset(self):
+        before = dict(sequence=20, uptimeMillis=1000, cpuNanos=2000, residentBytes=4096,
+                      nativeThreads=10, jvmThreads=8, connected=0, accepted=128, completed=128,
+                      refused=0, duplicates=0, droppedNotifications=0, protocolFailures=0,
+                      connectionFailures=0, running=0, queued=0, records=128, payloadBytes=1024)
+        after = {**before, 'sequence': 85, 'uptimeMillis': 66000, 'cpuNanos': 4000, 'residentBytes': 8192,
+                 'records': 0, 'payloadBytes': 0}
+        self.assertEqual(lab.retention_admission(before, after)['status'], 'PASS')
+        for mutation in ({'uptimeMillis': 65999}, {'sequence': 20}, {'cpuNanos': 0}, {'residentBytes': 0},
+                         {'accepted': 129}, {'completed': 129}, {'refused': 1}, {'duplicates': 1},
+                         {'protocolFailures': 1}, {'connectionFailures': 1}, {'connected': 1},
+                         {'running': 1}, {'queued': 1}, {'records': 1}, {'payloadBytes': 1},
+                         {'cpuNanos': True}, {'jvmThreads': -1}, {'private': 'not-an-exported-field'}):
+            with self.assertRaises(RuntimeError):
+                lab.retention_admission(before, {**after, **mutation})
+        for field in ('connected', 'running', 'queued'):
+            with self.assertRaises(RuntimeError):
+                lab.retention_admission({**before, field: 1}, after)
+
+    def test_retention_failure_still_closes_host_and_cannot_complete(self):
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        begin = source.index('result["postRetention"] = review_retention()')
+        failed = source.index('result["postRetention"] = {"status": "FAIL"', begin)
+        stop = source.index('lab.write_private(directories["host"] / "stop.txt"', failed)
+        check = source.index('need(result["postRetention"]["status"] == "PASS"', stop)
+        complete = source.index('result["status"] = "COMPLETED_', check)
+        self.assertLess(begin, failed)
+        self.assertLess(failed, stop)
+        self.assertLess(stop, check)
+        self.assertLess(check, complete)
+
+    def test_only_mutable_telemetry_uses_bounded_reobservation_during_copy_and_retention(self):
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        coordinate = next(node for node in ast.parse(source).body
+                          if isinstance(node, ast.FunctionDef) and node.name == 'coordinate')
+        copy = next(node for node in coordinate.body if isinstance(node, ast.FunctionDef) and node.name == 'copy_control')
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directories = {'host': root / 'host', 'client': root / 'client'}
+            for directory in directories.values():
+                directory.mkdir()
+            for name in ('host-telemetry.txt', 'host-ready.txt', 'client-pins.txt'):
+                (directories['host'] / name).touch()
+            reader = SimpleNamespace(read_telemetry=Mock(return_value=b'telemetry'),
+                                     read_private=Mock(return_value=b'immutable'), write_private=Mock())
+            namespace = {'lab': reader, 'directories': directories}
+            exec(compile(ast.Module(body=[copy], type_ignores=[]), '<isolated coordinator reader>', 'exec'), namespace)
+            self.assertTrue(namespace['copy_control']('host-telemetry.txt', 'host', 'client', True))
+            reader.read_telemetry.assert_called_once_with(directories['host'] / 'host-telemetry.txt')
+            reader.read_private.assert_not_called()
+            self.assertTrue(namespace['copy_control']('host-ready.txt', 'host', 'client'))
+            self.assertTrue(namespace['copy_control']('client-pins.txt', 'host', 'client'))
+            self.assertEqual(reader.read_private.call_count, 2)
+            reader.read_telemetry.side_effect = RuntimeError('Unresolved telemetry observation')
+            with self.assertRaises(RuntimeError):
+                namespace['copy_control']('host-telemetry.txt', 'host', 'client', True)
+            self.assertEqual(reader.write_private.call_count, 3)
+        retention = source.split('def fresh_host_sample(previous):', 1)[1].split('def review_retention():', 1)[0]
+        self.assertIn('lab.read_telemetry(directories["host"] / "host-telemetry.txt")', retention)
+        self.assertIn('deadline = time.monotonic() + 5', retention)
+        self.assertIn('sample["sequence"] >= previous', retention)
+
+    def test_distinct_clean_harness_never_rebinds_admitted_product_source(self):
+        product = {'commit': 'a' * 40, 'tree': 'b' * 40, 'diffSha256': 'c' * 64, 'status': ''}
+        harness = {**product, 'commit': 'd' * 40, 'tree': 'e' * 40}
+        context = {'root': str(lab.ROOT), 'source': product}
+        lab.source_binding_admission(context, product, harness)
+        for changed_context, changed_product, changed_harness in (
+                ({**context, 'root': '/other-source'}, product, harness),
+                (context, harness, harness),
+                (context, {**product, 'status': ' M tracked.py'}, harness),
+                (context, product, {**harness, 'status': '?? untracked.py'}),
+                (context, {**product, 'diffSha256': 'f' * 64}, harness)):
+            with self.assertRaises(RuntimeError):
+                lab.source_binding_admission(changed_context, changed_product, changed_harness)
+
+    def test_explicit_product_source_does_not_change_harness_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            product = Path(temporary).resolve()
+            harness = lab.HARNESS_ROOT
+            with patch.object(lab, 'ROOT', lab.ROOT), patch.object(lab, 'setup') as setup, \
+                    patch.object(sys, 'argv', ['driver', '--owner-authorized-same-host', '--state', '/synthetic',
+                                              '--mode', 'steady', '--source', str(product)]):
+                self.assertEqual(lab.main(), 125)  # Real setup must exec; this is an offline argv check only.
+                self.assertEqual(lab.ROOT, product)
+                self.assertEqual(lab.HARNESS_ROOT, harness)
+                self.assertEqual(setup.call_args.args[0].source, product)
+
+    def test_noncanonical_or_symlinked_product_source_never_reaches_setup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            link = base / 'linked-source'
+            link.symlink_to(ROOT, target_is_directory=True)
+            for source in ('relative', str(link), str(base / 'missing')):
+                with patch.object(lab, 'setup') as setup, \
+                        patch.object(sys, 'argv', ['driver', '--owner-authorized-same-host', '--state', '/synthetic',
+                                                  '--mode', 'steady', '--source', source]), \
+                        self.assertRaises((RuntimeError, FileNotFoundError)):
+                    lab.main()
+                setup.assert_not_called()
+
+    def test_only_unaddressed_inactive_kernel_sit_fallback_is_tolerated(self):
+        fallback = {'ifname': 'sit0', 'flags': ['NOARP'], 'link_type': 'sit', 'operstate': 'DOWN',
+                    'linkinfo': {'info_kind': 'sit'}, 'address': '0.0.0.0'}
+        value = topology()
+        value['links'].append(fallback)
+        value['addresses'].append({'ifname': 'sit0', 'addr_info': []})
+        lab.topology_admission(**value)
+        with patch.object(lab.sys, 'platform', 'linux'):
+            lab.isolated_controller_admission(1, [{'ifname': 'lo'}, fallback], [])
+        for mutation in ({'flags': ['NOARP', 'UP']}, {'operstate': 'UP'}, {'ifname': 'utun0'},
+                         {'link_type': 'ether'}, {'address': '10.1.2.3'}):
+            self.assertFalse(lab.inactive_kernel_fallback({**fallback, **mutation}))
+        value['addresses'][-1]['addr_info'].append({'family': 'inet', 'local': '10.1.2.3', 'prefixlen': 24})
+        with self.assertRaises(RuntimeError):
+            lab.topology_admission(**value)
+
+    def test_two_distinct_namespace_endpoints_and_explicit_virtual_scope(self):
+        for role in ('host', 'client'):
+            lab.topology_admission(**topology(role))
+        self.assertNotEqual(lab.ADDRESSES['host'], lab.ADDRESSES['client'])
+        self.assertIn('SAME_HOST_VIRTUAL_ETHERNET_NOT_PHYSICAL_LAN', lab.SCOPE)
+
+    def test_foreign_duplicate_or_nonvirtual_links_are_rejected(self):
+        for mutate in (lambda t: t['links'].append({'ifname': 'eth0'}),
+                       lambda t: t['links'].append({'ifname': 'lo'}),
+                       lambda t: t['links'][1].update(ifname='utun0'),
+                       lambda t: t['links'][1]['linkinfo'].update(info_kind='bridge'),
+                       lambda t: t['links'][1]['linkinfo'].clear(),
+                       lambda t: t['links'][1].update(flags=['UP'])):
+            value = topology()
+            mutate(value)
+            with self.assertRaises(RuntimeError):
+                lab.topology_admission(**value)
+
+    def test_default_gateway_foreign_subnet_or_wrong_interface_is_rejected(self):
+        for mutate in (lambda t: t['routes'].append({'dst': 'default', 'gateway': '192.168.252.2'}),
+                       lambda t: t['routes'][0].update(gateway='192.168.252.2'),
+                       lambda t: t['routes'][0].update(dst='192.168.252.0/24'),
+                       lambda t: t['routes'][0].update(dev='eth0'), lambda t: t['routes'].clear()):
+            value = topology()
+            mutate(value)
+            with self.assertRaises(RuntimeError):
+                lab.topology_admission(**value)
+
+    def test_wrong_peer_alias_extra_address_or_global_ipv6_is_rejected(self):
+        for mutate in (lambda t: t.update(role='client'),
+                       lambda t: t['addresses'][1]['addr_info'][0].update(prefixlen=24),
+                       lambda t: t['addresses'][1]['addr_info'].append(
+                           {'local': '10.1.2.3', 'prefixlen': 24, 'family': 'inet'}),
+                       lambda t: t['addresses'][1]['addr_info'][1].update(local='fd00::1'),
+                       lambda t: t['addresses'][1]['addr_info'][1].update(local='2001:4860::1'),
+                       lambda t: t['addresses'].append({'ifname': 'eth0', 'addr_info': []})):
+            value = topology()
+            mutate(value)
+            with self.assertRaises(RuntimeError):
+                lab.topology_admission(**value)
+
+    def test_setup_requires_pid_one_and_no_existing_network(self):
+        with patch.object(lab.sys, 'platform', 'linux'):
+            lab.isolated_controller_admission(1, [{'ifname': 'lo'}], [])
+            for pid, links, routes in ((2, [{'ifname': 'lo'}], []), (1, [{'ifname': 'eth0'}], []),
+                                       (1, [{'ifname': 'lo'}], [{'dst': 'default'}])):
+                with self.assertRaises(RuntimeError):
+                    lab.isolated_controller_admission(pid, links, routes)
+        with patch.object(lab.sys, 'platform', 'darwin'), self.assertRaises(RuntimeError):
+            lab.isolated_controller_admission(1, [{'ifname': 'lo'}], [])
+
+    def test_all_capability_sets_and_new_privilege_admission_are_closed(self):
+        fields = {name: '0000000000000000' for name in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')}
+        fields['NoNewPrivs'] = '1'
+        text = lambda value: '\n'.join(key + ':\t' + data for key, data in value.items())
+        lab.capability_admission(text(fields))
+        for name in fields:
+            altered = {**fields, name: '0' if name == 'NoNewPrivs' else '0000000000000001'}
+            with self.assertRaises(RuntimeError):
+                lab.capability_admission(text(altered))
+
+    def test_internal_stages_still_require_owner_acknowledgement(self):
+        for stage in ([], ['--coordinate'], ['--worker', 'host']):
+            with patch.object(sys, 'argv', ['driver', '--state', '/synthetic', '--mode', 'steady', *stage]), \
+                    self.assertRaisesRegex(RuntimeError, 'authorization'):
+                lab.main()
+
+    def test_result_is_create_only_private_and_never_follows_a_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'result.json'
+            lab.private_json(path, {'scope': lab.SCOPE})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(path.read_text()), {'scope': lab.SCOPE})
+            with self.assertRaises(FileExistsError):
+                lab.private_json(path, {})
+            link = Path(directory) / 'link.json'
+            link.symlink_to(path)
+            with self.assertRaises(FileExistsError):
+                lab.private_json(link, {})
+
+    def test_original_executor_and_full_inventory_precede_workload_gate_release(self):
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        self.assertIn('policy.control_inventory("linux-x64")', source)
+        self.assertIn('runner.main([', source)
+        self.assertIn('checker.validate(proof, code, purpose', source)
+        self.assertLess(source.index('"Complete fresh native admission failed'), source.index('release("client")'))
+        self.assertIn('lab.classpath(context["source"]["commit"])', source)
+        self.assertIn('NoNewPrivs', source)
+        self.assertIn('signal.pidfd_send_signal(worker["pidfd"], signal.SIGTERM)', source)
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                self.assertNotIn(node.func.attr, ('kill', 'killpg', 'terminate', 'send_signal'))
+        for forbidden in ('iptables', 'nftables', 'sysctl', 'StrictHostKeyChecking=no', 'LocalForward',
+                          'isForbiddenLanInterface', 'organizationJvmTarget', 'RpcTestLink', 'mock'):
+            # The docstring says "mock" to explicitly prohibit it; no executable references are allowed.
+            literals = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+                        and isinstance(node.value, str) and node is not tree.body[0].value]
+            with self.subTest(forbidden=forbidden):
+                self.assertFalse(any(forbidden in literal for literal in literals))
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

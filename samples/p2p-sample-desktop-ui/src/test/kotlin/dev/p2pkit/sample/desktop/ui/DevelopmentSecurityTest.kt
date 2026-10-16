@@ -66,6 +66,23 @@ class DevelopmentSecurityTest {
         }
     }
 
+    @Test
+    fun queuedOrdinaryStartCannotCreateAKitBehindTheReservedRpcSection() = withState { state ->
+        val entry = assertNotNull(state.reserveRpcSection())
+        state.start() // This stale action must return before identity, socket or transport allocation.
+        assertFalse(state.isRunning)
+        assertFalse(state.isStarting.value)
+        assertFalse(state.cleanupPending.value)
+        assertNull(state.localPeerId.value)
+        assertFalse(state.canOpenRpc)
+        assertTrue(state.releaseRpcSection(entry))
+        val replacement = assertNotNull(state.reserveRpcSection())
+        assertFalse(state.releaseRpcSection(entry))
+        assertFalse(state.canOpenRpc)
+        assertTrue(state.releaseRpcSection(replacement))
+        assertTrue(state.canOpenRpc)
+    }
+
     @OptIn(ExperimentalComposeUiApi::class)
     @Test
     fun bothScreensKeepTheCompleteWarningVisibleWithoutOverlappingDiagnostics() = withState { state ->
@@ -120,6 +137,37 @@ class DevelopmentSecurityTest {
                 }
             }
         }
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun rpcEntryUsesMaintainedSampleNavigationAndIsDisabledWhileTheRoomIsRunning() = withState { state ->
+        var rpcOpened = 0
+        var diagnosticsOpened = 0
+        for (running in listOf(false, true)) {
+            ImageComposeScene(width = 980, height = 760, content = {
+                MaterialTheme {
+                    DesktopSampleScreen(state, running,
+                        onOpenRpc = { rpcOpened++ }, onOpenDiagnostics = { diagnosticsOpened++ })
+                }
+            }).use { scene ->
+                scene.render().use {
+                    val nodes = scene.semanticsOwners.flatMap { it.unmergedRootSemanticsNode.descendants() }
+                    fun button(label: String) = nodes.single { node ->
+                        node.config.getOrNull(SemanticsProperties.Role) == Role.Button &&
+                            node.descendants().any { it.text() == label }
+                    }
+                    val rpc = button("RPC")
+                    assertEquals(running, rpc.config.contains(SemanticsProperties.Disabled))
+                    if (!running) assertNotNull(rpc.config.getOrNull(SemanticsActions.OnClick)?.action).invoke()
+                    assertNotNull(button("Diagnostics").config.getOrNull(SemanticsActions.OnClick)?.action).invoke()
+                    assertTrue(nodes.any { it.text().startsWith("DEVELOPMENT MODE:") })
+                }
+            }
+        }
+        assertEquals(1, rpcOpened)
+        assertEquals(2, diagnosticsOpened)
+        assertTrue(state.canOpenRpc, "Opening a section does not start the ordinary network kit")
     }
 
     @OptIn(ExperimentalComposeUiApi::class)

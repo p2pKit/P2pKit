@@ -8,18 +8,26 @@ internal data class SampleRunAdmission(
     val cleanupPending: Boolean,
     val smokeBusy: Boolean,
     val roomOwnsKit: Boolean = false,
-    val smokeOwnsKit: Boolean = false
+    val smokeOwnsKit: Boolean = false,
+    val rpcOwnsSection: Boolean = false,
+    val rpcRuntimeOccupied: Boolean = false,
+    val anotherProcessOwner: Boolean = false,
 ) {
     // A retained room kit makes this action a cleanup retry, not a new acquisition.
     val canStartOrRetryCleanup: Boolean
-        get() = !running && !starting && !stopping &&
-            (roomOwnsKit || (!cleanupPending && !smokeBusy && !smokeOwnsKit))
+        get() = !anotherProcessOwner && !rpcOwnsSection && !running && !starting && !stopping &&
+            (roomOwnsKit || (!rpcRuntimeOccupied && !cleanupPending && !smokeBusy && !smokeOwnsKit))
 
     val canRunKmpSmoke: Boolean
-        get() = !running && !starting && !stopping && !cleanupPending && !smokeBusy && !roomOwnsKit && !smokeOwnsKit
+        get() = !rpcRuntimeOccupied && canEnterRpc
+
+    /** A retained RPC owner blocks Room, but RPC remains reachable for an explicit cleanup retry. */
+    val canEnterRpc: Boolean
+        get() = !anotherProcessOwner && !rpcOwnsSection && !running && !starting && !stopping && !cleanupPending &&
+            !smokeBusy && !roomOwnsKit && !smokeOwnsKit
 
     val canRetryKmpCleanup: Boolean
-        get() = smokeOwnsKit && !smokeBusy
+        get() = !rpcOwnsSection && smokeOwnsKit && !smokeBusy
 
     /** #376: a name configures a new room; it must never be required to retire an owned kit. */
     fun canUseStartAction(deviceName: String): Boolean =

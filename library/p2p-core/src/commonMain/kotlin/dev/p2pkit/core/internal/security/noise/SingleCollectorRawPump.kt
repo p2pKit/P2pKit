@@ -1,6 +1,8 @@
 package dev.p2pkit.core.internal.security.noise
 
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.PayloadBudget
+import dev.p2pkit.core.reserveOrThrow
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -9,16 +11,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
@@ -33,8 +36,16 @@ private const val RAW_PUMP_SEGMENT_BYTES: Int = 16_384
 internal class SingleCollectorRawPump(
     private val rawConnection: RawConnection,
     parentScope: CoroutineScope,
+    internal val payloadBudget: PayloadBudget? = null,
 ) {
     val state: StateFlow<ConnectionState> get() = rawConnection.state
+
+    // Conservative reservation for the bounded raw queue/current/producer segments, platform read
+    // buffers and bounded handshake scratch. Reserved before starting I/O. Secure record scratch,
+    // application frames and reassembly are charged separately. A late collector keeps
+    // this allowance until it REALLY terminates; a cleanup timeout is not a release signal.
+    private val bufferAllowance = payloadBudget?.reserveOrThrow(224L * 1024)
+    private val buffersDetached = MutableStateFlow(false)
 
     private val ownerJob = SupervisorJob(parentScope.coroutineContext[Job])
     private val ownerScope = CoroutineScope(parentScope.coroutineContext + ownerJob)
@@ -160,6 +171,10 @@ internal class SingleCollectorRawPump(
             currentChunk = null
             currentOffset = 0
             chunks.cancel()
+            buffersDetached.value = true
+            collectorJob.invokeOnCompletion {
+                if (buffersDetached.value) bufferAllowance?.release()
+            }
             failure
         }
         closeFailure?.let { throw it }

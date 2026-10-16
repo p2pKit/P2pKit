@@ -61,7 +61,14 @@ public interface P2pSession {
      */
     public val peerIdentity: PeerIdentity get() = PeerIdentity(peer.id)
 
+    /** Captured admission class. Enrollment never upgrades in place; reconnect explicitly after approval. */
+    public val admission: PeerAdmission get() = PeerAdmission.Trusted
+
     public val state: StateFlow<ConnectionState>
+
+    /** Retained connection generation and sanitized failure; generation 0 means unsupported. */
+    public val connectionInfo: StateFlow<SessionConnectionInfo>
+        get() = UNKNOWN_CONNECTION_INFO
 
     /**
      * Hot application-message stream with no replay and no completion signal.
@@ -128,6 +135,20 @@ public interface P2pSession {
      */
     @Throws(Exception::class)
     public suspend fun send(message: P2pMessage)
+
+    /**
+     * Send only on the specified authenticated [connectionInfo] generation. The SDK checks the
+     * generation atomically with selecting its write epoch, then rechecks that epoch before writing.
+     * This prevents an upper-layer queue from silently crossing a reconnect/renegotiation boundary.
+     * A completed local write still does not prove remote application completion.
+     *
+     * Third-party sessions without this capability fail closed by default. Generation zero is not
+     * supported. Other failures and cancellation follow [send]'s error contract.
+     */
+    @Throws(Exception::class)
+    public suspend fun sendAtGeneration(message: P2pMessage, generation: Long) {
+        throw P2pError.ConnectionFailed("Generation-bound sending is unsupported by this session")
+    }
 
     /**
      * Authoritative retained snapshot of inbound offers awaiting a response.
@@ -285,3 +306,6 @@ public interface P2pSession {
 
 private val EMPTY_PENDING_FILE_OFFERS: StateFlow<List<P2pFileOffer>> =
     MutableStateFlow<List<P2pFileOffer>>(emptyList()).asStateFlow()
+
+private val UNKNOWN_CONNECTION_INFO: StateFlow<SessionConnectionInfo> =
+    MutableStateFlow(SessionConnectionInfo(0)).asStateFlow()

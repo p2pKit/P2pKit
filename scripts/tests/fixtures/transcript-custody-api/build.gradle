@@ -1,0 +1,311 @@
+// GitHub-only API/action-order controls. No Test task is scheduled or forked.
+// This is NOT CLI/diagnostics execution, worker-root custody or product evidence.
+import groovy.json.JsonOutput
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+import org.gradle.api.Action
+import org.gradle.api.GradleException
+import org.gradle.api.tasks.testing.Test
+import org.gradle.process.CommandLineArgumentProvider
+
+class CustodyApiArguments implements CommandLineArgumentProvider {
+    int calls = 0
+    String first
+    String later
+    Iterable<String> asArguments() {
+        calls++
+        [calls == 1 ? first : later]
+    }
+}
+
+def source = file(providers.gradleProperty("p2pkit.custodySource").get())
+def report = file(providers.gradleProperty("p2pkit.custodyApiReport").get())
+def sha = { byte[] bytes -> MessageDigest.getInstance("SHA-256").digest(bytes).encodeHex().toString() }
+def sourceBytes = source.bytes
+def loader = new GroovyClassLoader(this.class.classLoader)
+// Compile the actual complete initializer, but NEVER instantiate/run its script:
+// it needs real owner/request inputs, which this isolated API fixture does not fake.
+loader.parseClass(new String(sourceBytes, "UTF-8"), "CustodyInitializerUnderTest.groovy")
+def helper = loader.loadClass("TranscriptTestCustody")
+def requireControl = { condition, message ->
+    if (!condition) throw new AssertionError(message as Object)
+}
+def expectRejection = { String message, Closure action ->
+    try {
+        action.call()
+    } catch (GradleException failure) {
+        requireControl(failure.message == "Transcript custody: " + message, "unexpected rejection: " + failure.message)
+        return
+    }
+    throw new AssertionError("Expected rejection: " + message as Object)
+}
+def temporary = { name -> new File(projectDir, "test-temp/" + name).absolutePath }
+def prefix = "-Djava.io.tmpdir"
+def providersByName = [:]
+def registerTest = { String name, Closure configuration = null ->
+    def provider = tasks.register(name, Test)
+    if (configuration != null) provider.configure(configuration)
+    providersByName[name] = provider
+    provider
+}
+
+// These are real, unscheduled Gradle Test objects, not JavaForkOptions mocks.
+def argumentNames = ["argFresh", "argSameProperty", "argSameJvmArgument", "argWrongProperty", "argWrongJvmArgument",
+                     "argEmpty", "argNull", "argBare", "argSiblings", "argDuplicateMaps", "argProvider"]
+argumentNames.each { registerTest(it) }
+registerTest("guardAlreadyRealized").get()
+def observed = [:].withDefault { [] }
+def installed = [:]
+def installationErrors = [:]
+def registrationOrder = []
+
+// An earlier setup action is an unsupported initial shape, not something the
+// production helper may silently move around a guessed framework action.
+tasks.withType(Test).configureEach { task ->
+    if (task.name == "guardEarlierTypeSetup") task.doFirst { observed[task.name] << "earlier-type" }
+}
+tasks.withType(Test).configureEach { task ->
+    if (!task.name.startsWith("guard")) return
+    registrationOrder << task.name + ":install"
+    try {
+        installed[task.name] = helper.installGuard(task, temporary(task.name)) { observed[task.name] << "guard" }
+    } catch (GradleException failure) {
+        // A fixture observation only. The production initializer does not catch
+        // unsupported installation and would fail admission before product work.
+        installationErrors[task.name] = failure
+    }
+}
+tasks.withType(Test).configureEach { task ->
+    if (task.name == "guardLaterTypeSetup") task.doFirst { observed[task.name] << "later-type" }
+}
+registerTest("guardLazyRegistration") { task ->
+    registrationOrder << task.name + ":registration"
+    task.doFirst { observed[task.name] << "registration" }
+}
+def guardedNames = ["guardPlain", "guardEarlierTypeSetup", "guardLaterTypeSetup", "guardLateWrongProperty",
+                    "guardLateWrongArgument", "guardLateSame", "guardLateSibling", "guardLateProvider",
+                    "guardInsertedAction", "guardRemoved", "guardDuplicate", "guardAfterAction", "guardOtherRoot"]
+guardedNames.each { registerTest(it) }
+// Realize during configuration, never create/modify the task graph from a task.
+def testTasks = providersByName.collectEntries { name, provider -> [(name): provider.get()] }
+
+def runSetupAndGuard = { Map owner ->
+    def actions = owner.task.actions.toList()
+    def stock = actions.findIndexOf { it.is(owner.stock) }
+    requireControl(stock > 0, "stock action is missing or first")
+    // Deliberately stop BEFORE the stock Test action. No fork, XML or product
+    // event can be emitted; only real setup and helper guard APIs are exercised.
+    actions.take(stock).each { action -> action.execute(owner.task) }
+}
+def ownerFor = { name ->
+    requireControl(!installationErrors.containsKey(name), "guard installation failed: " + installationErrors[name])
+    def owner = installed[name]
+    requireControl(owner != null, "missing installed guard: " + name)
+    helper.configureTemporary(owner.task, owner.temporary)
+    helper.verifyGuard(owner)
+    owner
+}
+
+tasks.register("verifyTranscriptCustodyApi") {
+    doLast {
+        def checks = []
+        def checkCase = { String name, Closure action ->
+            def row = [name: name, status: "PASS"]
+            try {
+                action.call()
+            } catch (Exception | AssertionError failure) {
+                row.status = "FAIL"
+                row.failureType = failure.class.name
+                row.message = (failure.message ?: "").take(1024)
+            }
+            checks << row
+        }
+        checkCase("fresh-immutable-property") {
+            def task = testTasks.argFresh
+            helper.configureTemporary(task, temporary(task.name))
+            requireControl(!task.systemProperties.containsKey("java.io.tmpdir"), "pinned immutable getter changed")
+            helper.verifyTemporary(task, temporary(task.name))
+        }
+        [argSameProperty: false, argSameJvmArgument: true].each { name, jvm ->
+            checkCase("same-" + (jvm ? "jvm-argument" : "system-property")) {
+                def task = testTasks[name]
+                if (jvm) task.jvmArgs(prefix + "=" + temporary(name))
+                else task.systemProperty("java.io.tmpdir", temporary(name))
+                helper.configureTemporary(task, temporary(name))
+                helper.verifyTemporary(task, temporary(name))
+            }
+        }
+        [argWrongProperty: false, argWrongJvmArgument: true].each { name, jvm ->
+            checkCase("conflicting-" + (jvm ? "jvm-argument" : "system-property")) {
+                def task = testTasks[name]
+                if (jvm) task.jvmArgs(prefix + "=/not-the-owned-root")
+                else task.systemProperty("java.io.tmpdir", "/not-the-owned-root")
+                def before = task.allJvmArgs.toList()
+                expectRejection("conflicting effective test temporary argument") {
+                    helper.configureTemporary(task, temporary(name))
+                }
+                requireControl(task.allJvmArgs == before, "conflicting value was overwritten")
+            }
+        }
+        [argEmpty: "", argNull: null, argBare: "BARE"].each { name, value ->
+            checkCase("empty-key-" + name) {
+                def task = testTasks[name]
+                if (name == "argBare") task.jvmArgs(prefix)
+                else task.systemProperty("java.io.tmpdir", value)
+                def before = task.allJvmArgs.toList()
+                requireControl(helper.temporaryArguments(task) == [prefix], "bare key was not observed")
+                expectRejection("conflicting effective test temporary argument") {
+                    helper.configureTemporary(task, temporary(name))
+                }
+                requireControl(task.allJvmArgs == before, "empty conflicting value was overwritten")
+            }
+        }
+        checkCase("similarly-prefixed-keys-preserved") {
+            def task = testTasks.argSiblings
+            task.jvmArgs(prefix + ".extra=sibling", prefix + "Other=another")
+            helper.configureTemporary(task, temporary(task.name))
+            requireControl(task.allJvmArgs.containsAll([prefix + ".extra=sibling", prefix + "Other=another"]),
+                           "sibling property changed")
+            helper.verifyTemporary(task, temporary(task.name))
+        }
+        checkCase("duplicate-effective-maps-rejected") {
+            def task = testTasks.argDuplicateMaps
+            task.systemProperty("java.io.tmpdir", temporary(task.name))
+            task.systemProperties.put("java.io.tmpdir", temporary(task.name))
+            requireControl(helper.temporaryArguments(task).size() == 2, "expected real mutable/immutable duplicate")
+            expectRejection("conflicting effective test temporary argument") {
+                helper.configureTemporary(task, temporary(task.name))
+            }
+        }
+        checkCase("provider-at-setup-not-evaluated") {
+            def task = testTasks.argProvider
+            def provider = new CustodyApiArguments(first: prefix + "=" + temporary(task.name), later: prefix + "=/changed")
+            task.jvmArgumentProviders.add(provider)
+            expectRejection("test argument providers are not admitted") {
+                helper.configureTemporary(task, temporary(task.name))
+            }
+            requireControl(provider.calls == 0, "setup evaluated the stateful provider")
+        }
+        checkCase("plain-guard-before-stock") {
+            runSetupAndGuard(ownerFor("guardPlain"))
+            requireControl(observed.guardPlain == ["guard"], "plain helper order changed")
+        }
+        checkCase("already-realized-task-registration") {
+            runSetupAndGuard(ownerFor("guardAlreadyRealized"))
+            requireControl(observed.guardAlreadyRealized == ["guard"], "already-realized guard missing")
+        }
+        checkCase("lazy-registration-action-order") {
+            def name = "guardLazyRegistration"
+            requireControl(registrationOrder.indexOf(name + ":install") < registrationOrder.indexOf(name + ":registration"),
+                           "registration action ran before the early guard callback")
+            runSetupAndGuard(ownerFor(name))
+            requireControl(observed[name] == ["registration", "guard"], "registration setup did not precede guard")
+        }
+        checkCase("earlier-type-action-layout-rejected") {
+            def failure = installationErrors.guardEarlierTypeSetup
+            requireControl(failure?.message == "Transcript custody: unsupported initial Test action layout",
+                           "an unsupported earlier action was silently moved/accepted")
+            requireControl(installed.guardEarlierTypeSetup == null, "unsupported task got a guard")
+        }
+        checkCase("later-type-setup-before-guard") {
+            runSetupAndGuard(ownerFor("guardLaterTypeSetup"))
+            requireControl(observed.guardLaterTypeSetup == ["later-type", "guard"], "later type action did not run first")
+        }
+        [guardLateWrongProperty: false, guardLateWrongArgument: true].each { name, jvm ->
+            checkCase("late-conflicting-" + (jvm ? "argument" : "property")) {
+                def owner = ownerFor(name)
+                owner.task.doFirst {
+                    if (jvm) owner.task.jvmArgs(prefix + "=/late-conflict")
+                    else owner.task.systemProperty("java.io.tmpdir", "/late-conflict")
+                }
+                expectRejection("effective test temporary argument changed") { runSetupAndGuard(owner) }
+                requireControl(observed[name].isEmpty(), "ready callback preceded late-conflict rejection")
+            }
+        }
+        checkCase("late-same-value-accepted") {
+            def owner = ownerFor("guardLateSame")
+            owner.task.doFirst { owner.task.jvmArgs(prefix + "=" + owner.temporary) }
+            runSetupAndGuard(owner)
+            requireControl(observed.guardLateSame == ["guard"], "same-value setup rejected")
+        }
+        checkCase("late-sibling-accepted") {
+            def owner = ownerFor("guardLateSibling")
+            owner.task.doFirst { owner.task.jvmArgs(prefix + ".extra=late-sibling") }
+            runSetupAndGuard(owner)
+            requireControl(owner.task.allJvmArgs.contains(prefix + ".extra=late-sibling"), "late sibling was changed")
+        }
+        checkCase("late-provider-not-evaluated") {
+            def owner = ownerFor("guardLateProvider")
+            def provider = new CustodyApiArguments(first: prefix + "=" + owner.temporary, later: prefix + "=/changed")
+            owner.task.doFirst { owner.task.jvmArgumentProviders.add(provider) }
+            expectRejection("test argument providers are not admitted") { runSetupAndGuard(owner) }
+            requireControl(provider.calls == 0 && observed.guardLateProvider.isEmpty(), "late provider evaluated/accepted")
+        }
+        checkCase("interposed-action-rejected") {
+            def owner = ownerFor("guardInsertedAction")
+            owner.task.actions.add(1, { throw new AssertionError("interposed action must not run" as Object) } as Action)
+            expectRejection("Test guard is not immediately before its original action") { owner.guard.execute(owner.task) }
+        }
+        checkCase("missing-guard-rejected") {
+            def owner = ownerFor("guardRemoved")
+            owner.task.actions.remove(owner.guard)
+            expectRejection("Test guard is not immediately before its original action") { helper.verifyGuard(owner) }
+        }
+        checkCase("duplicate-guard-rejected") {
+            def owner = ownerFor("guardDuplicate")
+            owner.task.actions.add(0, owner.guard)
+            expectRejection("Test guard is not immediately before its original action") { helper.verifyGuard(owner) }
+        }
+        checkCase("after-test-action-never-executed") {
+            def owner = ownerFor("guardAfterAction")
+            owner.task.doLast { throw new AssertionError("stock/after-Test actions must not run" as Object) }
+            runSetupAndGuard(owner)
+            requireControl(observed.guardAfterAction == ["guard"], "guard callback missing")
+        }
+        checkCase("distinct-test-temporary-roots") {
+            def left = installed.guardPlain
+            def right = installed.guardAlreadyRealized
+            requireControl(left.temporary != right.temporary, "two tasks share a temporary root")
+            helper.verifyTemporary(left.task, left.temporary)
+            helper.verifyTemporary(right.task, right.temporary)
+        }
+        checkCase("matching-root-and-requested-task") {
+            def task = testTasks.guardOtherRoot
+            requireControl(helper.selectedScope(task, projectDir, [cli: task.path], ["cli"] as Set) == "cli",
+                           "same-root selected task was not admitted")
+        }
+        checkCase("foreign-root-same-task-path") {
+            def task = testTasks.guardOtherRoot
+            def before = task.allJvmArgs.toList()
+            requireControl(helper.selectedScope(task, new File(projectDir, "foreign"), [cli: task.path], ["cli"] as Set) == null,
+                           "same path in another root was selected")
+            requireControl(task.allJvmArgs == before, "root filter mutated task arguments")
+        }
+        checkCase("buildsrc-shaped-root-filter") {
+            def task = testTasks.guardOtherRoot
+            requireControl(helper.selectedScope(task, new File(projectDir, "foreign/buildSrc"),
+                                               [cli: task.path], ["cli"] as Set) == null, "foreign buildSrc root selected")
+        }
+        checkCase("unrequested-scope-filter") {
+            def task = testTasks.guardOtherRoot
+            requireControl(helper.selectedScope(task, projectDir, [diagnostics: task.path], ["cli"] as Set) == null,
+                           "unrequested scope selected")
+        }
+        requireControl(checks.size() == 30 && checks*.name.toSet().size() == 30, "finite control set changed")
+        def result = [schema: 1, scope: "GRADLE97_API_ACTION_ORDERING_ONLY", gradleVersion: gradle.gradleVersion,
+                      javaVersion: System.getProperty("java.version"), javaHome: System.getProperty("java.home"),
+                      gradleHome: gradle.gradleUserHomeDir.canonicalPath, projectRoot: projectDir.canonicalPath,
+                      initializerSha256: sha(sourceBytes), fixtureSha256: sha(buildFile.bytes),
+                      testWorkersExecuted: false, stockTestActionsExecuted: false, checks: checks,
+                      registrationOrder: registrationOrder, helperCallbacks: observed,
+                      actionTypes: testTasks.collectEntries { name, task -> [(name): task.actions*.class*.name] }]
+        Files.write(report.toPath(), (JsonOutput.toJson(result) + "\n").getBytes("UTF-8"),
+                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+        requireControl(checks.every { it.status == "PASS" }, "actual Gradle API controls failed; inspect original report")
+        println("PASS scope=GRADLE97_API_ACTION_ORDERING_ONLY controls=" + checks.size())
+    }
+}
+gradle.taskGraph.whenReady { graph ->
+    requireControl(graph.allTasks*.path == [":verifyTranscriptCustodyApi"], "fixture must not schedule any Test or product task")
+}

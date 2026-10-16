@@ -51,48 +51,48 @@ import kotlin.test.assertTrue
 /** Real native endpoints/TXT at the production callback boundary, not live multicast evidence. */
 class IosInvalidReresolutionTest {
     @Test
-    fun missingTxtWithdrawsTheAdmittedService() = withProfiles {
+    fun missingTxtWithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition { emitBytes(null) }
     }
 
     @Test
-    fun malformedConsumedUtf8WithdrawsTheAdmittedService() = withProfiles {
+    fun malformedConsumedUtf8WithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition { emit(properties() + ("name" to byteArrayOf(0xC3.toByte()))) }
     }
 
     @Test
-    fun truncatedFramingWithdrawsTheAdmittedService() = withProfiles {
+    fun truncatedFramingWithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition { emitBytes(bytes(properties()) + byteArrayOf(255.toByte())) }
     }
 
     @Test
-    fun foreignAppWithdrawsTheAdmittedService() = withProfiles {
+    fun foreignAppWithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition { emit(properties() + field("app", "other-app")) }
     }
 
     @Test
-    fun missingPeerIdWithdrawsTheAdmittedService() = withProfiles {
+    fun missingPeerIdWithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition { emit(properties() - "pid") }
     }
 
     @Test
-    fun selfPeerIdWithdrawsTheAdmittedService() = withProfiles {
+    fun selfPeerIdWithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition { emit(properties() + field("pid", context.localPeerId.value)) }
     }
 
     @Test
-    fun blankNameWithdrawsTheAdmittedService() = withProfiles {
+    fun blankNameWithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition { emit(properties() + field("name", " ")) }
     }
 
     @Test
-    fun mismatchedProtocolWithdrawsTheAdmittedServiceWithoutDowngrade() = withProfiles {
+    fun mismatchedProtocolWithdrawsTheAdmittedServiceWithoutDowngrade() = withProfilesAndTxtMonitor {
         val otherVersion = if (context.securityProfile == TransportSecurityProfile.AuthenticatedV2) "1" else "2"
         assertInvalidTransition { emit(properties() + field("pv", otherVersion)) }
     }
 
     @Test
-    fun contradictoryFingerprintWithdrawsTheAdmittedService() = withProfiles {
+    fun contradictoryFingerprintWithdrawsTheAdmittedService() = withProfilesAndTxtMonitor {
         assertInvalidTransition {
             val invalid = if (context.securityProfile == TransportSecurityProfile.AuthenticatedV2) {
                 properties() - "fp"
@@ -104,7 +104,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun foreignTxtIdentityWithdrawsOnlyItsNativeServiceNotAnotherPeer() = withProfiles {
+    fun foreignTxtIdentityWithdrawsOnlyItsNativeServiceNotAnotherPeer() = withProfilesAndTxtMonitor {
         emit()
         val first = assertIs<PeerEvent.Found>(events.single())
         emit(properties() + field("pid", "other"), serviceName = "other")
@@ -121,7 +121,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun invalidNeverAdmittedNativeServiceCannotWithdrawTxtNamedPeer() = withProfiles {
+    fun invalidNeverAdmittedNativeServiceCannotWithdrawTxtNamedPeer() = withProfilesAndTxtMonitor {
         emit()
         val admitted = events.toList()
         val lease = assertNotNull(registry.lease(REMOTE))
@@ -134,7 +134,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun conformingUpdatePreservesFoundOwnershipAndReplacesEndpointLease() = withProfiles {
+    fun conformingUpdatePreservesFoundOwnershipAndReplacesEndpointLease() = withProfilesAndTxtMonitor {
         emit()
         val first = assertIs<PeerEvent.Found>(events.single())
         val lease = assertNotNull(registry.lease(REMOTE))
@@ -154,7 +154,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun retiredGenerationCannotWithdrawOrReplaceFreshOwnership() = withProfiles {
+    fun retiredGenerationCannotWithdrawOrReplaceFreshOwnership() = withProfilesAndTxtMonitor {
         emit()
         val retired = generation
         discovery.refresh()
@@ -172,7 +172,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun currentInvalidResolutionWithdrawsUnconfirmedPredecessorDuringGrace() = withProfiles {
+    fun currentInvalidResolutionWithdrawsUnconfirmedPredecessorDuringGrace() = withProfilesAndTxtMonitor {
         emit()
         val first = assertIs<PeerEvent.Found>(events.single())
         val predecessor = generation
@@ -189,7 +189,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun callbackFromRetiredBrowserCannotMutateCacheDuringRebindGap() = withProfiles {
+    fun callbackFromRetiredBrowserCannotMutateCacheDuringRebindGap() = withProfilesAndTxtMonitor {
         emit()
         val admitted = assertNotNull(discovery.announceEntryForTest(REMOTE.value))
         val expectedEvents = events.toList()
@@ -226,7 +226,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun withdrawingDiscoveredRouteDoesNotRemoveExplicitManualHints() = withProfiles {
+    fun withdrawingDiscoveredRouteDoesNotRemoveExplicitManualHints() = withProfilesAndTxtMonitor {
         emit()
         val peer = assertIs<PeerEvent.Found>(events.single()).peer
         val manual = peer.copy(transportHints = listOf(TransportHint(TransportKind.LAN, "127.0.0.1", 43001)))
@@ -239,7 +239,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun pendingDialKeepsItsOwnershipAndOldFailureCannotDeleteRecoveredEndpoint() = withProfiles {
+    fun pendingDialKeepsItsOwnershipAndOldFailureCannotDeleteRecoveredEndpoint() = withProfilesAndTxtMonitor {
         emit()
         val peer = assertIs<PeerEvent.Found>(events.single()).peer
         coroutineScope {
@@ -264,7 +264,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun pendingDialCanCompleteAfterWithdrawalWithoutRecreatingDiscovery() = withProfiles {
+    fun pendingDialCanCompleteAfterWithdrawalWithoutRecreatingDiscovery() = withProfilesAndTxtMonitor {
         emit()
         val peer = assertIs<PeerEvent.Found>(events.single()).peer
         coroutineScope {
@@ -289,7 +289,7 @@ class IosInvalidReresolutionTest {
     }
 
     @Test
-    fun stopClearsOwnershipAndQueuedCallbacksCannotResurrectIt() = withProfiles {
+    fun stopClearsOwnershipAndQueuedCallbacksCannotResurrectIt() = withProfilesAndTxtMonitor {
         emit()
         val first = assertIs<PeerEvent.Found>(events.single())
         val retired = generation
@@ -308,7 +308,7 @@ class IosInvalidReresolutionTest {
         assertEquals(3, events.size)
     }
 
-    private class Fixture(profile: TransportSecurityProfile) {
+    private class Fixture(profile: TransportSecurityProfile, private val useTxtMonitor: Boolean) {
         val context = TransportContext(
             appId = AppId("lan-txt-test"),
             localPeerId = PeerId("local"),
@@ -323,7 +323,14 @@ class IosInvalidReresolutionTest {
             registry,
             connectionFactory = { native, _ -> ControlledConnection(native).also { connections += it } }
         )
-        val discovery = IosLanDiscoveryTransport(context, registry, data)
+        val dns = FakeIosLanTxtDns()
+        val discovery = IosLanDiscoveryTransport(context, registry, data, dns)
+        private data class Query(
+            val owner: IosLanTxtMonitor.Owner,
+            val reference: FakeIosLanTxtDns.Reference,
+            var raw: ByteArray? = null
+        )
+        private val queries = mutableMapOf<Pair<Int, String>, Query>()
         val events = mutableListOf<PeerEvent>()
         val generation: Int get() = discovery.browserGenerationForTest
 
@@ -345,6 +352,27 @@ class IosInvalidReresolutionTest {
             val endpoint = assertNotNull(
                 nw_endpoint_create_bonjour_service(serviceName, context.lanServiceTypeBonjour, "local.")
             )
+            if (useTxtMonitor) {
+                val key = callbackGeneration to serviceName
+                val query = queries[key] ?: run {
+                    val owner = discovery.txtServiceForTest(endpoint, callbackGeneration) ?: return
+                    Query(owner, dns.references.last()).also { queries[key] = it }
+                }
+                val previous = query.raw
+                dns.onQueue {
+                    if (previous != null) {
+                        query.reference.answer(previous, added = false, moreComing = bytes != null)
+                    }
+                    if (bytes != null) {
+                        query.reference.answer(bytes)
+                    } else if (previous == null) {
+                        // A missing current TXT set still reconciles/withdraws its exact native owner.
+                        query.reference.answer(ByteArray(0), added = false)
+                    }
+                }
+                query.raw = bytes?.copyOf()
+                return
+            }
             val txt: nw_txt_record_t = bytes?.usePinned { pinned ->
                 assertNotNull(
                     nw_txt_record_create_with_bytes(
@@ -427,9 +455,17 @@ class IosInvalidReresolutionTest {
         fun succeed() { mutableState.value = ConnectionState.Connected }
     }
 
-    private fun withProfiles(block: suspend Fixture.() -> Unit) = runBlocking<Unit> {
-        for (profile in TransportSecurityProfile.entries) {
-            val fixture = Fixture(profile)
+    // The unchanged cache-slot test uses this delegate-only route. A live query has a separate
+    // lifetime/capacity, covered explicitly by IosLanTxtMonitorTest rather than a fake NW removal.
+    private fun withProfiles(block: suspend Fixture.() -> Unit) = withInputs(listOf(false), block)
+
+    private fun withProfilesAndTxtMonitor(block: suspend Fixture.() -> Unit) = withInputs(listOf(false, true), block)
+
+    private fun withInputs(inputs: List<Boolean>, block: suspend Fixture.() -> Unit) = runBlocking<Unit> {
+        for ((profile, useMonitor) in TransportSecurityProfile.entries.flatMap { profile ->
+            inputs.map { profile to it }
+        }) {
+            val fixture = Fixture(profile, useMonitor)
             val collector = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
                 fixture.discovery.events.collect { fixture.events += it }
             }
@@ -449,6 +485,12 @@ class IosInvalidReresolutionTest {
                             fixture.data.close()
                         } finally {
                             fixture.connections.forEach { it.cancelNow("test finalizer") }
+                            assertEquals(0, fixture.discovery.txtQueryCountForTest)
+                            assertEquals(0, fixture.discovery.txtReservedQueryCountForTest)
+                            fixture.dns.references.forEach { reference ->
+                                assertEquals(1, reference.operations.count { it == "deallocate" })
+                                assertEquals(1, reference.operations.count { it == "dispose" })
+                            }
                         }
                     }
                 }

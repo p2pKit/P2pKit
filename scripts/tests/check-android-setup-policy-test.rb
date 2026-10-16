@@ -6,7 +6,7 @@ require "shellwords"
 ROOT = File.expand_path("../..", __dir__)
 CATALOG = "gradle/libs.versions.toml"
 LOCAL = "docs/testing/local.md"
-CI = ".github/workflows/ci.yml"
+CI = "scripts/setup-ci-component.sh"
 ENTRY_POINTS = {
     "CONTRIBUTING.md" => ["## Development setup", "docs/testing/local.md#android-sdk-setup"],
     "docs/validation/test-catalog.md" => ["### 1.1 Required tools and accounts", "../testing/local.md#android-sdk-setup"],
@@ -71,9 +71,9 @@ def check_setup(files)
         line.include?("/cmdline-tools/latest/bin/sdkmanager") && !line.lstrip.start_with?("#")
     end.map do |line|
         cmd = Shellwords.split(line.strip)
-        cmd.drop(1) if cmd.first == manager
+        cmd.drop(1) if ["$sdk/cmdline-tools/latest/bin/sdkmanager", "$sdk/cmdline-tools/latest/bin/sdkmanager.bat"].include?(cmd.first)
     end.compact
-    require_setup(ci_packages.size == 1 && (packages - ci_packages.first).empty?,
+    require_setup(ci_packages.size == 2 && ci_packages.all? { |items| (packages - items).empty? },
                   "documented platform packages differ from the CI installer")
     ENTRY_POINTS.each do |path, (heading, target)|
         text = section(files.fetch(path), heading)

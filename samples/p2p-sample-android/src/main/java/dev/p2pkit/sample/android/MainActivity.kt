@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.viewModels
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -76,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pSession
@@ -117,6 +119,7 @@ internal const val SECURITY_POSTURE_WARNING: String =
 
 class MainActivity : ComponentActivity() {
     private val sampleViewModel: P2pKitViewModel by viewModels()
+    private val rpcNavigationRequest = SampleRpcOpenRequest()
     // Register outside either screen: rotation, room navigation and diagnostics must not retire the result owner.
     private val lanPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         // The callback Boolean is not a live grant and never authorizes replay of a previous action.
@@ -125,6 +128,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null && sampleRpcAvailable) rpcNavigationRequest.offer(intent?.action)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -141,6 +145,23 @@ class MainActivity : ComponentActivity() {
         sampleViewModel.notifyForegrounded()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (sampleRpcAvailable) rpcNavigationRequest.offer(intent.action)
+        consumeRpcNavigation()
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        consumeRpcNavigation()
+    }
+
+    private fun consumeRpcNavigation() {
+        rpcNavigationRequest.consume(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            sampleViewModel.openRpcFromNavigation()
+        }
+    }
+
     override fun onStop() {
         sampleViewModel.notifyBackgrounded()
         super.onStop()
@@ -152,6 +173,17 @@ class MainActivity : ComponentActivity() {
 private fun P2pKitSampleApp(vm: P2pKitViewModel, onGrantLanAccess: () -> Unit) {
     val isRunning by vm.isRunning.collectAsState()
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    val rpcEntry by vm.rpcSection.collectAsState()
+    val rpcNotice by vm.rpcNavigationMessage.collectAsState()
+    val admission by vm.runAdmission.collectAsState(vm.currentRunAdmission())
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val entry = rpcEntry
+    if (entry != null && sampleRpcAvailable) {
+        // Only the exact entry's cleanup callback can release Room admission; old callbacks cannot pop a new RPC entry.
+        SampleRpcSection(entry, onExit = { if (vm.leaveRpcSection(entry)) showDiagnostics = false })
+        return
+    }
+    BackHandler(enabled = showDiagnostics) { showDiagnostics = false }
 
     Scaffold(
         topBar = {
@@ -170,13 +202,24 @@ private fun P2pKitSampleApp(vm: P2pKitViewModel, onGrantLanAccess: () -> Unit) {
                     }
                 },
                 actions = {
+                    if (sampleRpcAvailable) {
+                        TextButton(onClick = {
+                            // Recheck the current owner at dispatch time; an old enabled frame is not admission.
+                            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) vm.enterRpcSection()
+                        }, enabled = admission.canEnterRpc) { Text("RPC") }
+                    }
                     TextButton(onClick = { showDiagnostics = !showDiagnostics }) {
                         Text(if (showDiagnostics) "Room" else "Diagnostics")
                     }
                 }
             )
         },
-        bottomBar = { LanPermissionStatus(vm, onGrantLanAccess) }
+        bottomBar = {
+            Column {
+                rpcNotice?.let { Text(it, Modifier.padding(Dimens.ScreenPadding)) }
+                LanPermissionStatus(vm, onGrantLanAccess)
+            }
+        }
     ) { padding ->
         if (showDiagnostics) {
             AndroidDiagnosticsScreen(
@@ -263,6 +306,10 @@ private fun SetupScreen(
             style = MaterialTheme.typography.bodyMedium
         )
         SecurityPostureWarning()
+        if (sampleRpcAvailable) {
+            Text("Open RPC from the top bar for nearby trusted APIs. Stop Room or KMP smoke first; " +
+                "RPC becomes available after owned cleanup finishes.", style = MaterialTheme.typography.bodySmall)
+        }
         OutlinedTextField(
             value = vm.deviceName,
             onValueChange = vm::updateDeviceName,

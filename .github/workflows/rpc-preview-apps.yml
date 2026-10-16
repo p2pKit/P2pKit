@@ -1,0 +1,98 @@
+name: RPC preview applications
+
+# Feature-branch opt-in delivery only; no release, main merge, device or ART claim.
+on:
+  push:
+    branches: [work/rpc-lan-20260927-054728-8b1b11da]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-preview-apps-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (!github.event.deleted && contains(github.event.head_commit.message, '[rpc-ui-build]')))
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: android, os: ubuntu-24.04}
+          - {target: linux, os: ubuntu-24.04}
+          - {target: windows-ui-preview, os: windows-2025}
+          - {target: macos-arm64, os: macos-26}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      RPC_PREVIEW_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out exact source without retained credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Configure Gradle daemon JDK 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Retain daemon JDK
+        run: echo "RPC_PREVIEW_JDK21=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Configure application compiler and runtime JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Validate wrapper and reuse dependency and wrapper caches
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: false
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            init.d
+
+      - name: Check packaging boundaries and configure disposable runner inputs
+        run: |
+          python3 scripts/tests/package-rpc-preview-test.py
+          python3 scripts/run-rpc-preview-build.py configure
+
+      - name: Build and verify the exact-source preview
+        run: python3 scripts/run-rpc-preview-build.py build
+
+      - name: Upload only completed artifacts and manifests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: build/rpc-app-delivery/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain focused test results on failure or success
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-${{ matrix.target }}-tests-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            samples/p2p-sample-android/build/test-results/testDebugUnitTest/
+            samples/p2p-sample-rpc/build/test-results/jvmTest/
+            build/rpc-preview-build.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -11,20 +11,38 @@ scripts/check-gradle-wrapper.sh
 scripts/check-dependency-verification.sh
 scripts/tests/check-dependency-update-policy-test.sh
 scripts/tests/check-lock-write-policy-test.sh
+python3 -I -B -S scripts/tests/check-freemarker-floor-test.py
+python3 -I -B -S scripts/tests/check-jackson-floor-test.py
+python3 -I -B -S scripts/tests/stage-rpc-macos-app-test.py
+python3 -I -B -S scripts/tests/check-rpc-hosted-validation-test.py
 scripts/tests/check-repository-layout.sh
 scripts/tests/check-osv-lockfile-coverage.sh
 scripts/tests/check-markdown-links.sh
 scripts/tests/classify-ci-scope-test.sh
 scripts/tests/resolve-ci-scope-test.sh
-ruby scripts/tests/check-ci-scope-policy-test.rb
+ruby scripts/check-modular-ci-policy.rb
+ruby scripts/tests/check-modular-ci-policy-test.rb
+python3 -B scripts/tests/ci-component-test.py
+python3 -B scripts/tests/ci-evidence-test.py
+python3 -B scripts/tests/ci-qualification-test.py
 scripts/tests/check-git-whitespace-test.sh
 scripts/tests/check-release-identity-test.sh
 python3 scripts/tests/check-publish-license-test.py
+ruby scripts/tests/check-consumer-gradle-policy-test.rb
 scripts/tests/check-kotlin-toolchain-policy-test.sh
 scripts/check-android-abi-guard.sh
 ruby scripts/tests/check-platform-test-policy-test.rb
 python3 scripts/tests/run-platform-tests-test.py
 python3 scripts/tests/check-release-metadata-test.py
+python3 -I -B scripts/tests/application-release-version-test.py
+bash scripts/tests/check-application-release-version.sh
+python3 -I -B scripts/tests/sample-artifact-identity-test.py
+python3 -I -B scripts/tests/package-sample-apps-test.py
+python3 -I -B scripts/tests/publish-sample-release-test.py
+python3 -I -B scripts/tests/release-application-set-test.py
+python3 -I -B scripts/tests/central-bundle-evidence-test.py
+python3 -I -B scripts/tests/central-deployment-evidence-test.py
+python3 -I -B scripts/tests/maven-recovery-test.py
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh
 python3 scripts/tests/ios-project-generation-test.py

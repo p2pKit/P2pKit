@@ -25,6 +25,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -33,6 +34,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** Virtual diagnostic deadlines, with real bounded settlement of the existing independent cleanup workers. */
@@ -106,13 +108,47 @@ class StuckReconnectWatchdogTest {
             val registered = timersAtHandlerEntry.await()
             assertEquals(1, registered.size, "register the LAZY timer before allowing an immediate reconnect handler")
             assertTrue(settle {
-                accepted.await().also { handlerJob.await().join() }
+                val rearmed = accepted.await()
+                handlerJob.await().join()
+                val timer = registered.single()
+                assertTrue(timer.isCancelled, "rearm must request cancellation before handler completion")
+                // Real epoch cleanup may suspend the eager handler long enough
+                // for the timer to start. cancel() does not join its completion.
+                timer.join()
+                rearmed
             })
             assertEquals(ConnectionState.Connected, session.state.value)
             assertTrue(registered.single().isCancelled && registered.single().isCompleted)
             assertEquals(beforeLoss.size, liveChildren().size)
             advanceBy(30_000)
             logger.assertNoUnexpectedWarnOrError()
+        }
+    }
+
+    @Test
+    fun settlementWaitsForQueuedTimerCancellationWithoutAdvancingVirtualTime() = runBlocking {
+        withFixture {
+            val virtualNow = scheduler.currentTime
+            val timer = launch(StandardTestDispatcher(scheduler)) { delay(30_000) }
+            try {
+                scheduler.runCurrent()
+                assertTrue(timer.isActive)
+                timer.cancel()
+                assertTrue(timer.isCancelled)
+                assertFalse(timer.isCompleted, "a started timer still has queued cancellation work")
+                val joined = async(start = CoroutineStart.UNDISPATCHED) { timer.join() }
+                try {
+                    assertFalse(joined.isCompleted, "joining must wait for the queued cancellation")
+                    settle { joined.await() }
+                    assertTrue(timer.isCancelled && timer.isCompleted)
+                    assertEquals(virtualNow, scheduler.currentTime, "settlement must not advance diagnostic time")
+                } finally {
+                    settle { joined.cancelAndJoin() }
+                }
+            } finally {
+                timer.cancel()
+                settle { timer.join() }
+            }
         }
     }
 

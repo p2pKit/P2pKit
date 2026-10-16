@@ -9,6 +9,7 @@ selftest; producing its fixture is not a cancellation or cleanup verdict.
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -47,6 +48,8 @@ PACKAGING_REPORT_BYTES = (
     b"PASS: embedded JmDNS Android D8/R8 plain+coexistence; POM-only runtime graphs\n"
 )
 PACKAGING_REPORT_PATH = "androidConsumer/build/reports/embedded-jmdns/packaging.txt"
+RPC_REPORT_PATH = "rpcJvm/build/reports/rpc-api/smoke.txt"
+RPC_REPORT_BYTES = b"PASS: published RPC JVM API values; no network or capacity claim\n"
 EXPECTED_APKS = {
     "debug": "androidConsumer-debug.apk",
     "release": "androidConsumer-release-unsigned.apk",
@@ -62,11 +65,14 @@ EXPECTED_PUBLICATIONS = [
     ("p2p-core-iosarm64", ".klib"), ("p2p-transport-lan-iosarm64", ".klib"),
     ("p2p-core-iossimulatorarm64", ".klib"), ("p2p-transport-lan-iossimulatorarm64", ".klib"),
     ("p2p-core-iosx64", ".klib"), ("p2p-transport-lan-iosx64", ".klib"),
+    ("p2p-rpc", ".jar"), ("p2p-rpc-jvm", ".jar"), ("p2p-rpc-android", ".aar"),
+    ("p2p-rpc-iosarm64", ".klib"), ("p2p-rpc-iossimulatorarm64", ".klib"), ("p2p-rpc-iosx64", ".klib"),
 ]
-EXPECTED_TOOLING_PUBLICATIONS = ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android")
+EXPECTED_TOOLING_PUBLICATIONS = ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android")
 EXPECTED_NATIVE_PUBLICATIONS = (
     "p2p-core-iosarm64", "p2p-core-iossimulatorarm64", "p2p-core-iosx64",
     "p2p-transport-lan-iosarm64", "p2p-transport-lan-iossimulatorarm64", "p2p-transport-lan-iosx64",
+    "p2p-rpc-iosarm64", "p2p-rpc-iossimulatorarm64", "p2p-rpc-iosx64",
 )
 EXPECTED_INTEROP_PUBLICATIONS = (
     "p2p-transport-lan-iosarm64", "p2p-transport-lan-iossimulatorarm64", "p2p-transport-lan-iosx64",
@@ -101,6 +107,13 @@ EXPECTED_LOGICAL_ALIASES = [
      f"p2p-transport-lan-iossimulatorarm64-{VERSION}-cinterop-p2pkit_nw.klib"),
     ("p2p-transport-lan-iosx64", f"p2p-transport-lan-iosX64Cinterop-p2pkit_nwMain-{VERSION}.klib",
      f"p2p-transport-lan-iosx64-{VERSION}-cinterop-p2pkit_nw.klib"),
+    ("p2p-rpc", f"p2p-rpc-metadata-{VERSION}.jar", f"p2p-rpc-{VERSION}.jar"),
+    ("p2p-rpc", f"p2p-rpc-kotlin-{VERSION}-sources.jar", f"p2p-rpc-{VERSION}-sources.jar"),
+    ("p2p-rpc-android", "p2p-rpc.aar", f"p2p-rpc-android-{VERSION}.aar"),
+    ("p2p-rpc-iosarm64", f"p2p-rpc-iosArm64Main-{VERSION}.klib", f"p2p-rpc-iosarm64-{VERSION}.klib"),
+    ("p2p-rpc-iossimulatorarm64", f"p2p-rpc-iosSimulatorArm64Main-{VERSION}.klib",
+     f"p2p-rpc-iossimulatorarm64-{VERSION}.klib"),
+    ("p2p-rpc-iosx64", f"p2p-rpc-iosX64Main-{VERSION}.klib", f"p2p-rpc-iosx64-{VERSION}.klib"),
 ]
 EXPECTED_LEGACY_TASKS = [
     ":coreJvm:compileKotlin", ":coreJvm:compileJava", ":lanJvm:compileKotlin", ":desktopJvm:compileKotlin",
@@ -119,7 +132,13 @@ EXPECTED_EMBEDDED_TASKS = [
     ":androidConsumer:assembleCoexistRelease",
     ":androidConsumer:verifyEmbeddedJmdnsPackaging",
 ]
-EXPECTED_TASKS = EXPECTED_LEGACY_TASKS + EXPECTED_EMBEDDED_TASKS
+EXPECTED_RPC_TASKS = [":rpcJvm:compileKotlin", ":rpcJvm:runPublishedRpcApiSmoke"]
+EXPECTED_TASKS = EXPECTED_LEGACY_TASKS + EXPECTED_EMBEDDED_TASKS + EXPECTED_RPC_TASKS
+EXPECTED_CONSUMER_GRADLE_PROPERTIES = (
+    "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8\n"
+    "org.gradle.workers.max=2\n"
+    "org.gradle.parallel=false\n"
+)
 EXPECTED_FOCUSED_PUBLICATIONS = [
     ("p2p-core-jvm", ".jar"), ("p2p-core-android", ".aar"),
     ("p2p-transport-lan-jvm", ".jar"), ("p2p-transport-lan-android", ".aar"),
@@ -150,6 +169,16 @@ POM_DEPENDENCIES = {
     ],
     "p2p-network-provisioning-android-android": [["p2p-core-android", "compile"], ["kotlinx-coroutines-core-jvm", "compile"]],
     "p2p-network-provisioning-desktop": [["p2p-core-jvm", "compile"], ["kotlinx-coroutines-core-jvm", "compile"]],
+    "p2p-rpc-jvm": [
+        ["p2p-core-jvm", "compile"], ["p2p-transport-lan-jvm", "compile"],
+        ["kotlinx-serialization-core-jvm", "compile"], ["kotlinx-serialization-json-jvm", "runtime"],
+        ["kotlinx-serialization-json-io-jvm", "runtime"], ["p2p-network-provisioning-desktop", "runtime"],
+    ],
+    "p2p-rpc-android": [
+        ["p2p-core-android", "compile"], ["p2p-transport-lan-android", "compile"],
+        ["kotlinx-serialization-core-jvm", "compile"], ["kotlinx-serialization-json-jvm", "runtime"],
+        ["kotlinx-serialization-json-io-jvm", "runtime"], ["p2p-network-provisioning-android-android", "runtime"],
+    ],
 }
 
 BOUNDARY = r'''#!/usr/bin/env python3
@@ -181,7 +210,10 @@ OWNERSHIP_FIELDS = __OWNERSHIP_FIELDS__
 CONSUMER_REPORT_BYTES = __CONSUMER_REPORT_BYTES__
 PACKAGING_REPORT_BYTES = __PACKAGING_REPORT_BYTES__
 PACKAGING_REPORT_PATH = __PACKAGING_REPORT_PATH__
+RPC_REPORT_BYTES = __RPC_REPORT_BYTES__
+RPC_REPORT_PATH = __RPC_REPORT_PATH__
 EXPECTED_APKS = __EXPECTED_APKS__
+EXPECTED_CONSUMER_GRADLE_PROPERTIES = __EXPECTED_CONSUMER_GRADLE_PROPERTIES__
 
 def record(kind, **fields):
     with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as stream:
@@ -294,6 +326,8 @@ def publish(repo, publications):
             component = "p2p-core"
         elif artifact.startswith("p2p-transport-lan-"):
             component = "p2p-transport-lan"
+        elif artifact.startswith("p2p-rpc-"):
+            component = "p2p-rpc"
         elif artifact == "p2p-network-provisioning-android-android":
             component = "p2p-network-provisioning-android"
         if artifact in TOOLING_PUBLICATIONS and not (
@@ -325,12 +359,17 @@ def publish(repo, publications):
                 "group": GROUP, "module": target, "version": VERSION,
             }})
         lan_variants(artifact, variants)
-        if artifact == "p2p-core" and os.environ.get("FAKE_MODULE_FILE_CHANGE"):
+        if artifact == os.environ.get("FAKE_MODULE_FILE_OWNER", "p2p-core") and os.environ.get("FAKE_MODULE_FILE_CHANGE"):
             change = os.environ["FAKE_MODULE_FILE_CHANGE"]
             entry = api_files[0]
             source_binding = {key: variants[1]["files"][0][key] for key in ("url", "sha256", "size")}
             if change == "missing-alias":
-                api_files.clear()
+                # Android repeats the same logical name in API and runtime.
+                # Remove both occurrences; retaining either is not a missing alias.
+                missing_name = entry["name"]
+                for variant in variants:
+                    if "files" in variant:
+                        variant["files"] = [item for item in variant["files"] if item["name"] != missing_name]
             elif change == "unapproved-name":
                 entry["name"] = "unapproved-logical.jar"
             elif change == "wrong-target":
@@ -364,8 +403,13 @@ def publish(repo, publications):
     if os.environ.get("FAKE_EXTRA_NATIVE_INTEROP"):
         (repo / GROUP.replace(".", "/") / "p2p-core-iosarm64" / VERSION /
          f"p2p-core-iosarm64-{VERSION}-cinterop-p2pkit_nw.klib").write_bytes(b"unapproved interop coordinate")
+    if os.environ.get("FAKE_EXTRA_RPC_INTEROP"):
+        (repo / GROUP.replace(".", "/") / "p2p-rpc-iosarm64" / VERSION /
+         f"p2p-rpc-iosarm64-{VERSION}-cinterop-p2pkit_nw.klib").write_bytes(b"unapproved RPC interop coordinate")
     for flag, artifact, ending in (
             ("FAKE_MISSING_NATIVE_METADATA", "p2p-core-iosarm64", "-metadata.jar"),
+            ("FAKE_MISSING_RPC_METADATA", "p2p-rpc-iosarm64", "-metadata.jar"),
+            ("FAKE_MISSING_RPC_JAR", "p2p-rpc-jvm", ".jar"),
             ("FAKE_MISSING_NATIVE_INTEROP", "p2p-transport-lan-iosarm64", "-cinterop-p2pkit_nw.klib")):
         if os.environ.get(flag):
             (repo / GROUP.replace(".", "/") / artifact / VERSION / f"{artifact}-{VERSION}{ending}").unlink()
@@ -388,6 +432,13 @@ def publish(repo, publications):
 
 def build(args):
     fixture = Path(args[args.index("-p") + 1])
+    # Inspect the actual generated input at the fake Gradle boundary, not after
+    # compilation. This verifies wiring only, never JVM allocation or D8/R8.
+    assert (fixture / "gradle.properties").read_text() == EXPECTED_CONSUMER_GRADLE_PROPERTIES
+    if ":rpcJvm:runPublishedRpcApiSmoke" in args and not os.environ.get("FAKE_MISSING_RPC_REPORT"):
+        report = fixture / RPC_REPORT_PATH
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_bytes(os.environ["FAKE_RPC_REPORT"].encode() if "FAKE_RPC_REPORT" in os.environ else RPC_REPORT_BYTES)
     if ":kmpConsumer:linkDebugFrameworkIosSimulatorArm64" in args:
         report = fixture / "kmpConsumer/build/reports/consumer-fixture.json"
         report.parent.mkdir(parents=True, exist_ok=True)
@@ -426,6 +477,8 @@ def build(args):
         (repo / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION / f"p2p-core-jvm-{VERSION}.jar").write_bytes(b"changed after prepared allowlist")
     for flag, artifact, ending in (
             ("FAKE_TAMPER_NATIVE_METADATA", "p2p-core-iosarm64", "-metadata.jar"),
+            ("FAKE_TAMPER_RPC_JAR", "p2p-rpc-jvm", ".jar"),
+            ("FAKE_TAMPER_RPC_METADATA", "p2p-rpc-iosarm64", "-metadata.jar"),
             ("FAKE_TAMPER_NATIVE_INTEROP", "p2p-transport-lan-iosarm64", "-cinterop-p2pkit_nw.klib")):
         if os.environ.get(flag):
             repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-PconsumerRepo=")))
@@ -645,7 +698,9 @@ class ConsumerGateTest(unittest.TestCase):
             "COROUTINES_VERSION": COROUTINES_VERSION, "EXTERNAL_SHA256": EXTERNAL_SHA256,
             "OWNERSHIP_FIELDS": OWNERSHIP_FIELDS, "CONSUMER_REPORT_BYTES": CONSUMER_REPORT_BYTES,
             "PACKAGING_REPORT_BYTES": PACKAGING_REPORT_BYTES, "PACKAGING_REPORT_PATH": PACKAGING_REPORT_PATH,
+            "RPC_REPORT_BYTES": RPC_REPORT_BYTES, "RPC_REPORT_PATH": RPC_REPORT_PATH,
             "EXPECTED_APKS": EXPECTED_APKS,
+            "EXPECTED_CONSUMER_GRADLE_PROPERTIES": EXPECTED_CONSUMER_GRADLE_PROPERTIES,
         }.items():
             code = code.replace("__" + key + "__", repr(value))
         for path in (self.root / "gradlew", self.tools / "executor with spaces", self.tools / "xcrun", self.tools / "curl",
@@ -821,6 +876,146 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertEqual(len(self.calls("xcrun")), 1)
         self.assertEqual((work / "consumer" / PACKAGING_REPORT_PATH).read_bytes(), PACKAGING_REPORT_BYTES)
 
+    def test_fixture_resource_budget_is_local_and_preserves_executor_and_complete_arguments(self):
+        root_properties = self.root / "gradle.properties"
+        root_before = root_properties.read_bytes()
+        home_properties = self.state / "gradle-home/gradle.properties"
+        home_before = b"# Synthetic caller-owned settings; the consumer must not rewrite this file.\n"
+        home_properties.write_bytes(home_before)
+        for executor in (False, True):
+            work = self.work_root / ("resource budget " + str(executor))
+            options = self.adapter_options(work) if executor else {"P2PKIT_CONSUMER_WORK_DIR": str(work)}
+            with self.subTest(executor=executor):
+                self.assert_pass(self.run_gate(options, home=None if executor else home_properties.parent))
+                leaves = self.calls("gradle")[-2:]
+                self.assertEqual(work, self.assert_complete_arguments(leaves))
+                self.assertEqual([row["home"] for row in leaves], [str(home_properties.parent)] * 2)
+                self.assertEqual(EXPECTED_CONSUMER_GRADLE_PROPERTIES,
+                                 (work / "consumer/gradle.properties").read_text())
+                self.assertEqual(root_before, root_properties.read_bytes())
+                self.assertEqual(home_before, home_properties.read_bytes())
+
+    def test_fixed_fixture_budget_matches_canonical_executor_and_not_host_defaults(self):
+        script = (ROOT / "scripts/check-published-consumers.sh").read_text()
+        marker = 'cat > "$FIXTURE_DIR/gradle.properties" <<\'EOF_CONSUMER_RESOURCES\'\n'
+        self.assertEqual(1, script.count(marker))
+        body = script.split(marker, 1)[1].split("EOF_CONSUMER_RESOURCES\n", 1)[0]
+        self.assertEqual(EXPECTED_CONSUMER_GRADLE_PROPERTIES, body)
+        self.assertLess(script.index(marker), script.index('echo "==> Compiling isolated published consumers"'))
+        canonical = ast.parse((ROOT / "scripts/run-audit-command.py").read_text())
+        jvm = [ast.literal_eval(node.value) for node in canonical.body if isinstance(node, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == "JVM_ARGUMENTS" for target in node.targets)]
+        self.assertEqual([EXPECTED_CONSUMER_GRADLE_PROPERTIES.splitlines()[0].split("=", 1)[1]], jvm)
+
+    def test_rpc_fixture_uses_only_published_coordinates_and_all_three_platform_apis(self):
+        result = self.run_gate(self.audit_options())
+        self.assert_pass(result)
+        fixture = self.work / "consumer"
+        self.assertIn(f'implementation("{GROUP}:p2p-rpc-jvm:{VERSION}")',
+                      (fixture / "rpcJvm/build.gradle.kts").read_text())
+        self.assertIn(f'implementation("{GROUP}:p2p-rpc-android:{VERSION}")',
+                      (fixture / "androidConsumer/build.gradle.kts").read_text())
+        self.assertIn(f'implementation("{GROUP}:p2p-rpc:{VERSION}")',
+                      (fixture / "kmpConsumer/build.gradle.kts").read_text())
+        shared = (fixture / "rpcJvm/src/main/kotlin/consumer/PublishedRpcConsumer.kt").read_bytes()
+        for source_set in ("androidConsumer/src/main", "kmpConsumer/src/commonMain"):
+            self.assertEqual((fixture / source_set / "kotlin/consumer/PublishedRpcConsumer.kt").read_bytes(), shared)
+        for operation in (b"RpcHost.create(platform, scope)", b"RpcClient.create(platform, scope)",
+                          b"client.connect(selected)", b"client.call(echo", b"RpcExecutionEvidence.MayHaveExecuted",
+                          b"authorize = { false }"):
+            self.assertIn(operation, shared)
+        for name, platform in (("rpcJvm/src/main/kotlin/consumer/RpcJvmConsumer.kt", "jvm"),
+                               ("kmpConsumer/src/androidMain/kotlin/consumer/RpcAndroidConsumer.kt", "android"),
+                               ("kmpConsumer/src/iosMain/kotlin/consumer/RpcIosConsumer.kt", "ios")):
+            self.assertIn("RpcPlatform." + platform + "(", (fixture / name).read_text())
+        for path in fixture.rglob("*.gradle.kts"):
+            self.assertNotIn("project(\"", path.read_text(), str(path))
+            self.assertNotIn("includeBuild(", path.read_text(), str(path))
+        self.assertEqual((fixture / RPC_REPORT_PATH).read_bytes(), RPC_REPORT_BYTES)
+        self.assertIn("no RPC network, ART/device or capacity qualification", result.stdout)
+
+    def test_lan_failure_diagnostics_preserve_real_discovery_and_disposal(self):
+        # Generated-source wiring only: this does not qualify live multicast.
+        result = self.run_gate(self.audit_options())
+        self.assert_pass(result)
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        for phase in ("advertise-$index", "discover-$index", "capture-owners", "metadata-$index",
+                      "await-peer-$index", "stop-$index", "verify-disposed-$index"):
+            self.assertIn(f'markPhase("{phase}")', smoke)
+        self.assertEqual(smoke.count("withTimeout(30_000)"), 2)
+        for invariant in ("transports { lan() }", "kit.startAdvertising()", "kit.startDiscovery()",
+                          "check(owners.size == kits.size)", "kit.peers.first", "owner.requireDisposed(factory)",
+                          "withContext(NonCancellable)", "failure?.let { throw it }"):
+            self.assertIn(invariant, smoke)
+        diagnostic = smoke.split("private fun reportNativeState(factory: Any)", 1)[1].split(
+            "private fun requirePackaging", 1)[0]
+        for forbidden in ("hostAddress", "getPropertyString", "getServiceInfo", "requestServiceInfo", ".list(",
+                          "toString()", "JvmLanDiag.enabled", ".close(", ".cancel(", "getName(", ".textBytes", ".allValues()"):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn("cachedNames=${dns.cache.size}", diagnostic)
+        self.assertIn("reportNativeState(factory)", smoke)
+        self.assertIn("recordFailure(diagnosticFailure)", smoke)
+        self.assertLess(smoke.index("recordFailure(error)"), smoke.index("reportNativeState(factory)",
+                                                                       smoke.index("fun main(")))
+        for bypass in ("System.exit(", "exitProcess(", "dev.p2pkit.test.jmdnsBindAddress", "JvmTestDiscoveryBackend"):
+            self.assertNotIn(bypass, smoke)
+
+    def test_rpc_runtime_smoke_requires_its_exact_fresh_report(self):
+        for index, overrides in enumerate((
+                {"FAKE_MISSING_RPC_REPORT": "1"}, {"FAKE_RPC_REPORT": ""},
+                {"FAKE_RPC_REPORT": "not an API pass\n"},
+                {"FAKE_RPC_REPORT": RPC_REPORT_BYTES.decode() + "extra\n"})):
+            with self.subTest(overrides=overrides):
+                work = self.work_root / f"rpc-report-{index}"
+                result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), **overrides})
+                self.assert_rejected(result, "missing or invalid published RPC API smoke report")
+        self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
+
+    def test_pom_diagnostic_uses_original_published_smoke_only_without_claiming_full_qualification(self):
+        result = self.run_gate({"P2PKIT_CONSUMER_WORK_DIR": str(self.work)}, arguments=("--pom-diagnostic",))
+        self.assertEqual(result.returncode, 0, self.output(result))
+        self.assertIn("focused published POM discovery diagnostic only", result.stdout)
+        self.assertIn("NOT complete consumer or release qualification", result.stdout)
+        leaves = self.calls("gradle")
+        self.assertEqual(len(leaves), 2)
+        self.assertEqual(leaves[0]["argv"], ["--no-daemon", "--console=plain", *EXPECTED_FOCUSED_PUBLISH_TASKS,
+                                            f"-Dmaven.repo.local={self.work / 'repository'}"])
+        self.assertEqual(leaves[1]["argv"], ["--no-daemon", "--console=plain", "-p", str(self.work / "consumer"),
+                                            f"-PconsumerRepo={self.work / 'repository'}", ":lanJvm:runEmbeddedJmdnsPomSmoke"])
+        self.assertFalse(self.calls("xcrun"))
+        self.assertFalse(self.calls("curl"))
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        passive = smoke.split("private fun reportDiscoveryState", 1)[1].split("private fun reportNativeState", 1)[0]
+        self.assertIn('field(dns, "_serviceListeners")', passive)
+        self.assertIn('field(status, "_addedServices")', passive)
+        self.assertIn('CONSUMER_DISCOVERY_SNAPSHOT INDEX $index', passive)
+        self.assertIn('CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE', passive)
+        self.assertIn('catch (_: Throwable)', passive)
+        for forbidden in ('getServiceInfo(', 'requestServiceInfo(', '.addServiceListener(', 'JvmLanDiag.enabled',
+                          'hostAddress', '.textBytes', '.toString()', '.close(', '.cancel(', 'Thread.sleep('):
+            self.assertNotIn(forbidden, passive)
+        printed = passive.split('println(', 1)[1].split(')', 1)[0]
+        self.assertNotIn('localPeerId', printed)
+        self.assertEqual(smoke.count("withTimeout(30_000)"), 2)
+        self.assertIn('kit.peers.first', smoke)
+        self.assertIn('failure?.let { throw it }', smoke)
+        self.assertIn('owner.requireDisposed(factory)', smoke)
+
+    def test_pom_diagnostic_rejects_remote_audit_executor_profiles_and_extra_arguments(self):
+        for options, arguments in (({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://invalid.example"}, ("--pom-diagnostic",)),
+                ({"P2PKIT_CONSUMER_AUDIT_METADATA": "1"}, ("--pom-diagnostic",)),
+                ({"P2PKIT_GRADLE_EXECUTOR": "/not/an/executor"}, ("--pom-diagnostic",)),
+                ({"P2PKIT_CONSUMER_PROFILE": "lan-jvm-android"}, ("--pom-diagnostic",)),
+                ({}, ("--pom-diagnostic", "--latest-published")),
+                ({}, ("--pom-diagnostic", "extra"))):
+            with self.subTest(options=options, arguments=arguments):
+                result = self.run_gate(options, arguments=arguments)
+                self.assertEqual(result.returncode, 2, self.output(result))
+                self.assertIn("requires ordinary source-local", result.stderr)
+        # setUp records fixture Git construction; no PRODUCT boundary may run.
+        for kind in ("gradle", "gradle-stop", "executor", "curl", "xcrun"):
+            self.assertFalse(self.calls(kind), kind)
+
     def test_focused_profile_uses_only_five_publications_and_exact_embedded_tasks_without_native_tools(self):
         result = self.run_gate({"P2PKIT_CONSUMER_PROFILE": "lan-jvm-android",
                                 "P2PKIT_CONSUMER_WORK_DIR": str(self.work), "FAKE_MISSING_FRAMEWORK": "1"})
@@ -844,6 +1039,8 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertIn('":androidConsumer"', settings)
         self.assertNotIn('":kmpConsumer"', settings)
         self.assertNotIn('":desktopJvm"', settings)
+        self.assertNotIn('":rpcJvm"', settings)
+        self.assertFalse(list((self.work / "consumer").rglob("*Rpc*")))
         android_build = (self.work / "consumer/androidConsumer/build.gradle.kts").read_text()
         self.assertNotIn("p2p-network-provisioning", android_build)
         self.assertEqual((self.work / "consumer" / PACKAGING_REPORT_PATH).read_bytes(), PACKAGING_REPORT_BYTES)
@@ -1066,6 +1263,30 @@ class ConsumerGateTest(unittest.TestCase):
             self.assertIn(self.state, receipt.parents)
             self.assertEqual(json.loads(receipt.read_text())["requestedArgv"], row["requested"])
 
+    def test_consumer_configurations_keep_named_graph_and_fail_closed_loaders(self):
+        result = self.run_gate(self.adapter_options())
+        self.assert_pass(result)
+        work = self.assert_complete_arguments(self.calls("gradle")) / "consumer"
+        declarations = {
+            "lanJvm": ("upstreamJmdns", "publishedPomRuntimeClasspath"),
+            "androidConsumer": ("publishedPomDebugRuntimeClasspath", "publishedPomCoexistRuntimeClasspath"),
+        }
+        for project, names in declarations.items():
+            build = (work / project / "build.gradle.kts").read_text()
+            self.assertNotIn("configurations.creating", build)
+            for name in names:
+                self.assertEqual(build.count(f'val {name} = configurations.create("{name}") {{'), 1)
+            self.assertIn('extendsFrom(configurations.getByName("implementation"), '
+                          'configurations.getByName("runtimeOnly"))', build)
+            sources = list((work / project / "src/main/kotlin/consumer").glob("*.kt"))
+            source = "\n".join(path.read_text() for path in sources)
+            self.assertEqual(source.count("val loader = checkNotNull(JmDNS::class.java.classLoader)"), 1)
+            self.assertNotIn("val loader = JmDNS::class.java.classLoader", source)
+        android = (work / "androidConsumer/build.gradle.kts").read_text()
+        self.assertIn('configurations.getByName("coexistDebugImplementation"), '
+                      'configurations.getByName("coexistDebugRuntimeOnly")', android)
+        self.assertIn("target.attributes.attribute(key, requireNotNull(source.attributes.getAttribute(key)))", android)
+
     def test_executor_rejects_implicit_owned_work_before_creating_fixtures_or_receipts(self):
         for keep in ("0", "1"):
             with self.subTest(keep=keep):
@@ -1223,7 +1444,8 @@ class ConsumerGateTest(unittest.TestCase):
         expected_metadata = [
             ("p2p-core-jvm", ".pom"), ("p2p-transport-lan-jvm", ".pom"),
             ("p2p-network-provisioning-android-android", ".pom"), ("p2p-network-provisioning-desktop", ".pom"),
-            ("p2p-transport-lan-android", ".pom"), ("p2p-transport-lan-jvm", ".module"),
+            ("p2p-transport-lan-android", ".pom"), ("p2p-rpc-jvm", ".pom"), ("p2p-rpc-android", ".pom"),
+            ("p2p-transport-lan-jvm", ".module"),
             ("p2p-transport-lan-android", ".module"),
         ]
         downloads = self.calls("curl")
@@ -1257,6 +1479,9 @@ class ConsumerGateTest(unittest.TestCase):
                                             f"https://repository.example.invalid/maven/{relative}",
                                             "--output", str(self.work / "repository" / relative)])
         self.assertFalse((self.work / "consumer" / PACKAGING_REPORT_PATH).exists())
+        self.assertFalse((self.work / "consumer" / RPC_REPORT_PATH).exists())
+        self.assertFalse(list((self.work / "consumer").rglob("*Rpc*")))
+        self.assertNotIn("p2p-rpc", (self.work / "consumer/kmpConsumer/build.gradle.kts").read_text())
         self.assertEqual(len(self.calls("xcrun")), 1)
         self.assertFalse(self.calls("executor"))
 
@@ -1280,7 +1505,7 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertFalse(self.calls("gradle"))
         self.assertFalse(self.calls("curl"))
 
-    def test_metadata_preserves_external_bytes_and_only_exact_84_local_hashes(self):
+    def test_metadata_preserves_external_bytes_and_only_exact_117_local_hashes(self):
         result = self.run_gate(self.audit_options())
         self.assert_pass(result)
         metadata = (self.work / "consumer/gradle/verification-metadata.xml").read_bytes()
@@ -1322,20 +1547,20 @@ class ConsumerGateTest(unittest.TestCase):
                         "group": GROUP, "module": module, "version": VERSION, "name": name,
                         "path": relative.as_posix(), "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content),
                     }
-        self.assertEqual(len(actual), 84)
-        self.assertEqual(len(expected_alias_records), 18)
-        self.assertEqual(record_count, 102)
+        self.assertEqual(len(actual), 117)
+        self.assertEqual(len(expected_alias_records), 24)
+        self.assertEqual(record_count, 141)
         self.assertNotIn(b"<trust", metadata)
         manifest_path = next(self.state.glob("consumer-receipts.*/consumer-publication-manifest.json"))
         manifest = json.loads(manifest_path.read_text())
-        self.assertEqual(manifest["publicationCount"], 15)
-        self.assertEqual(manifest["artifactCount"], 84)
-        self.assertEqual(manifest["verificationRecordCount"], 102)
-        self.assertEqual(len(manifest["localArtifacts"]), 84)
-        self.assertEqual(len(manifest["logicalAliases"]), 18)
+        self.assertEqual(manifest["publicationCount"], 21)
+        self.assertEqual(manifest["artifactCount"], 117)
+        self.assertEqual(manifest["verificationRecordCount"], 141)
+        self.assertEqual(len(manifest["localArtifacts"]), 117)
+        self.assertEqual(len(manifest["logicalAliases"]), 24)
         self.assertEqual({(row["module"], row["name"]): row for row in manifest["logicalAliases"]}, expected_alias_records)
         self.assertIn("Gradle skips per-artifact verification for changing/SNAPSHOT modules", manifest["limitations"])
-        self.assertEqual(len(manifest["repositoryFiles"]), 117)
+        self.assertEqual(len(manifest["repositoryFiles"]), 163)
         for module in EXPECTED_TOOLING_PUBLICATIONS:
             relative = (Path(GROUP.replace(".", "/")) / module / VERSION /
                         f"{module}-{VERSION}-kotlin-tooling-metadata.json").as_posix()
@@ -1348,8 +1573,8 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertEqual((evidence / "reviewed-verification-metadata.xml").read_bytes(), self.reviewed)
         verification = json.loads((evidence / "consumer-metadata-verification.json").read_text())
         self.assertEqual(verification["result"], "PASS")
-        self.assertEqual(verification["artifactCount"], 84)
-        self.assertEqual(verification["verificationRecordCount"], 102)
+        self.assertEqual(verification["artifactCount"], 117)
+        self.assertEqual(verification["verificationRecordCount"], 141)
         self.assertEqual(manifest["reviewedPluginInputs"], {
             name: hashlib.sha256((self.root / name).read_bytes()).hexdigest()
             for name in ("scripts/consumer-buildscript.gradle.kts", "buildscript-gradle.lockfile")
@@ -1417,6 +1642,20 @@ class ConsumerGateTest(unittest.TestCase):
         self.assert_rejected(result)
         self.assertFalse((work / "consumer/gradle/verification-metadata.xml").exists())
 
+    def test_rpc_root_android_and_native_aliases_cannot_expand_or_rebind_trust(self):
+        for owner in ("p2p-rpc", "p2p-rpc-android", "p2p-rpc-iosarm64"):
+            for change, message in (("missing-alias", "missing required logical aliases"),
+                                    ("wrong-target", "source-local module file URL mismatch"),
+                                    ("remote", "source-local module file URL mismatch"),
+                                    ("wrong-sha256", "source-local module file content mismatch")):
+                with self.subTest(owner=owner, change=change):
+                    work = self.work_root / f"{owner}-{change}"
+                    result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work),
+                                            "FAKE_MODULE_FILE_OWNER": owner, "FAKE_MODULE_FILE_CHANGE": change})
+                    self.assert_rejected(result, message)
+                    self.assertFalse((work / "consumer/gradle/verification-metadata.xml").exists())
+        self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-publication-manifest.json")))
+
     def test_missing_consumer_receipt_cannot_issue_final_pass(self):
         result = self.run_gate({**self.audit_options(), "FAKE_MISSING_RECEIPT": "consumer-build"})
         self.assert_rejected(result)
@@ -1426,6 +1665,7 @@ class ConsumerGateTest(unittest.TestCase):
 
     def test_current_source_receipt_cannot_substitute_legacy_focused_or_extra_consumer_tasks(self):
         requests = [EXPECTED_LEGACY_TASKS, EXPECTED_EMBEDDED_TASKS, EXPECTED_TASKS[:-1],
+                    EXPECTED_LEGACY_TASKS + EXPECTED_EMBEDDED_TASKS,
                     [*EXPECTED_TASKS, ":lanJvm:unadmittedTask"]]
         for index, tasks in enumerate(requests):
             with self.subTest(tasks=tasks):
@@ -1443,9 +1683,12 @@ class ConsumerGateTest(unittest.TestCase):
         for flag, text in (("FAKE_EXTRA_ARTIFACT", "unexpected publication artifact"),
                            ("FAKE_EXTRA_TOOLING", "unexpected publication artifact"),
                            ("FAKE_EXTRA_NATIVE_INTEROP", "unexpected publication artifact"),
+                           ("FAKE_EXTRA_RPC_INTEROP", "unexpected publication artifact"),
                            ("FAKE_EXTRA_GROUP", "unexpected publication directory"),
                            ("FAKE_MISSING_ARTIFACT", "missing required artifacts"),
                            ("FAKE_MISSING_NATIVE_METADATA", "missing required artifacts"),
+                           ("FAKE_MISSING_RPC_METADATA", "missing required artifacts"),
+                           ("FAKE_MISSING_RPC_JAR", "missing required artifacts"),
                            ("FAKE_MISSING_NATIVE_INTEROP", "missing required artifacts"),
                            ("FAKE_SYMLINK_ARTIFACT", "not a regular publication file")):
             with self.subTest(flag=flag):
@@ -1464,6 +1707,8 @@ class ConsumerGateTest(unittest.TestCase):
         for flag, text in (("FAKE_TAMPER_EXTERNAL", "prepared external/local verification metadata was modified"),
                            ("FAKE_TAMPER_LOCAL", "source-local module file content mismatch"),
                            ("FAKE_TAMPER_NATIVE_METADATA", "source-local module file content mismatch"),
+                           ("FAKE_TAMPER_RPC_METADATA", "source-local module file content mismatch"),
+                           ("FAKE_TAMPER_RPC_JAR", "source-local module file content mismatch"),
                            ("FAKE_TAMPER_NATIVE_INTEROP", "source-local module file content mismatch")):
             with self.subTest(flag=flag):
                 work = self.work_root / flag
@@ -1617,7 +1862,7 @@ class ConsumerGateTest(unittest.TestCase):
         tree = ET.parse(self.work / "consumer/gradle/verification-metadata.xml")
         coordinates = {(node.get("group"), node.get("name"), node.get("version"))
                        for node in tree.findall(f".//{{{NAMESPACE}}}component")}
-        self.assertEqual(len(coordinates), 16)
+        self.assertEqual(len(coordinates), 22)  # 21 explicit local publications + one original external fixture.
         self.assertNotIn(("com.android.library", "com.android.library.gradle.plugin", "92.0.0"), coordinates)
         self.assertEqual(len(self.calls("curl")), 0)
 

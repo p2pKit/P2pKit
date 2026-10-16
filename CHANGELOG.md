@@ -3,13 +3,29 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## Unreleased
+## 0.8.0-rc1 (unpublished candidate)
 
-`main` is the unreleased post-RC3 development line, including the consolidated
-audit work. The `0.7.0-SNAPSHOT` label does not authorize shipping the changes
-reserved below for **0.8.0+** in a 0.7 release without a new explicit owner decision.
+This combined Foundation/RPC candidate targets **0.8.0-rc1**. It is not yet
+merged into `main`, tagged, signed, or published. All changes below remain
+subject to same-source modular CI, artifact freezing, and final owner approval.
 The six real-world, independent-interoperability, and professional-audit areas
 remain pending; no stable-release readiness claim is implied.
+
+### RPC prerelease target — 0.8.0-rc1
+
+- The owner requests retaining the existing Windows RPC implementation and MSI while
+  accepting post-release real Windows runtime qualification as a known prerelease risk.
+  This is not a Windows functionality exclusion or a security-check waiver.
+- **Windows limitation:** the RPC section and native components are present, but Windows
+  sample Host/Client remains unavailable because secure native loading and production
+  protected-profile integration are incomplete. Other Windows sample functionality is
+  retained. The shared JVM RPC library is distinct from this sample-owned native backend.
+- Standard-user protected-profile, actual JNI/provider and installed-application lifecycle
+  tests are not passed. See [issue #462](https://github.com/p2pKit/P2pKit/issues/462) and the
+  [owner decision and exact limitations](docs/rpc/windows-release-scope.md). Existing
+  fail-closed controls remain intact; no unsafe loading/storage fallback is enabled.
+- `0.8.0-rc1` is the intended prerelease, **not an already published version**. Required
+  combined-source checks, Foundation approvals and canonical artifact freezing still apply.
 
 ### Audit-origin Android provisioning address snapshots — reserved for 0.8.0+
 

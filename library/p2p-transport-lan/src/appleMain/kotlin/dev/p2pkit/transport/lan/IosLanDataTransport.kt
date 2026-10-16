@@ -10,8 +10,8 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
-import kotlin.concurrent.Volatile
-import kotlin.coroutines.resume
+import dev.p2pkit.transport.lan.interop.p2pkit_lan_interface_fingerprint
+import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.CancellationException
@@ -35,23 +35,27 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
-import dev.p2pkit.transport.lan.interop.p2pkit_lan_interface_fingerprint
+import platform.Foundation.NSLock
 import platform.Foundation.NSNotification
 import platform.Foundation.NSNotificationCenter
-import platform.Foundation.NSLock
-import platform.Network.nw_connection_create
 import platform.Network.nw_connection_cancel
 import platform.Network.nw_connection_copy_endpoint
+import platform.Network.nw_connection_create
 import platform.Network.nw_connection_t
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_get_hostname
-import platform.Network.nw_error_get_error_code
+import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_endpoint_t
+import platform.Network.nw_error_get_error_code
+import platform.Network.nw_interface_type_cellular
+import platform.Network.nw_interface_type_other
+import platform.Network.nw_interface_type_wifi
+import platform.Network.nw_interface_type_wired
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_get_port
 import platform.Network.nw_listener_set_new_connection_handler
+import platform.Network.nw_listener_set_advertised_endpoint_changed_handler
 import platform.Network.nw_listener_set_queue
 import platform.Network.nw_listener_set_state_changed_handler
 import platform.Network.nw_listener_start
@@ -59,14 +63,11 @@ import platform.Network.nw_listener_state_cancelled
 import platform.Network.nw_listener_state_failed
 import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
-import platform.Network.nw_parameters_prohibit_interface_type
 import platform.Network.nw_parameters_get_include_peer_to_peer
+import platform.Network.nw_parameters_iterate_prohibited_interface_types
+import platform.Network.nw_parameters_prohibit_interface_type
 import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
-import platform.Network.nw_interface_type_cellular
-import platform.Network.nw_interface_type_other
-import platform.Network.nw_interface_type_wifi
-import platform.Network.nw_interface_type_wired
 import platform.Network.nw_path_get_status
 import platform.Network.nw_path_monitor_cancel
 import platform.Network.nw_path_monitor_create
@@ -82,6 +83,8 @@ import platform.UIKit.UIApplicationWillResignActiveNotification
 import platform.darwin.NSObjectProtocol
 import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_queue_t
+import kotlin.concurrent.Volatile
+import kotlin.coroutines.resume
 
 /**
  * iOS LAN [DataTransport].
@@ -121,7 +124,9 @@ internal class IosLanDataTransport(
     /** Test seam for the accepted connection's stable remote-address key. */
     private val inboundSourceProvider: (nw_connection_t) -> String? = ::appleInboundSource,
     private val connectionFactory: (nw_connection_t, dispatch_queue_t) -> IosConnectionHandle =
-        { connection, connectionQueue -> IosRawConnection.wrap(connection, connectionQueue) }
+        { connection, connectionQueue -> IosRawConnection.wrap(connection, connectionQueue) },
+    private val policy: OrganizationLan? = null,
+    private val role: LanRole = LanRole.Host
 ) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
@@ -173,7 +178,7 @@ internal class IosLanDataTransport(
             return null
         }
         nw_parameters_prohibit_interface_type(p, nw_interface_type_cellular)
-        nw_parameters_set_include_peer_to_peer(p, true)
+        nw_parameters_set_include_peer_to_peer(p, policy == null)
         if (!_parameters.compareAndSet(null, p)) {
             IosLanDebug.log(
                 "data",
@@ -191,6 +196,18 @@ internal class IosLanDataTransport(
 
     internal fun parametersIncludePeerToPeerForTest(): Boolean =
         ensureParameters()?.let(::nw_parameters_get_include_peer_to_peer) == true
+
+    private suspend fun selectedParameters(port: Int = 0): nw_parameters_t = if (policy == null) {
+        ensureParameters()
+    } else {
+        restrictAppleLanParameters(p2pkit_nw_create_plain_tcp_parameters(), policy, queue, port)
+    }
+
+    private fun wrapConnection(connection: nw_connection_t): IosConnectionHandle = if (policy == null) {
+        connectionFactory(connection, queue)
+    } else {
+        IosRawConnection.wrap(connection, queue, policy)
+    }
 
     private val _tcpPort = MutableStateFlow<Int?>(null)
     override val tcpPort: StateFlow<Int?> = _tcpPort.asStateFlow()
@@ -334,6 +351,16 @@ internal class IosLanDataTransport(
             IosLanDebug.log("data", "start: refused (transport already closed)")
             return Result.failure(IllegalStateException("transport already closed"))
         }
+        if (role == LanRole.DialOnly) {
+            return try {
+                selectedParameters()
+                Result.success(Unit)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Result.failure(failure)
+            }
+        }
         if (listener != null && startedByHost) {
             IosLanDebug.log("data", "start: already started (port=${_tcpPort.value})")
             return Result.success(Unit)
@@ -385,12 +412,26 @@ internal class IosLanDataTransport(
      */
     private suspend fun buildListener(): ListenerLease? {
         IosLanDebug.log("data", "buildListener: nw_listener_create")
-        val params = ensureParameters() ?: run {
+        val params = selectedParameters(policy?.listenPort ?: 0) ?: run {
             IosLanDebug.log(
                 "data",
                 "buildListener: TCP parameters unavailable (cinterop helper returned null)"
             )
             return null
+        }
+        try {
+            var cellularProhibited = false
+            nw_parameters_iterate_prohibited_interface_types(params) { type ->
+                if (type == nw_interface_type_cellular) cellularProhibited = true
+                true
+            }
+            val peerToPeer = nw_parameters_get_include_peer_to_peer(params)
+            IosLanDebug.log(
+                "data",
+                "native params: kind=TCP peerToPeer=$peerToPeer cellularProhibited=$cellularProhibited"
+            )
+        } catch (_: Throwable) {
+            // Read-only diagnostics must not change listener creation.
         }
         val l = nw_listener_create(params)
             ?: run {
@@ -405,6 +446,23 @@ internal class IosLanDataTransport(
         nw_listener_set_new_connection_handler(l) connectionHandler@ { conn ->
             handleInboundConnection(owner = l, connection = conn)
             return@connectionHandler
+        }
+
+        // Observe configured-local registration only; never retain or emit the native service name.
+        nw_listener_set_advertised_endpoint_changed_handler(l) registrationHandler@ { endpoint, added ->
+            try {
+                val localMatch = endpoint?.let {
+                    nw_endpoint_get_bonjour_service_name(it)?.toKString()
+                } == transportContext.localPeerId.value
+                val current = listenerLease === lease
+                IosLanDebug.log(
+                    "advertise",
+                    "native registration: added=$added localMatch=$localMatch current=$current"
+                )
+            } catch (_: Throwable) {
+                // A diagnostic callback must never throw through the native boundary.
+            }
+            return@registrationHandler
         }
 
         val readyListener = try {
@@ -446,6 +504,7 @@ internal class IosLanDataTransport(
                                     continuation.resume(null)
                                 }
                                 nw_listener_set_new_connection_handler(lease.handle, null)
+                                nw_listener_set_advertised_endpoint_changed_handler(lease.handle, null)
                                 nw_listener_set_state_changed_handler(lease.handle, null)
                                 onNativeListenerTerminated(lease, label)
                             }
@@ -511,6 +570,10 @@ internal class IosLanDataTransport(
                 .getOrNull()
                 ?.takeIf(String::isNotBlank)
                 ?: UNKNOWN_INBOUND_SOURCE
+            if (policy != null && !policy.allows(source)) {
+                rejectNativeConnection(connection, "organization endpoint rejected")
+                return@withInboundOwnershipLock false
+            }
             val admissionLease = inboundAdmission.tryAcquire(source)
             if (admissionLease == null) {
                 IosLanDebug.log(
@@ -522,7 +585,7 @@ internal class IosLanDataTransport(
                 return@withInboundOwnershipLock false
             }
             val delegate = try {
-                connectionFactory(connection, queue)
+                wrapConnection(connection)
             } catch (error: Throwable) {
                 admissionLease.release()
                 // Do not throw across the native callback boundary. The
@@ -654,6 +717,7 @@ internal class IosLanDataTransport(
             // installed creates a native -> Kotlin block -> lease -> native
             // ownership cycle and can keep the bound descriptor alive.
             nw_listener_set_new_connection_handler(lease.handle, null)
+            nw_listener_set_advertised_endpoint_changed_handler(lease.handle, null)
             nw_listener_set_state_changed_handler(lease.handle, null)
             pendingListenerCleanups.removeAll { it === lease }
         } else {
@@ -676,6 +740,7 @@ internal class IosLanDataTransport(
     }
 
     override fun canConnect(peer: InternalPeer): Boolean {
+        if (policy != null) return peer.lanEndpoints().any { policy.allows(it.host) }
         if (endpointRegistry.get(peer.publicPeer.id) != null) return true
         // Manual-IP fallback: peers registered via ManualPeerRegistrar
         // carry a TransportHint(LAN, host, port) that we can dial directly,
@@ -691,7 +756,7 @@ internal class IosLanDataTransport(
             dialGeneration
         }
         val pid8 = peer.publicPeer.id.value.take(8)
-        val cachedLease = endpointRegistry.lease(peer.publicPeer.id)
+        val cachedLease = if (policy == null) endpointRegistry.lease(peer.publicPeer.id) else null
         IosLanDebug.log(
             "connect",
             "begin peer=$pid8 name=${peer.publicPeer.name} " +
@@ -700,7 +765,8 @@ internal class IosLanDataTransport(
         )
         val endpoint: nw_endpoint_t = cachedLease?.endpoint
             ?: peer.transportHints.firstOrNull {
-                it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) > 0
+                it.type == TransportKind.LAN && !it.host.isNullOrBlank() && (it.port ?: 0) in 1..65_535 &&
+                    (policy == null || policy.allows(it.host!!))
             }?.let { hint ->
                 IosLanDebug.log(
                     "connect",
@@ -712,7 +778,7 @@ internal class IosLanDataTransport(
                 IosLanDebug.log("connect", "ABORT peer=$pid8 — no transport available (no cached endpoint, no manual-IP hint)")
                 throw P2pError.NoTransportAvailable(peer.publicPeer)
             }
-        val params = ensureParameters() ?: run {
+        val params = selectedParameters() ?: run {
             IosLanDebug.log(
                 "connect",
                 "ABORT peer=$pid8 — TCP parameters unavailable (cinterop helper returned null)"
@@ -731,7 +797,7 @@ internal class IosLanDataTransport(
         }
         IosLanDebug.log("connect", "peer=$pid8 nw_connection_create OK, wrapping + awaiting Connected (<=${CONNECT_TIMEOUT_MILLIS}ms)")
         val raw = try {
-            connectionFactory(conn, queue)
+            wrapConnection(conn)
         } catch (error: Throwable) {
             // Ownership has not transferred to a wrapper or session yet.
             rejectNativeConnection(conn, "outbound connection wrapper failure")

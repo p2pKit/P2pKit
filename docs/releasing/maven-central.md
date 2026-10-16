@@ -5,6 +5,14 @@ P2pKit publishes under the owner-verified namespace
 `.github/workflows/publish-maven-central.yml`; it is tag-triggered and uses the
 `maven-central` GitHub Environment for irreversible publication.
 
+Before the protected publisher can run, the secret-free application preflight
+must freeze the matching four-platform main application/evidence set. Both
+protected approval and the final pre-upload check revalidate its original
+identity and retention. See the [exact-source release procedure](release-foundation.md)
+for owner challenge comments, post-Maven application delivery and partial-failure
+boundaries. That document also records outstanding activation prerequisites;
+new source controls alone do not establish readiness.
+
 Required secrets and variables remain in the GitHub Environment and must never
 be printed or committed. The workflow validates namespace/publisher access,
 the exact tag/commit/version relationship, signing-key fingerprint, credential
@@ -54,11 +62,19 @@ scripts/build-central-portal-bundle.sh
 
 The builder creates a fresh isolated local publication, verifies the signing
 fingerprint, artifact signatures and publication shape, then generates
-checksums and the bundle. It writes the versioned ZIP, SHA-256 manifest and JSON
-summary under `build/central/`. It never uploads and does not replace the
-complete release gates or authorize publication. Keep secret material out of
-logs and remove it from the invocation environment afterward.
+checksums and the bundle. It writes the versioned ZIP, SHA-256 manifest,
+source-bound JSON summary and public-only signing certificate under
+`build/central/`. The protected publisher retains this verified quartet before
+upload and the original PUBLISHED deployment receipt before remote verification.
+It never exports private signing material into those public artifacts.
+The builder never uploads and does not replace the complete release gates or
+authorize publication. Keep secret material out of logs and remove it from the
+invocation environment afterward.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
 record. See [`../releases/0.7.0-rc3.md`](../releases/0.7.0-rc3.md).
+If an irreversible upload succeeds but verification fails, do not rerun the
+publisher. Follow the separately protected [read-only recovery procedure](release-foundation.md#read-only-recovery-after-an-original-published-deployment)
+using the original signed quartet, deployment receipt and frozen applications.
+Missing or expired originals remain a HOLD; rebuilding is not recovery.

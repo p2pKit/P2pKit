@@ -27,7 +27,8 @@ internal fun buildJmdnsServiceInfo(registration: LanServiceRegistration, localPe
         platform = localPeer.platform,
         supportedTransports = localPeer.supportedTransports,
         protocolVersion = registration.protocolVersion,
-        fingerprint = registration.fingerprint
+        fingerprint = registration.fingerprint,
+        numericEndpoint = registration.advertisedAddress?.let { LanEndpoint(it, port) },
     )
     return ServiceInfo.create(
         registration.serviceTypeJmdns,

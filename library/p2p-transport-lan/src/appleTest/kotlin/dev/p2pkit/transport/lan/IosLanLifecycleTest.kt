@@ -6,23 +6,51 @@ import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transfer.FileTransferState
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onSubscription
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
-import kotlinx.io.Buffer
-import kotlinx.io.write
+import dev.p2pkit.core.transport.PeerAuthenticationHint
+import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportHint
+import dev.p2pkit.core.transport.TransportSecurityProfile
+import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.io.Buffer
+import kotlinx.io.write
+import platform.Network.nw_listener_get_port
 
 /**
  * Probe tests for v0.3.0-dev audit gaps the basic loopback suite doesn't cover:
@@ -50,7 +78,9 @@ class IosLanLifecycleTest {
     private lateinit var peerIdV2Key: String
 
     private val diagnostics = KitTestDiagnostics()
+    private val lanTimeouts = IosLanTimeoutDiagnostics()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
+    private var discoveryTrace: AppleLanDiscoveryTrace? = null
 
     @BeforeTest
     fun isolateDefaults() {
@@ -60,6 +90,7 @@ class IosLanLifecycleTest {
         defaultsLease = AppleGlobalStateTestGuard.acquire(
             keys = arrayOf(peerIdKey, peerIdV2Key)
         )
+        discoveryTrace = AppleLanDiscoveryTrace()
     }
 
     private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
@@ -93,21 +124,41 @@ class IosLanLifecycleTest {
         return kit
     }
 
-    private suspend fun P2pKit.awaitPeer(target: P2pKit): Peer =
-        withTimeout(DISCOVERY_TIMEOUT_MS) {
+    private suspend fun P2pKit.awaitPeer(
+        target: P2pKit,
+        phase: Phase = Phase.DISCOVERY,
+        stage: AppleLanDiscoveryStage = AppleLanDiscoveryStage.INITIAL_PEER
+    ): Peer = traceAppleLanDiscovery(stage, ::discoveryObservations) {
+        lanTimeouts.withTimeout(phase, DISCOVERY_TIMEOUT_MS) {
             peers.first { current -> current.any { it.id == target.localPeerId } }
                 .first { it.id == target.localPeerId }
         }
+    }
+
+    private fun discoveryObservations(): Set<AppleLanDiscoveryMarker> = checkNotNull(discoveryTrace).snapshot()
 
     @AfterTest
     fun teardown() {
         runBlocking {
-            diagnostics.finish {
+            var primary: Throwable? = null
+            try {
+                diagnostics.finish {
+                    try {
+                        removeStoredPeerId()
+                    } finally {
+                        defaultsLease?.close()
+                        defaultsLease = null
+                    }
+                }
+            } catch (failure: Throwable) {
+                primary = failure
+                throw failure
+            } finally {
                 try {
-                    removeStoredPeerId()
-                } finally {
-                    defaultsLease?.close()
-                    defaultsLease = null
+                    withTimeout(5_000) { discoveryTrace?.close() }
+                    discoveryTrace = null
+                } catch (failure: Throwable) {
+                    primary?.addSuppressed(failure) ?: throw failure
                 }
             }
         }
@@ -115,7 +166,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun peerLostEventFiresWhenPeerStops() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -128,7 +179,7 @@ class IosLanLifecycleTest {
             // populated forever and the test times out.
             bob.stop()
 
-            withTimeout(PEER_LOST_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
         }
@@ -136,7 +187,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun stopDiscoveryWithdrawsOwnedPeersAndRestartReplaysCurrentState() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -146,20 +197,20 @@ class IosLanLifecycleTest {
             // browser must therefore publish an explicit withdrawal; core's
             // stale timer intentionally cannot clean this entry for us.
             alice.stopDiscovery()
-            withTimeout(LOCAL_OWNERSHIP_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.LOCAL_WITHDRAWAL, LOCAL_OWNERSHIP_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
 
             // A fresh browser generation must repopulate both the endpoint
             // registry and the state-backed event relay.
             alice.startDiscovery()
-            alice.awaitPeer(bob)
+            alice.awaitPeer(bob, Phase.REDISCOVERY, AppleLanDiscoveryStage.REDISCOVERY)
         }
     }
 
     @Test
     fun repeatedKitLifecycleDoesNotLeakPorts() {
-        runBlocking {
+        lanTimeouts.run {
             repeat(LIFECYCLE_CYCLE_COUNT) { i ->
                 removeStoredPeerId()
                 val kit = newKit("Cycle$i")
@@ -182,7 +233,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun threePeersMutuallyDiscover() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
             val charlie = startAndAdvertise("Charlie")
@@ -190,22 +241,28 @@ class IosLanLifecycleTest {
             // Each kit must see the OTHER TWO. If the discovery transport
             // accidentally treated peer #1 as a "first peer" cache key
             // somewhere, this lights it up.
-            val aliceSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                alice.peers.first { peers ->
-                    peers.any { it.id == bob.localPeerId } &&
-                        peers.any { it.id == charlie.localPeerId }
+            val aliceSees = traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER_SET, ::discoveryObservations) {
+                lanTimeouts.withTimeout(Phase.DISCOVERY_1, DISCOVERY_TIMEOUT_MS) {
+                    alice.peers.first { peers ->
+                        peers.any { it.id == bob.localPeerId } &&
+                            peers.any { it.id == charlie.localPeerId }
+                    }
                 }
             }
-            val bobSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                bob.peers.first { peers ->
-                    peers.any { it.id == alice.localPeerId } &&
-                        peers.any { it.id == charlie.localPeerId }
+            val bobSees = traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER_SET, ::discoveryObservations) {
+                lanTimeouts.withTimeout(Phase.DISCOVERY_2, DISCOVERY_TIMEOUT_MS) {
+                    bob.peers.first { peers ->
+                        peers.any { it.id == alice.localPeerId } &&
+                            peers.any { it.id == charlie.localPeerId }
+                    }
                 }
             }
-            val charlieSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
-                charlie.peers.first { peers ->
-                    peers.any { it.id == alice.localPeerId } &&
-                        peers.any { it.id == bob.localPeerId }
+            val charlieSees = traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER_SET, ::discoveryObservations) {
+                lanTimeouts.withTimeout(Phase.DISCOVERY_3, DISCOVERY_TIMEOUT_MS) {
+                    charlie.peers.first { peers ->
+                        peers.any { it.id == alice.localPeerId } &&
+                            peers.any { it.id == bob.localPeerId }
+                    }
                 }
             }
 
@@ -224,9 +281,9 @@ class IosLanLifecycleTest {
             val sBC = async { bob.connect(charliePeer) }
             val sCA = async { charlie.connect(alicePeerFromCharlie) }
 
-            val ab = withTimeout(HANDSHAKE_TIMEOUT_MS) { sAB.await() }
-            val bc = withTimeout(HANDSHAKE_TIMEOUT_MS) { sBC.await() }
-            val ca = withTimeout(HANDSHAKE_TIMEOUT_MS) { sCA.await() }
+            val ab = lanTimeouts.withTimeout(Phase.HANDSHAKE_1, HANDSHAKE_TIMEOUT_MS) { sAB.await() }
+            val bc = lanTimeouts.withTimeout(Phase.HANDSHAKE_2, HANDSHAKE_TIMEOUT_MS) { sBC.await() }
+            val ca = lanTimeouts.withTimeout(Phase.HANDSHAKE_3, HANDSHAKE_TIMEOUT_MS) { sCA.await() }
 
             // Round-trip one message per session so we know the actual
             // wire is working, not just session bookkeeping.
@@ -242,7 +299,7 @@ class IosLanLifecycleTest {
         // A normal kit stop sends a CLOSE frame. That frame is authoritative
         // even when reconnect is enabled, so the exact terminal outcome is
         // Closed; accepting Failed here would hide a protocol-ordering race.
-        runBlocking {
+        lanTimeouts.run {
             val alice = newKitWithReconnect("Alice")
             val bob = newKitWithReconnect("Bob")
             alice.start()
@@ -256,16 +313,25 @@ class IosLanLifecycleTest {
                 host = "127.0.0.1",
                 port = bobInfo.port
             )
-            val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
-            withTimeout(HANDSHAKE_TIMEOUT_MS) {
+            val session = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                alice.connect(bobPeer)
+            }
+            lanTimeouts.withTimeout(Phase.HANDSHAKE_CONNECTED, HANDSHAKE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Connected }
+                // Outgoing handshake completion can precede the responder's lifecycle commit.
+                // This test stops an established session, not a pending incoming setup. Observe
+                // Bob's public committed owner as well, within the existing readiness deadline.
+                val incoming = bob.sessions.first { current ->
+                    current.any { it.peer.id == alice.localPeerId }
+                }.single { it.peer.id == alice.localPeerId }
+                incoming.state.first { it == ConnectionState.Connected }
             }
 
             // Bob exits cleanly and Alice must honor the CLOSE frame without
             // treating it as a reconnectable transport failure.
             bob.stop()
 
-            val terminal = withTimeout(CLEAN_CLOSE_TIMEOUT_MS) {
+            val terminal = lanTimeouts.withTimeout(Phase.CLEAN_CLOSE, CLEAN_CLOSE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Closed }
             }
             assertEquals(ConnectionState.Closed, terminal)
@@ -305,14 +371,18 @@ class IosLanLifecycleTest {
         // transition to Cancelled / Failed terminal states within
         // TERMINAL_TIMEOUT_MS and the underlying nw_connection_t must
         // remain usable for further messages.
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
             val bobPeer = alice.awaitPeer(bob)
             val outgoingDeferred = async { alice.connect(bobPeer) }
-            val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
+            val incomingSession = lanTimeouts.withTimeout(Phase.HANDSHAKE_INCOMING, HANDSHAKE_TIMEOUT_MS) {
+                bob.incomingSessions.first()
+            }
+            val outgoing = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                outgoingDeferred.await()
+            }
 
             val totalBytes = 5 * 1024 * 1024
             val payload = ByteArray(totalBytes) { ((it * 31) and 0xFF).toByte() }
@@ -334,7 +404,7 @@ class IosLanLifecycleTest {
                 source = srcBuffer
             )
 
-            val offer = withTimeout(HANDSHAKE_TIMEOUT_MS) { offerDeferred.await() }
+            val offer = lanTimeouts.withTimeout(Phase.FILE_OFFER, HANDSHAKE_TIMEOUT_MS) { offerDeferred.await() }
             val incomingTransfer = offer.accept(dstBuffer)
 
             // Wait for partial progress before cancelling. We deliberately
@@ -342,7 +412,7 @@ class IosLanLifecycleTest {
             // the simulator. Anywhere between 5% and 95% suffices to prove
             // we cancelled MID-transfer (not before it started, not after
             // it completed).
-            withTimeout(HANDSHAKE_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.TRANSFER_PROGRESS, HANDSHAKE_TIMEOUT_MS) {
                 val low = (totalBytes / 20).toLong()
                 val high = (totalBytes - 1).toLong()
                 transfer.bytesTransferred.first { it in low..high }
@@ -350,10 +420,10 @@ class IosLanLifecycleTest {
 
             transfer.cancel("test-mid-cancel")
 
-            val senderFinal = withTimeout(TERMINAL_TIMEOUT_MS) {
+            val senderFinal = lanTimeouts.withTimeout(Phase.TRANSFER_SENDER_TERMINAL, TERMINAL_TIMEOUT_MS) {
                 transfer.state.first { isTerminal(it) }
             }
-            val receiverFinal = withTimeout(TERMINAL_TIMEOUT_MS) {
+            val receiverFinal = lanTimeouts.withTimeout(Phase.TRANSFER_RECEIVER_TERMINAL, TERMINAL_TIMEOUT_MS) {
                 incomingTransfer.state.first { isTerminal(it) }
             }
 
@@ -391,7 +461,7 @@ class IosLanLifecycleTest {
         // verify end-to-end is that Bob can stop and restart advertising,
         // and Alice's peers flow observes the churn (either via Lost+Found
         // or Updated — both are valid responses for our consumers).
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -400,7 +470,7 @@ class IosLanLifecycleTest {
 
             // Bob disappears from the air.
             bob.stopAdvertising()
-            withTimeout(PEER_LOST_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
 
@@ -408,7 +478,7 @@ class IosLanLifecycleTest {
             // mutate it through the public DSL). Alice should see the peer
             // reappear within a reasonable Bonjour TTL.
             bob.startAdvertising()
-            alice.awaitPeer(bob)
+            alice.awaitPeer(bob, Phase.REDISCOVERY, AppleLanDiscoveryStage.REDISCOVERY)
         }
     }
 
@@ -419,14 +489,16 @@ class IosLanLifecycleTest {
         // SessionManager left a stale session in its map, the second
         // connect() either dedups (no new handshake) or fails ("session
         // already exists"). Either is a regression.
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
             val bobPeer = alice.awaitPeer(bob)
 
             repeat(CONNECT_STORM_COUNT) { i ->
-                val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
+                val session = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                    alice.connect(bobPeer)
+                }
                 session.send(P2pMessage.Text("cycle-$i"))
                 session.close()
                 // Brief pause for the close frame to flush before redialing —
@@ -435,6 +507,682 @@ class IosLanLifecycleTest {
                 delay(50)
             }
             assertTrue(true, "$CONNECT_STORM_COUNT cycles completed cleanly")
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalForeignApi::class)
+    fun liveTxtAnswerScopeClassifierAndMarkerRemainFinite() {
+        assertEquals(
+            listOf("NONE", "LOCAL_ONLY", "P2P", "UNICAST", "ANY", "CONCRETE", "OTHER_SPECIAL", "UNKNOWN"),
+            IosLanTxtAnswerScope.entries.map { it.name }
+        )
+        val indices = listOf(
+            0u to IosLanTxtAnswerScope.ANY,
+            0xffffffffu to IosLanTxtAnswerScope.LOCAL_ONLY,
+            0xfffffffeu to IosLanTxtAnswerScope.UNICAST,
+            0xfffffffdu to IosLanTxtAnswerScope.P2P,
+            0xfffffffcu to IosLanTxtAnswerScope.OTHER_SPECIAL,
+            0xfffffffbu to IosLanTxtAnswerScope.OTHER_SPECIAL,
+            1u to IosLanTxtAnswerScope.CONCRETE,
+            65535u to IosLanTxtAnswerScope.CONCRETE,
+            0xfffffffau to IosLanTxtAnswerScope.CONCRETE
+        )
+        for ((index, scope) in indices) assertEquals(scope, IosLanTxtAnswerScope.fromInterfaceIndex(index))
+        for (profile in TransportSecurityProfile.entries) {
+            val profileName = if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+            for (scope in IosLanTxtAnswerScope.entries) {
+                val marker = renderIosLanLiveTxtScope(profile, scope, scope, scope, scope)
+                val status = if (scope == IosLanTxtAnswerScope.UNKNOWN) "UNAVAILABLE" else "OK"
+                assertEquals(
+                    listOf(
+                        IOS_LAN_LIVE_TXT_SCOPE_PREFIX, "scope=AFTER_TIMEOUT_TEST_OWNED", "phase=DISCOVERY_2",
+                        "profile=$profileName", "status=$status", "originalFirst=$scope", "beforeUpdate=$scope",
+                        "originalLast=$scope", "freshFirst=$scope"
+                    ),
+                    marker.split(' ')
+                )
+                assertTrue(marker.length <= 256 && marker.all { it.code in 32..126 })
+            }
+            assertEquals(
+                "originalFirst=LOCAL_ONLY beforeUpdate=P2P originalLast=CONCRETE freshFirst=ANY",
+                renderIosLanLiveTxtScope(
+                    profile, IosLanTxtAnswerScope.LOCAL_ONLY, IosLanTxtAnswerScope.P2P,
+                    IosLanTxtAnswerScope.CONCRETE, IosLanTxtAnswerScope.ANY
+                ).substringAfter("status=OK ")
+            )
+            val unavailable = renderIosLanLiveTxtScope(profile)
+            assertEquals(
+                unavailable,
+                renderIosLanLiveTxtScope(
+                    profile, IosLanTxtAnswerScope.LOCAL_ONLY, IosLanTxtAnswerScope.P2P,
+                    IosLanTxtAnswerScope.CONCRETE, IosLanTxtAnswerScope.UNKNOWN
+                )
+            )
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalForeignApi::class)
+    fun liveTxtChangesWithdrawAndRecoverWithoutReplacingThePublisherListener() {
+        lanTimeouts.run {
+            for (profile in TransportSecurityProfile.entries) {
+                val app = AppId("$unique-live-${profile.name}")
+                val remote = PeerId("live-publisher")
+                val receiverContext = TransportContext(
+                    appId = app, localPeerId = PeerId("live-observer"), deviceName = "Observer",
+                    platform = Platform.IOS, securityProfile = profile
+                )
+                val publisherContext = TransportContext(
+                    appId = app, localPeerId = remote, deviceName = "Live A",
+                    platform = Platform.IOS, securityProfile = profile
+                )
+                val registry = IosEndpointRegistry()
+                val receiverData = IosLanDataTransport(receiverContext, registry)
+                val publisher = IosLanDataTransport(publisherContext, IosEndpointRegistry())
+                var dnsPublisher: IosLanDnsSdTestPublisher? = null
+                var originalFailure: Throwable? = null
+                data class Observation(val sequence: Long, val error: Int, val snapshot: IosLanTxtMonitor.Snapshot?)
+                val observed = MutableStateFlow(Observation(0, 0, null))
+                val current = MutableStateFlow<PeerEvent.Found?>(null)
+                val eventHistory = MutableStateFlow<List<PeerEvent>>(emptyList())
+                val updateClaims = MutableStateFlow<Set<ValidatedLanDiscoveryRecord>?>(null)
+                val withdrawals = MutableStateFlow(LiveTxtWithdrawalEvidence())
+                val observationFailed = MutableStateFlow(false)
+                lateinit var receiver: IosLanDiscoveryTransport
+
+                fun observeWithdrawal(queued: Boolean, block: () -> Unit) {
+                    val expected = updateClaims.value
+                    var before: IosLanTxtMonitor.Snapshot? = null
+                    var admitted = false
+                    var firstEvent = 0
+                    if (expected != null) try {
+                        before = receiver.txtSnapshotForTest(remote.value)
+                        admitted = registry.lease(remote) != null
+                        firstEvent = eventHistory.value.size
+                    } catch (_: Throwable) {
+                        observationFailed.value = true
+                    }
+                    // Observation failure cannot suppress/repeat the real callback or catch its exception.
+                    block()
+                    if (expected != null && admitted) try {
+                        val after = receiver.txtSnapshotForTest(remote.value)
+                        if (registry.lease(remote) == null) {
+                            val prior = before
+                            val kind = when {
+                                prior == null || after == null || prior.owner !== after.owner ->
+                                    LiveTxtWithdrawalKind.OTHER
+                                queued && prior.revision == after.revision && prior.pending && after.pending ->
+                                    LiveTxtWithdrawalKind.GUARD
+                                !queued && prior.revision < Long.MAX_VALUE &&
+                                    after.revision == prior.revision + 1 && !after.pending ->
+                                    classifyLiveTxtCompletedWithdrawal(after.records, expected, receiverContext, remote)
+                                else -> LiveTxtWithdrawalKind.OTHER
+                            }
+                            val witness = LiveTxtWithdrawalWitness(
+                                kind, prior?.owner, prior?.revision ?: -1, after?.revision ?: -1,
+                                firstEvent, eventHistory.value.size
+                            )
+                            withdrawals.update {
+                                if (it.witnesses.size == LIVE_TXT_WITHDRAWAL_LIMIT) it.copy(capped = true)
+                                else it.copy(witnesses = it.witnesses + witness)
+                            }
+                        }
+                    } catch (_: Throwable) {
+                        observationFailed.value = true
+                    }
+                    // Producer evidence is complete before afterCallback resumes any live-test waiter.
+                }
+                val dns = ObservingLiveIosLanTxtDns(
+                    delegate = PlatformIosLanTxtDns(receiverData.queue),
+                    targetName = remote.value,
+                    observeQueuedBlock = { block -> observeWithdrawal(queued = true, block = block) },
+                    observeCallback = { block -> observeWithdrawal(queued = false, block = block) },
+                    afterCallback = { fullName, error ->
+                        // This notification follows an ACTUAL daemon callback handled by the real monitor.
+                        // It neither supplies bytes nor changes admission. Ignore unrelated service queries.
+                        if (fullName.startsWith("${remote.value}.")) {
+                            observed.value = Observation(
+                                observed.value.sequence + 1, error, receiver.txtSnapshotForTest(remote.value)
+                            )
+                        }
+                    }
+                )
+                receiver = IosLanDiscoveryTransport(receiverContext, registry, receiverData, dns)
+                var progressBeforeAction = dns.progress
+                val collector = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+                    receiver.events.collect { event ->
+                        val relevant = when (event) {
+                            is PeerEvent.Found -> event.peer.publicPeer.id == remote
+                            is PeerEvent.Updated -> event.peer.publicPeer.id == remote
+                            is PeerEvent.Lost -> event.peerId == remote
+                        }
+                        if (relevant) eventHistory.update { it + event }
+                        when (event) {
+                            is PeerEvent.Found -> if (event.peer.publicPeer.id == remote) current.value = event
+                            is PeerEvent.Updated -> if (event.peer.publicPeer.id == remote) {
+                                current.value = PeerEvent.Found(event.peer)
+                            }
+                            is PeerEvent.Lost -> if (event.peerId == remote) current.value = null
+                        }
+                    }
+                }
+                try {
+                    publisher.start().getOrThrow()
+                    val listener = assertNotNull(publisher.listener)
+                    val port = nw_listener_get_port(listener)
+                    assertTrue(port.toUInt() > 0u)
+                    val txtPublisher = IosLanDnsSdTestPublisher(
+                        publisher.queue, remote.value, publisherContext.lanServiceTypeBonjour, "local.", port
+                    ) {
+                        assertSame(listener, publisher.listener)
+                        assertEquals(port, nw_listener_get_port(listener))
+                    }
+                    dnsPublisher = txtPublisher
+                    receiver.startDiscovery()
+
+                    fun properties(name: String, appText: String = app.value): Map<String, String> =
+                        LanTxtRecordFixtures.properties(profile).mapValues { (_, bytes) ->
+                            assertNotNull(bytes).decodeToString()
+                        } + mapOf("pid" to remote.value, "app" to appText, "name" to name, "plat" to "IOS")
+
+                    suspend fun publish(properties: Map<String, String>) {
+                        try { progressBeforeAction = dns.progress } catch (_: Throwable) { }
+                        txtPublisher.publish(IosBonjour.mapToTxtRecord(properties))
+                    }
+
+                    suspend fun <T> awaitLive(
+                        phase: Phase,
+                        timeMillis: Long,
+                        before: Long,
+                        firstEvent: Int,
+                        expectedName: String?,
+                        expectedApp: String,
+                        wait: suspend CoroutineScope.() -> T
+                    ): T {
+                        try {
+                            return lanTimeouts.withTimeout(phase, timeMillis) { txtPublisher.whileAvailable(wait) }
+                        } catch (failure: TimeoutCancellationException) {
+                            // Failure-only test-owned state, before the enclosing finally retires it.
+                            // Separately sampled values are not an atomic/native ownership proof.
+                            try {
+                                val profileName =
+                                    if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+                                val prefix = "P2PKIT_IOS_LIVE_TXT_WAIT_V1 scope=TEST_OWNED_BEST_EFFORT " +
+                                    "phase=${phase.name} profile=$profileName"
+                                val marker = try {
+                                    val observation = observed.value
+                                    val prior = observation.snapshot
+                                    val live = receiver.txtSnapshotForTest(remote.value)
+                                    val peer = current.value
+                                    val native = dns.observation
+                                    val history = eventHistory.value
+                                    var capped = false
+                                    fun bounded(value: Long, maximum: Long = 255): Long {
+                                        if (value < 0 || value > maximum) capped = true
+                                        return value.coerceIn(0, maximum)
+                                    }
+                                    fun expected(snapshot: IosLanTxtMonitor.Snapshot?): Boolean = when (phase) {
+                                        Phase.DISCOVERY_1, Phase.DISCOVERY_2, Phase.DISCOVERY_3 ->
+                                            snapshot?.records?.any {
+                                                !it.malformed && it.properties["name"] == expectedName &&
+                                                    it.properties["app"] == expectedApp
+                                            } == true
+                                        Phase.LOCAL_WITHDRAWAL ->
+                                            snapshot?.records?.any { it.properties["app"] == expectedApp } == true
+                                        else -> false
+                                    }
+                                    val validated = live?.records?.map { decoded ->
+                                        if (decoded.malformed) null else validateLanDiscoveryRecord(
+                                            decoded.properties, receiverContext.appId, receiverContext.localPeerId,
+                                            receiverContext.securityProfile
+                                        )?.takeIf { it.peerId == remote }
+                                    }.orEmpty()
+                                    val first = validated.firstOrNull()
+                                    val coherent = first != null && validated.all { it == first }
+                                    val events = history.drop(firstEvent.coerceIn(0, history.size))
+                                    val callbackError =
+                                        if (observation.sequence > 0) observation.error.toString() else "NONE"
+                                    val fields = listOf(
+                                        "cbBefore=${bounded(before)}",
+                                        "cbNow=${bounded(observation.sequence)}",
+                                        "cbAdvanced=${observation.sequence > before}",
+                                        "cbError=$callbackError",
+                                        "construct=${native.construct.name}", "start=${native.start.name}",
+                                        "startError=${native.startError?.toString() ?: "NONE"}",
+                                        "schedule=${native.schedule.name}",
+                                        "scheduleError=${native.scheduleError?.toString() ?: "NONE"}",
+                                        "queries=${bounded(receiver.txtQueryCountForTest.toLong(), 256)}",
+                                        "reserved=${bounded(receiver.txtReservedQueryCountForTest.toLong(), 256)}",
+                                        "retained=${bounded(receiver.txtRetainedBytesForTest.toLong(), 8_388_608L)}",
+                                        "observed=${prior != null}", "observedPending=${prior?.pending ?: false}",
+                                        "observedRr=${bounded((prior?.records?.size ?: 0).toLong(), 8)}",
+                                        "observedExpected=${expected(prior)}", "live=${live != null}",
+                                        "livePending=${live?.pending ?: false}",
+                                        "liveRr=${bounded((live?.records?.size ?: 0).toLong(), 8)}",
+                                        "liveExpected=${expected(live)}", "liveCoherent=$coherent",
+                                        "sameSnapshot=${prior != null && live != null && prior.owner === live.owner &&
+                                            prior.revision == live.revision}",
+                                        "peer=${peer != null}",
+                                        "peerExpected=${if (expectedName == null) peer == null
+                                            else peer?.peer?.publicPeer?.name == expectedName}",
+                                        "lease=${registry.lease(remote) != null}",
+                                        "found=${bounded(events.count { it is PeerEvent.Found }.toLong())}",
+                                        "updated=${bounded(events.count { it is PeerEvent.Updated }.toLong())}",
+                                        "lost=${bounded(events.count { it is PeerEvent.Lost }.toLong())}",
+                                        "capped=$capped"
+                                    )
+                                    val text = "$prefix status=OK " + fields.joinToString(" ")
+                                    check(text.length <= 1024 && text.all { it.code in 32..126 })
+                                    text
+                                } catch (_: Throwable) { "$prefix status=UNAVAILABLE" }
+                                try { println(marker) } catch (_: Throwable) { }
+                                failure.addSuppressed(IllegalStateException(marker))
+                            } catch (_: Throwable) { }
+                            if (phase == Phase.DISCOVERY_2) {
+                                // The original failure and WAIT context above are already frozen.
+                                // This independent read cannot rescue the predicate or replace its timeout.
+                                try {
+                                    val profileName =
+                                        if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+                                    val freshPrefix = "P2PKIT_IOS_LIVE_TXT_FRESH_V2 " +
+                                        "scope=AFTER_TIMEOUT_TEST_OWNED phase=${phase.name} profile=$profileName"
+                                    var observedScopeMarker: String? = null
+                                    val freshMarker = try {
+                                        val prior = observed.value.snapshot
+                                        val live = checkNotNull(receiver.txtSnapshotForTest(remote.value))
+                                        check(prior != null && prior.owner === live.owner)
+                                        val service = live.owner.service
+                                        val fullName = live.owner.fullName
+                                        check(service.name == remote.value && !live.owner.ambiguous)
+                                        check(fullName.isNotEmpty())
+                                        val published = txtPublisher.status
+                                        val progress = dns.progress
+                                        var capped = progress.capped || progressBeforeAction.capped
+                                        fun delta(now: Long, beforeAction: Long): Long {
+                                            val value = now - beforeAction
+                                            if (value < 0 || value > 255) capped = true
+                                            return value.coerceIn(0, 255)
+                                        }
+                                        val localFields = listOf(
+                                            "publisher=DNS_SD",
+                                            "publishOp=${published.publishOp.name}",
+                                            "publishCode=${published.publishCode?.toString() ?: "NONE"}",
+                                            "registration=${published.registration.name}",
+                                            "registerCode=${published.registerCode?.toString() ?: "NONE"}",
+                                            "entered=${delta(progress.entered, progressBeforeAction.entered)}",
+                                            "fields=${delta(progress.fields, progressBeforeAction.fields)}",
+                                            "returned=${delta(progress.returned, progressBeforeAction.returned)}"
+                                        )
+                                        val fresh = IosLanLiveTxtFailureProbe.inspect(
+                                            service, fullName, properties("Live B"), properties("Live A"),
+                                            publisher.queue, receiverData.queue
+                                        )
+                                        // Original samples precede this same fresh query; none are atomic RRset proofs.
+                                        try {
+                                            observedScopeMarker = renderIosLanLiveTxtScope(
+                                                profile, progress.firstScope, progressBeforeAction.lastScope,
+                                                progress.lastScope, fresh.firstScope
+                                            )
+                                        } catch (_: Throwable) { }
+                                        val text = "$freshPrefix status=OK " + localFields.joinToString(" ") +
+                                            " " + fresh.renderFields(localCapped = capped)
+                                        check(text.length <= 1024 && text.all { it.code in 32..126 })
+                                        text
+                                    } catch (_: Throwable) { "$freshPrefix status=UNAVAILABLE" }
+                                    try { println(freshMarker) } catch (_: Throwable) { }
+                                    try { failure.addSuppressed(IllegalStateException(freshMarker)) }
+                                    catch (_: Throwable) { }
+                                    try {
+                                        val scopeMarker = observedScopeMarker ?: renderIosLanLiveTxtScope(profile)
+                                        try { println(scopeMarker) } catch (_: Throwable) { }
+                                        try { failure.addSuppressed(IllegalStateException(scopeMarker)) }
+                                        catch (_: Throwable) { }
+                                    } catch (_: Throwable) { }
+                                } catch (_: Throwable) { }
+                            }
+                            throw failure
+                        }
+                    }
+
+                    suspend fun awaitName(
+                        name: String, after: Long, phase: Phase, firstEvent: Int
+                    ): Pair<PeerEvent.Found, IosLanTxtMonitor.Snapshot> =
+                        awaitLive(phase, DISCOVERY_TIMEOUT_MS, after, firstEvent, name, app.value) {
+                            if (phase == Phase.DISCOVERY_1) txtPublisher.awaitRegistered()
+                            val expected = setOf(assertNotNull(validateLanDiscoveryRecord(
+                                properties(name), app, receiverContext.localPeerId, profile
+                            )))
+                            combine(observed, current) { observation, found ->
+                                check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
+                                val snapshot = observation.snapshot
+                                val actualRecord = observation.sequence > after && snapshot != null &&
+                                    !snapshot.pending && liveTxtRecordsMatchClaims(
+                                        snapshot.records, expected, receiverContext, remote
+                                    )
+                                found?.takeIf { actualRecord && it.peer.publicPeer.name == name }
+                                    ?.let { it to assertNotNull(snapshot) }
+                            }.filterNotNull().first()
+                        }
+
+                    var before = observed.value.sequence
+                    var firstEvent = eventHistory.value.size
+                    publish(properties("Live A"))
+                    val (first, firstTxt) = awaitName("Live A", before, Phase.DISCOVERY_1, firstEvent)
+                    assertEquals(Platform.IOS, first.peer.publicPeer.platform)
+                    if (profile == TransportSecurityProfile.AuthenticatedV2) {
+                        assertIs<PeerAuthenticationHint.UntrustedDiscoveryClaim>(first.peer.authenticationHint)
+                    } else {
+                        assertNull(first.peer.authenticationHint)
+                    }
+                    assertNotNull(registry.lease(remote))
+                    before = observed.value.sequence
+                    val beforeUpdateEvents = eventHistory.value.size
+                    updateClaims.value = setOf("Live A", "Live B").map { name ->
+                        assertNotNull(validateLanDiscoveryRecord(
+                            properties(name), app, receiverContext.localPeerId, profile
+                        ))
+                    }.toSet()
+                    val (_, updatedTxt) = try {
+                        publish(properties("Live B"))
+                        awaitName("Live B", before, Phase.DISCOVERY_2, beforeUpdateEvents)
+                    } finally {
+                        updateClaims.value = null
+                    }
+                    assertSame(firstTxt.owner, updatedTxt.owner, "live update retains the original query owner")
+                    val updateEvents = eventHistory.value.withIndex().drop(beforeUpdateEvents)
+                    val losses = updateEvents.filter { it.value is PeerEvent.Lost }
+                    if (losses.isEmpty()) {
+                        assertTrue(updateEvents.any {
+                            val event = it.value
+                            event is PeerEvent.Updated && event.peer.publicPeer.name == "Live B"
+                        }, "a complete live update must emit actual Updated")
+                    } else {
+                        assertSame(firstTxt.owner, updatedTxt.owner, "withdrawal recovery retains the same query owner")
+                        val evidence = withdrawals.value.copy(failed = observationFailed.value)
+                        val lossIndices = losses.map { it.index }
+                        val matched = matchLiveTxtWithdrawals(
+                            evidence, lossIndices, firstTxt.owner, firstTxt.revision,
+                            updatedTxt.owner, updatedTxt.revision
+                        )
+                        try {
+                            assertTrue(
+                                matched.size == losses.size,
+                                "Lost must follow a distinct witnessed producer withdrawal before same-owner recovery"
+                            )
+                            for (loss in losses) {
+                                assertTrue(updateEvents.any {
+                                    val event = it.value
+                                    it.index > loss.index && event is PeerEvent.Found &&
+                                        event.peer.publicPeer.name == "Live B"
+                                }, "withdrawal must recover with a later actual Found")
+                            }
+                        } catch (failure: AssertionError) {
+                            val withdrawalMarker = try {
+                                renderLiveTxtWithdrawalFailure(profile, evidence, lossIndices, matched)
+                            } catch (_: Throwable) { "$IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX status=UNAVAILABLE" }
+                            try { println(withdrawalMarker) } catch (_: Throwable) { }
+                            try { failure.addSuppressed(IllegalStateException(withdrawalMarker)) }
+                            catch (_: Throwable) { }
+                            throw failure
+                        }
+                    }
+                    assertNotNull(registry.lease(remote))
+                    before = observed.value.sequence
+                    firstEvent = eventHistory.value.size
+                    publish(properties("Invalid", appText = "foreign-app"))
+                    awaitLive(Phase.LOCAL_WITHDRAWAL, PEER_LOST_TIMEOUT_MS, before, firstEvent, null, "foreign-app") {
+                        combine(observed, current) { observation, found ->
+                            check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
+                            observation.sequence > before && found == null &&
+                                observation.snapshot?.records?.any { it.properties["app"] == "foreign-app" } == true
+                        }.first { it }
+                    }
+                    assertNull(registry.lease(remote))
+                    assertNull(receiver.announceEntryForTest(remote.value))
+                    assertTrue(receiver.txtQueryCountForTest > 0, "invalid TXT must retain its live query")
+                    assertSame(firstTxt.owner, assertNotNull(receiver.txtSnapshotForTest(remote.value)).owner)
+                    before = observed.value.sequence
+                    firstEvent = eventHistory.value.size
+                    publish(properties("Live C"))
+                    val (_, recoveredTxt) = awaitName("Live C", before, Phase.DISCOVERY_3, firstEvent)
+                    assertSame(firstTxt.owner, recoveredTxt.owner, "valid recovery retains the original query owner")
+                    assertNotNull(registry.lease(remote))
+                    assertSame(listener, publisher.listener)
+                    assertEquals(port, nw_listener_get_port(listener))
+                    before = observed.value.sequence
+                    firstEvent = eventHistory.value.size
+                    try { progressBeforeAction = dns.progress } catch (_: Throwable) { }
+                    val retired = try { txtPublisher.close() } finally { publisher.close() }
+                    assertTrue(retired.complete, "DNS-SD publisher retirement must finish within its ownership window")
+                    assertEquals(0, retired.references)
+                    assertEquals(0, retired.contexts)
+                    awaitLive(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS, before, firstEvent, null, app.value) {
+                        current.first { it == null }
+                    }
+                    assertNull(registry.lease(remote))
+                } catch (failure: Throwable) {
+                    originalFailure = failure
+                    throw failure
+                } finally {
+                    withContext(NonCancellable) {
+                        var cleanupFailure: Throwable? = null
+                        suspend fun cleanup(action: suspend () -> Unit) {
+                            try { action() } catch (failure: Throwable) {
+                                val prior = cleanupFailure
+                                if (prior == null) cleanupFailure = failure
+                                else if (prior !== failure) prior.addSuppressed(failure)
+                            }
+                        }
+                        cleanup {
+                            dnsPublisher?.let {
+                                val retired = it.close()
+                                assertTrue(retired.complete, "DNS-SD publisher cleanup incomplete")
+                                assertEquals(0, retired.references)
+                                assertEquals(0, retired.contexts)
+                                it.status.failure?.let { failure -> throw failure }
+                            }
+                        }
+                        cleanup { receiver.stopDiscovery() }
+                        cleanup { collector.cancelAndJoin() }
+                        cleanup { receiverData.close() }
+                        cleanup { publisher.close() }
+                        cleanup {
+                            assertEquals(0, receiver.txtQueryCountForTest)
+                            assertEquals(0, receiver.txtReservedQueryCountForTest)
+                            assertEquals(0, receiver.txtRetainedBytesForTest)
+                        }
+                        cleanupFailure?.let { failure ->
+                            val prior = originalFailure
+                            if (prior == null) throw failure
+                            if (prior !== failure) prior.addSuppressed(failure)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun liveTxtCallbackWitnessPrecedesObservation() {
+        val order = mutableListOf<String>()
+        lateinit var nativeCallback: (Int, () -> IosLanTxtAnswer) -> Unit
+        val delegate = object : IosLanTxtDns {
+            override fun constructFullName(name: String, type: String, domain: String): String =
+                "$name.$type.$domain"
+
+            override fun start(
+                fullName: String, scope: IosLanTxtQueryScope, callback: (Int, () -> IosLanTxtAnswer) -> Unit
+            ): IosLanTxtDns.Start {
+                nativeCallback = callback
+                return IosLanTxtDns.Start(0, null)
+            }
+
+            override fun enqueue(block: () -> Unit) = block()
+        }
+        val dns = ObservingLiveIosLanTxtDns(
+            delegate = delegate,
+            targetName = "target",
+            observeQueuedBlock = { it() },
+            observeCallback = { block ->
+                order += "before"
+                block()
+                order += "witness"
+            },
+            afterCallback = { _, _ -> order += "observed" }
+        )
+        val answer = IosLanTxtAnswer(
+            "target._p2pkit2._tcp.local.", 0u, 16.toUShort(), 1.toUShort(),
+            added = true, moreComing = false, length = 0UL, readBytes = { ByteArray(it) }
+        )
+        var callbacks = 0
+        var fields = 0
+        var callbackFailure: IllegalStateException? = null
+        dns.start(assertNotNull(answer.fullName)) { error, supplier ->
+            callbacks++
+            order += "callback"
+            callbackFailure?.let { throw it }
+            if (error == 0) assertSame(answer, supplier())
+        }
+        val supplier = {
+            fields++
+            order += "fields"
+            answer
+        }
+        nativeCallback(0, supplier)
+        assertEquals(listOf("before", "callback", "fields", "witness", "observed"), order)
+        assertEquals(1, callbacks)
+        assertEquals(1, fields)
+
+        order.clear()
+        nativeCallback(-1, supplier)
+        assertEquals(listOf("callback", "observed"), order)
+        assertEquals(2, callbacks)
+        assertEquals(1, fields, "error callbacks must not inspect borrowed fields")
+
+        order.clear()
+        val failure = IllegalStateException("callback failure")
+        callbackFailure = failure
+        assertSame(failure, assertFailsWith<IllegalStateException> { nativeCallback(0, supplier) })
+        assertEquals(listOf("before", "callback"), order)
+        assertEquals(3, callbacks)
+        assertEquals(1, fields)
+    }
+
+    @Test
+    @OptIn(ExperimentalForeignApi::class)
+    fun producerWithdrawalWitnessesAllowDeferredRelayDelivery() = runBlocking {
+        withTimeout(LOCAL_OWNERSHIP_TIMEOUT_MS) {
+            val context = TransportContext(
+                AppId("withdrawal-control"), PeerId("observer"), "Observer", Platform.IOS,
+                securityProfile = TransportSecurityProfile.AuthenticatedV2
+            )
+            val remote = PeerId("publisher")
+            fun decoded(name: String) = IosBonjour.DecodedRecord(
+                LanTxtRecordFixtures.properties(context.securityProfile).mapValues { (_, bytes) ->
+                    assertNotNull(bytes).decodeToString()
+                } + mapOf("pid" to remote.value, "app" to context.appId.value, "name" to name), false
+            )
+            val a = decoded("Live A")
+            val b = decoded("Live B")
+            fun claim(record: IosBonjour.DecodedRecord) = assertNotNull(validateLanDiscoveryRecord(
+                record.properties, context.appId, context.localPeerId, context.securityProfile
+            ))
+            val expected = setOf(claim(a), claim(b))
+            val expectedB = setOf(claim(b))
+            assertTrue(!liveTxtRecordsMatchClaims(listOf(a, b), expectedB, context, remote))
+            assertTrue(liveTxtRecordsMatchClaims(listOf(b, b), expectedB, context, remote))
+            assertEquals(LiveTxtWithdrawalKind.EMPTY, classifyLiveTxtCompletedWithdrawal(
+                emptyList(), expected, context, remote
+            ))
+            assertEquals(LiveTxtWithdrawalKind.CONFLICT, classifyLiveTxtCompletedWithdrawal(
+                listOf(a, b), expected, context, remote
+            ))
+            assertEquals(LiveTxtWithdrawalKind.OTHER, classifyLiveTxtCompletedWithdrawal(
+                listOf(a, a), expected, context, remote
+            ))
+            assertEquals(LiveTxtWithdrawalKind.OTHER, classifyLiveTxtCompletedWithdrawal(
+                listOf(a, b.copy(properties = b.properties + ("app" to "foreign"))), expected, context, remote
+            ))
+            val owner = IosLanTxtMonitor.Owner(
+                IosLanTxtService(remote.value, "_p2pkit2._tcp", "local.", null, 1),
+                IosLanTxtMonitor.Reservation()
+            )
+            val relay = ReliablePeerEventRelay()
+            val events = mutableListOf<PeerEvent>()
+            val found = CompletableDeferred<Unit>()
+            val resume = CompletableDeferred<Unit>()
+            val observedRecords = MutableStateFlow(listOf(a, b))
+            val observedPeer = MutableStateFlow<PeerEvent.Found?>(null)
+            val stalePairSeen = CompletableDeferred<Unit>()
+            val coherent = async(start = CoroutineStart.UNDISPATCHED) {
+                combine(observedRecords, observedPeer) { records, peer ->
+                    if (peer?.peer?.publicPeer?.name == "Live B" && records == listOf(a, b)) {
+                        stalePairSeen.complete(Unit)
+                    }
+                    peer?.takeIf {
+                        it.peer.publicPeer.name == "Live B" &&
+                            liveTxtRecordsMatchClaims(records, expectedB, context, remote)
+                    }
+                }.filterNotNull().first()
+            }
+            val collect = async(start = CoroutineStart.UNDISPATCHED) {
+                relay.events.take(3).collect { event ->
+                    events += event
+                    if (event is PeerEvent.Found) observedPeer.value = event
+                    if (event is PeerEvent.Found && !found.isCompleted) {
+                        found.complete(Unit)
+                        resume.await()
+                    }
+                }
+            }
+            try {
+                assertTrue(relay.upsert(claim(a).toInternalPeer(TransportHint(type = TransportKind.LAN))))
+                found.await()
+                val firstEvent = events.size
+                relay.remove(remote)
+                val witness = LiveTxtWithdrawalWitness(
+                    LiveTxtWithdrawalKind.EMPTY, owner, 1, 2, firstEvent, events.size
+                )
+                assertTrue(relay.upsert(claim(b).toInternalPeer(TransportHint(type = TransportKind.LAN))))
+                assertEquals(firstEvent, events.size, "the collector is still paused after actual remove/readd")
+                resume.complete(Unit)
+                collect.await()
+                assertIs<PeerEvent.Lost>(events[1])
+                assertEquals("Live B", assertIs<PeerEvent.Found>(events[2]).peer.publicPeer.name)
+                stalePairSeen.await()
+                assertTrue(!coherent.isCompleted, "Found B cannot admit the stale conflicting callback snapshot")
+                observedRecords.value = listOf(b, b)
+                assertEquals("Live B", coherent.await().peer.publicPeer.name)
+                assertTrue(1 !in witness.firstEvent until witness.lastEventExclusive)
+                val evidence = LiveTxtWithdrawalEvidence(listOf(witness))
+                fun match(value: LiveTxtWithdrawalEvidence = evidence, losses: List<Int> = listOf(1)) =
+                    matchLiveTxtWithdrawals(value, losses, owner, 1, owner, 3)
+                val matched = match()
+                assertEquals(listOf(witness), matched)
+                assertTrue(match(evidence.copy(witnesses = listOf(witness.copy(owner = null)))).isEmpty())
+                assertTrue(match(evidence.copy(witnesses = listOf(witness.copy(revision = 3)))).isEmpty())
+                assertTrue(match(losses = listOf(0)).isEmpty())
+                assertEquals(1, match(losses = listOf(1, 2)).size, "one producer witness cannot cover two losses")
+                assertEquals(1, match(
+                    evidence.copy(witnesses = listOf(witness, witness)), listOf(1, 2)
+                ).size, "duplicating one transition is not a second producer withdrawal")
+                assertTrue(match(LiveTxtWithdrawalEvidence()).isEmpty())
+                assertTrue(match(evidence.copy(failed = true)).isEmpty())
+                assertTrue(match(evidence.copy(capped = true)).isEmpty())
+                assertTrue(match(evidence.copy(witnesses = listOf(
+                    witness, witness.copy(kind = LiveTxtWithdrawalKind.OTHER)
+                ))).isEmpty())
+                assertEquals(
+                    "$IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX status=OK phase=DISCOVERY_2 profile=V2 " +
+                        "losses=1 guards=0 empty=1 conflict=0 other=0 deferred=1 unmatched=0 observation=OK",
+                    renderLiveTxtWithdrawalFailure(context.securityProfile, evidence, listOf(1), matched)
+                )
+            } finally {
+                resume.complete(Unit)
+                collect.cancelAndJoin()
+                coherent.cancelAndJoin()
+            }
         }
     }
 
@@ -448,4 +1196,259 @@ class IosLanLifecycleTest {
         const val LIFECYCLE_CYCLE_COUNT: Int = 20
         const val CONNECT_STORM_COUNT: Int = 10
     }
+}
+
+private const val LIVE_TXT_WITHDRAWAL_LIMIT = 64
+private const val IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX = "P2PKIT_IOS_LIVE_TXT_WITHDRAWAL_V1"
+
+private enum class LiveTxtWithdrawalKind { GUARD, EMPTY, CONFLICT, OTHER }
+
+private data class LiveTxtWithdrawalWitness(
+    val kind: LiveTxtWithdrawalKind,
+    val owner: IosLanTxtMonitor.Owner?,
+    val priorRevision: Long,
+    val revision: Long,
+    val firstEvent: Int,
+    val lastEventExclusive: Int
+)
+
+private data class LiveTxtWithdrawalEvidence(
+    val witnesses: List<LiveTxtWithdrawalWitness> = emptyList(),
+    val failed: Boolean = false,
+    val capped: Boolean = false
+)
+
+/** Only the same validated A/B claims can justify a completed conflicting set during this update. */
+private fun classifyLiveTxtCompletedWithdrawal(
+    records: List<IosBonjour.DecodedRecord>,
+    expected: Set<ValidatedLanDiscoveryRecord>,
+    context: TransportContext,
+    remote: PeerId
+): LiveTxtWithdrawalKind {
+    if (records.isEmpty()) return LiveTxtWithdrawalKind.EMPTY
+    return if (expected.size == 2 && liveTxtRecordsMatchClaims(records, expected, context, remote)) {
+        LiveTxtWithdrawalKind.CONFLICT
+    } else LiveTxtWithdrawalKind.OTHER
+}
+
+/** Reject stale conflicting snapshots even if a newer relay Found has already reached the collector. */
+private fun liveTxtRecordsMatchClaims(
+    records: List<IosBonjour.DecodedRecord>,
+    expected: Set<ValidatedLanDiscoveryRecord>,
+    context: TransportContext,
+    remote: PeerId
+): Boolean {
+    if (records.isEmpty() || expected.isEmpty() || expected.any { it.peerId != remote }) return false
+    val actual = records.map { decoded ->
+        if (decoded.malformed) return false
+        validateLanDiscoveryRecord(
+            decoded.properties, context.appId, context.localPeerId, context.securityProfile
+        )?.takeIf { it.peerId == remote } ?: return false
+    }.toSet()
+    return actual == expected
+}
+
+/** Match producer transitions, not synchronous delivery spans: StateFlow may defer Lost until re-add. */
+private fun matchLiveTxtWithdrawals(
+    evidence: LiveTxtWithdrawalEvidence,
+    losses: List<Int>,
+    firstOwner: IosLanTxtMonitor.Owner,
+    firstRevision: Long,
+    updatedOwner: IosLanTxtMonitor.Owner,
+    updatedRevision: Long
+): List<LiveTxtWithdrawalWitness> {
+    if (firstOwner !== updatedOwner || evidence.failed || evidence.capped ||
+        losses.size > LIVE_TXT_WITHDRAWAL_LIMIT || evidence.witnesses.any { it.kind == LiveTxtWithdrawalKind.OTHER }
+    ) return emptyList()
+    val candidates = evidence.witnesses.filter {
+        it.owner === firstOwner && it.revision > firstRevision && it.revision < updatedRevision &&
+            (if (it.kind == LiveTxtWithdrawalKind.GUARD) it.priorRevision == it.revision
+            else it.priorRevision >= firstRevision && it.priorRevision < Long.MAX_VALUE &&
+                it.revision == it.priorRevision + 1)
+    }.distinctBy { it.revision }.sortedBy { it.revision }
+    val matched = mutableListOf<LiveTxtWithdrawalWitness>()
+    var next = 0
+    for (loss in losses) {
+        val index = (next until candidates.size).firstOrNull { candidates[it].firstEvent <= loss } ?: break
+        matched += candidates[index]
+        next = index + 1 // No witness may justify more than one collected loss.
+    }
+    return matched
+}
+
+private fun renderLiveTxtWithdrawalFailure(
+    profile: TransportSecurityProfile,
+    evidence: LiveTxtWithdrawalEvidence,
+    losses: List<Int>,
+    matched: List<LiveTxtWithdrawalWitness>
+): String {
+    val profileName = if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+    fun bounded(value: Int) = value.coerceIn(0, LIVE_TXT_WITHDRAWAL_LIMIT)
+    fun count(kind: LiveTxtWithdrawalKind) = bounded(evidence.witnesses.count { it.kind == kind })
+    val observation = when {
+        evidence.capped || losses.size > LIVE_TXT_WITHDRAWAL_LIMIT -> "CAPPED"
+        evidence.failed -> "FAILED"
+        else -> "OK"
+    }
+    val deferred = matched.indices.count { losses[it] >= matched[it].lastEventExclusive }
+    val marker = "$IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX status=OK phase=DISCOVERY_2 profile=$profileName " +
+        "losses=${bounded(losses.size)} guards=${count(LiveTxtWithdrawalKind.GUARD)} " +
+        "empty=${count(LiveTxtWithdrawalKind.EMPTY)} conflict=${count(LiveTxtWithdrawalKind.CONFLICT)} " +
+        "other=${count(LiveTxtWithdrawalKind.OTHER)} deferred=${bounded(deferred)} " +
+        "unmatched=${bounded(losses.size - matched.size)} observation=$observation"
+    check(marker.length <= 384 && marker.all { it.code in 32..126 })
+    return marker
+}
+
+/** Delegates native calls once; captures outcomes and retains the actual post-callback witness. */
+private class ObservingLiveIosLanTxtDns(
+    private val delegate: IosLanTxtDns,
+    private val targetName: String,
+    private val observeQueuedBlock: (() -> Unit) -> Unit,
+    private val observeCallback: (() -> Unit) -> Unit,
+    private val afterCallback: (String, Int) -> Unit
+) : IosLanTxtDns {
+    enum class Construct { NONE, OK, EMPTY, THREW }
+    enum class Start { NONE, REF, NO_REF, ERROR, THREW }
+    enum class Schedule { NONE, OK, ERROR, THREW }
+
+    data class Observation(
+        val construct: Construct = Construct.NONE,
+        val start: Start = Start.NONE,
+        val startError: Int? = null,
+        val schedule: Schedule = Schedule.NONE,
+        val scheduleError: Int? = null
+    )
+
+    data class Progress(
+        val entered: Long = 0,
+        val fields: Long = 0,
+        val returned: Long = 0,
+        val capped: Boolean = false,
+        val firstScope: IosLanTxtAnswerScope = IosLanTxtAnswerScope.NONE,
+        val lastScope: IosLanTxtAnswerScope = IosLanTxtAnswerScope.NONE
+    )
+
+    private enum class ProgressEvent { ENTERED, FIELDS, RETURNED }
+
+    private val nativeObservation = MutableStateFlow(Observation())
+    val observation: Observation get() = nativeObservation.value
+    private val callbackProgress = MutableStateFlow(Progress())
+    val progress: Progress get() = callbackProgress.value
+
+    private fun observe(update: (Observation) -> Observation) {
+        try { nativeObservation.update(update) } catch (_: Throwable) { }
+    }
+
+    private fun advance(event: ProgressEvent) {
+        try {
+            callbackProgress.update { current ->
+                val before = when (event) {
+                    ProgressEvent.ENTERED -> current.entered
+                    ProgressEvent.FIELDS -> current.fields
+                    ProgressEvent.RETURNED -> current.returned
+                }
+                val capped = current.capped || before == Long.MAX_VALUE
+                val next = if (before == Long.MAX_VALUE) before else before + 1
+                when (event) {
+                    ProgressEvent.ENTERED -> current.copy(entered = next, capped = capped)
+                    ProgressEvent.FIELDS -> current.copy(fields = next, capped = capped)
+                    ProgressEvent.RETURNED -> current.copy(returned = next, capped = capped)
+                }
+            }
+        } catch (_: Throwable) { }
+    }
+
+    private fun observeScope(index: UInt) {
+        try {
+            val scope = IosLanTxtAnswerScope.fromInterfaceIndex(index)
+            callbackProgress.update { current ->
+                current.copy(
+                    firstScope = if (current.firstScope == IosLanTxtAnswerScope.NONE) scope else current.firstScope,
+                    lastScope = scope
+                )
+            }
+        } catch (_: Throwable) {
+            try {
+                callbackProgress.update {
+                    it.copy(firstScope = IosLanTxtAnswerScope.UNKNOWN, lastScope = IosLanTxtAnswerScope.UNKNOWN)
+                }
+            } catch (_: Throwable) { }
+        }
+    }
+
+    override fun constructFullName(name: String, type: String, domain: String): String? {
+        val target = name == targetName
+        if (target) observe { Observation() }
+        val result = try {
+            delegate.constructFullName(name, type, domain)
+        } catch (failure: Throwable) {
+            if (target) observe { it.copy(construct = Construct.THREW) }
+            throw failure
+        }
+        if (target) observe { it.copy(construct = if (result.isNullOrEmpty()) Construct.EMPTY else Construct.OK) }
+        return result
+    }
+
+    override fun start(
+        fullName: String, scope: IosLanTxtQueryScope, callback: (Int, () -> IosLanTxtAnswer) -> Unit
+    ): IosLanTxtDns.Start {
+        val target = fullName.startsWith("$targetName.")
+        val result = try {
+            delegate.start(fullName, scope) { error, fields ->
+                if (target) advance(ProgressEvent.ENTERED)
+                val forwarded = if (target && error == 0) try {
+                    {
+                        advance(ProgressEvent.FIELDS)
+                        val answer = fields()
+                        observeScope(answer.interfaceIndex)
+                        answer
+                    }
+                } catch (_: Throwable) { fields } else fields
+                if (target && error == 0) {
+                    observeCallback { callback(error, forwarded) }
+                } else {
+                    callback(error, forwarded)
+                }
+                if (target) advance(ProgressEvent.RETURNED)
+                afterCallback(fullName, error)
+            }
+        } catch (failure: Throwable) {
+            if (target) observe { it.copy(start = Start.THREW) }
+            throw failure
+        }
+        if (!target) return result
+        // Error-first: never access the reference on a nonzero returned native error.
+        if (result.error != 0) {
+            observe { it.copy(start = Start.ERROR, startError = result.error) }
+            return result
+        }
+        val reference = result.reference
+        if (reference == null) {
+            observe { it.copy(start = Start.NO_REF, startError = result.error) }
+            return result
+        }
+        observe { it.copy(start = Start.REF, startError = result.error) }
+        // Wrapping records the actual schedule outcome; the native reference still has one owner.
+        // If allocating diagnostic wrapping fails, return the original result unchanged.
+        return try {
+            IosLanTxtDns.Start(result.error, object : IosLanTxtDns.Reference {
+                override fun schedule(): Int {
+                    val code = try {
+                        reference.schedule()
+                    } catch (failure: Throwable) {
+                        observe { it.copy(schedule = Schedule.THREW) }
+                        throw failure
+                    }
+                    observe { it.copy(schedule = if (code == 0) Schedule.OK else Schedule.ERROR, scheduleError = code) }
+                    return code
+                }
+
+                override fun deallocate() = reference.deallocate()
+                override fun disposeContext() = reference.disposeContext()
+            })
+        } catch (_: Throwable) { result }
+    }
+
+    override fun enqueue(block: () -> Unit) = delegate.enqueue { observeQueuedBlock(block) }
 }

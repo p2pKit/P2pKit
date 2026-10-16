@@ -1,0 +1,17 @@
+name: Source and repository checks
+on:
+  push:
+    branches: [main, 'work/release-modular-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  component:
+    name: source
+    uses: ./.github/workflows/ci-component.yml
+    with:
+      component: source
+      runner: ubuntu-24.04
+      minutes: 30
+      job_minutes: 40

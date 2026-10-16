@@ -7,22 +7,15 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
-import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DiscoveryTransport
-import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.transport.lan.internal.jmdns.JmDNS
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceEvent
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceListener
-import java.io.IOException
-import java.net.Inet4Address
-import java.net.Inet6Address
-import java.net.InetAddress
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +26,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicLong
+import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 
 /** One callback generation installed in JmDNS by the lifecycle coordinator. */
 internal class AndroidListenerLease(
@@ -312,7 +311,9 @@ internal class AndroidServiceAdmissions {
 internal class AndroidLanDiscoveryTransport(
     private val context: Context,
     private val registration: LanServiceRegistration,
-    private val networkState: AndroidLanNetworkState = AndroidLanNetworkState()
+    private val networkState: AndroidLanNetworkState = AndroidLanNetworkState(),
+    private val policy: OrganizationLan? = null,
+    private val role: LanRole = LanRole.Host
 ) : DiscoveryTransport {
 
     override val type: TransportKind = TransportKind.LAN
@@ -420,8 +421,10 @@ internal class AndroidLanDiscoveryTransport(
     // DiscoveryTransport API
     // ──────────────────────────────────────────────────────────────────
 
-    override suspend fun startAdvertising(localPeer: LocalPeerInfo) =
+    override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
+        check(role == LanRole.Host) { "A dial-only LAN transport cannot advertise" }
         coordinator.startAdvertising(localPeer)
+    }
 
     override suspend fun stopAdvertising() = coordinator.stopAdvertising()
 
@@ -521,7 +524,7 @@ internal class AndroidLanDiscoveryTransport(
                 target: AndroidLanBindTarget?,
                 forRebind: Boolean
             ): JmdnsHandleBinding<AndroidLanBindTarget, JmDNS> {
-                val selected = target ?: currentBindTarget()
+                val selected = (if (policy != null) currentBindTarget() else target ?: currentBindTarget())
                     ?: throw IOException(
                         "No Wi-Fi, Ethernet, AP, or tether LAN address is available for JmDNS"
                     )
@@ -647,6 +650,7 @@ internal class AndroidLanDiscoveryTransport(
         }
 
     private fun currentBindTarget(): AndroidLanBindTarget? {
+        if (policy != null) return organizationAndroidTarget(policy, connectivity)
         synchronized(networkLock) {
             observedNetwork?.let { network ->
                 androidLanBindTargetForNetwork(connectivity, network)?.let { return it }
@@ -769,7 +773,10 @@ internal class AndroidLanDiscoveryTransport(
                     return@publishIfActive
                 }
                 val candidates = info.inetAddresses.toList()
-                val hosts = selectRoutableHosts(candidates, localLanInterfaceAddresses())
+                val hosts = if (policy != null) {
+                    candidates.mapNotNull { it.hostAddress }.filter(policy::allows)
+                        .distinct().take(LanConstants.MAX_DIAL_CANDIDATES)
+                } else selectRoutableHosts(candidates, localLanInterfaceAddresses())
                 if (hosts.isEmpty()) {
                     // V0.4-IPV6: no routable address in this resolution. Typical
                     // cause is a peer whose only advertised IP on this cycle is
@@ -899,7 +906,7 @@ internal class AndroidLanDiscoveryTransport(
                 }
 
                 val initialTarget = withContext(Dispatchers.IO) {
-                    currentAndroidLanBindTarget(connectivity)
+                    currentBindTarget()
                 }
                 if (initialTarget != boundNetwork) {
                     publishForCurrentWatcher(lease) {

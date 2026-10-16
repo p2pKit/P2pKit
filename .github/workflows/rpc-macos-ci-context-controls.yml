@@ -1,0 +1,64 @@
+name: RPC Apple CI context component controls (NOT complete-gate)
+
+on:
+  push:
+    branches: [work/rpc-macos-ci-context-20261014]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-apple-ci-context-components
+  cancel-in-progress: false
+
+jobs:
+  component-controls:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure daemon prerequisite
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+      - name: Configure unchanged native-control JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Verify diagnostic refusal controls
+        run: |
+          python3 -I -B -S scripts/tests/current-macos-multicast-diagnostic-test.py
+          python3 -I -B -S scripts/tests/rpc-apple-ci-environment-test.py
+          python3 -I -B -S scripts/tests/rpc-apple-ci-lifecycle-test.py
+          python3 -I -B -S scripts/tests/rpc-apple-ci-liveness-test.py
+          python3 -I -B -S scripts/tests/rpc-apple-ci-setup-test.py
+          python3 -I -B -S scripts/tests/rpc-apple-ci-clock-test.py
+          python3 -I -B -S scripts/tests/with-darwin-audit-session-test.py
+      - name: Run maintained native controls and new component controls
+        run: |
+          umask 077
+          python_bin="$(python3 -I -B -S -c 'import sys; from pathlib import Path; print(Path(sys.executable).resolve(strict=True))')"
+          session="$RUNNER_TEMP/p2pkit-mdns-session-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$session"
+          # No Terminal, multicast, GUI service or network mutation. The
+          # existing bootstrap only allocates the audit session and drops
+          # permanently to the invoking account before the owned native tests.
+          exec "$python_bin" -I -B -S scripts/with-darwin-audit-session.py --parent "$session" -- \
+            "$python_bin" -I -B -S "$GITHUB_WORKSPACE/scripts/diagnose-current-macos-multicast.py" \
+            --profile terminal-components
+      - name: Retain source-bound component observations only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-context-components-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-mdns-${{ github.run_id }}-${{ github.run_attempt }}/export/summary.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false

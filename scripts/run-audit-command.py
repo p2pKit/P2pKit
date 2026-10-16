@@ -13,6 +13,7 @@ import errno
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -28,7 +29,8 @@ from typing import Any
 
 # Importing the adapter must not create untracked __pycache__ in the bound source.
 sys.dont_write_bytecode = True
-from audit_processes import CHAIN_ENV, OwnershipError, STATE_ENV, host_role, make_scope, ownership_environment
+from audit_processes import (CHAIN_ENV, OwnershipError, STATE_ENV, format_ownership_error,
+                             host_role, make_scope, ownership_environment)
 
 INFRASTRUCTURE_EXIT = 125
 HOSTS = ("windows-x64", "macos-arm64", "macos-x64", "linux-x64")
@@ -37,6 +39,7 @@ AUDIT_FLAGS = ["--no-daemon", "--console=plain", "--dependency-verification", "s
                "--no-build-cache", "--no-configuration-cache", "--no-parallel", "--max-workers=2",
                "-Pkotlin.compiler.execution.strategy=in-process", f"-Dorg.gradle.jvmargs={JVM_ARGUMENTS}"]
 MAX_JSON_BYTES = 4 * 1024 * 1024
+MAX_STREAM_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_FILES = 20000
 MAX_CLEANUP_ENTRIES = 250000
@@ -499,48 +502,135 @@ class LeafLock:
 
 
 class Tee:
-    def __init__(self, source: Any, destination: Path, live: Any | None, errors: list[str]):
+    def __init__(self, source: Any, destination: Path, live: Any | None, errors: list[str], start: bool = True,
+                 *, max_bytes: int = MAX_STREAM_BYTES):
+        require(type(max_bytes) is int and 0 <= max_bytes <= MAX_STREAM_BYTES,
+                "Evidence stream byte limit must only shorten the source-owned ceiling")
         self.source, self.live, self.errors = source, live, errors
-        self.output = new_file(destination)
-        self.thread = threading.Thread(target=self._copy, name="audit-byte-tee", daemon=True)
+        self.output = self.thread = None
+        self._start_attempted = self._finish_attempted = self._resources_attempted = False
+        self._complete = threading.Event()
+        try:
+            self.output = new_file(destination)
+            # Bind the original allowance before any source/sink calls; mutable
+            # published counters and successful writes cannot refill it.
+            self.thread = threading.Thread(target=self._copy, args=(max_bytes,), name="audit-byte-tee", daemon=True)
+        except BaseException:
+            # No thread start was attempted. The caller still owns the input;
+            # this not-yet-returned allocation owns only its new output file.
+            self._retire_resources(close_source=False)
+            raise
+        if start:
+            try:
+                self.start()
+            except BaseException as original:
+                # Keep the historical eager-start API for direct callers. The
+                # execution owners below instead register before explicit start.
+                # An interrupted start may have entered the worker already: only
+                # that worker may close its streams; an absent ack is UNKNOWN.
+                original._p2pkit_pending_tee = self
+                try:
+                    self.finish()
+                except BaseException as error:
+                    self.errors.append("Tee construction finalization failed: " + format_ownership_error(error))
+                raise
+
+    def start(self) -> None:
+        require(not self._start_attempted and not self._finish_attempted, "Owned Tee cannot start twice or after retirement")
+        self._start_attempted = True  # A start exception is not proof that no worker entered.
         self.thread.start()
 
-    def _copy(self) -> None:
+    def _retire_resources(self, *, close_source: bool = True) -> None:
+        if self._resources_attempted:
+            return
+        self._resources_attempted = True  # Never retry a close with an uncertain outcome.
+        original = sys.exc_info()[1]
+        cancellation = None
+        actions = [("Owned stream close", self.source.close)] if close_source else []
+        if self.output is not None:
+            actions.extend((("Evidence stream flush", self.output.flush),
+                            ("Evidence stream sync", lambda: os.fsync(self.output.fileno())),
+                            ("Evidence stream close", self.output.close)))
+        for label, action in actions:
+            try:
+                action()
+            except BaseException as error:
+                suffix = " failed; retirement UNKNOWN: " if label.endswith(" close") else " failed: "
+                self.errors.append(label + suffix + format_ownership_error(error))
+                if cancellation is None and not isinstance(error, Exception):
+                    cancellation = error
+        if cancellation is not None and original is None:
+            raise cancellation
+
+    def _copy(self, remaining: int) -> None:
         file_ok, live_ok = True, self.live is not None
+        overflow = False
         try:
             while True:
+                # Always ask for a positive chunk, even at the cap: read(0) is
+                # not actual EOF. Broken suppliers fail without retry or slicing.
                 block = self.source.read(65536)
+                require(type(block) is bytes and len(block) <= 65536, "Owned stream read violated byte/chunk contract")
                 if not block:
                     break
+                retained = min(remaining, len(block))
+                if retained < len(block) and not overflow:
+                    # Latch already-observed excess before any fallible sink.
+                    self.errors.append("Evidence stream byte limit exceeded; retained prefix only")
+                    overflow = True
+                remaining -= retained
+                block = block[:retained]
+                if not block:
+                    continue  # Drain bounded chunks; never retain the tail.
                 if file_ok:
                     try:
-                        self.output.write(block)
+                        written = self.output.write(block)
+                        require(type(written) is int and written == len(block), "Evidence stream write acknowledgement differs")
                         self.output.flush()  # Retain the prefix before live delivery, even without EOF.
-                    except OSError as error:
+                    except (OSError, ValueError, AuditError) as error:
                         self.errors.append(f"Evidence stream write failed: {type(error).__name__}")
                         file_ok = False
                 if live_ok:
                     try:
-                        self.live.write(block)
+                        written = self.live.write(block)
+                        require(type(written) is int and written == len(block), "Product stream write acknowledgement differs")
                         self.live.flush()
-                    except (OSError, ValueError) as error:
+                    except (OSError, ValueError, AuditError) as error:
                         self.errors.append(f"Product stream delivery failed: {type(error).__name__}")
                         live_ok = False
-        except (OSError, ValueError) as error:
-            self.errors.append(f"Owned stream read failed: {type(error).__name__}")
+        except BaseException as error:
+            self.errors.append("Owned stream read failed: " + format_ownership_error(error))
+            if not isinstance(error, Exception):
+                raise
         finally:
             try:
-                self.source.close()
-                self.output.flush()
-                os.fsync(self.output.fileno())
-                self.output.close()
-            except (OSError, ValueError) as error:
-                self.errors.append(f"Evidence stream finalization failed: {type(error).__name__}")
+                self._retire_resources()
+            finally:
+                # Completion acknowledges all resource attempts, not success;
+                # any retention/retirement error remains latched in errors.
+                self._complete.set()
 
     def finish(self) -> None:
-        self.thread.join(timeout=3)
-        if self.thread.is_alive():
-            self.errors.append("Owned pipe did not reach EOF after worker drain")
+        if self._finish_attempted:
+            return
+        self._finish_attempted = True
+        if not self._start_attempted:
+            try:
+                self._retire_resources()
+            finally:
+                self._complete.set()
+            return
+        deadline = time.monotonic() + 3
+        try:
+            if not self._complete.wait(timeout=3):
+                self.errors.append("Owned stream retirement UNKNOWN: worker start/completion not acknowledged after drain")
+                return
+            self.thread.join(timeout=max(0, deadline - time.monotonic()))
+            if self.thread.is_alive():
+                self.errors.append("Owned stream retirement UNKNOWN: copy worker did not terminate after drain")
+        except BaseException as error:
+            self.errors.append("Owned stream retirement UNKNOWN: completion observation failed: " + format_ownership_error(error))
+            raise
 
 
 def regular_report_files(directory: Path, budget: list[int]) -> list[Path]:
@@ -630,6 +720,37 @@ def report_snapshot(root: Path, state: Path, original: list[str]) -> dict[str, d
     return result
 
 
+def retained_report_parent(evidence: Path, parent: Path) -> None:
+    """Create only private descendants of the existing evidence anchor.
+
+    Path.mkdir(parents=True) applies mode only to its last component. Do not
+    change the process umask or repair/adopt broad existing directories instead.
+    These path checks are not atomic same-UID custody or Windows ACL admission.
+    """
+    require(evidence.is_absolute() and parent.is_absolute() and within(parent, evidence) and
+            ".." not in parent.parts, "Retained report parent is outside its evidence anchor")
+    reject_symlinks(evidence)
+
+    def validate(path: Path) -> None:
+        info = existing_lstat(path)
+        require(info is not None and stat.S_ISDIR(info.st_mode) and
+                not (getattr(info, "st_file_attributes", 0) & 0x400),
+                "Retained report parent is not a physical directory")
+        if os.name == "posix":
+            require(info.st_uid == os.getuid() and not info.st_mode & 0o077,
+                    "Retained report parent is not private to the current user")
+
+    validate(evidence)  # Never create an absent anchor or inspect /tmp as private.
+    current = evidence
+    for name in parent.relative_to(evidence).parts:
+        current = current / name
+        try:
+            current.mkdir(mode=0o700)
+        except FileExistsError:
+            pass  # Existing/racing paths must pass the same checks before descent.
+        validate(current)
+
+
 def retain_reports(root: Path, state: Path, original: list[str], before: dict[str, Any],
                    evidence: Path) -> list[dict[str, Any]]:
     after = report_snapshot(root, state, original)
@@ -640,7 +761,7 @@ def retain_reports(root: Path, state: Path, original: list[str], before: dict[st
         row = {"source": label, **item, "classification": "preexisting-unchanged" if unchanged else "changed-since-admission"}
         if not unchanged:
             destination = evidence / "reports" / label
-            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            retained_report_parent(evidence, destination.parent)
             with paths[label].open("rb") as source, new_file(destination) as target:
                 shutil.copyfileobj(source, target, length=1024 * 1024)
                 target.flush()
@@ -718,30 +839,91 @@ def cancel_nested_leaves(state: Path, context: dict[str, Any], invocation: str,
         errors.append("Nested adapter did not finalize within cooperative cancellation grace")
 
 
+def finite_local_number(value: Any, label: str) -> int | float:
+    """Validate local arithmetic without invoking a caller's numeric coercion."""
+    require(type(value) in (int, float), label + " must be an exact finite int/float")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    require(finite, label + " must be an exact finite int/float")
+    return value
+
+
+def local_timeout_deadline(started: Any, timeout: Any) -> int | float:
+    """Same-process monotonic arithmetic, not a shared-clock or job identity."""
+    started = finite_local_number(started, "Local clock")
+    timeout = finite_local_number(timeout, "Local timeout")
+    require(timeout > 0, "Local timeout must be positive")
+    try:
+        deadline = started + timeout
+    except OverflowError as error:
+        raise AuditError("Local deadline arithmetic overflow") from error
+    return finite_local_number(deadline, "Local deadline")
+
+
 def wait_process(scope: Any, child: Any, timeout: float, cancelled: list[int], check_cancel: Any,
-                 *, stop: bool = False) -> int:
-    deadline = time.monotonic() + timeout
+                 *, stop: bool = False, local_deadline: float | None = None) -> int:
+    timeout = finite_local_number(timeout, "Local timeout")
+    require(timeout > 0, "Local timeout must be positive")
+    if local_deadline is not None:
+        local_deadline = finite_local_number(local_deadline, "Local deadline")
+    observed = finite_local_number(time.monotonic(), "Local clock")
+    deadline = local_timeout_deadline(observed, timeout)
+    if local_deadline is not None:
+        require(local_deadline <= deadline, "Local deadline cannot enlarge the relative timeout")
+        deadline = local_deadline
+    high_water = observed
+    expired = "Wrapper stop timed out" if stop else "Product command timed out"
+
+    def observe() -> int | float:
+        nonlocal high_water
+        current = finite_local_number(time.monotonic(), "Local clock")
+        require(current >= high_water, "Local clock moved backwards during wait")
+        high_water = current
+        return current
+
     while True:
+        if observed >= deadline:
+            # Already-known expiry cannot be reopened by a callback or another
+            # sample. Preserve original cancellation/capture failure precedence.
+            check_cancel()
+            if cancelled and not stop:
+                raise AuditError("Invocation cancellation requested")
+            raise AuditError(expired)
         code = child.poll()
         scope.discover()
         check_cancel()
-        if code is not None:
-            return code
         if cancelled and not stop:
             raise AuditError("Invocation cancellation requested")
-        require(time.monotonic() < deadline, "Wrapper stop timed out" if stop else "Product command timed out")
+        observed = observe()
+        require(observed < deadline, expired)
+        if code is not None:
+            return code
         time.sleep(0.1)
+        observed = observe()
 
 
 def finalize_receipts(receipt: dict[str, Any], evidence: Path, optional: Any,
                       optional_path: Path | None, lock: LeafLock | None) -> None:
     targets = []
-    if optional is not None:
-        targets.append((optional_path, optional, os.fstat(optional.fileno())))
+    interruptions = []
 
-    def failed(label: str, error: Exception) -> None:
+    def failed(label: str, error: BaseException) -> None:
         receipt["finalExitCode"] = INFRASTRUCTURE_EXIT
-        receipt["errors"].append(f"{label}: {type(error).__name__}: {error}")
+        receipt["errors"].append(label + ": " + format_ownership_error(error))
+        if not isinstance(error, Exception) and not interruptions:
+            interruptions.append(error)
+
+    def register(path: Path, stream: Any) -> None:
+        targets.append((path, stream, None))  # Retire the handle even if fstat fails.
+        targets[-1] = (path, stream, os.fstat(stream.fileno()))
+
+    if optional is not None:
+        try:
+            register(optional_path, optional)
+        except BaseException as error:
+            failed("Optional receipt identity failed", error)
 
     def publish() -> bool:
         success = True
@@ -752,7 +934,7 @@ def finalize_receipts(receipt: dict[str, Any], evidence: Path, optional: Any,
                 stream.truncate()
                 stream.flush()
                 os.fsync(stream.fileno())
-            except Exception as error:
+            except BaseException as error:
                 failed("Receipt write/fsync failed", error)
                 success = False
         return success
@@ -760,22 +942,22 @@ def finalize_receipts(receipt: dict[str, Any], evidence: Path, optional: Any,
     try:
         path = evidence / "receipt.json"
         stream = new_file(path)
-        targets.append((path, stream, os.fstat(stream.fileno())))
-    except Exception as error:
+        register(path, stream)
+    except BaseException as error:
         failed("Canonical receipt creation failed", error)
     if not publish():
         publish()  # Best-effort invalidate another output written before the failure.
     if lock is not None:
         try:
             lock.close()  # Receipt bytes/fsync completed while the leaf lease was held.
-        except Exception as error:
+        except BaseException as error:
             failed("Gradle lease release failed", error)
             publish()
     close_failed = False
     for _path, stream, _identity in targets:
         try:
             stream.close()
-        except Exception as error:
+        except BaseException as error:
             failed("Receipt handle close failed", error)
             close_failed = True
     if close_failed:
@@ -785,6 +967,7 @@ def finalize_receipts(receipt: dict[str, Any], evidence: Path, optional: Any,
         for path, _stream, identity in targets:
             descriptor = None
             try:
+                require(identity is not None, "Receipt identity is unknown; cannot safely invalidate by reopening")
                 reject_symlinks(path)
                 descriptor = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
                 observed = os.fstat(descriptor)
@@ -796,11 +979,16 @@ def finalize_receipts(receipt: dict[str, Any], evidence: Path, optional: Any,
                     target.truncate()
                     target.flush()
                     os.fsync(target.fileno())
-            except Exception as error:
+            except BaseException as error:
                 failed("Receipt invalidation failed", error)
             finally:
                 if descriptor is not None:
-                    os.close(descriptor)
+                    try:
+                        os.close(descriptor)
+                    except BaseException as error:
+                        failed("Receipt invalidation handle close failed", error)
+    if interruptions:
+        raise interruptions[0]
 
 
 def execute(args: argparse.Namespace) -> int:
@@ -826,6 +1014,13 @@ def execute(args: argparse.Namespace) -> int:
         "finalExitCode": INFRASTRUCTURE_EXIT, "sourceUnchanged": False, "ownedSurvivors": [], "errors": [],
         "evidenceDirectory": str(evidence)}
     errors: list[str] = receipt["errors"]
+    interruptions: list[BaseException] = []
+
+    def record_error(prefix: str, error: BaseException) -> None:
+        errors.append(prefix + format_ownership_error(error))
+        if not isinstance(error, Exception) and not interruptions:
+            interruptions.append(error)
+
     scope, lock, optional, child, stop_child = None, None, None, None, None
     optional_path = None
     streams: list[Tee] = []
@@ -838,6 +1033,11 @@ def execute(args: argparse.Namespace) -> int:
     context_hash = digest((state / "context.json").read_bytes())
     monotonic_start = time.monotonic()
     check_cancel = lambda: cancellation_requested(state, context, invocation, cancelled)
+
+    def check_product() -> None:
+        check_cancel()
+        require(not errors, "Product stream capture failed")
+
     write_new_json(evidence / "start.json", receipt)
     try:
         if args.receipt:
@@ -848,7 +1048,10 @@ def execute(args: argparse.Namespace) -> int:
         expected_wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
         require(wrapper == expected_wrapper and wrapper.is_file(), "Use the applicable checked-in root wrapper")
         require(original, "Command argv must not be empty")
-        require(0.1 <= args.timeout <= 24 * 60 * 60 and 0.1 <= args.stop_timeout <= 300,
+        product_timeout, stop_timeout = args.timeout, args.stop_timeout
+        product_timeout = finite_local_number(product_timeout, "Command timeout")
+        stop_timeout = finite_local_number(stop_timeout, "Stop timeout")
+        require(0.1 <= product_timeout <= 24 * 60 * 60 and 0.1 <= stop_timeout <= 300,
                 "Invalid bounded command/stop timeout")
         actual = gradle_arguments(original) if args.kind == "gradle" else original
         env = ownership_environment(dict(os.environ), context["id"], invocation, str(state), context["gradleHome"])
@@ -879,14 +1082,20 @@ def execute(args: argparse.Namespace) -> int:
         receipt["executedArgvSemantics"] = "logical-command; exact platform launch is ownership.launches[productLaunchIndex]"
         receipt["productLaunchIndex"] = len(scope.launches)
         receipt["productStartedUtc"] = utc()
+        product_deadline = local_timeout_deadline(time.monotonic(), product_timeout)
         started = True  # A partially failed launch still needs same-home stop.
         child = scope.spawn(command, str(root), env)
         receipt["productPid"] = child.pid
-        streams += [Tee(child.stdout, evidence / "product.stdout.log", sys.stdout.buffer, errors),
-                    Tee(child.stderr, evidence / "product.stderr.log", sys.stderr.buffer, errors)]
-        receipt["productExitCode"] = wait_process(scope, child, args.timeout, cancelled, check_cancel)
-    except Exception as error:
-        errors.append(f"{type(error).__name__}: {error}")
+        # Register before start: a start exception can follow actual thread entry.
+        # It must not turn that thread's reader into an "unclaimed" pipe to close.
+        for pipe, name, live in ((child.stdout, "stdout", sys.stdout.buffer), (child.stderr, "stderr", sys.stderr.buffer)):
+            stream = Tee(pipe, evidence / ("product." + name + ".log"), live, errors, False)
+            streams.append(stream)
+            stream.start()
+        receipt["productExitCode"] = wait_process(scope, child, product_timeout, cancelled, check_product,
+                                                  local_deadline=product_deadline)
+    except BaseException as error:
+        record_error("", error)
     finally:
         receipt["productEndedUtc"] = utc()
         # Outer commands must release/drain their own nested leaves before acquiring
@@ -898,8 +1107,8 @@ def execute(args: argparse.Namespace) -> int:
                 receipt["ownedSurvivors"] = scope.drain()
                 if receipt["ownedSurvivors"]:
                     errors.append("Owned product workers survived pre-stop drain")
-            except Exception as error:
-                errors.append(f"Pre-stop ownership drain failed: {error}")
+            except BaseException as error:
+                record_error("Pre-stop ownership drain failed: ", error)
                 receipt["ownedSurvivors"] = [{"status": "UNKNOWN", "reason": "pre-stop drain failed"}]
         if started and scope is not None:
             try:
@@ -913,40 +1122,57 @@ def execute(args: argparse.Namespace) -> int:
                 receipt["stopArgv"] = stop_argv
                 receipt["stopLaunchIndex"] = len(scope.launches)
                 receipt["stopStartedUtc"] = utc()
+                # The stop budget begins after lease admission, not at product
+                # launch or after stop spawn/stream setup has already consumed it.
+                stop_deadline = local_timeout_deadline(time.monotonic(), stop_timeout)
                 stop_child = scope.spawn(stop_argv, str(root), env)
-                streams += [Tee(stop_child.stdout, evidence / "stop.stdout.log", None, errors),
-                            Tee(stop_child.stderr, evidence / "stop.stderr.log", None, errors)]
-                receipt["stopExitCode"] = wait_process(scope, stop_child, args.stop_timeout, cancelled, check_cancel, stop=True)
+                for pipe, name in ((stop_child.stdout, "stdout"), (stop_child.stderr, "stderr")):
+                    stream = Tee(pipe, evidence / ("stop." + name + ".log"), None, errors, False)
+                    streams.append(stream)
+                    stream.start()
+                receipt["stopExitCode"] = wait_process(scope, stop_child, stop_timeout, cancelled, check_cancel,
+                                                       stop=True, local_deadline=stop_deadline)
                 if receipt["stopExitCode"] != 0:
                     errors.append("Applicable same-home Gradle wrapper --stop failed")
-            except Exception as error:
-                errors.append(f"Wrapper stop/finalizer failed: {error}")
+            except BaseException as error:
+                record_error("Wrapper stop/finalizer failed: ", error)
             receipt["stopEndedUtc"] = utc()
         if scope is not None:
             try:
                 receipt["ownedSurvivors"] = scope.drain()
                 if receipt["ownedSurvivors"]:
                     errors.append("Owned workers survived final drain")
-            except Exception as error:
-                errors.append(f"Final ownership drain failed: {error}")
+            except BaseException as error:
+                record_error("Final ownership drain failed: ", error)
                 receipt["ownedSurvivors"] = [{"status": "UNKNOWN", "reason": "final drain failed"}]
             try:
                 receipt["ownership"] = scope.description()
                 errors.extend(receipt["ownership"].get("discoveryErrors", []))
-            except Exception as error:
-                errors.append(f"Ownership trace retention failed: {error}")
+            except BaseException as error:
+                record_error("Ownership trace retention failed: ", error)
             if child is not None:
                 try:
                     receipt["productExitCode"] = child.poll()
-                except Exception as error:
-                    errors.append(f"Product exit observation failed: {error}")
+                except BaseException as error:
+                    record_error("Product exit observation failed: ", error)
             if stop_child is not None and receipt["stopExitCode"] is None:
                 try:
                     receipt["stopExitCode"] = stop_child.poll()
-                except Exception as error:
-                    errors.append(f"Stop exit observation failed: {error}")
+                except BaseException as error:
+                    record_error("Stop exit observation failed: ", error)
         for stream in streams:
-            stream.finish()
+            try:
+                stream.finish()
+            except BaseException as error:
+                record_error("Owned stream completion failed: ", error)
+        for label, process in (("product", child), ("stop", stop_child)):
+            if process is not None:
+                for pipe in (process.stdout, process.stderr):
+                    if pipe is not None and not any(stream.source is pipe for stream in streams):
+                        try:
+                            pipe.close()  # No successful Tee acquired this returned reader.
+                        except BaseException as error:
+                            record_error("Unclaimed " + label + " pipe close failed: ", error)
         try:
             receipt["sourceAfter"] = source_snapshot(root)
             receipt["sourceUnchanged"] = receipt["sourceBefore"] == receipt["sourceAfter"] == context["source"]
@@ -957,8 +1183,8 @@ def execute(args: argparse.Namespace) -> int:
                     context["gradlePropertiesSha256"], "Bounded Gradle-home policy changed during invocation")
             if started:
                 receipt["reports"] = retain_reports(root, state, report_arguments, baseline, evidence)
-        except Exception as error:
-            errors.append(f"Source/evidence finalization failed: {error}")
+        except BaseException as error:
+            record_error("Source/evidence finalization failed: ", error)
         if xcframework_reuse is not None:
             try:
                 # Keep the no-output Gradle verifier running, but never let its writer
@@ -966,17 +1192,17 @@ def execute(args: argparse.Namespace) -> int:
                 require(xcframework_reuse_binding(state, context, root, wrapper) == xcframework_reuse,
                         "XCFramework producer bindings changed during reuse")
                 receipt["xcframeworkReuseUnchanged"] = True
-            except Exception as error:
-                errors.append(f"XCFramework reuse finalization failed: {error}")
+            except BaseException as error:
+                record_error("XCFramework reuse finalization failed: ", error)
         if scope is not None:
             try:
                 scope.close()
-            except Exception as error:
-                errors.append(f"Owned handle close failed: {error}")
+            except BaseException as error:
+                record_error("Owned handle close failed: ", error)
         try:
             check_cancel()
-        except Exception as error:
-            errors.append(f"Cancellation finalization failed: {type(error).__name__}: {error}")
+        except BaseException as error:
+            record_error("Cancellation finalization failed: ", error)
         if cancelled:
             receipt["cancelledSignals"] = [number for number in cancelled if number != 0]
             receipt["cancelRequested"] = 0 in cancelled
@@ -988,11 +1214,24 @@ def execute(args: argparse.Namespace) -> int:
             receipt["finalExitCode"] = product_code if 0 <= product_code <= 255 else INFRASTRUCTURE_EXIT
             if receipt["finalExitCode"] == INFRASTRUCTURE_EXIT:
                 errors.append("Product exit is reserved/unsupported as an expected-red audit result")
-        finalize_receipts(receipt, evidence, optional, optional_path, lock)
+        # A terminal receipt or handler failure must not replace an earlier
+        # capture/native cancellation. Restore before writing the terminal
+        # receipts so a restoration failure cannot leave an accepted receipt.
         for number, handler in handlers.items():
-            signal.signal(number, handler)
+            try:
+                signal.signal(number, handler)
+            except BaseException as error:
+                record_error("Signal handler restoration failed: ", error)
+                receipt["finalExitCode"] = INFRASTRUCTURE_EXIT
+        try:
+            finalize_receipts(receipt, evidence, optional, optional_path, lock)
+        except BaseException as error:
+            record_error("Receipt finalization failed: ", error)
+            receipt["finalExitCode"] = INFRASTRUCTURE_EXIT
     if receipt["errors"]:
         print(f"audit executor infrastructure failure; receipt {evidence / 'receipt.json'}", file=sys.stderr)
+    if interruptions:
+        raise interruptions[0]  # Receipt/finalizers precede propagation of the same cancellation object.
     return receipt["finalExitCode"]
 
 

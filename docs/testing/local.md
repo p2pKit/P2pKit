@@ -50,13 +50,16 @@ scripts/check-publish-artifacts.sh
 scripts/check-published-consumers.sh
 ./gradlew :p2p-core:checkKotlinAbi \
   :p2p-transport-lan:checkKotlinAbi \
+  :p2p-rpc:checkKotlinAbi \
   :p2p-network-provisioning-android:checkKotlinAbi \
   :p2p-network-provisioning-desktop:checkKotlinAbi
 ./gradlew :p2p-core:checkAndroidAbi \
   :p2p-transport-lan:checkAndroidAbi \
+  :p2p-rpc:checkAndroidAbi \
   :p2p-network-provisioning-android:checkAndroidAbi
 ./gradlew :p2p-core:dokkaGeneratePublicationHtml \
   :p2p-transport-lan:dokkaGeneratePublicationHtml \
+  :p2p-rpc:dokkaGeneratePublicationHtml \
   :p2p-network-provisioning-android:dokkaGeneratePublicationHtml \
   :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml
 ```
@@ -65,6 +68,20 @@ The complete macOS gate is `scripts/run-release-gate.sh`. It includes module
 tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
+
+## Optional RPC workstream
+
+The optional `:p2p-rpc` library and `:p2p-sample-rpc` example remain unpublished.
+Earlier source-bound JVM/Android/Apple checks and generated ABI/lock inputs are
+recorded in the [validation checkpoint](../rpc/implementation-status.md) and
+[official Mac27 continuation](../rpc/mac27-continuation-status.md). These scoped
+passes do not establish current full RPC/LAN or physical-device qualification;
+see the **NOT_READY** [Mac-only checkpoint](../rpc/mac-local-closeout-20261003.md).
+Follow the [RPC validation requirements](../rpc/qualification.md) for any
+outstanding or change-affected lane. Regenerate dependency inputs only through
+the complete maintained writer, review all fourteen tracked locks, and verify
+the frozen result; do not fabricate inputs or weaken checks. The historical
+main `org.jmdns` lock correction remains separate.
 
 ## Kit diagnostic teardown
 
@@ -119,7 +136,7 @@ physical-device, hostile-network, independent interoperability and cryptographic
 
 ## Android ABI graph verification
 
-`scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the three Android modules' `check` tasks and
+`scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the four Android library modules' `check` tasks and
 requires their compiler, ABI extraction and comparison tasks in the realized graph. It does not execute those
 tasks or replace a real `check`/ABI comparison. Configure the SDKs below first, and stop Gradle afterward even
 on failure. Full CI and `scripts/run-release-gate.sh` each invoke this unflagged command explicitly once.
@@ -172,6 +189,7 @@ Run the library suites without requesting Apple/Android tasks:
 
 ```bash
 ./gradlew :p2p-core:jvmTest :p2p-transport-lan:jvmTest \
+  :p2p-rpc:jvmTest :p2p-sample-rpc:jvmTest \
   :p2p-network-provisioning-desktop:test --continue --no-build-cache \
   --dependency-verification strict --max-workers=2 --no-parallel --console=plain
 ./gradlew --stop
@@ -186,9 +204,12 @@ manual run and weekly schedule. macOS uses the conservative
 [CI scope policy](../../CONTRIBUTING.md#ci-scope-policy): non-Markdown changes,
 manual dispatches and the weekly backstop request the full gate; no main-merge
 check is inferred from tree equality. Keep `complete-gate`
-required in repository rules: it waits for both JVM hosts and explicitly rejects
-failure, cancellation, or a skipped matrix before running either its lightweight
-or full checks. No new required-check name is needed. The separate Desktop
+required in repository rules: it aggregates both JVM hosts, repository checks,
+and independent iOS, full-platform, and artifact/consumer jobs. Any failed,
+cancelled, or skipped prerequisite fails the aggregate. Repository checks resolve
+scope once against the exact workflow source (the synthetic merge for PRs).
+Each worker validates that source and scope before running; lightweight changes
+omit heavy steps, not dependency-result validation. No new required-check name is needed. The separate Desktop
 matrix remains sample-test/packaging coverage.
 
 Each JVM host uploads XML/HTML reports as
@@ -213,9 +234,28 @@ The full profile runs `./gradlew check --console=plain` with strict dependency
 verification, task reruns, build/configuration caches disabled, two workers,
 and no parallel tasks. Shared dependency caches remain available.
 Both simulator architectures share the network-test serialization service.
-The Intel profile requests only core and LAN `iosX64Test` tasks. CI uses the
-full profile; `ios-x64-tests.yml` provides a secret-free weekly/manual Intel job.
+The Intel and ARM profiles each request four native test tasks: core, LAN, RPC
+and the RPC sample. Modular CI executes these on their matching native hosts.
+Its required `macos-shared` profile runs original `check` on macOS 14/Xcode 16.2,
+excluding only those eight tasks with explicit `-x` arguments because both
+native lanes are separately mandatory. All 16 shared tests and non-test `check`
+dependencies remain required. The standalone `full` profile is unchanged;
+`ios-x64-tests.yml` also provides a secret-free weekly/manual Intel job. See the
+[release foundation](../releasing/release-foundation.md) for the temporary runner
+retirement limitation and the preserved macOS 26 JVM multicast failure.
 Keep failures blocking; a configured workflow is not hosted execution evidence.
+
+The caller-managed Intel `intel-bootstatus` command has a 600-second work ceiling
+for cold simulator startup, increased from 300 seconds after a hosted cold start
+reported completion just before that deadline but did not exit within it. This
+operational headroom is not permission to accept a readiness message instead of
+actual exit 0, closed output, and fresh Booted readback. Other caller-managed
+commands and the shared FULL simulator route retain a 120-second per-command
+work ceiling. The existing
+15-second TERM and 5-second KILL allowances bound cleanup, not successful work.
+Actual Booted readiness and owned Shutdown retirement remain required. This
+command budget changes no test timeout or assertion; one measured cold start is
+neither a reliability guarantee nor Native test qualification.
 
 Reports live in `build/reports/platform-tests/<invocation-token>/`:
 `invocation.json` binds the command to the commit/tree and complete tracked diff;
@@ -477,6 +517,16 @@ an authenticated GitHub CLI (`gh`), and Python 3:
 scripts/prepare-dependency-update.sh origin/main
 ```
 
+The complete writer retains the genuine Dokka compatibility configurations
+`dokkaJavadocPlugin` and `dokkaHtmlRuntime`. After every required check, current
+Dokka HTML and SBOM task succeeds, each Dokka subproject's
+`resolveDokkaMigrationLocks` task resolves its own configurations under Gradle's
+project execution lock. Disabled compatibility tasks are only realized, not
+executed. Invalid configuration roles and selection of an owner task without
+`resolveAndLockAll` fail before execution. No graph is cleared, unlocked or
+replaced with synthetic empty entries; no lockfile is hand-edited. Review all
+fourteen tracked locks and newly generated integrity metadata.
+
 The artifact-review workspace follows `${TMPDIR:-/tmp}`; an unusable selected directory fails rather than silently
 moving downloads to another volume. Its small GPG home is separately created under `${P2PKIT_GPG_TMPDIR:-/tmp}`.
 Both parent directories must already exist. Choose a short GPG root: its physical path, random directory name and
@@ -525,8 +575,19 @@ component's checksum-listed, detached-signed `.module` as a locator. It accepts
 only an unambiguous local file or sibling-version file within the same
 repository, group, and module; metadata is limited to 1 MiB. Both the locator
 and the relocated artifact must independently pass checksum and signature
-verification. Remote URLs, redirects, ambiguous paths, and unsigned locators
-are not supported. This does not expand the unsigned-plugin exception above.
+verification. Remote artifact URLs, ambiguous paths, and unsigned locators
+are not supported.
+
+KMP's logical JAR/KLIB filenames additionally require their exact metadata
+SHA-256 and a local, same-extension filename in the original publication
+directory. A child metadata file referring to a KMP root is not sufficient:
+the reviewer separately authenticates that checksum-listed root from the
+same repository, group and version, then verifies its reciprocal child
+publication and matching variant attributes. Root chains, external URLs,
+cross-module artifact paths and aliasing into another version fail closed.
+Common metadata can use its own authenticated root. This narrowly bounded
+publication relationship does not expand the unsigned-plugin exception above;
+the actual aliased artifact still requires its own detached signature.
 
 Before pushing, inspect the complete lock and metadata diff and run:
 
@@ -539,6 +600,98 @@ CI executes the range-aware update check before Gradle so an incomplete bot PR
 fails quickly instead of spending the Complete Gate discovering missing
 artifacts. Candidate generation is deliberately not automatic: newly downloaded
 checksums are not trusted until the maintainer review succeeds.
+
+### Hosted candidate generation without changing the controller
+
+`Prepare dependency update candidate` (`dependency-update-candidate.yml`) is
+a separate, manual maintainer operation. It is **not ordinary FULL/Desktop,
+cache bootstrap, Release qualification or publication**. Its implementation
+must receive source review and hosted qualification before operational use;
+workflow registration alone does not establish that it can be dispatched from
+a branch. Do not repurpose the historical audit lock writer as a fallback.
+
+The workflow uses five exact lowercase commit/tree inputs: `controller_sha`,
+`controller_tree`, `candidate_sha`, `candidate_tree`, `dependency_base_sha`.
+The controller must equal the genuine workflow source on `main` (or the
+reviewed Release Foundation branch during initial delivery). Both checkouts
+must descend from the fetched main baseline. The base must be an ancestor of
+the candidate with byte-identical original lock/verification files; it may be
+the reviewed Foundation parent, not necessarily current main. Candidate source
+changes, including dependency floors, are reviewed **before** dispatch.
+
+The immutable controller owns the existing canonical executor, bounded Gradle
+home, wrapper stop and native process receipts. The full maintained
+`prepare-dependency-update.sh <dependency_base_sha>` runs in a separate clean
+candidate. Only content changes to its original tracked Gradle locks and
+`gradle/verification-metadata.xml` are admitted afterward; source injection,
+staging, additions/deletions, links and mode changes fail. This does not weaken
+the executor's immutable-source or strict ordinary Gradle admission rules.
+
+One manual macOS ARM64 job shares the existing non-cancelling heavy queue.
+It uses JDK 17/21, Xcode 26.5 and the maintained SDK platform IDs; only missing
+SDK platforms are acquired by an owned command. The full generator has a
+7,200-second product allowance and the original 120-second stop allowance,
+within a 210-minute job including setup, finalization and upload. These are
+maintenance bounds, **not** measurements or new bootstrap/native deadlines.
+There is no automatic whole-generator retry. The maintained provenance
+reviewer's bounded individual download retries/fallbacks remain unchanged.
+
+The actual owner-provided public recipient/policy pins are checked before
+acquisition and through upload, including their finite policy expiry and
+remaining-time headroom. This direct manual exporter does not grant initial
+C1/C2 authority or lift either ordinary activation HOLD. No custodian private
+key, signing/Portal secret, Actions-runtime token or GitHub API token enters
+the dependency process. An unexpected authenticated provenance requirement
+fails rather than forwarding a credential or skipping review.
+
+On successful command, stop, retirement and encrypted-export return, the
+workflow retains these **separate 14-day artifacts**, named by run/attempt:
+
+- `dependency-candidate-<run>-<attempt>`: the complete generated source patch
+  and safe JSON with exact controller/candidate/base/run bindings, hashes and
+  public signer/provenance fields extracted from the closed original log.
+- `dependency-evidence-<run>-<attempt>`: only `evidence.tar.gz.gpg` and its
+  manifest. Raw command/stop/ownership/input/provenance logs remain encrypted.
+  The remote reviewer's temporary artifact/key buffers are removed by its
+  existing cleanup; they are not represented as retained originals.
+
+Before adopting anything, independently inspect the **complete** generated
+diff and attribute every new signer to its actual publisher using trusted
+public publisher material. A signature matching a retrieved key, the safe
+JSON, or an agent's own source test is not that attribution approval. The
+owner retrieves/decrypts any needed private originals through the existing
+private procedure, never through an agent-visible private key. Use the exact
+artifact IDs/digests and recorded patch hash; do not select `latest` output.
+Only after that review should a normal dependency-update PR integrate the
+reviewed source/floor/lock/checksum set and run its required gates. This manual
+operation does not authorize a merge, close the advisory, or qualify any app.
+
+The two source checkouts use exact SHAs at depth 1, followed by an explicit
+heads-only `git fetch --no-tags --unshallow`. Pinned checkout's depth-0 path
+includes a tags refspec even with `fetch-tags: false`; it is not used here.
+Both checkouts must have complete ancestry and no fetched tag refs before the
+controller admits them. This does not alter or recreate any published tag.
+
+Known-closed failed products have a **separate diagnostic path**, never a
+candidate PASS. Only an actual canonical product exit 1–123 with matching
+original receipt, successful same-home stop, unchanged controller, no survivor,
+discovery/cancellation/error and known stream/handle/receipt closure is eligible.
+After caller captures close/fsync and the real same-process exporter returns,
+the failed Step emits a distinct return hash. Exact failure-only guards admit
+`dependency-failed-product-evidence-<run>-<attempt>` containing only ciphertext
+and manifest, with the same 14-day retention and original deadline/policy
+reserves. No public patch or success record is generated, and the generator's
+actual nonzero result and the failed overall job are preserved.
+
+Timeout/reserved/signal-style exits (including 124/125), cancellation, unknown
+ownership/close, source/policy/expiry failures, missing originals or failed
+export/upload remain failures; provisional files cannot authorize custody.
+Their private bytes may remain only on the ephemeral runner and are **not**
+claimed retained. Public logs contain only bounded purpose/reason/status data.
+A diagnosed repair/new invocation needs its own exact source/run identity,
+not an automatic retry or reuse of another attempt's receipts. The unchanged
+210-minute job includes mutually exclusive success/failure tails; failure
+diagnostics do not add another allowance or weaken successful generation.
 
 Toolchain updates must curate foreign-host artifacts as well as the updating machine's resolved graph.
 The pre-build Kotlin policy requires all four Kotlin/Native host archives (Linux x64, macOS arm64/x64,

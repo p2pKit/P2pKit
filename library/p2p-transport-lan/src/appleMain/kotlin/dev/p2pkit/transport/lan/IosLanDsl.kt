@@ -27,6 +27,27 @@ public fun TransportsBuilder.lan() {
     register(IosLanTransportFactory)
 }
 
+/**
+ * Explicit organization LAN. Secure peers can advertise policy-checked numeric TXT reachability hints.
+ * Opaque-only Bonjour endpoints are never dialed under this policy; older peers need a numeric manual endpoint.
+ */
+public fun TransportsBuilder.lan(policy: OrganizationLan, role: LanRole) {
+    register(IosOrganizationLanFactory(policy, role))
+}
+
+private class IosOrganizationLanFactory(
+    private val policy: OrganizationLan,
+    private val role: LanRole,
+) : TransportFactory {
+    override val descriptor: TransportDescriptor = TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
+
+    override fun build(context: TransportContext): TransportPair {
+        val registry = IosEndpointRegistry()
+        val data = IosLanDataTransport(context, registry, policy = policy, role = role)
+        return TransportPair(data, IosLanDiscoveryTransport(context, registry, data, policy = policy, role = role))
+    }
+}
+
 internal object IosLanTransportFactory : TransportFactory {
     override val descriptor: TransportDescriptor =
         TransportDescriptor.dataAndDiscovery(TransportKind.LAN)

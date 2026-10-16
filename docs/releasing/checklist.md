@@ -18,22 +18,31 @@ existing audit history into `main` is not release qualification.
    docs/changelog. Keep `LATEST_PUBLISHED_VERSION` at the previous release until
    remote publication is verified.
 2. Confirm a clean worktree and exact ancestry from `origin/main`.
-3. Run all script tests, `git diff --check`, and `scripts/run-release-gate.sh`.
-   Retain its source-bound `build/reports/platform-tests/` execution report and
-   a same-source native Intel `ios-x64` profile result (local or the manual/weekly
-   Intel workflow). The arm64 gate cannot verify the published `iosX64` slice;
+3. Pass the modular `ci.yml` components and exact-source aggregation, plus
+   `git diff --check`. Retain genuine `build/reports/platform-tests/` evidence
+   from the same-source `macos-shared`, native ARM64 `ios-arm64` and native Intel
+   `ios-x64` profiles: all 24 portable test tasks plus non-test `check` dependencies
+   remain required across the three components. The arm64 gate cannot verify the published `iosX64` slice;
    no Intel execution may be inferred from cross-compilation. See the
    [platform coverage guide](../testing/local.md#platform-execution-evidence).
-4. Run OSV, dependency submission, ABI, strict Dokka, SBOM, publication shape,
+4. Require the component results for OSV, ABI, strict Dokka, SBOM, publication shape,
    isolated consumers, Swift warnings-as-errors, and XCFramework provenance.
 5. Confirm `scripts/check-release-tag.sh v<VERSION_NAME>` and
    `scripts/check-maven-central-version.sh absent` pass.
-6. Obtain explicit owner authorization for the exact tag and commit.
+6. Require the exact same-source/version four-platform application set and
+   original encrypted evidence, then obtain explicit owner authorization for
+   the exact tag and commit. Follow the [exact-source foundation procedure](release-foundation.md).
 7. Push the immutable tag and allow the protected `maven-central` environment
    to perform signing, bundle validation, publication-build SBOM validation,
-   provenance, and publication.
+   provenance, and publication. The new secret-free `freeze-applications` stage
+   must pass first; protected approval must include its exact attempt/set-hash
+   challenge. Readiness is checked again immediately before irreversible upload.
 8. Verify remote bytes, signatures, checksums, metadata, and isolated consumers.
-9. Create a release record, set `LATEST_PUBLISHED_VERSION`, open the next
+9. After successful Maven verification, deliver the exact frozen APK/MSI/ARM64-DMG/DEB
+   through the separately protected sample evidence-approval stage and verify
+   every complete public download against its recorded hash. Do not rebuild or
+   reselect applications after Maven.
+10. Create a release record, set `LATEST_PUBLISHED_VERSION`, open the next
    snapshot line, and create a GitHub prerelease/release entry.
 
 Never move or recreate an existing release tag, weaken a gate, put secrets in
@@ -41,8 +50,9 @@ the repository, or publish a snapshot.
 
 ## Which build each gate covers
 
-`verify-release` runs the secret-free complete gate on a verification build:
-tests, ABI, Dokka, SBOM, local publication/consumers, and Apple/XCFramework checks.
+`ci.yml` independently executes tests, ABI, Dokka, SBOM, local publication/consumers
+and Apple/XCFramework checks. `verify-release` revalidates those exact-source
+results and the frozen application set; it does not repeat all component builds.
 The approved `publish-release` job separately rebuilds the exact source with
 caches disabled; this signing isolation prevents stale key-specific signatures
 from entering the bundle. The two builds are not claimed to be byte-identical.
@@ -90,16 +100,20 @@ For future candidate builds, the root `Jar`/`BundleAar` rules copy the repositor
 
 | Artifact class | Required content / inspection |
 | --- | --- |
-| Main JVM and KMP-metadata JARs; six native `-metadata.jar` archives; Android AARs | Exactly one `META-INF/LICENSE`, byte-identical to repository `LICENSE`. |
+| Main JVM and KMP-metadata JARs; nine native `-metadata.jar` archives; Android AARs | Exactly one `META-INF/LICENSE`, byte-identical to repository `LICENSE`. |
 | Every publication's `-sources.jar` and Dokka `-javadoc.jar`, including iOS coordinates | The same single canonical embedded license, in addition to the existing source/index checks. |
-| Six Kotlin/Native main `.klib` and three LAN `-cinterop-p2pkit_nw.klib` archives | Explicit **embedded-license-check exemption**: not produced by `Jar`/`BundleAar`, and not rewritten. The gate requires each archive to exist and be readable, plus the sibling POM's Apache-2.0 metadata; the six main KLIBs also retain their existing identity checks. It prints `EXEMPT`, not an embedded-license pass. |
+| Nine Kotlin/Native main `.klib` and three LAN `-cinterop-p2pkit_nw.klib` archives | Explicit **embedded-license-check exemption**: not produced by `Jar`/`BundleAar`, and not rewritten. The gate requires each archive to exist and be readable, plus the sibling POM's Apache-2.0 metadata; the nine main KLIBs also require identity checks. It prints `EXEMPT`, not an embedded-license pass. |
 | Source-built `P2pKitShared.xcframework` | Separate Apple output, not an artifact in this Maven publication set. Its provenance/minimum-OS checks do not certify license embedding. A redistributor must separately include the applicable license/notice material. |
 
-The complete macOS set has 54 archives: 45 license-covered JARs/AARs and nine
-explicitly exempt KLIBs, across 15 publication coordinates.
+The current source configuration including **unpublished, unqualified RPC**
+requires 75 archives on macOS: 63 license-covered JARs/AARs and 12 explicitly
+exempt KLIBs, across 21 publication coordinates. This is an expected packaging
+shape, not inspected artifact evidence. The immutable historical four-library
+set remains 54 archives (45 covered, nine exempt) across 15 coordinates;
+no RPC coordinate is inferred for a previously published release.
 Every checked publication produces success, failure or an explicit KLIB
 exception; missing, changed or duplicate license entries in a covered JAR/AAR
-fail the gate. Non-macOS omission of the six iOS publication rows is a host
+fail the gate. Non-macOS omission of the nine current-source iOS publication rows is a host
 execution limitation, **not** that license exception or a complete release pass.
 Retain a macOS inspection of the complete publication set before release.
 

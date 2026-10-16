@@ -1,0 +1,312 @@
+"""Fixed boot observation and closed nonsecret runner output, not admission.
+
+Nothing is observed or loaded natively at import. Boot equality is meaningful
+only with the reviewed same-job Steps caller and original execution evidence.
+No timestamp/hostname/runner-label fallback can stand in for a kernel boot ID.
+"""
+from __future__ import annotations
+
+import ctypes
+import hashlib
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import uuid
+
+import hosted_job_clock as clocks
+
+STEP_SCOPE = "INITIAL_RECIPIENT_STEP_PENDING_GUARDED_OUTPUT_AND_RETURN_V1"
+STEP_HASH_ENV = "P2PKIT_INITIAL_RECIPIENT_STEP_SHA256"
+STEP_FILE = "step-pending.json"
+STEP_LIMIT = 16384
+SEAL_DEADLINE_FIELDS = frozenset(("initialSealSha256", "initialSealEndNs", "initialSealClockRole",
+    "initialSealClockDomain", "initialSealClockTicksPerSecond", "initialSealBootSha256"))
+SEAL_DEADLINE_LIMIT = 512
+QUARANTINE = []
+
+
+class ContinuityError(RuntimeError):
+    """Finite public-safe refusal; native identifiers are never exception text."""
+
+
+def require(value, code):
+    if not value:
+        raise ContinuityError(code)
+
+
+def _uuid_bytes(raw, ending):
+    require(type(raw) is bytes and len(raw) == 36 + len(ending) and raw.endswith(ending), "BOOT_UUID_SIZE")
+    text = raw[:36]
+    require(re.fullmatch(rb"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", text),
+            "BOOT_UUID_GRAMMAR")
+    value = uuid.UUID(text.decode("ascii")).bytes
+    require(value != bytes(16), "BOOT_UUID_ZERO")
+    return value
+
+
+def _linux_boot():
+    require(sys.platform == "linux", "BOOT_PLATFORM")
+    path = Path("/proc/sys/kernel/random/boot_id")
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and not before.st_mode & 0o022,
+            "BOOT_KERNEL_FILE")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    failure, raw = None, None
+    try:
+        require(os.path.samestat(before, os.fstat(descriptor)), "BOOT_KERNEL_FILE_CHANGED")
+        raw = os.read(descriptor, 64)
+        require(os.read(descriptor, 1) == b"", "BOOT_KERNEL_FILE_LIMIT")
+        require(os.path.samestat(before, path.lstat()), "BOOT_KERNEL_FILE_CHANGED")
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        QUARANTINE.append(descriptor)  # No retry or lost close responsibility.
+        if failure is not None:
+            raise failure from error
+        raise ContinuityError("BOOT_KERNEL_CLOSE_UNKNOWN") from error
+    if failure is not None:
+        raise failure
+    return _uuid_bytes(raw, b"\n")
+
+
+def _darwin_boot():
+    require(sys.platform == "darwin", "BOOT_PLATFORM")
+    library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    function = library.sysctlbyname
+    function.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t),
+                         ctypes.c_void_p, ctypes.c_size_t]
+    function.restype = ctypes.c_int
+    data, size = ctypes.create_string_buffer(37), ctypes.c_size_t(37)
+    require(function(b"kern.bootsessionuuid", data, ctypes.byref(size), None, 0) == 0 and size.value == 37,
+            "BOOT_DARWIN_QUERY")
+    return _uuid_bytes(data.raw, b"\0")
+
+
+class _BootEnvironment(ctypes.Structure):
+    _fields_ = [("identifier", ctypes.c_ubyte * 16), ("firmware", ctypes.c_uint32), ("flags", ctypes.c_uint64)]
+
+
+def _windows_boot():
+    require(sys.platform == "win32" and callable(getattr(ctypes, "WinDLL", None)), "BOOT_PLATFORM")
+    library = ctypes.WinDLL("ntdll.dll", use_last_error=True, winmode=0x00000800)
+    function = library.NtQuerySystemInformation
+    function.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    function.restype = ctypes.c_int32
+    data, size = _BootEnvironment(), ctypes.c_uint32()
+    require(ctypes.sizeof(data) == 32, "BOOT_WINDOWS_ABI")
+    # SystemBootEnvironmentInformation (90), fixed current supported NT ABI.
+    require(function(90, ctypes.byref(data), ctypes.sizeof(data), ctypes.byref(size)) == 0 and
+            size.value == ctypes.sizeof(data) and data.firmware in (0, 1, 2), "BOOT_WINDOWS_QUERY")
+    raw = bytes(data.identifier)
+    require(raw != bytes(16), "BOOT_UUID_ZERO")
+    return uuid.UUID(bytes_le=raw).bytes
+
+
+def boot_digest(role):
+    """Actual closed native role; return a domain-separated digest, never raw ID."""
+    require(not QUARANTINE and role in clocks.DOMAINS and clocks.processes.host_role() == role, "BOOT_NATIVE_ROLE")
+    try:
+        raw = (_linux_boot() if role == "linux-x64" else _windows_boot() if role == "windows-x64" else _darwin_boot())
+        return hashlib.sha256(b"P2pKit hosted boot v1\0" + role.encode("ascii") + b"\0" + raw).hexdigest()
+    except ContinuityError:
+        raise
+    except Exception:
+        raise ContinuityError("BOOT_NATIVE_OBSERVATION_FAILED") from None
+
+
+def _seal_decimal(value, maximum):
+    require(type(value) is str and re.fullmatch(r"[1-9][0-9]{0,19}", value), "SEAL_DEADLINE_DECIMAL")
+    number = int(value)
+    require(number <= maximum, "SEAL_DEADLINE_INTEGER")
+    return number
+
+
+def seal_deadline_data(values):
+    """Decode exactly six supplied strings as DATA, never a clock or admission.
+
+    Return hash, original absolute end, declared clock identity and boot digest.
+    Nothing is observed. Only the original seal fence may emit these fields;
+    a future BEFORE caller still needs successful-Step custody, new actual
+    FIRST observations/owned reads and fresh source/service authority.
+    """
+    require(type(values) is dict and len(values) == 6 and all(type(name) is str for name in values) and
+        set(values) == SEAL_DEADLINE_FIELDS and
+        all(type(value) is str and len(value) <= SEAL_DEADLINE_LIMIT for value in values.values()),
+        "SEAL_DEADLINE_FIELDS")
+    require(all(re.fullmatch(r"[0-9a-f]{64}", values[name]) for name in
+        ("initialSealSha256", "initialSealBootSha256")), "SEAL_DEADLINE_DIGEST")
+    end = _seal_decimal(values["initialSealEndNs"], clocks.UINT64)
+    frequency = _seal_decimal(values["initialSealClockTicksPerSecond"], clocks.INT64)
+    identity = clocks.ClockIdentity(values["initialSealClockRole"], values["initialSealClockDomain"], frequency)
+    try:
+        clocks.validate_identity(identity)  # Declared DATA only; no RAW/LOCAL/boot observation.
+    except clocks.ClockError:
+        raise ContinuityError("SEAL_DEADLINE_CLOCK") from None
+    raw = "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+    require(len(raw) <= SEAL_DEADLINE_LIMIT, "SEAL_DEADLINE_SIZE")
+    return values["initialSealSha256"], end, identity, values["initialSealBootSha256"]
+
+
+def _output_bytes(values):
+    """Pure closed encoder: old hash sets or the single exact seal handoff."""
+    require(type(values) is dict and 0 < len(values) <= 6 and all(type(name) is str for name in values),
+        "STEP_OUTPUT_FIELDS")
+    if set(values) == SEAL_DEADLINE_FIELDS:
+        seal_deadline_data(values)
+    else:
+        require(set(values) in (
+            {"recipientSenderSha256", "recipientStepSha256"},
+            {"recipientSenderSha256", "recipientStepSha256", "recipientCryptoOriginalsSha256"}, {"initializationSha256"},
+            {"initializationSha256", "workerHandoffSha256"},
+            {"initialOriginalsSha256", "gateHandoffSha256"},
+            {"initialCryptoStepSha256", "initialExporterReturnSha256"},
+            {"initialCustodySha256", "initialExporterReturnSha256"}, {"initialSealSha256"}) and
+            all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()),
+            "STEP_OUTPUT_FIELDS")
+    return "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+
+
+def append_outputs(values, check):
+    """Actual runner file command, not evidence storage or a self-signed result.
+
+    Only fixed lowercase hashes and the opt-in six-field original seal deadline
+    leave private custody. A failed/partial append cannot authorize the next
+    step: the fixed caller also requires the actual successful predecessor.
+    """
+    return _append_output_bytes(_output_bytes(values), check)
+
+
+def _productive_output_bytes(values):
+    """The separate productive two-hash grammar; old output admission is unchanged."""
+    require(type(values) is dict and len(values) == 2 and all(type(name) is str for name in values) and
+        set(values) in (
+            {"initialProductiveExportTransferSha256", "initialProductiveManifestSha256"},
+            {"initialProductiveCollectCloseSha256", "initialProductiveManifestSha256"}) and
+        all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()),
+        "PRODUCTIVE_OUTPUT_FIELDS")
+    return "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+
+
+def append_productive_outputs(values, check):
+    """Append only a genuine caller's productive hashes, never future Step success."""
+    return _append_output_bytes(_productive_output_bytes(values), check)
+
+
+def _append_output_bytes(raw, check):
+    # ONE original native writer for both separately closed encoders. Do not
+    # relax its empty-target, path, readback, parent or known-close contract.
+    require(callable(check) and not QUARANTINE, "STEP_OUTPUT_FIELDS")
+    check()
+    target = Path(os.environ.get("GITHUB_OUTPUT", ""))
+    parent = Path(os.environ.get("RUNNER_TEMP", ""))
+    require(target.is_absolute() and parent.is_absolute() and ".." not in target.parts and
+        target.parent == parent / "_runner_file_commands" and
+        re.fullmatch(r"set_output_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                     target.name), "STEP_OUTPUT_PATH")
+    parents = tuple((path, path.lstat()) for path in target.parents)
+    for path, info in parents:
+        require(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400,
+                "STEP_OUTPUT_PARENT")
+    before = target.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size == 0 and
+        not getattr(before, "st_file_attributes", 0) & 0x400 and
+        (os.name == "nt" or before.st_uid == os.geteuid()), "STEP_OUTPUT_FILE")
+    attributes = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_file_attributes")
+    identity = tuple(getattr(before, name, None) for name in attributes)
+    def same_file(current, size):
+        return tuple(getattr(current, name, None) for name in attributes) == identity and current.st_size == size
+    check()
+    descriptor = os.open(target, os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) |
+                         getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    failure = None
+    try:
+        require(same_file(os.fstat(descriptor), 0), "STEP_OUTPUT_CHANGED")
+        check()
+        require(os.write(descriptor, raw) == len(raw), "STEP_OUTPUT_SHORT_WRITE")
+        os.fsync(descriptor)
+        check()
+        require(os.lseek(descriptor, 0, os.SEEK_SET) == 0 and os.read(descriptor, len(raw) + 1) == raw,
+                "STEP_OUTPUT_READBACK")
+        require(same_file(target.lstat(), len(raw)) and same_file(os.fstat(descriptor), len(raw)),
+                "STEP_OUTPUT_CHANGED")
+        for path, info in parents:
+            after = path.lstat()
+            require(os.path.samestat(info, after) and stat.S_ISDIR(after.st_mode) and
+                    not getattr(after, "st_file_attributes", 0) & 0x400, "STEP_OUTPUT_PARENT_CHANGED")
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        QUARANTINE.append(descriptor)
+        if failure is not None:
+            raise failure from error
+        raise ContinuityError("STEP_OUTPUT_CLOSE_UNKNOWN") from error
+    if failure is not None:
+        raise failure
+    check()  # Actual fsync/readback/close return remains inside the original cap.
+
+
+def _receiver_output_bridge():
+    # Retain C's load-time originals in closures, not a replaceable global read
+    # at append entry. RD is deliberately absent until the fixed late import.
+    module, runtime, modules, clock, need, writer, name = (
+        sys.modules[__name__], sys, sys.modules, clocks, require, _append_output_bytes, __name__)
+
+    def current(codec=None):
+        """Passive source checks only; no receiver owner, observation or cap."""
+        need(_RECEIVER_OUTPUT_SOURCE is source and sys is runtime and sys.modules is modules and
+            __name__ is name and modules.get(name) is module and clocks is clock and require is need and
+            _append_output_bytes is writer and _receiver_output_current is current and
+            append_productive_receiver_outputs is append, "RECEIVER_OUTPUT_SOURCE_CHANGED")
+        if codec is not None:
+            data, encode, validate, fields, before, custody, origin = codec
+            need(type(data) is type(module) and
+                modules.get("hosted_initial_recipient_productive_receiver_data") is data and
+                data.encode_output_values is encode and data.output_values is validate and data.OUTPUT_FIELDS is fields and
+                data.B is before and before.continuity is module and data.CD is custody and
+                custody.O is origin and data.O is origin and origin.clocks is clock,
+                "RECEIVER_OUTPUT_CODEC_CHANGED")
+
+    def append(values, check):
+        """Write the separate exact receiver tuple6 under its original guard.
+
+        The receiver owns registration, once-only append and two late checks.
+        This DATA bridge cannot establish earlier source/native custody or a
+        Step result. RD bindings cover this append, not earlier R acquisitions.
+        """
+        current()
+        need(callable(check) and not QUARANTINE, "STEP_OUTPUT_FIELDS")
+        quarantine = QUARANTINE
+        # BEFORE imports C before defining PHASE_FILES, which RD uses at import.
+        # A literal late DATA import avoids that cycle and creates no new R graph.
+        import hosted_initial_recipient_productive_receiver_data as data
+        codec = (data, data.encode_output_values, data.output_values, data.OUTPUT_FIELDS, data.B, data.CD, data.O)
+        current(codec)  # Pin before the first supplied guard callback.
+        raw = codec[1](values)  # Real maintained ordered tuple6 grammar, not a dict.
+        current(codec)
+
+        def guarded():
+            current(codec)
+            need(QUARANTINE is quarantine and not quarantine, "STEP_OUTPUT_FIELDS")
+            check()
+            current(codec)
+            need(QUARANTINE is quarantine and not quarantine, "STEP_OUTPUT_FIELDS")
+
+        result = writer(raw, guarded)  # One unchanged original native writer.
+        current(codec)
+        need(QUARANTINE is quarantine and not quarantine, "STEP_OUTPUT_FIELDS")
+        return result
+
+    source = (module, runtime, modules, clock, need, writer, current, append)
+    return current, append, source
+
+
+# Fixed public signature remains exactly (values, check). Discard the factory:
+# append entry never rebaselines the C-load-owned originals into new suppliers.
+_receiver_output_current, append_productive_receiver_outputs, _RECEIVER_OUTPUT_SOURCE = _receiver_output_bridge()
+del _receiver_output_bridge

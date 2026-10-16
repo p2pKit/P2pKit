@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """Exercise the real launcher entry points; only macOS tool boundaries are fake."""
 
+import json
 import os
 import pathlib
 import shutil
+import shlex
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import uuid
+from unittest import mock
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(REPO / "scripts"))
+import audit_processes as ownership
 BASH = os.environ.get("P2PKIT_TEST_BASH", "bash")
 UDID = "11111111-1111-1111-1111-111111111111"
 FAKE_TOOL = r'''#!/usr/bin/env python3
-import os, pathlib, sys, time
+import os, pathlib, sys, time, json
 tool = pathlib.Path(sys.argv[0]).name
 root = pathlib.Path(os.environ["FAKE_IOS_ROOT"])
 args = sys.argv[1:]
@@ -24,7 +32,14 @@ with (root / "tools.log").open("a") as log:
     log.write(tool + " " + " ".join(args) + "\n")
 if tool == "xcrun":
     assert args[0] == "simctl", args
-    if args[1] == "list":
+    if args[1:3] == ["list", "--json"]:
+        print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+            {"name": "iPhone 17", "udid": "11111111-1111-1111-1111-111111111111",
+             "state": "Shutdown", "isAvailable": True}],
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-2": [
+            {"name": "iPhone 17", "udid": "22222222-2222-2222-2222-222222222222",
+             "state": "Shutdown", "isAvailable": True}]}}))
+    elif args[1] == "list":
         print("    iPhone 17 (11111111-1111-1111-1111-111111111111) (Shutdown)")
     elif args[1] == "install":
         (root / "installed-path").write_text(args[3])
@@ -86,10 +101,36 @@ class LauncherLifecycleTest(unittest.TestCase):
         bash_env.write_text("function /usr/libexec/PlistBuddy { printf '%s\\n' p2pkit-sample; }\n")
         self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
                         FAKE_IOS_ROOT=str(self.root), BASH_ENV=str(bash_env), SIM_UDID=UDID)
-        for name in ("IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE"):
+        for name in ("SIM_RUNTIME", "IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE"):
             self.env.pop(name, None)
         self.processes = []
         self.addCleanup(self.stop_processes)
+
+    def test_ui_runtime_selection_reaches_existing_launcher_without_explicit_udid(self):
+        self.finish(self.start('run-ios-ui-tests.sh', SIM_UDID='',
+                               SIM_RUNTIME='com.apple.CoreSimulator.SimRuntime.iOS-26-5'))
+        tools = (self.root / 'tools.log').read_text()
+        self.assertIn('simctl bootstatus ' + UDID + ' -b', tools)
+        self.assertIn('-destination platform=iOS Simulator,id=' + UDID, tools)
+        self.assertIn('xcodebuild ', tools)
+        self.assertFalse(self.lock.exists())
+
+    def test_ui_runtime_selection_rejects_conflicting_explicit_udid_before_mutation(self):
+        self.finish(self.start('run-ios-ui-tests.sh', SIM_UDID='22222222-2222-2222-2222-222222222222',
+                               SIM_RUNTIME='com.apple.CoreSimulator.SimRuntime.iOS-26-5'), expected=1)
+        tools = (self.root / 'tools.log').read_text()
+        self.assertNotIn('bootstatus', tools)
+        self.assertNotIn('xcodegen', tools)
+        self.assertNotIn('xcodebuild', tools)
+        self.assertFalse(self.lock.exists())
+
+    def test_ui_missing_runtime_refuses_without_name_fallback_or_mutation(self):
+        self.finish(self.start('run-ios-ui-tests.sh', SIM_UDID='',
+                               SIM_RUNTIME='com.apple.CoreSimulator.SimRuntime.iOS-27-0'), expected=5)
+        tools = (self.root / 'tools.log').read_text()
+        self.assertNotIn('bootstatus', tools)
+        self.assertNotIn('xcodebuild', tools)
+        self.assertFalse(self.lock.exists())
 
     def stop_processes(self):
         for process in self.processes:
@@ -100,22 +141,174 @@ class LauncherLifecycleTest(unittest.TestCase):
                 pass
             process.communicate(timeout=5)
 
+    def launcher_environment(self, overrides):
+        # Fixture inputs may select a different audit state, but must not mutate
+        # an inherited controller's ownership domain in a new OS process.
+        state = overrides.get(ownership.STATE_ENV)
+        environment = dict(self.env)
+        if state and environment.get(ownership.CHAIN_ENV):
+            environment = ownership.ownership_environment(
+                environment, environment[ownership.JOB_ENV], uuid.uuid4().hex,
+                state, environment["GRADLE_USER_HOME"], allow_new_context=True)
+        environment.update({key: value for key, value in overrides.items()
+                            if key != ownership.STATE_ENV or state})
+        if ownership.STATE_ENV in overrides and not state:
+            # Exercise the real missing-state refusal INSIDE Bash, after its
+            # path lookup children and before the child-free case/exit boundary.
+            # The initial OS environment remains coherently owned. Never erase
+            # the ancestor markers or exempt this child from outer supervision.
+            boundary = 'action="${1:-}"'
+            self.assertIn("\n" + boundary + "\n", (self.repo / "scripts/run-ios-ui-tests.sh").read_text())
+            hook = ('if [[ "$BASH_COMMAND" == ' + shlex.quote(boundary) + ' ]]; then '
+                    'printf "%s\\n" fired > "$FAKE_IOS_ROOT/missing-state-hook"; '
+                    'unset P2PKIT_AUDIT_STATE_DIR; trap - DEBUG; fi')
+            bash_env = self.root / ("missing-state-env-" + uuid.uuid4().hex)
+            bash_env.write_text(pathlib.Path(environment["BASH_ENV"]).read_text() +
+                                "trap " + shlex.quote(hook) + " DEBUG\n")
+            environment["BASH_ENV"] = str(bash_env)
+        return environment
+
+    def test_fixture_state_inputs_preserve_original_ancestor_ownership(self):
+        job, invocation = uuid.uuid4().hex, uuid.uuid4().hex
+        state, home = str(self.root / "outer-state"), str(self.root / "outer-home")
+        self.env = ownership.ownership_environment(self.env, job, invocation, state, home, allow_new_context=True)
+        controller = object.__new__(ownership.PosixScope)
+        controller.job, controller.invocation, controller.state, controller.home = job, invocation, state, home
+        for selected in (str(self.root / "nested-state"), ""):
+            environment = self.launcher_environment({ownership.STATE_ENV: selected})
+            self.assertTrue(controller._ours({key.encode(): value.encode() for key, value in environment.items()}))
+            domains = ownership.ownership_domains(environment[ownership.CHAIN_ENV], environment[ownership.DOMAINS_ENV])
+            self.assertIn({"id": invocation, "job": job, "state": state, "home": home}, domains)
+            self.assertEqual(selected or state, domains[-1]["state"])
+            self.assertEqual(home, domains[-1]["home"])
+            self.assertEqual(selected or state, environment[ownership.STATE_ENV])
+
     def start(self, script="run-ios-app.sh", cwd=None, absolute=False, arguments=(), **overrides):
         cwd = cwd or self.repo
         path = self.repo / "scripts" / script
         # The default matches Gradle's repository-root, relative-path invocation.
         argument = str(path) if absolute else os.path.relpath(path, cwd)
         process = subprocess.Popen([BASH, argument, *arguments], cwd=cwd,
-                                   env=dict(self.env, **overrides), stdout=subprocess.PIPE,
+                                   env=self.launcher_environment(overrides), stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, start_new_session=True)
         self.processes.append(process)
         return process
 
     def finish(self, process, expected=0):
-        output, _ = process.communicate(timeout=10)
+        wait_started = time.monotonic()
+        try:
+            output, _ = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired as error:
+            wait_elapsed_millis = int((time.monotonic() - wait_started) * 1000)
+            # The synthetic checkout is removed by cleanup. Preserve the last
+            # observed phase before that happens, without renewing the deadline,
+            # retrying a launcher, or treating a later exit as a passing result.
+            observed = self.timeout_diagnostics(process, error)
+            observed["waitElapsedMillis"] = wait_elapsed_millis
+            self.fail("Synthetic launcher exceeded the unchanged 10-second deadline: " +
+                      json.dumps(observed, sort_keys=True))
         self.assertEqual(expected, process.returncode, output)
         self.assertNotIn("unbound variable", output)
         return output
+
+    def timeout_diagnostics(self, process, error):
+        """Bounded synthetic-fixture observations, never live ownership proof."""
+        limit = 4096
+
+        def text_tail(value):
+            truncated = isinstance(value, (bytes, str)) and len(value) > limit
+            if isinstance(value, bytes):
+                value = value[-limit:].decode("utf-8", errors="replace")
+            value = value if isinstance(value, str) else ""
+            return {"tail": value[-limit:].replace(str(self.root), "<fixture>"),
+                    "truncated": truncated}
+
+        def read_record(path, directory=None):
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+                with os.fdopen(fd, "rb") as stream:
+                    info = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode):
+                        return {"state": "NOT_REGULAR"}
+                    if directory is not None:
+                        raw = stream.read(65)
+                        value = raw.strip()
+                        return {"state": "RECORDED" if 0 < len(raw) <= 64 and value.isdigit() else "INVALID",
+                                "pid": int(value) if 0 < len(raw) <= 64 and value.isdigit() else None}
+                    stream.seek(max(0, info.st_size - limit))
+                    result = text_tail(stream.read(limit))
+                    result["truncated"] = info.st_size > limit
+                    return {"state": "READ", **result}
+            except OSError as failure:
+                return {"state": "UNAVAILABLE", "errno": failure.errno}
+
+        snapshot = {"scope": "SYNTHETIC_TIMEOUT_OBSERVATION_NOT_OWNERSHIP_PROOF",
+                    "launchOrdinal": next((i + 1 for i, child in enumerate(self.processes)
+                                           if child is process), None),
+                    "launcherReturnCode": process.poll(), "output": text_tail(error.output),
+                    "tools": read_record(self.root / "tools.log")}
+        try:
+            guard = pathlib.Path(str(self.lock) + ".guard").lstat()
+            snapshot["guard"] = {"regular": stat.S_ISREG(guard.st_mode), "inode": guard.st_ino,
+                                 "bytes": guard.st_size, "links": guard.st_nlink}
+        except OSError as failure:
+            snapshot["guard"] = {"state": "UNAVAILABLE", "errno": failure.errno}
+        try:
+            directory = os.open(self.lock, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                snapshot["lock"] = {"state": "DIRECTORY", "owner": read_record("pid", directory),
+                                    "worker": read_record("worker", directory)}
+            finally:
+                os.close(directory)
+        except OSError as failure:
+            snapshot["lock"] = {"state": "UNAVAILABLE", "errno": failure.errno}
+        return snapshot
+
+    def test_timeout_preserves_bounded_phase_and_lock_records_without_retry_or_pass(self):
+        self.seed_lock(12345)
+        (self.lock / "worker").write_text("12346\n")
+        (self.root / "tools.log").write_text("x" * 6000 + "\nxcodebuild synthetic-build\n")
+        error = subprocess.TimeoutExpired(["bash", "scripts/run-ios-app.sh"], 10,
+                                          output=b"x" * 6000 + b"\n[ios-run] Building iOS app...\n")
+        process = mock.Mock()
+        process.communicate.side_effect = error
+        process.poll.return_value = None
+        with mock.patch.object(self, "processes", [object(), process]):
+            with self.assertRaises(AssertionError) as failed:
+                self.finish(process)
+        process.communicate.assert_called_once_with(timeout=10)
+        self.assertIn("unchanged 10-second deadline", str(failed.exception))
+        snapshot = json.loads(str(failed.exception).split(": ", 1)[1])
+        self.assertIn("[ios-run] Building iOS app...", snapshot["output"]["tail"])
+        self.assertTrue(snapshot["output"]["truncated"])
+        self.assertIn("xcodebuild synthetic-build", snapshot["tools"]["tail"])
+        self.assertTrue(snapshot["tools"]["truncated"])
+        self.assertEqual(12345, snapshot["lock"]["owner"]["pid"])
+        self.assertEqual(12346, snapshot["lock"]["worker"]["pid"])
+        self.assertEqual(2, snapshot["launchOrdinal"])
+        self.assertIsNone(snapshot["launcherReturnCode"])
+        self.assertLess(len(str(failed.exception)), 10000)
+        self.assertEqual("12345\n", (self.lock / "pid").read_text())
+        self.assertEqual("12346\n", (self.lock / "worker").read_text())
+
+    def test_timeout_diagnostics_do_not_follow_symlinks_or_block_on_fifo(self):
+        other = self.root / "unrelated"
+        other.write_text("MUST_NOT_READ_UNRELATED_CONTENT")
+        tools = self.root / "tools.log"
+        tools.symlink_to(other)
+        self.build.mkdir()
+        self.lock.symlink_to(self.root, target_is_directory=True)
+        process = mock.Mock()
+        process.poll.return_value = 0  # Even a post-deadline exit cannot erase the timeout.
+        process.communicate.side_effect = subprocess.TimeoutExpired(["synthetic"], 10)
+        with self.assertRaises(AssertionError) as failed:
+            self.finish(process)
+        self.assertNotIn("MUST_NOT_READ_UNRELATED_CONTENT", str(failed.exception))
+        tools.unlink()
+        os.mkfifo(tools)
+        observed = self.timeout_diagnostics(process, subprocess.TimeoutExpired(["synthetic"], 10))
+        self.assertEqual("NOT_REGULAR", observed["tools"]["state"])
+        self.assertTrue(self.lock.is_symlink())
 
     def wait_for_build(self, process):
         deadline = time.monotonic() + 5
@@ -247,7 +440,12 @@ printf 'invoked\\n' >> fake-gradle-invocations
                 with self.subTest(action=action, missing=missing):
                     environment = {"P2PKIT_AUDIT_STATE_DIR": str(self.root / "audit-state"),
                                    "IOS_RUN_DIR": str(self.root / action), "SIM_UDID": UDID, missing: ""}
+                    hook = self.root / "missing-state-hook"
+                    hook.unlink(missing_ok=True)
                     self.finish(self.start("run-ios-ui-tests.sh", arguments=(action,), **environment), expected=2)
+                    self.assertEqual(missing == ownership.STATE_ENV, hook.exists())
+                    if hook.exists():
+                        self.assertEqual("fired\n", hook.read_text())
                     self.assertFalse((self.root / "tools.log").exists())
                     self.assertFalse(self.build.exists())
 

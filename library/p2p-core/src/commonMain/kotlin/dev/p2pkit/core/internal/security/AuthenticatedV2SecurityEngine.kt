@@ -3,6 +3,8 @@ package dev.p2pkit.core.internal.security
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pSessionProfile
+import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
@@ -73,6 +75,7 @@ internal class AuthenticatedV2SecurityEngine(
         authorization: PeerAuthorizationPolicy,
         expectedPeerId: PeerId? = null,
         expectedFingerprint: PeerFingerprint? = null,
+        sessionProfile: P2pSessionProfile? = null,
     ): SecureConnection {
         var localPrivate: ByteArray? = null
         var localPublic: ByteArray? = null
@@ -96,7 +99,7 @@ internal class AuthenticatedV2SecurityEngine(
             )
             localStatic = NoiseKeyPair(localPrivate, localPublic)
 
-            pump = SingleCollectorRawPump(rawConnection, parentScope)
+            pump = SingleCollectorRawPump(rawConnection, parentScope, sessionProfile?.payloadBudget)
             // A raw transport write may be implemented with blocking,
             // non-cancellable I/O. Run the exchange as a kit-owned sibling so
             // cancellation of this caller can close the sole pump immediately,
@@ -115,6 +118,7 @@ internal class AuthenticatedV2SecurityEngine(
                                 authorization = authorization,
                                 expectedPeerId = expectedPeerId,
                                 expectedFingerprint = expectedFingerprint,
+                                sessionProfile = sessionProfile,
                             ).also { remoteIdentity = it }
                             true
                         },
@@ -224,6 +228,7 @@ internal class AuthenticatedV2SecurityEngine(
         authorization: PeerAuthorizationPolicy,
         expectedPeerId: PeerId?,
         expectedFingerprint: PeerFingerprint?,
+        sessionProfile: P2pSessionProfile?,
     ): PeerIdentity {
         var fingerprintDigest: ByteArray? = null
         var expectedFingerprintDigest: ByteArray? = null
@@ -257,13 +262,21 @@ internal class AuthenticatedV2SecurityEngine(
             }
 
             val perConnectionPinAllows = expectedFingerprint != null
-            if (!perConnectionPinAllows && !configuredPolicyAllows) {
+            val identity = PeerIdentity(peerId = peerId, fingerprint = fingerprint)
+            // Live admission remains authoritative even for per-connect pins: revocation must not
+            // be bypassed by reconnect's remembered fingerprint. Ordinary P2P retains its policy.
+            val permitted = if (sessionProfile != null) {
+                sessionProfile.decide(identity) != PeerAdmission.Rejected
+            } else {
+                perConnectionPinAllows || configuredPolicyAllows
+            }
+            if (!permitted) {
                 throw P2pError.AuthorizationRejected(
                     "Authenticated remote identity is not authorized",
                 )
             }
 
-            return PeerIdentity(peerId = peerId, fingerprint = fingerprint)
+            return identity
         } finally {
             fingerprintDigest?.wipe()
             expectedFingerprintDigest?.wipe()

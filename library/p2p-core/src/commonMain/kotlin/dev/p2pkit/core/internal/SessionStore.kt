@@ -3,6 +3,8 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.P2pSessionProfile
+import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerId
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,7 +55,8 @@ internal class SessionStore(
      * unit tests can exercise the boundary without 64 fixtures if ever
      * needed — production always uses the default.
      */
-    private val maxTotalActiveSessions: Int = MAX_TOTAL_ACTIVE_SESSIONS
+    private val maxTotalActiveSessions: Int = MAX_TOTAL_ACTIVE_SESSIONS,
+    private val profile: P2pSessionProfile? = null
 ) {
 
     private val mutex = Mutex()
@@ -170,7 +173,9 @@ internal class SessionStore(
                     // by construction) — keep our incoming, reject our outgoing.
                     isIncoming
                 }
-                if (newWinsLocally) {
+                if (newWinsLocally && !profileHasCapacity(session, replacing = existing)) {
+                    RegisterOutcome.RefusedAtCapacity(session)
+                } else if (newWinsLocally) {
                     byPeer[peerId] = session
                     directionByPeer[peerId] = newDirection
                     publishSessions(_sessions.value.filter { it !== existing } + session)
@@ -188,8 +193,8 @@ internal class SessionStore(
             // session growth, so it is exempt by construction. Only ACTIVE
             // sessions count: a terminal-but-not-yet-evicted entry must not
             // block admission of a live peer.
-            isIncoming &&
-            byPeer.values.count { it.state.value in ACTIVE_STATES } >= maxTotalActiveSessions
+            if (profile != null) !profileHasCapacity(session) else isIncoming &&
+                byPeer.values.count { it.state.value in ACTIVE_STATES } >= maxTotalActiveSessions
         ) {
             RegisterOutcome.RefusedAtCapacity(session = session)
         } else {
@@ -213,6 +218,22 @@ internal class SessionStore(
         publishRegistrationSnapshotLocked()
         checkInvariants("tryRegister")
         outcome
+    }
+
+    /** Restricted profiles count both directions and separate quarantined from trusted peers. */
+    private fun profileHasCapacity(candidate: P2pSession, replacing: P2pSession? = null): Boolean {
+        val policy = profile ?: return true
+        val admission = (candidate as? P2pSessionImpl)?.admittedAs ?: return false
+        if (policy.decide(candidate.peerIdentity) != admission || admission == PeerAdmission.Rejected) return false
+        val count = byPeer.values.count {
+            it !== replacing && it.state.value in ACTIVE_STATES &&
+                (it as? P2pSessionImpl)?.admittedAs == admission
+        }
+        return count < when (admission) {
+            PeerAdmission.Trusted -> policy.maxTrustedSessions
+            PeerAdmission.EnrollmentOnly -> policy.maxEnrollmentSessions
+            PeerAdmission.Rejected -> 0
+        }
     }
 
     /**

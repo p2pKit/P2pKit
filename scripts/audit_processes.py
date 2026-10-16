@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
 """Identity-scoped children for the opt-in audit executor; never a process-name sweep.
 
-Windows uses a kernel Job Object attached atomically before resume. POSIX discovers
-controlled marker-inheriting descendants and signals through pidfds (Linux) or real
-Mach audit tokens (macOS). POSIX markers are not containment of malicious children
-that erase their environment or delegate work to another service. Native API/fixture
-admission is required; unsupported ownership fails closed rather than using PID kill.
+Windows uses a kernel Job Object attached atomically before resume. Linux discovers
+controlled marker-inheriting descendants and signals through pidfds. macOS binds
+each launch before exec, adds an inherited anonymous-pipe capability, and follows
+observed non-reaper parent lifetimes. SIP hides restricted executables' environment;
+reparent-then-exec can also replace their parent unique ID with launchd's ID.
+Signals use real Mach audit tokens, never a PID/group/name fallback. Unresolved
+ancestry fails closed. Neither POSIX backend contains malicious children or work
+delegated to unrelated services; native API/fixture admission remains required.
 """
 from __future__ import annotations
 
 import ctypes
 import errno
+import hashlib
+import io
 import json
+import math
 import os
 from pathlib import Path
 import platform
 import re
+import select
 import shutil
 import signal
 import struct
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -27,14 +35,201 @@ JOB_ENV = "P2PKIT_AUDIT_JOB_ID"
 CHAIN_ENV = "P2PKIT_AUDIT_OWNERSHIP_CHAIN"
 DOMAINS_ENV = "P2PKIT_AUDIT_OWNERSHIP_DOMAINS"
 STATE_ENV = "P2PKIT_AUDIT_STATE_DIR"
+PIPE_ENV = "P2PKIT_AUDIT_DARWIN_PIPES"
 MAX_PROCESS_BYTES = 8 * 1024 * 1024
 MAX_PROCESSES = 65536
+MAX_PROCESS_FDS = 65536
 SIG_TERM = 15
 SIG_KILL = 9
+# Diagnostic labels only. A kernel name never grants ownership, exclusion or
+# signal authority; unknown/shortened names are deliberately not guessed.
+DARWIN_DIAGNOSTIC_ROLES = frozenset((
+    "java", "python", "simctl", "xcodebuild", "xctest", "launchd_sim", "launchd",
+    "Simulator", "SimulatorTrampoline", "SimulatorBridge", "SpringBoard", "backboardd",
+    "DataMigrator", "testmanagerd", "testmanagerd_sim", "runningboardd", "installd",
+    "ReportCrash", "ReportMemoryException", "diagnosticd", "logd", "lsd", "cfprefsd",
+    "mDNSResponder", "OTHER", "UNRECORDED",
+))
+DARWIN_DIAGNOSTIC_PARENTAGE = frozenset(("OWNED", "BASELINE", "UNOBSERVED", "TRACED", "INVALID"))
+DARWIN_SESSION_EXCLUSIONS = frozenset(("SAME_VALID_SESSION", "UNADMITTED_CONTROLLER_SESSION",
+                                     "UNADMITTED_TARGET_SESSION"))
+
+
+def darwin_diagnostic_role(name: bytes) -> str:
+    if name in (b"Python", b"Python3", b"python") or re.fullmatch(rb"python3(?:\.[0-9]{1,2})?", name):
+        return "python"
+    return next((label for label in DARWIN_DIAGNOSTIC_ROLES - {"OTHER", "UNRECORDED"}
+                 if name == label.encode("ascii")), "OTHER")
 
 
 class OwnershipError(RuntimeError):
     """Ownership cannot be established or finalized safely."""
+
+
+class DrainDeadlineExceeded(OwnershipError):
+    """An explicit retirement phase expired; never evidence of disappearance."""
+
+
+def _finite_number(value: Any) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _drain_phase_ends(grace: float, kill_wait: float, deadline: float) -> tuple[float, float, float]:
+    if not all(_finite_number(value) for value in (grace, kill_wait, deadline)) or grace < 0 or kill_wait < 0:
+        raise OwnershipError("Explicit native drain requires finite nonboolean end and nonnegative durations")
+    started = time.monotonic()
+    if not _finite_number(started):
+        raise OwnershipError("Invalid native drain monotonic observation")
+    if deadline <= started:
+        raise DrainDeadlineExceeded("Native drain absolute end is already expired")
+    # Fix both ends before any discovery or signaling. A slow TERM phase never
+    # creates a fresh KILL grace or extends the caller's original monotonic end.
+    return started, min(started + grace, deadline), min(started + grace + kill_wait, deadline)
+
+
+def _check_drain_deadline(deadline: float | None) -> None:
+    if deadline is None:
+        return  # The existing no-keyword route does not acquire a new clock.
+    if not _finite_number(deadline):
+        raise OwnershipError("Invalid native drain absolute phase end")
+    now = time.monotonic()
+    if not _finite_number(now):
+        raise OwnershipError("Invalid native drain monotonic observation")
+    if now >= deadline:
+        raise DrainDeadlineExceeded("Native drain absolute phase end exhausted")
+
+
+def _bounded_drain(scope: Any, grace: float, kill_wait: float, deadline: float, *,
+                   quiet_required: int, repeat_signals: bool = True) -> list[dict[str, Any]]:
+    """Bound acceptance, not synchronous kernel latency; an outer watchdog is required.
+
+    Existing discover() inner loops/native calls retain their original bounds.
+    A call already entered can finish late; its result cannot authorize success
+    or new signals. Callers must also postcheck their end and resource closure.
+    Darwin uses its own pending-lifetime reconciliation loop below.
+    """
+    _, term_end, kill_end = _drain_phase_ends(grace, kill_wait, deadline)
+    live = []
+    for signum, end in ((SIG_TERM, term_end), (SIG_KILL, kill_end)):
+        quiet, sent = 0, False
+        try:
+            while True:
+                _check_drain_deadline(end)
+                observed = scope.discover()
+                _check_drain_deadline(end)
+                live = observed  # Only completed timely observations may be returned.
+                if not live and not scope.discovery_errors and not getattr(scope, "pending_discoveries", None):
+                    quiet += 1
+                    if quiet >= quiet_required:
+                        _check_drain_deadline(end)
+                        return []
+                else:
+                    quiet = 0
+                    if repeat_signals or not sent:
+                        scope.signal_all(signum, deadline=end)
+                        _check_drain_deadline(end)
+                        sent = True
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.1, remaining))
+        except DrainDeadlineExceeded as error:
+            if retirement_details(error):
+                raise  # An expired operation cannot erase UNKNOWN resource cleanup.
+            # Escalation, if any, spends only the already fixed second phase.
+            # No quiet count, late observation or late signal result is accepted.
+            continue
+    if live:
+        return live  # Conservative last timely census, not a new late discovery.
+    raise DrainDeadlineExceeded("Native drain did not establish timely quiet retirement within its absolute bounds")
+
+
+MAX_RETIREMENT_ERRORS = 256
+
+
+def _exception_text(error: BaseException) -> str:
+    try:
+        message = str(error)[:2048]
+    except BaseException:
+        message = "<exception message unavailable>"
+    return f"{type(error).__name__}: {message}"
+
+
+def retirement_details(error: BaseException) -> dict[str, Any]:
+    """Bounded, JSON-safe secondary failures; never mutate the primary's args/type."""
+    value = getattr(error, "_p2pkit_retirement", None)
+    return {"status": "UNKNOWN", "resources": [dict(row) for row in value["resources"]],
+            "omitted": value["omitted"]} if value is not None else {}
+
+
+def _retirement_text(row: dict[str, Any]) -> str:
+    backend = "POSIX" if row["phase"].startswith("posix-") else "Windows"
+    return f"{backend} resource retirement UNKNOWN ({row['phase']}/{row['resource']}): {row['error']}"
+
+
+def format_ownership_error(error: BaseException) -> str:
+    """Use at real receipt boundaries: str(error) alone omits exception notes."""
+    text = _exception_text(error)
+    detail = retirement_details(error)
+    if detail:
+        text += "; " + "; ".join(_retirement_text(row) for row in detail["resources"])
+        if detail["omitted"]:
+            text += f"; retirement UNKNOWN: {detail['omitted']} further resource errors exceed the evidence bound"
+    return text
+
+
+def _retire_actions(actions: list[Any], phase: str) -> tuple[list[dict[str, Any]], list[Any]]:
+    outcomes, failures = [], []
+    for label, action in actions:
+        row = {"phase": phase, "resource": label, "status": "RETIRED"}
+        try:
+            action()
+        except BaseException as error:
+            row.update(status="UNKNOWN", error=_exception_text(error)[:512])
+            failures.append((row, error))
+        outcomes.append(row)
+    return outcomes, failures
+
+
+def _finish_retirement(failures: list[Any], original: BaseException | None = None) -> None:
+    if not failures:
+        return
+    # Preserve every attempt even if the bounded carrier cannot hold every
+    # diagnostic. Overflow is explicit UNKNOWN, never disposal/next-run authority.
+    rows, omitted = [], 0
+    for row, error in failures:
+        rows.append(row)
+        nested = retirement_details(error)
+        rows.extend(nested.get("resources", []))
+        omitted += nested.get("omitted", 0)
+    cancellation = next((error for _, error in failures if not isinstance(error, Exception)), None)
+    failure = original if original is not None else cancellation
+    if failure is None:
+        backend = "POSIX" if rows[0]["phase"].startswith("posix-") else "Windows"
+        failure = OwnershipError(f"{backend} resource retirement UNKNOWN; "
+                                 "all remaining resources attempted; " +
+                                 "; ".join(_retirement_text(row) for row in rows[:MAX_RETIREMENT_ERRORS]))
+    prior = retirement_details(failure)
+    combined = [*prior.get("resources", []), *rows]
+    failure._p2pkit_retirement = {"status": "UNKNOWN", "resources": combined[:MAX_RETIREMENT_ERRORS],
+        "omitted": prior.get("omitted", 0) + omitted + max(0, len(combined) - MAX_RETIREMENT_ERRORS)}
+    # Notes aid tracebacks on newer Python; the explicit carrier/formatter above
+    # also works on Python 3.9 and survives constructor failure with scope=None.
+    notes = [_retirement_text(row) for row in rows[:MAX_RETIREMENT_ERRORS]]
+    failure.__notes__ = [*getattr(failure, "__notes__", ()), *notes]
+    if original is None:
+        if cancellation is not None:
+            raise cancellation
+        raise failure from failures[0][1]
+
+class DiscoveryUncertain(OwnershipError):
+    """A live, unclassified lifetime must not be treated as unrelated or retired."""
+
+    # Diagnostic result of an already-required kernel read, never another proof.
+    audit_session_exclusion: str | None = None
 
 
 def host_role() -> str:
@@ -196,6 +391,11 @@ class PosixProcess:
         self.stdout = process.stdout
         self.stderr = process.stderr
 
+    @property
+    def returncode(self) -> int | None:
+        """Return the cached exit status without polling a retired process."""
+        return self.process.returncode
+
     def poll(self) -> int | None:
         return self.process.poll()
 
@@ -207,7 +407,38 @@ class PosixProcess:
         self.process.poll()
 
 
+def _owned_posix_stdin(source: Any) -> int:
+    """Borrow one read-only regular-file descriptor without taking its ownership.
+
+    The caller retains the pinned reader and its byte/identity/lifetime checks.
+    Capturing once also avoids passing a mutable fileno callback to Popen.
+    """
+    import fcntl
+    import stat
+
+    if type(source) is int:
+        descriptor = source
+    else:
+        fileno = getattr(source, "fileno", None)
+        if not callable(fileno):
+            raise OwnershipError("Owned stdin requires a read-only file descriptor")
+        descriptor = fileno()
+    if type(descriptor) is not int or descriptor < 0:
+        raise OwnershipError("Owned stdin requires a nonnegative file descriptor")
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode) or \
+            fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY or \
+            os.get_inheritable(descriptor) or os.lseek(descriptor, 0, os.SEEK_CUR) != 0:
+        raise OwnershipError("Owned stdin must be a noninheritable read-only regular file at offset zero")
+    return descriptor
+
+
 class PosixScope:
+    """Serialized, non-reentrant controller; close is not concurrent cancellation.
+
+    Callers must drain their writer domain before handle finalization. Closing
+    descriptors or polling leaders alone does not prove process retirement.
+    """
     name = "abstract"
 
     def __init__(self, job: str, invocation: str, state: str, home: str):
@@ -220,10 +451,13 @@ class PosixScope:
         self.pending_discoveries: dict[int, dict[str, Any]] = {}
         self.discovery_reconciliations: list[dict[str, Any]] = []
         self.baseline: set[tuple[int, ...]] = set()
+        self._closed = False
+        self._retirement_error: BaseException | None = None
         self._admit()
         for pid in self._pids():
             identity = self._identity(pid)
             if identity is not None:
+                self._remember_identity(identity)
                 self.baseline.add(self._key(identity))
 
     def _admit(self) -> None:
@@ -253,10 +487,38 @@ class PosixScope:
     def _acquire(self, identity: dict[str, Any]) -> Any:
         raise NotImplementedError
 
-    def _send(self, identity: dict[str, Any], handle: Any, signum: int) -> None:
+    def _send(self, identity: dict[str, Any], handle: Any, signum: int, *, deadline: float | None = None) -> None:
         raise NotImplementedError
 
     def _release(self, handle: Any) -> None:
+        pass
+
+    def _ensure_open(self) -> None:
+        failure = getattr(self, "_retirement_error", None)
+        if failure is not None:
+            raise failure
+        if getattr(self, "_closed", False):
+            raise OwnershipError("POSIX process owner is closed")
+
+    def _retire_resources(self, actions: list[Any], phase: str, *, original: BaseException | None = None) -> None:
+        # Preserve the closed four-field carrier consumed by private custody.
+        _, failures = _retire_actions(actions, "posix-" + phase)
+        if not failures:
+            return
+        prior = getattr(self, "_retirement_error", None)
+        primary = prior if prior is not None else original if original is not None else failures[0][1]
+        self._retirement_error = primary  # UNKNOWN remains terminal, even after a later successful close.
+        _finish_retirement(failures, primary)
+        if original is None:
+            raise primary
+
+    def _remember_identity(self, identity: dict[str, Any]) -> None:
+        pass
+
+    def _ownership_proof(self, identity: dict[str, Any], environment: dict[bytes, bytes]) -> dict[str, Any] | None:
+        return {"kind": "inherited-domain"} if self._ours(environment) else None
+
+    def _retain_proof(self, identity: dict[str, Any], proof: dict[str, Any]) -> None:
         pass
 
     def _ours(self, environment: dict[bytes, bytes]) -> bool:
@@ -290,13 +552,21 @@ class PosixScope:
             self.discovery_errors.discard(record["message"])
 
     def discover(self) -> list[dict[str, Any]]:
+        self._ensure_open()
         for leader in self.leaders:
             leader.poll()  # Reap our children; a zombie is not a running worker.
         # A missing census entry is not exit evidence for an unresolved lifetime.
+        census = []
         for pid in dict.fromkeys([*self._pids(), *self.pending_discoveries]):
             if pid == os.getpid():
                 continue
             identity = self._identity(pid)
+            if identity is not None:
+                self._remember_identity(identity)
+            census.append((pid, identity))
+        # Remember the entire observed census before interpreting parentage; OS
+        # enumeration order is neither ancestry nor proof of ownership.
+        for pid, identity in census:
             pending = self.pending_discoveries.get(pid)
             if pending is not None and (identity is None or not identity["live"] or
                                         self._key(identity) != self._key(pending["identity"])):
@@ -313,12 +583,28 @@ class PosixScope:
             try:
                 environment = self._inspect_environment(identity)
             except (PermissionError, OwnershipError) as error:
+                if retirement_details(error):
+                    raise
                 self._discovery_failed(identity, error)
                 continue
-            except ProcessLookupError:
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise
                 self._discovery_resolved(pid, "lifetime-ended")
                 continue
-            if not self._ours(environment):
+            try:
+                proof = self._ownership_proof(identity, environment)
+            except DiscoveryUncertain as error:
+                if retirement_details(error):
+                    raise
+                self._discovery_failed(identity, error)
+                continue
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise
+                self._discovery_resolved(pid, "lifetime-ended")
+                continue
+            if proof is None:
                 self._discovery_resolved(pid, "unmarked", identity)
                 continue
             try:
@@ -326,11 +612,14 @@ class PosixScope:
                 # the handle. A separate eligibility read here could hide denial
                 # as absence before this positively owned process is registered.
                 handle = self._acquire(identity)
-            except ProcessLookupError:
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise  # A vanished lifetime does not resolve an uncertain pidfd close.
                 self._discovery_resolved(pid, "lifetime-ended")
                 continue
             self.known[key] = identity
             self.handles[key] = handle
+            self._retain_proof(identity, proof)
             self._discovery_resolved(pid, "owned", identity)
         live = []
         for key, previous in list(self.known.items()):
@@ -340,14 +629,28 @@ class PosixScope:
                 live.append(dict(current))
         return sorted(live, key=lambda item: item["pid"])
 
-    def spawn(self, argv: list[str], cwd: str, env: dict[str, str]) -> PosixProcess:
+    def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
+              stdout: Any = None, stderr: Any = None, stdin: Any = None) -> PosixProcess:
+        self._ensure_open()
+        # Optional privately owned sinks avoid an additional pipe/thread owner.
+        # The caller retains both sinks until complete scope retirement, bounds
+        # live output size, and verifies/syncs them before accepting a result.
+        # The default pipe contract used by existing executor callers is unchanged.
+        if (stdout is None) != (stderr is None):
+            raise OwnershipError("Both owned output sinks are required")
+        input_descriptor = subprocess.DEVNULL if stdin is None else _owned_posix_stdin(stdin)
         launch = {"api": "subprocess.Popen", "requestedArgv": list(argv),
                   "cwd": cwd, "shell": False, "created": False}
+        if stdout is not None:
+            launch["outputMode"] = "caller-owned-files"
+        if stdin is not None:
+            launch["inputMode"] = "caller-owned-file"
         self.launches.append(launch)
         actual = resolve_executable(argv, cwd, env)
         launch.update({"resolvedArgv": actual, "executable": actual[0]})
-        process = PosixProcess(subprocess.Popen(actual, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        process = PosixProcess(subprocess.Popen(actual, cwd=cwd, env=env, stdin=input_descriptor,
+                                               stdout=subprocess.PIPE if stdout is None else stdout,
+                                               stderr=subprocess.PIPE if stderr is None else stderr,
                                                start_new_session=True, close_fds=True, bufsize=0))
         launch.update({"created": True, "pid": process.pid})
         self.leaders.append(process)
@@ -356,41 +659,60 @@ class PosixScope:
         self.discover()
         return process
 
-    def signal_all(self, signum: int) -> None:
-        for identity in self.discover():
+    def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
+        self._ensure_open()
+        _check_drain_deadline(deadline)
+        live = self.discover()
+        _check_drain_deadline(deadline)
+        for identity in live:
+            _check_drain_deadline(deadline)
             key = self._key(identity)
             try:
-                self._send(identity, self.handles[key], signum)
-            except ProcessLookupError:
-                pass
+                if deadline is None:
+                    self._send(identity, self.handles[key], signum)
+                else:
+                    self._send(identity, self.handles[key], signum, deadline=deadline)
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise
+            _check_drain_deadline(deadline)
 
-    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
+              deadline: float | None = None) -> list[dict[str, Any]]:
+        self._ensure_open()
+        if deadline is not None:
+            return _bounded_drain(self, grace, kill_wait, deadline, quiet_required=3)
         if self.discover():
             self.signal_all(SIG_TERM)
         end = time.monotonic() + grace
         quiet = 0
         while time.monotonic() < end:
             live = self.discover()
-            if not live:
+            # No known workers is not quiescence while a discovered lifetime is
+            # still unclassified. Keep observing within the ORIGINAL drain
+            # bounds; only positive reconciliation can make a sample quiet.
+            if not live and not self.pending_discoveries and not self.discovery_errors:
                 quiet += 1
                 if quiet >= 3:
                     return []
             else:
                 quiet = 0
-                self.signal_all(SIG_TERM)
+                if live:
+                    self.signal_all(SIG_TERM)
             time.sleep(0.1)
         self.signal_all(SIG_KILL)
         end = time.monotonic() + kill_wait
         quiet = 0
         while time.monotonic() < end:
             live = self.discover()
-            if not live:
+            if not live and not self.pending_discoveries and not self.discovery_errors:
                 quiet += 1
                 if quiet >= 3:
                     return []
             else:
                 quiet = 0
-                self.signal_all(SIG_KILL)
+                if live:
+                    self.signal_all(SIG_KILL)
             time.sleep(0.1)
         return self.discover()
 
@@ -403,15 +725,50 @@ class PosixScope:
                 "discoveryErrors": sorted(self.discovery_errors)}
 
     def close(self) -> None:
-        for handle in self.handles.values():
-            self._release(handle)
+        if getattr(self, "_closed", False):
+            failure = getattr(self, "_retirement_error", None)
+            if failure is not None:
+                raise failure
+            return
+        # Prepare the complete once-only roster before any native close. A close
+        # can raise after releasing its descriptor; retrying may hit a reused fd.
+        actions = [(f"handle:{index}", lambda handle=handle: self._release(handle))
+                   for index, handle in enumerate(self.handles.values())]
+        actions += [(f"leader:{index}", lambda process=process: process.close())
+                    for index, process in enumerate(self.leaders)]
+        self._closed = True
         self.handles.clear()
-        for process in self.leaders:
-            process.close()
+        self.leaders.clear()
+        self._retire_resources(actions, "scope-close")
+        failure = getattr(self, "_retirement_error", None)
+        if failure is not None:
+            raise failure
 
 
 class LinuxScope(PosixScope):
     name = "linux-proc-pidfd"
+
+    def _discovery_failed(self, identity: dict[str, Any], error: Exception) -> str:
+        message = super()._discovery_failed(identity, error)
+        # Only a denied observation can later be reconciled; malformed ownership
+        # or uncertain native retirement remains fatal. No extra polling/wait.
+        if isinstance(error, PermissionError) and not retirement_details(error):
+            record = self.pending_discoveries.get(identity["pid"])
+            if record is None:
+                if len(self.discovery_reconciliations) >= 1024:
+                    raise OwnershipError("Linux discovery evidence exceeds its bound")
+                record = {"identity": dict(identity), "message": message, "firstFailure": str(error),
+                          "failures": 0, "outcome": "unresolved"}
+                self.pending_discoveries[identity["pid"]] = record
+                self.discovery_reconciliations.append(record)
+            else:
+                if self._key(record["identity"]) != self._key(identity):
+                    raise OwnershipError("Linux pending discovery lifetime changed")
+                if record["message"] != message:
+                    self.discovery_errors.discard(record["message"])
+                    record["message"] = message
+            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)
+        return message
 
     def _admit(self) -> None:
         if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
@@ -420,10 +777,14 @@ class LinuxScope(PosixScope):
         if identity is None:
             raise OwnershipError("Cannot inspect the Linux controller identity")
         handle = self._acquire(identity)
+        original = None
         try:
             signal.pidfd_send_signal(handle, 0)
+        except BaseException as error:
+            original = error
+            raise
         finally:
-            os.close(handle)
+            self._retire_resources([("pidfd", lambda: os.close(handle))], "admission-probe", original=original)
 
     def _pids(self) -> list[int]:
         pids = [int(entry.name) for entry in Path("/proc").iterdir() if entry.name.isdecimal()]
@@ -431,7 +792,7 @@ class LinuxScope(PosixScope):
             raise OwnershipError("Process count exceeds ownership bound")
         return pids
 
-    def _identity(self, pid: int) -> dict[str, Any] | None:
+    def _identity(self, pid: int, *, required: bool = False) -> dict[str, Any] | None:
         try:
             base = Path("/proc") / str(pid)
             raw = (base / "stat").read_bytes()
@@ -445,7 +806,7 @@ class LinuxScope(PosixScope):
         except (FileNotFoundError, ProcessLookupError):
             return None
         except PermissionError:
-            if any(key[0] == pid for key in self.known):
+            if required or pid in self.pending_discoveries or any(key[0] == pid for key in self.known):
                 raise OwnershipError("Cannot reinspect a recorded Linux process identity")
             return None  # Not eligible for same-uid marker discovery.
 
@@ -460,16 +821,44 @@ class LinuxScope(PosixScope):
         except FileNotFoundError as error:
             raise ProcessLookupError(pid) from error
 
+    def _inspect_environment(self, identity: dict[str, Any]) -> dict[bytes, bytes]:
+        try:
+            return self._environment(identity["pid"])
+        except (PermissionError, OwnershipError) as error:
+            # This identity was already observed as a live same-UID candidate.
+            # A later stat denial is not absence or permission to forget it.
+            current = self._identity(identity["pid"], required=True)
+            if current is None or not current["live"] or self._key(current) != self._key(identity):
+                raise ProcessLookupError(identity["pid"]) from error
+            raise
+
+
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
+              deadline: float | None = None) -> list[dict[str, Any]]:
+        live = (super().drain(grace, kill_wait) if deadline is None else
+                super().drain(grace, kill_wait, deadline=deadline))
+        if self.pending_discoveries:
+            raise OwnershipError("Unclassified Linux lifetimes remain; cleanup is not proven")
+        return live
+
     def _acquire(self, identity: dict[str, Any]) -> int:
+        self._ensure_open()
         handle = os.pidfd_open(identity["pid"], 0)
-        current = self._identity(identity["pid"])
-        if current is None or not current["live"] or self._key(current) != self._key(identity):
-            os.close(handle)
-            raise ProcessLookupError(identity["pid"])
+        try:
+            current = self._identity(identity["pid"], required=True)
+            if current is None or not current["live"] or self._key(current) != self._key(identity):
+                raise ProcessLookupError(identity["pid"])
+            self._ensure_open()
+        except BaseException as error:
+            self._retire_resources([("pidfd", lambda: os.close(handle))], "acquire", original=error)
+            raise
         return handle
 
-    def _send(self, identity: dict[str, Any], handle: int, signum: int) -> None:
+    def _send(self, identity: dict[str, Any], handle: int, signum: int, *, deadline: float | None = None) -> None:
+        self._ensure_open()
+        _check_drain_deadline(deadline)
         signal.pidfd_send_signal(handle, signum)
+        _check_drain_deadline(deadline)
 
     def _release(self, handle: int) -> None:
         os.close(handle)
@@ -505,6 +894,28 @@ class AuditToken(ctypes.Structure):
     _fields_ = [("val", U32 * 8)]
 
 
+class DarwinFileInfo(ctypes.Structure):
+    _fields_ = [("openflags", U32), ("status", U32), ("offset", ctypes.c_int64),
+                ("type", I32), ("guardflags", U32)]
+
+
+class DarwinVinfoStat(ctypes.Structure):
+    _fields_ = [("dev", U32), ("mode", ctypes.c_uint16), ("nlink", ctypes.c_uint16),
+                ("ino", U64), ("uid", U32), ("gid", U32)] + [
+        (name, ctypes.c_int64) for name in ("atime", "atimensec", "mtime", "mtimensec", "ctime", "ctimensec",
+                                           "birthtime", "birthtimensec", "size", "blocks")] + [
+        ("blksize", I32), ("flags", U32), ("gen", U32), ("rdev", U32), ("spare", ctypes.c_int64 * 2)]
+
+
+class DarwinPipeInfo(ctypes.Structure):
+    _fields_ = [("file", DarwinFileInfo), ("stat", DarwinVinfoStat), ("handle", U64), ("peer", U64),
+                ("status", I32), ("reserved", I32)]
+
+
+class DarwinFdInfo(ctypes.Structure):
+    _fields_ = [("fd", I32), ("type", U32)]
+
+
 class DarwinObservationError(OwnershipError):
     """A failed observation, not proof of exit or an unreleased kernel right."""
 
@@ -516,16 +927,47 @@ class DarwinObservationExhausted(OwnershipError):
 class DarwinScope(PosixScope):
     name = "darwin-libproc-audit-token"
 
+    def __init__(self, job: str, invocation: str, state: str, home: str):
+        self.pipe_fds: tuple[int, ...] = ()
+        self.pipe_marker: tuple[int, ...] | None = None
+        try:
+            super().__init__(job, invocation, state, home)
+            # Keep BOTH endpoints alive until close: a kernel pipe handle cannot
+            # be recycled into an unrelated pipe while this reference is held.
+            self.pipe_fds = os.pipe()
+            self.pipe_marker = self._pipe_identity(os.getpid(), self.pipe_fds[1])
+            if self.pipe_marker is None or not self.pipe_marker[1]:
+                raise OwnershipError("Cannot bind the Darwin inherited pipe capability")
+        except BaseException as error:
+            descriptors, self.pipe_fds = self.pipe_fds, ()
+            self.pipe_marker = None
+            actions = [("scope", lambda: super(DarwinScope, self).close())]
+            actions += [(f"pipe:{index}", lambda fd=fd: os.close(fd))
+                        for index, fd in enumerate(descriptors)]
+            self._retire_resources(actions, "darwin-construction", original=error)
+            raise
+
     def _admit(self) -> None:
         self.observation_reconciliations: list[dict[str, Any]] = []
+        self.drain_reconciliations: list[dict[str, Any]] = []
+        self.active_drain: dict[str, Any] | None = None
+
+        self.identity_history: dict[int, dict[str, Any]] = {}
+        self.diagnostic_roles: dict[tuple[int, ...], str] = {}
+        self.ownership_proofs: dict[tuple[int, ...], dict[str, Any]] = {}
+        self.foreign_sessions: dict[tuple[int, ...], dict[str, Any]] = {}
         if (ctypes.sizeof(DarwinBsdInfo), ctypes.sizeof(DarwinUniqueInfo), ctypes.sizeof(DarwinIdentity),
-                ctypes.sizeof(AuditToken)) != (136, 56, 192, 32):
+                ctypes.sizeof(AuditToken), ctypes.sizeof(DarwinFileInfo), ctypes.sizeof(DarwinVinfoStat),
+                ctypes.sizeof(DarwinPipeInfo), ctypes.sizeof(DarwinFdInfo)) != (136, 56, 192, 32, 24, 136, 184, 8):
             raise OwnershipError("Unsupported Darwin process ABI layout")
         try:
             self.proc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
             self.system = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+            self.bsm = ctypes.CDLL("/usr/lib/libbsm.dylib", use_errno=True)
             self.proc.proc_pidinfo.argtypes = [I32, I32, U64, PTR, I32]
             self.proc.proc_pidinfo.restype = I32
+            self.proc.proc_pidfdinfo.argtypes = [I32, I32, I32, PTR, I32]
+            self.proc.proc_pidfdinfo.restype = I32
             self.proc.proc_listallpids.argtypes = [PTR, I32]
             self.proc.proc_listallpids.restype = I32
             self.proc.proc_signal_with_audittoken.argtypes = [ctypes.POINTER(AuditToken), I32]
@@ -538,6 +980,12 @@ class DarwinScope(PosixScope):
             self.system.task_info.restype = I32
             self.system.mach_port_deallocate.argtypes = [U32, U32]
             self.system.mach_port_deallocate.restype = I32
+            self.bsm.audit_token_to_asid.argtypes = [AuditToken]
+            self.bsm.audit_token_to_asid.restype = U32
+            self.bsm.audit_token_to_pid.argtypes = [AuditToken]
+            self.bsm.audit_token_to_pid.restype = I32
+            self.bsm.audit_token_to_euid.argtypes = [AuditToken]
+            self.bsm.audit_token_to_euid.restype = U32
             self.self_port = U32.in_dll(self.system, "mach_task_self_").value
         except (AttributeError, OSError, ValueError) as error:
             raise OwnershipError("Required Darwin libproc/Mach API is unavailable") from error
@@ -554,7 +1002,259 @@ class DarwinScope(PosixScope):
         self._inspect_environment(identity)
         # Token acquisition admission is not proof that signaling controls pass;
         # the native fixture must exercise a real child and stale token.
-        self._acquire(identity)
+        self.controller_session = self._audit_session(identity)
+
+    def _audit_session(self, identity: dict[str, Any]) -> int:
+        token = self._acquire(identity)
+        # These are libbsm's decoders, not fabricated/interpreted token words.
+        if self.bsm.audit_token_to_pid(token) != identity["pid"] or \
+                self.bsm.audit_token_to_euid(token) != identity["uid"]:
+            raise OwnershipError("Darwin audit token decoder/identity mismatch")
+        return self.bsm.audit_token_to_asid(token)
+
+    def _pipe_identity(self, pid: int, descriptor: int) -> tuple[int, ...] | None:
+        value = DarwinPipeInfo()
+        ctypes.set_errno(0)
+        size = self.proc.proc_pidfdinfo(pid, descriptor, 6, ctypes.byref(value), ctypes.sizeof(value))
+        if size == 0 and ctypes.get_errno() in (errno.EBADF, errno.ENOENT, errno.EINVAL):
+            return None  # The descriptor closed/changed; never a positive match.
+        if size == 0:
+            raise DarwinObservationError(f"Darwin pipe observation failed: errno {ctypes.get_errno()}")
+        if size != ctypes.sizeof(value) or not value.handle or \
+                value.stat.mode & 0o170000 != 0o010000:
+            raise OwnershipError("Unsupported Darwin pipe identity response")
+        # Opaque pipe handles are never emitted in logs, receipts or environment.
+        return value.handle, value.peer, value.stat.ino
+
+    @staticmethod
+    def _pipe_digest(marker: tuple[int, ...]) -> str:
+        return hashlib.sha256(struct.pack("=QQQ", *marker)).hexdigest()
+
+    def _inherited_pipes(self, env: dict[str, str]) -> list[dict[str, Any]]:
+        encoded = env.get(PIPE_ENV, "[]")
+        if len(encoded) > 8192:
+            raise OwnershipError("Darwin inherited pipe bindings exceed their bound")
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise OwnershipError("Duplicate Darwin inherited pipe binding field")
+                value[key] = item
+            return value
+        try:
+            records = json.loads(encoded, object_pairs_hook=unique)
+        except (ValueError, TypeError) as error:
+            raise OwnershipError("Invalid Darwin inherited pipe bindings") from error
+        if not isinstance(records, list) or len(records) > 32:
+            raise OwnershipError("Invalid Darwin inherited pipe binding count")
+        chain = env.get(CHAIN_ENV, "").split(":")
+        verified, seen, descriptors = [], set(), set()
+        for record in records:
+            if not isinstance(record, dict) or set(record) != {"id", "fd", "digest"} or \
+                    not isinstance(record["id"], str) or record["id"] not in chain or record["id"] in seen or \
+                    type(record["fd"]) is not int or not 3 <= record["fd"] < MAX_PROCESS_FDS or \
+                    record["fd"] in descriptors or \
+                    not isinstance(record["digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["digest"]):
+                raise OwnershipError("Invalid Darwin inherited pipe binding")
+            seen.add(record["id"])
+            descriptors.add(record["fd"])
+        for record in records:
+            marker = self._pipe_identity(os.getpid(), record["fd"])
+            # Some controlled tools close nonstandard FDs when they spawn. A lost
+            # optional marker is not authority, nor proof of nonownership. Retain
+            # environment/ancestry checks; never pass an unrelated reused FD.
+            if marker is not None and self._pipe_digest(marker) == record["digest"]:
+                verified.append(record)
+        return verified
+
+    def _has_pipe(self, identity: dict[str, Any]) -> bool:
+        if self.pipe_marker is None or len(self.pipe_fds) != 2 or \
+                self._pipe_identity(os.getpid(), self.pipe_fds[1]) != self.pipe_marker:
+            raise OwnershipError("Darwin observation lost its held pipe capability")
+        def inspect(current):
+            capacity = 128
+            while capacity <= MAX_PROCESS_FDS:
+                rows = (DarwinFdInfo * capacity)()
+                ctypes.set_errno(0)
+                size = self.proc.proc_pidinfo(current["pid"], 1, 0, rows, ctypes.sizeof(rows))
+                if size < 0 or size > ctypes.sizeof(rows) or size % ctypes.sizeof(DarwinFdInfo):
+                    raise OwnershipError("Unsupported Darwin descriptor census")
+                if size == 0:
+                    if ctypes.get_errno() == 0:
+                        return False
+                    raise DarwinObservationError(f"Darwin descriptor census failed: errno {ctypes.get_errno()}")
+                if size == ctypes.sizeof(rows):
+                    capacity *= 2
+                    continue
+                return any(row.type == 6 and self._pipe_identity(current["pid"], row.fd) == self.pipe_marker
+                           for row in rows[:size // ctypes.sizeof(DarwinFdInfo)])
+            raise OwnershipError("Darwin descriptor census exceeds its bound")
+        return self._observe(identity, "inherited pipe", inspect)
+
+    def _remember_identity(self, identity: dict[str, Any]) -> None:
+        unique = identity["uniqueId"]
+        if unique <= 0 or identity["parentUniqueId"] == unique:
+            raise OwnershipError("Invalid Darwin original-parent identity")
+        previous = self.identity_history.get(unique)
+        if previous is not None and self._key(previous) != self._key(identity):
+            raise OwnershipError("Darwin unique ID changed its bound lifetime")
+        if previous is None and len(self.identity_history) >= MAX_PROCESSES:
+            raise OwnershipError("Darwin lineage history exceeds its bound")
+        self.identity_history[unique] = dict(identity)
+
+    def _retain_proof(self, identity: dict[str, Any], proof: dict[str, Any]) -> None:
+        # Link to startedIdentities without duplicating every full observation.
+        self.ownership_proofs.setdefault(self._key(identity), {"identity": list(self._key(identity)), **proof})
+
+    def _ownership_proof(self, identity: dict[str, Any], environment: dict[bytes, bytes]) -> dict[str, Any] | None:
+        proof = super()._ownership_proof(identity, environment)
+        if proof is not None:
+            return proof
+        try:
+            if self._has_pipe(identity):
+                return {"kind": "inherited-pipe-capability"}
+            try:
+                return self._parent_proof(identity)
+            except DiscoveryUncertain as error:
+                # Audit sessions are inherited across ordinary fork/exec. An OS
+                # service in a different session is outside this controlled scope;
+                # matching sessions confer NO ownership. Session-changing/delegated
+                # work needs a separate explicit lifecycle owner, not a tree sweep.
+                session = self._audit_session(identity)
+                if self.controller_session not in (0, 0xffffffff) and session not in (0, 0xffffffff) and \
+                        session != self.controller_session:
+                    if self._key(identity) not in self.foreign_sessions and len(self.foreign_sessions) >= MAX_PROCESSES:
+                        raise OwnershipError("Darwin foreign-session history exceeds its bound")
+                    self.foreign_sessions[self._key(identity)] = {
+                        "identity": list(self._key(identity)), "kind": "different-kernel-audit-session",
+                        "signalAuthority": False}
+                    return None
+                # Preserve the original failure and unchanged exclusion decision.
+                # Record only why this existing comparison did not exclude the
+                # lifetime; no raw ASID, new native call or signal authority.
+                error.audit_session_exclusion = (
+                    "UNADMITTED_CONTROLLER_SESSION" if self.controller_session in (0, 0xffffffff) else
+                    "UNADMITTED_TARGET_SESSION" if session in (0, 0xffffffff) else "SAME_VALID_SESSION")
+                raise
+        except DarwinObservationExhausted as error:
+            if retirement_details(error):
+                raise
+            raise DiscoveryUncertain(str(error)) from error
+
+    def _parent_proof(self, identity: dict[str, Any]) -> dict[str, Any] | None:
+        # p_puniqueid survives ordinary reparenting, but exec can reset it to the
+        # reaper's ID. A launchd edge is NEVER original-parent/nonownership proof.
+        # The retained original-parent VERSION is diagnostic only: it is a lone
+        # wrapping 32-bit number, not an identity we can safely reconstruct.
+        current, ancestors, seen = identity, [], {identity["uniqueId"]}
+        for _ in range(256):
+            if current["flags"] & 2:  # PROC_FLAG_TRACED: debugger reparenting is not our authority.
+                raise DiscoveryUncertain("Darwin traced parentage is not an ownership proof")
+            parent = self.identity_history.get(current["parentUniqueId"])
+            if parent is None or parent["pid"] == 1:
+                raise DiscoveryUncertain("Darwin non-reaper original-parent lifetime was not observed")
+            if parent["uniqueId"] in seen:
+                raise OwnershipError("Cyclic Darwin original-parent evidence")
+            seen.add(parent["uniqueId"])
+            ancestors.append(list(self._key(parent)))
+            if self._key(parent) in self.known:
+                return {"kind": "kernel-original-parent", "ancestors": ancestors}
+            if self._key(parent) in self.baseline:
+                return None  # Positive foreign lineage, not missing markers alone.
+            current = parent
+        raise OwnershipError("Darwin original-parent depth exceeds its bound")
+
+    def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
+              stdout: Any = None, stderr: Any = None, stdin: Any = None) -> PosixProcess:
+        self._ensure_open()
+        if (stdout is None) != (stderr is None):
+            raise OwnershipError("Both owned output sinks are required")
+        input_descriptor = subprocess.DEVNULL if stdin is None else _owned_posix_stdin(stdin)
+        # Validate the inheritance contract before creating any process. Direct
+        # ownership does not authorize fabricated/missing ancestor domains.
+        if not self._ours({os.fsencode(key): os.fsencode(value) for key, value in env.items()}):
+            raise OwnershipError("Darwin launch lacks its bound inherited ownership domain")
+        inherited = self._inherited_pipes(env)
+        if self.pipe_marker is None or len(self.pipe_fds) != 2 or \
+                self._pipe_identity(os.getpid(), self.pipe_fds[1]) != self.pipe_marker:
+            raise OwnershipError("Darwin launch lost its inherited pipe capability")
+        inherited = [record for record in inherited if record["id"] != self.invocation]
+        inherited.append({"id": self.invocation, "fd": self.pipe_fds[1], "digest": self._pipe_digest(self.pipe_marker)})
+        if len(inherited) > 32:
+            raise OwnershipError("Darwin pipe nesting exceeds its bound")
+        child_env = {**env, PIPE_ENV: json.dumps(inherited, separators=(",", ":"))}
+        pass_fds = tuple(sorted({record["fd"] for record in inherited}))
+        actual = resolve_executable(argv, cwd, env)
+        launch = {"api": "subprocess.Popen", "requestedArgv": list(argv), "resolvedArgv": actual,
+                  "executable": actual[0], "cwd": cwd, "shell": False, "created": False,
+                  "gateReleased": False}
+        if stdout is not None:
+            launch["outputMode"] = "caller-owned-files"
+        if stdin is not None:
+            launch["inputMode"] = "caller-owned-file"
+        self.launches.append(launch)
+        owner = self._identity(os.getpid(), required=True)
+        if owner is None or not owner["live"]:
+            raise OwnershipError("Cannot bind the Darwin spawning controller")
+        self._remember_identity(owner)
+        ready_read = ready_write = release_read = release_write = -1
+        process, original = None, None
+        try:
+            ready_read, ready_write = os.pipe()
+            release_read, release_write = os.pipe()
+            bootstrap = [sys.executable, "-I", "-S", str(Path(__file__).with_name("audit_exec_gate.py")),
+                         str(ready_write), str(release_read), *actual]
+            launch["bootstrapArgv"] = bootstrap
+            process = PosixProcess(subprocess.Popen(bootstrap, cwd=cwd, env=child_env, stdin=input_descriptor,
+                stdout=subprocess.PIPE if stdout is None else stdout,
+                stderr=subprocess.PIPE if stderr is None else stderr,
+                start_new_session=True, close_fds=True, bufsize=0,
+                pass_fds=(*pass_fds, ready_write, release_read)))
+            launch.update({"created": True, "pid": process.pid})
+            self.leaders.append(process)
+            descriptor, ready_write = ready_write, -1
+            os.close(descriptor)
+            descriptor, release_read = release_read, -1
+            os.close(descriptor)
+            if not select.select([ready_read], [], [], 10)[0] or os.read(ready_read, 1) != b"R":
+                raise OwnershipError("Darwin exec gate did not establish readiness")
+            # The trusted gate cannot exec/fork the product until the bound
+            # lifetime and a real token have been acquired. No fast-exit race.
+            identity = self._identity(process.pid, required=True)
+            if identity is None or not identity["live"] or identity["parentPid"] != os.getpid() or \
+                    identity["parentUniqueId"] != owner["uniqueId"] or identity["uid"] != os.getuid() or \
+                    identity["realUid"] != os.getuid() or self._key(identity) in self.baseline:
+                raise OwnershipError("Darwin exec gate is not the directly spawned lifetime")
+            if not self._has_pipe(identity):
+                raise OwnershipError("Darwin exec gate did not inherit its bound pipe capability")
+            self._remember_identity(identity)
+            handle = self._acquire(identity)
+            self.known[self._key(identity)] = identity
+            self.handles[self._key(identity)] = handle
+            self._retain_proof(identity, {"kind": "direct-spawn-gate", "controller": list(self._key(owner))})
+            launch["boundIdentity"] = dict(identity)
+            if os.write(release_write, b"G") != 1:
+                raise OwnershipError("Darwin exec gate was not released")
+            launch["gateReleased"] = True
+            # Return the streams to their owner before further fallible census
+            # work. The leader is already bound; normal waiting discovers children.
+            return process
+        except BaseException as error:
+            original = error
+            raise
+        finally:
+            # Gate EOF prevents execution on admission failure. Retire every
+            # original gate descriptor even if an earlier stream/close failed.
+            actions = []
+            if original is not None and process is not None and not launch["gateReleased"]:
+                actions += [(f"stream:{index}", stream.close)
+                            for index, stream in enumerate((process.stdout, process.stderr))
+                            if stream is not None]
+            actions += [(f"gate:{index}", lambda fd=fd: os.close(fd))
+                        for index, fd in enumerate((ready_read, ready_write, release_read, release_write))
+                        if fd >= 0]
+            self._retire_resources(actions, "darwin-spawn", original=original)
+
 
     def _pids(self) -> list[int]:
         count = self.proc.proc_listallpids(None, 0)
@@ -598,11 +1298,20 @@ class DarwinScope(PosixScope):
             previous = self._recorded_identity(pid)
             if previous is not None:
                 return self._reconcile_identity(previous, failure)
-        return {"pid": pid, "uid": value.bsd.uid, "parentPid": value.bsd.ppid, "group": value.bsd.pgid,
+        identity = {"pid": pid, "uid": value.bsd.uid, "parentPid": value.bsd.ppid, "group": value.bsd.pgid,
                 "uniqueId": value.unique.uniqueid, "parentUniqueId": value.unique.parentuniqueid,
+                "originalParentPidVersion": value.unique.parentpidversion,
                 "pidVersion": value.unique.pidversion, "startSeconds": value.bsd.startsec,
                 "startMicroseconds": value.bsd.startusec, "realUid": value.bsd.ruid,
                 "status": value.bsd.status, "flags": value.bsd.flags, "live": value.bsd.status not in (0, 5)}
+        # Reuse this already-required kernel read. No extra census, environment,
+        # path, task port or permission is acquired for diagnostic attribution.
+        if hasattr(self, "diagnostic_roles"):
+            key = self._key(identity)
+            if key not in self.diagnostic_roles and len(self.diagnostic_roles) >= MAX_PROCESSES:
+                raise OwnershipError("Darwin diagnostic role history exceeds its bound")
+            self.diagnostic_roles[key] = darwin_diagnostic_role(bytes(value.bsd.name))
+        return identity
 
     def _recorded_identity(self, pid: int) -> dict[str, Any] | None:
         # Only failed observations need this history lookup, not every ordinary
@@ -614,9 +1323,9 @@ class DarwinScope(PosixScope):
 
     def _discovery_failed(self, identity: dict[str, Any], error: Exception) -> str:
         message = super()._discovery_failed(identity, error)
-        # Defer only a reconciler's exhausted observation, never structural errors
-        # or leaked Mach rights. No extra wait or relaxed finalizer is introduced.
-        if isinstance(error, DarwinObservationExhausted):
+        # Defer an exhausted observation or missing original-parent lifetime,
+        # never structural errors or leaked Mach rights. No relaxed finalizer.
+        if isinstance(error, (DarwinObservationExhausted, DiscoveryUncertain)) and not retirement_details(error):
             record = self.pending_discoveries.get(identity["pid"])
             if record is None:
                 if len(self.discovery_reconciliations) >= 1024:
@@ -625,7 +1334,15 @@ class DarwinScope(PosixScope):
                           "failures": 0, "outcome": "unresolved"}
                 self.pending_discoveries[identity["pid"]] = record
                 self.discovery_reconciliations.append(record)
-            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)
+            session_exclusion = getattr(error, "audit_session_exclusion", None)
+            if record["message"] != message:
+                # Keep one current retryable error per bound lifetime, as on
+                # Linux. Positive reconciliation must not leave a stale class.
+                self.discovery_errors.discard(record["message"])
+                record["message"] = message
+            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1,
+                          auditSessionExclusion=session_exclusion if session_exclusion in DARWIN_SESSION_EXCLUSIONS
+                          else "NOT_RECORDED")
         return message
 
     def _reconcile_identity(self, previous: dict[str, Any], failure: DarwinObservationError) -> dict[str, Any] | None:
@@ -633,7 +1350,9 @@ class DarwinScope(PosixScope):
         # privileged exec. Required rechecks are raw and cannot recurse here.
         try:
             return self._observe(previous, "identity", lambda current: current, initial_error=failure)
-        except ProcessLookupError:
+        except ProcessLookupError as error:
+            if retirement_details(error):
+                raise
             return None  # Observed exit/replacement, never permission denial alone.
 
     def _key(self, identity: dict[str, Any]) -> tuple[int, ...]:
@@ -643,6 +1362,10 @@ class DarwinScope(PosixScope):
 
     def _observe(self, identity: dict[str, Any], operation: str, action: Any,
                  *, initial_error: DarwinObservationError | None = None) -> Any:
+        self._ensure_open()
+        if initial_error is not None and retirement_details(initial_error):
+            self._retirement_error = initial_error
+            raise initial_error
         # libproc's zombie-list lookup can still return a non-SZOMB INEXIT proc
         # after Mach/procargs lookup loses it. INEXIT is pending, not completion.
         # Reconcile only failed observations; do not slow every process census or
@@ -650,6 +1373,7 @@ class DarwinScope(PosixScope):
         deadline = time.monotonic() + 0.25
         first_error = last_error = None if initial_error is None else str(initial_error)
         current, outcome, attempts = identity, "unresolved", 0
+        primary = None
 
         def recheck():
             nonlocal current, outcome
@@ -670,6 +1394,8 @@ class DarwinScope(PosixScope):
                     outcome = "recovered"
                     return result
                 except DarwinObservationError as error:
+                    if retirement_details(error):
+                        raise  # A failed Mach-right release is not a retryable observation.
                     last_error = str(error)
                     if first_error is None:
                         first_error = last_error
@@ -678,13 +1404,21 @@ class DarwinScope(PosixScope):
                     break
                 time.sleep(min(0.01, remaining))
             raise DarwinObservationExhausted(f"Darwin {operation} unresolved after bounded observation: {last_error}")
+        except BaseException as error:
+            primary = error
+            raise
         finally:
             if first_error is not None:
-                if len(self.observation_reconciliations) >= 1024:
-                    raise OwnershipError("Darwin observation evidence exceeds its bound")
-                self.observation_reconciliations.append({"operation": operation, "identity": identity,
-                    "lastIdentity": current, "attempts": attempts, "firstFailure": first_error,
-                    "lastFailure": last_error, "outcome": outcome})
+                def record_observation():
+                    if len(self.observation_reconciliations) >= 1024:
+                        raise OwnershipError("Darwin observation evidence exceeds its bound")
+                    self.observation_reconciliations.append({"operation": operation, "identity": identity,
+                        "lastIdentity": current, "attempts": attempts, "firstFailure": first_error,
+                        "lastFailure": last_error, "outcome": outcome})
+                # This action retains metadata, not a Mach-right close. Its
+                # failure is terminal but cannot replace an in-flight primary.
+                self._retire_resources([("observation-record", record_observation)],
+                    "darwin-observation-record", original=primary)
 
     def _inspect_environment(self, identity: dict[str, Any]) -> dict[bytes, bytes]:
         return self._observe(identity, "environment", lambda before: self._environment(before["pid"]))
@@ -708,7 +1442,14 @@ class DarwinScope(PosixScope):
         return self._observe(identity, "task token", self._acquire_once)
 
     def _acquire_once(self, identity: dict[str, Any]) -> AuditToken:
+        self._ensure_open()
         port = U32()
+        original = None
+
+        def release_port():
+            if self.system.mach_port_deallocate(self.self_port, port) != 0:
+                raise OwnershipError("Cannot release the owned Darwin task-name port")
+
         try:
             result = self.system.task_name_for_pid(self.self_port, identity["pid"], ctypes.byref(port))
             if result != 0 or not port.value:
@@ -719,22 +1460,251 @@ class DarwinScope(PosixScope):
             if result != 0 or count.value != 8:
                 raise DarwinObservationError(f"Darwin TASK_AUDIT_TOKEN unavailable: Mach result {result}")
             return token
+        except BaseException as error:
+            original = error
+            raise
         finally:
-            if port.value and self.system.mach_port_deallocate(self.self_port, port) != 0:
-                # Never catch/retry a leaked right as an ordinary observation error.
-                raise OwnershipError("Cannot release the owned Darwin task-name port")
+            if port.value:
+                self._retire_resources([("task-name-port", release_port)], "darwin-token", original=original)
+
+    def _pending_context(self) -> dict[str, Any]:
+        """Recorded context only: cannot resolve a denial or confer authority.
+
+        This deliberately makes no native call and does not try another proof
+        after failed environment admission. Even recorded positive ancestry
+        leaves the existing discovery error and finalization failure intact.
+        """
+        roles: dict[str, int] = {}
+        parentage: dict[str, int] = {}
+        for record in self.pending_discoveries.values():
+            identity = record.get("lastIdentity", record["identity"])
+            role = getattr(self, "diagnostic_roles", {}).get(self._key(identity), "UNRECORDED")
+            roles[role] = roles.get(role, 0) + 1
+            try:
+                proof = self._parent_proof(identity)
+                label = "BASELINE" if proof is None else "OWNED"
+            except DiscoveryUncertain:
+                label = "TRACED" if identity["flags"] & 2 else "UNOBSERVED"
+            except OwnershipError:
+                # This is only descriptive: the original unknown lifetime still
+                # prevents cleanup, and no malformed lineage is accepted.
+                label = "INVALID"
+            parentage[label] = parentage.get(label, 0) + 1
+        return {"scope": "RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT", "roles": roles, "parentage": parentage}
 
     def description(self) -> dict[str, Any]:
-        return {**super().description(), "observationReconciliations": self.observation_reconciliations}
+        return {**super().description(), "scope": "controlled-domains-pipes-and-observed-nonreaper-parent-lifetimes",
+                "ownershipProofs": list(self.ownership_proofs.values()),
+                "foreignAuditSessions": list(self.foreign_sessions.values()),
+                "inheritedPipeBound": self.pipe_marker is not None,
+                "unclassifiedLifetimes": list(self.pending_discoveries.values()),
+                "unclassifiedContext": self._pending_context(),
+                "observationReconciliations": self.observation_reconciliations,
+                "drainReconciliations": self.drain_reconciliations}
 
-    def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int) -> None:
+    def close(self) -> None:
+        # Withdraw each original descriptor before a fallible close; never retry
+        # an integer which may already have been released/recycled by the OS.
+        descriptors, self.pipe_fds = self.pipe_fds, ()
+        self.pipe_marker = None
+        actions = [("scope", lambda: super(DarwinScope, self).close())]
+        actions += [(f"pipe:{index}", lambda fd=fd: os.close(fd))
+                    for index, fd in enumerate(descriptors)]
+        self._retire_resources(actions, "darwin-close")
+
+    def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int, *,
+              deadline: float | None = None) -> None:
         # A real token is reacquired after exec-version changes; never os.kill(pid).
+        _check_drain_deadline(deadline)
         token = self._acquire(identity)
+        # Token acquisition retains its existing bounded observation/Mach-right
+        # cleanup. A token returned late must never reach the actual signal API.
+        _check_drain_deadline(deadline)
         result = self.proc.proc_signal_with_audittoken(ctypes.byref(token), signum)
+        if result not in (0, errno.ESRCH):
+            # A real native denial stays fatal even if the call consumed this
+            # phase. Turning it into normal phase expiry could hide the failure
+            # behind a later KILL/quiet census and incorrectly accept retirement.
+            raise OwnershipError(f"Darwin identity-scoped signal failed: errno {result}")
+        _check_drain_deadline(deadline)
         if result == errno.ESRCH:
             raise ProcessLookupError(identity["pid"])
-        if result != 0:
-            raise OwnershipError(f"Darwin identity-scoped signal failed: errno {result}")
+
+    def _reconcile_drain_signals(self, *, deadline: float | None = None) -> None:
+        for key, record in list(self.active_drain["pending"].items()):
+            # A filtered/empty census, changed credentials, or a stale token's
+            # ESRCH is not retirement of this already-owned lifetime.
+            _check_drain_deadline(deadline)
+            current = self._identity(record["identity"]["pid"], required=True)
+            _check_drain_deadline(deadline)
+            record["lastIdentity"] = current
+            if current is None or not current["live"] or self._key(current) != key:
+                record["outcome"] = "absent" if current is None else "nonrunning" if not current["live"] else "replaced"
+                self.active_drain["pending"].pop(key)
+
+    def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
+        self._ensure_open()
+        if self.active_drain is None:
+            if deadline is None:
+                return super().signal_all(signum)
+            return super().signal_all(signum, deadline=deadline)
+        active = self.active_drain
+        if deadline is not None:
+            if deadline != active["deadline"]:
+                raise OwnershipError("Native signal end differs from its active drain phase")
+            _check_drain_deadline(deadline)
+        elif time.monotonic() >= active["deadline"]:
+            return
+        live = self.discover()
+        _check_drain_deadline(deadline)
+        if deadline is None:
+            self._reconcile_drain_signals()
+        else:
+            self._reconcile_drain_signals(deadline=deadline)
+        _check_drain_deadline(deadline)
+        for identity in live:
+            # Do not start another signal observation after this phase. An
+            # in-flight census/_observe/kernel call retains its existing bounds.
+            if deadline is not None:
+                _check_drain_deadline(deadline)
+            elif time.monotonic() >= active["deadline"]:
+                break
+            key = self._key(identity)
+            first_observation = len(self.observation_reconciliations)
+            try:
+                if deadline is None:
+                    self._send(identity, self.handles[key], signum)
+                else:
+                    self._send(identity, self.handles[key], signum, deadline=deadline)
+                _check_drain_deadline(deadline)
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise
+                _check_drain_deadline(deadline)
+                if deadline is None:
+                    self._reconcile_drain_signals()
+                else:
+                    self._reconcile_drain_signals(deadline=deadline)
+            except DarwinObservationExhausted as error:
+                if retirement_details(error):
+                    raise
+                record = active["pending"].get(key)
+                if record is None:
+                    if sum(len(row["signalReconciliations"]) for row in self.drain_reconciliations) >= 1024:
+                        raise OwnershipError("Darwin drain signal evidence exceeds its bound") from error
+                    record = {"identity": dict(identity), "firstFailure": str(error), "failures": 0,
+                              "firstSignal": signum, "firstObservation": first_observation, "outcome": "unresolved"}
+                    active["pending"][key] = record
+                    active["record"]["signalReconciliations"].append(record)
+                record.update(lastIdentity=dict(identity), lastFailure=str(error), lastSignal=signum,
+                              lastObservation=len(self.observation_reconciliations) - 1,
+                              failures=record["failures"] + 1)
+                _check_drain_deadline(deadline)
+            else:
+                record = active["pending"].pop(key, None)
+                if record is not None:
+                    # A successful fresh-token signal resolves access, not exit.
+                    # Ordinary known-lifetime/quiet checks still govern retirement.
+                    record.update(outcome="signal-succeeded", lastSignal=signum, lastIdentity=dict(identity),
+                                  lastObservation=len(self.observation_reconciliations) - 1)
+            _check_drain_deadline(deadline)
+
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
+              deadline: float | None = None) -> list[dict[str, Any]]:
+        self._ensure_open()
+        if self.active_drain is not None:
+            raise OwnershipError("Darwin drain is already active")
+        if len(self.drain_reconciliations) >= 1024:
+            raise OwnershipError("Darwin drain evidence exceeds its bound")
+        if deadline is None:
+            started = time.monotonic()
+            term_end, kill_end = started + grace, started + grace + kill_wait
+        else:
+            started, term_end, kill_end = _drain_phase_ends(grace, kill_wait, deadline)
+        record = {"startedMonotonic": started, "graceSeconds": grace, "killWaitSeconds": kill_wait,
+                  "phases": [], "signalReconciliations": [], "outcome": "unresolved"}
+        if deadline is not None:
+            record["absoluteDeadlineMonotonic"] = deadline
+        self.drain_reconciliations.append(record)
+        self.active_drain = {"record": record, "pending": {}, "deadline": started}
+        live, primary = [], None
+        try:
+            # Both deadlines are fixed before any failed signal/census. No new
+            # retry window is added for an exhausted 0.25-second observation.
+            for signum, phase_end in ((SIG_TERM, term_end), (SIG_KILL, kill_end)):
+                self.active_drain["deadline"] = phase_end
+                record["phases"].append({"signal": signum, "deadlineMonotonic": phase_end})
+                quiet = 0
+                try:
+                    while time.monotonic() < phase_end:
+                        _check_drain_deadline(phase_end if deadline is not None else None)
+                        observed = self.discover()
+                        _check_drain_deadline(phase_end if deadline is not None else None)
+                        live = observed
+                        if deadline is None:
+                            self._reconcile_drain_signals()
+                        else:
+                            self._reconcile_drain_signals(deadline=phase_end)
+                        _check_drain_deadline(phase_end if deadline is not None else None)
+                        unknown = self.discovery_errors or self.pending_discoveries
+                        if not live and not self.active_drain["pending"] and not unknown:
+                            quiet += 1
+                            if quiet >= 3:
+                                _check_drain_deadline(phase_end if deadline is not None else None)
+                                record["outcome"] = "retired"
+                                return []
+                        else:
+                            quiet = 0
+                            if deadline is None:
+                                self.signal_all(signum)
+                            else:
+                                self.signal_all(signum, deadline=phase_end)
+                        remaining = phase_end - time.monotonic()
+                        if remaining > 0:
+                            time.sleep(min(0.1, remaining))
+                except DrainDeadlineExceeded as error:
+                    if retirement_details(error):
+                        raise
+                    if deadline is None:
+                        raise
+                    record["phases"][-1]["outcome"] = "deadline-exhausted"
+            if self.active_drain["pending"]:
+                raise DarwinObservationExhausted("Darwin known-token drain remains unresolved within its phase bounds")
+            if live:
+                # No late discovery/token acquisition. This is the conservative
+                # last observation, not a claim that a later exit was inspected.
+                record["outcome"] = "last-observed-live"
+                return live
+            if self.pending_discoveries:
+                raise OwnershipError("Unclassified Darwin lifetimes remain; cleanup is not proven")
+            raise OwnershipError("Darwin drain did not establish three quiet censuses within its phase bounds")
+        except BaseException as error:
+            primary = error
+            unknown = bool(retirement_details(error))
+            record["error"] = format_ownership_error(error) if unknown else str(error)
+            record["outcome"] = "unresolved" if isinstance(error, DarwinObservationExhausted) and not unknown else "failed"
+            raise
+        finally:
+            if deadline is None:
+                record["finishedMonotonic"] = time.monotonic()
+                self.active_drain = None
+            else:
+                try:
+                    finished = time.monotonic()
+                    record["finishedMonotonic"] = finished
+                    if not _finite_number(finished):
+                        raise OwnershipError("Invalid native drain final monotonic observation")
+                    if record["outcome"] == "retired" and finished >= self.active_drain["deadline"]:
+                        raise DrainDeadlineExceeded("Native drain retirement returned after its absolute phase end")
+                except BaseException as error:
+                    if primary is None:
+                        record.update(error=str(error), outcome="failed")
+                        raise
+                    record["finalizationError"] = str(error)
+                finally:
+                    # Earlier terminal/failed records are never rewritten by a
+                    # later drain; even a late-return failure retires active state.
+                    self.active_drain = None
 
 
 class SecurityAttributes(ctypes.Structure):
@@ -781,10 +1751,12 @@ def batch_command_line(cmd: str, argv: list[str]) -> str:
 
     %* in the checked-in Gradle batch file ultimately reaches the Java CRT.
     Doubling trailing backslashes prevents the closing quote becoming an escaped
-    quote there. Reject embedded quotes and every expansion/control metacharacter.
+    quote there. Parentheses are literal only inside the quotes emitted for every
+    argv element. Keep them forbidden in the separately framed cmd executable;
+    reject embedded quotes and all other expansion/control metacharacters in both.
     """
-    forbidden = re.compile(r'[\x00-\x1f"%!&|<>^()]')
-    if not argv or any(forbidden.search(arg) for arg in [cmd, *argv]):
+    forbidden = re.compile(r'[\x00-\x1f"%!&|<>^]')
+    if not argv or any(char in cmd for char in "()") or any(forbidden.search(arg) for arg in [cmd, *argv]):
         raise OwnershipError("Unsupported batch argument expansion/control character")
 
     def quote(arg: str) -> str:
@@ -811,6 +1783,8 @@ class WinApi:
         self._bind("IsProcessInJob", [PTR, PTR, ctypes.POINTER(I32)], I32)
         self._bind("CreatePipe", [ctypes.POINTER(PTR), ctypes.POINTER(PTR), ctypes.POINTER(SecurityAttributes), U32], I32)
         self._bind("SetHandleInformation", [PTR, U32, U32], I32)
+        self._bind("GetHandleInformation", [PTR, ctypes.POINTER(U32)], I32)
+        self._bind("DuplicateHandle", [PTR, PTR, PTR, ctypes.POINTER(PTR), U32, I32, U32], I32)
         self._bind("CreateFileW", [ctypes.c_wchar_p, U32, U32, ctypes.POINTER(SecurityAttributes), U32, U32, PTR], PTR)
         self._bind("InitializeProcThreadAttributeList", [PTR, U32, U32, ctypes.POINTER(SIZE)], I32)
         self._bind("UpdateProcThreadAttribute", [PTR, U32, SIZE, PTR, SIZE, PTR, PTR], I32)
@@ -859,6 +1833,68 @@ class WinApi:
         return path
 
 
+class _WindowsPipeReader:
+    """One CRT descriptor owner with a strictly nonowning, unbuffered I/O view."""
+
+    def __init__(self, handle: int, name: str):
+        self.native_handle, self.name = handle, name
+        self._fd: int | None = None
+        self._view: Any = None
+        self._adoption_started = self._closed = self._fd_close_attempted = False
+        self._close_error: BaseException | None = None
+
+    @property
+    def descriptor_adopted(self) -> bool:
+        # Remains true even after an ambiguous descriptor-close failure. The
+        # original Win32 value must never then reach CloseHandle as a fallback.
+        return self._fd is not None or self._fd_close_attempted
+
+    def adopt(self) -> None:
+        import msvcrt
+        if self._adoption_started or self._closed:
+            raise OwnershipError("Owned pipe descriptor adoption cannot be repeated")
+        self._adoption_started = True
+        self._fd = msvcrt.open_osfhandle(self.native_handle, os.O_RDONLY | os.O_BINARY)
+        # The pending owner is already registered before either adoption or this
+        # fallible constructor. FileIO can never close/recycle the owned fd.
+        self._view = io.FileIO(self._fd, "rb", closefd=False)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def fileno(self) -> int:
+        if self._closed or self._fd is None:
+            raise ValueError("I/O operation on a closed owned pipe")
+        return self._fd
+
+    def read(self, size: int = -1) -> bytes:
+        if self._closed or self._view is None:
+            raise ValueError("I/O operation on a closed owned pipe")
+        return self._view.read(size)
+
+    def close(self) -> None:
+        if self._closed:
+            if self._close_error is not None:
+                raise self._close_error
+            return
+        self._closed = True
+        view, self._view = self._view, None
+        actions = []
+        if view is not None:
+            actions.append((self.name + "-nonowning-view", view.close))
+        if self._fd is not None:
+            self._fd_close_attempted = True
+            fd, self._fd = self._fd, None  # No retry, including cancellation or uncertain os.close.
+            actions.append((self.name + "-crt-descriptor", lambda: os.close(fd)))
+        _, failures = _retire_actions(actions, "pipe-close")
+        try:
+            _finish_retirement(failures)
+        except BaseException as error:
+            self._close_error = error
+            raise
+
+
 class WindowsProcess:
     def __init__(self, api: WinApi, handle: Any, pid: int, stdout: Any, stderr: Any):
         self.api, self.handle, self.pid = api, handle, pid
@@ -888,8 +1924,10 @@ class WindowsProcess:
 
     def close(self) -> None:
         if self.handle:
-            self.api.close(self.handle)
-            self.handle = None
+            # A failed native close has UNKNOWN retirement. Never retry a raw
+            # handle value which the OS might already have recycled.
+            handle, self.handle = self.handle, None
+            self.api.close(handle)
 
 
 class WindowsScope:
@@ -908,10 +1946,20 @@ class WindowsScope:
             limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway bits.
             self.api.check(self.api.SetInformationJobObject(self.job, 9, ctypes.byref(limits),
                                                            ctypes.sizeof(limits)), "SetInformationJobObject")
-        except BaseException:
-            self.api.close(self.job)
-            self.job = None
+        except BaseException as error:
+            job, self.job = self.job, None
+            self._retire([("job", lambda: self.api.close(job))], original=error, phase="scope-construction")
             raise
+
+    def _retire(self, actions: list[Any], *, original: BaseException | None = None,
+                launch: dict[str, Any] | None = None, phase: str = "scope-close") -> None:
+        """Attempt every acquired resource once; cleanup cannot hide a primary failure."""
+        outcomes, failures = _retire_actions(actions, phase)
+        for row, _ in failures:
+            self.discovery_errors.add(_retirement_text(row))
+        if launch is not None:
+            launch.setdefault("resourceCleanup", []).extend(outcomes)
+        _finish_retirement(failures, original)
 
     def _member_pids(self) -> list[int]:
         capacity = 64
@@ -954,10 +2002,33 @@ class WindowsScope:
                 self.api.close(handle)
         return sorted(result, key=lambda item: item["pid"])
 
-    def spawn(self, argv: list[str], cwd: str, env: dict[str, str]) -> WindowsProcess:
-        import msvcrt
+    def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
+              stdout: Any = None, stderr: Any = None, stdin: Any = None) -> WindowsProcess:
+        """Spawn with the existing pipe contract or two pinned private NativeFiles.
+
+        Supplied sinks remain caller-owned. Only fresh duplicates of their
+        borrowed, noninheritable Win32 handles enter the explicit HANDLE_LIST;
+        a Win32 handle is never treated as a CRT descriptor. The caller must keep
+        each original alive without a concurrent close through duplication and
+        full child/domain retirement, monitor live size, then verify and sync.
+        Optional stdin likewise borrows a read-only NativeFile at offset zero;
+        its caller retains the original through complete child/domain retirement.
+        Job assignment, suspended creation and no-breakaway remain unchanged.
+        """
+        if (stdout is None) != (stderr is None):
+            raise OwnershipError("Both owned output sinks are required")
+        if stdin is not None:
+            # The ordinary controller already owns this source-bound primitive.
+            # Keep this optional dependency out of every legacy/default launch.
+            from hosted_windows_files import NativeFile
+            if type(stdin) is not NativeFile:
+                raise OwnershipError("Owned Windows stdin requires the original NativeFile reader")
         launch = {"api": "CreateProcessW", "requestedArgv": list(argv), "cwd": cwd,
                   "created": False, "resumed": False}
+        if stdout is not None:
+            launch["outputMode"] = "caller-owned-native-files"
+        if stdin is not None:
+            launch["inputMode"] = "caller-owned-native-file"
         self.launches.append(launch)
         actual = resolve_executable(argv, cwd, env)
         launch["resolvedArgv"] = actual
@@ -980,24 +2051,70 @@ class WindowsScope:
         attributes = None
         initialized = False
         handles: list[Any] = []
-        streams: list[Any] = []
+        # Keep both output cells BEFORE any DuplicateHandle call. A supplier
+        # can populate its cell and then raise, or its result check can fail;
+        # neither case may hide the acquired duplicate from finalization.
+        output_duplicates = (PTR(), PTR()) if stdout is not None else ()
+        # Retain the input output-cell before a native call can populate it and
+        # then fail. The borrowed original never enters temporary finalization.
+        input_duplicate = PTR() if stdin is not None else None
+        streams: list[_WindowsPipeReader] = []
         process = ProcessInformation()
         created = False
+        original = None
         try:
             security = SecurityAttributes(ctypes.sizeof(SecurityAttributes), None, 1)
             reads, writes = [], []
-            for _ in range(2):
-                read, write = PTR(), PTR()
-                self.api.check(self.api.CreatePipe(ctypes.byref(read), ctypes.byref(write),
-                                                    ctypes.byref(security), 0), "CreatePipe")
-                handles.extend([read.value, write.value])
-                self.api.check(self.api.SetHandleInformation(read, 1, 0), "SetHandleInformation")
-                reads.append(read.value)
-                writes.append(write.value)
-            stdin = self.api.CreateFileW("NUL", 0x80000000, 3, ctypes.byref(security), 3, 0x80, None)
-            if stdin in (None, ctypes.c_void_p(-1).value):
-                raise OwnershipError("Cannot create owned Windows NUL stdin")
-            handles.append(stdin)
+            if stdout is None:
+                for _ in range(2):
+                    read, write = PTR(), PTR()
+                    self.api.check(self.api.CreatePipe(ctypes.byref(read), ctypes.byref(write),
+                                                        ctypes.byref(security), 0), "CreatePipe")
+                    handles.extend([read.value, write.value])
+                    self.api.check(self.api.SetHandleInformation(read, 1, 0), "SetHandleInformation")
+                    reads.append(read.value)
+                    writes.append(write.value)
+            else:
+                borrowed = set()
+                for sink, duplicate in zip((stdout, stderr), output_duplicates):
+                    handle = sink.native_handle
+                    if type(handle) is not int or handle in (0, ctypes.c_void_p(-1).value) or \
+                            handle in borrowed or not sink.writable():
+                        raise OwnershipError("Distinct open native output handles are required")
+                    borrowed.add(handle)
+                    flags = U32()
+                    self.api.check(self.api.GetHandleInformation(handle, ctypes.byref(flags)), "GetHandleInformation")
+                    if flags.value & 1:
+                        raise OwnershipError("Original private output handle must not be inheritable")
+                    # DUPLICATE_SAME_ACCESS into this process; inherit ONLY the
+                    # explicitly listed duplicate, never the original or all
+                    # ambient runner handles.
+                    self.api.check(self.api.DuplicateHandle(PTR(-1), handle, PTR(-1), ctypes.byref(duplicate),
+                                                            0, 1, 2), "DuplicateHandle owned output")
+                    writes.append(duplicate.value)
+            if stdin is None:
+                input_handle = self.api.CreateFileW("NUL", 0x80000000, 3, ctypes.byref(security), 3, 0x80, None)
+                if input_handle in (None, ctypes.c_void_p(-1).value):
+                    raise OwnershipError("Cannot create owned Windows NUL stdin")
+                handles.append(input_handle)
+            else:
+                handle = stdin.native_handle
+                if type(handle) is not int or not 0 < handle < ctypes.c_void_p(-1).value or \
+                        (stdout is not None and handle in borrowed) or \
+                        stdin.readable() is not True or stdin.writable() is not False:
+                    raise OwnershipError("Distinct open read-only native stdin at offset zero is required")
+                position = stdin.tell()
+                if type(position) is not int or position != 0:
+                    raise OwnershipError("Original private input must be at offset zero")
+                flags = U32()
+                self.api.check(self.api.GetHandleInformation(handle, ctypes.byref(flags)), "GetHandleInformation")
+                if flags.value & 1:
+                    raise OwnershipError("Original private input handle must not be inheritable")
+                self.api.check(self.api.DuplicateHandle(PTR(-1), handle, PTR(-1), ctypes.byref(input_duplicate),
+                                                        0, 1, 2), "DuplicateHandle owned input")
+                input_handle = input_duplicate.value
+                if input_handle in (None, 0, ctypes.c_void_p(-1).value):
+                    raise OwnershipError("Cannot duplicate owned Windows stdin")
             size = SIZE()
             self.api.InitializeProcThreadAttributeList(None, 2, 0, ctypes.byref(size))
             if not size.value or size.value > 1024 * 1024:
@@ -1006,7 +2123,7 @@ class WindowsScope:
             self.api.check(self.api.InitializeProcThreadAttributeList(attributes, 2, 0,
                                                                        ctypes.byref(size)), "Initialize attributes")
             initialized = True
-            inherited = (PTR * 3)(stdin, *writes)
+            inherited = (PTR * 3)(input_handle, *writes)
             job_list = (PTR * 1)(self.job)
             self.api.check(self.api.UpdateProcThreadAttribute(attributes, 0, 0x00020002, inherited,
                                                                ctypes.sizeof(inherited), None, None), "HANDLE_LIST")
@@ -1015,7 +2132,7 @@ class WindowsScope:
             startup = StartupInfoEx()
             startup.startup.cb = ctypes.sizeof(startup)
             startup.startup.flags = 0x100  # STARTF_USESTDHANDLES
-            startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = stdin, *writes
+            startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = input_handle, *writes
             startup.attributes = ctypes.cast(attributes, PTR)
             if any("\0" in key or "=" in key or "\0" in value for key, value in env.items()):
                 raise OwnershipError("Invalid Windows environment field")
@@ -1037,43 +2154,76 @@ class WindowsScope:
             identity["jobAssignedBeforeResume"] = True
             launch["jobAssignedBeforeResume"] = True
             self.known[(process.pid, identity["creationFileTime"])] = identity
-            for handle in reads:
-                fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
-                handles.remove(handle)  # Descriptor now owns the OS handle.
-                streams.append(os.fdopen(fd, "rb", buffering=0))
-            child = WindowsProcess(self.api, process.process, process.pid, streams[0], streams[1])
+            for index, handle in enumerate(reads):
+                reader = _WindowsPipeReader(handle, "stdout" if index == 0 else "stderr")
+                streams.append(reader)  # Register before CRT adoption or fallible FileIO wrapping.
+                reader.adopt()
+            child = WindowsProcess(self.api, process.process, process.pid,
+                                   streams[0] if streams else None, streams[1] if streams else None)
             self.leaders.append(child)
             process.process = None  # Child object now owns the process handle.
             if self.api.ResumeThread(process.thread) == 0xFFFFFFFF:
                 raise OwnershipError("ResumeThread failed for assigned Windows child")
             launch["resumed"] = True
-            streams.clear()  # The caller's independent tee threads now own them.
-            return child
-        except BaseException:
-            if created:
-                self.api.TerminateJobObject(self.job, 125)
+        except BaseException as error:
+            original = error
             raise
         finally:
+            actions = []
             if initialized:
-                self.api.DeleteProcThreadAttributeList(attributes)
-            for handle in handles:
-                self.api.close(handle)
-            for stream in streams:
-                stream.close()
-            self.api.close(process.thread)
-            self.api.close(process.process)
+                actions.append(("startup-attributes", lambda: self.api.DeleteProcThreadAttributeList(attributes)))
+            # Keep raw acquisition records until this phase. Successful CRT
+            # adoption, including a failed FileIO construction, excludes that
+            # raw handle from CloseHandle without a second ownership handoff.
+            adopted = {stream.native_handle for stream in streams if stream.descriptor_adopted}
+            # Empty cells represent no acquired resource. Successful file mode
+            # keeps its existing duplicate0/duplicate1/stdin cleanup ordering.
+            input_handles = [input_duplicate.value] if input_duplicate is not None and input_duplicate.value else []
+            owned_handles = [cell.value for cell in output_duplicates if cell.value] + input_handles + handles
+            actions.extend((f"launch-handle-{index}", lambda value=handle: self.api.close(value))
+                           for index, handle in enumerate(owned_handles) if handle not in adopted)
+            if process.thread:
+                actions.append(("primary-thread", lambda: self.api.close(process.thread)))
+            if process.process:
+                actions.append(("untransferred-process", lambda: self.api.close(process.process)))
+            try:
+                self._retire(actions, original=original, launch=launch, phase="launch-temporary")
+            except BaseException as error:
+                original = error
+                raise
+            finally:
+                if original is not None:
+                    pending = []
+                    if created:
+                        pending.append(("failed-launch-job-termination", lambda: self.api.check(
+                            self.api.TerminateJobObject(self.job, 125), "TerminateJobObject failed launch")))
+                    pending.extend((f"launch-stream-{index}", stream.close) for index, stream in enumerate(streams))
+                    # Includes a late temporary-finalizer failure after resume.
+                    # No caller/tee received these readers; the process handle
+                    # remains registered for the outer owner's bounded drain.
+                    self._retire(pending, original=original, launch=launch, phase="failed-return")
+        streams.clear()  # Transfer only after every fallible launch finalizer succeeded.
+        return child
 
-    def signal_all(self, signum: int) -> None:
+    def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
+        _check_drain_deadline(deadline)
         if signum == SIG_KILL:
             self.api.check(self.api.TerminateJobObject(self.job, 125), "TerminateJobObject")
+            _check_drain_deadline(deadline)
             return
         # A best-effort scoped CTRL_BREAK may be unavailable for detached leaders.
         # Hard cleanup below always uses the proven job, never a process-group0 signal.
         for child in self.leaders:
+            _check_drain_deadline(deadline)
             if child.pid > 0 and child.poll() is None:
+                _check_drain_deadline(deadline)
                 self.api.GenerateConsoleCtrlEvent(1, child.pid)
+            _check_drain_deadline(deadline)
 
-    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
+              deadline: float | None = None) -> list[dict[str, Any]]:
+        if deadline is not None:
+            return _bounded_drain(self, grace, kill_wait, deadline, quiet_required=1, repeat_signals=False)
         if self.discover():
             self.signal_all(SIG_TERM)
         deadline = time.monotonic() + grace
@@ -1097,11 +2247,11 @@ class WindowsScope:
                 "discoveryErrors": sorted(self.discovery_errors)}
 
     def close(self) -> None:
-        for child in self.leaders:
-            child.close()
-        if self.job:
-            self.api.close(self.job)
-            self.job = None
+        job, self.job = self.job, None
+        actions = [(f"leader-{index}", child.close) for index, child in enumerate(self.leaders)]
+        if job:
+            actions.append(("job", lambda: self.api.close(job)))
+        self._retire(actions)
 
 
 def make_scope(job: str, invocation: str, state: str, home: str) -> PosixScope | WindowsScope:

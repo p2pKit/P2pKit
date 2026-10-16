@@ -1,0 +1,1854 @@
+#!/usr/bin/env python3
+"""Focused history-predicate DATA controls, not a reader/owner qualification.
+
+Only selected, source-validated pure functions are compiled. No project module,
+old fixture, CLI, reader, owner constructor, native library or provider is
+imported/executed. Record classes below are inert exact-type model shells, NOT
+original returns or reconstructed owners. Paths, stamps and bytes are supplied
+in memory; no modeled pathname is opened.
+
+Normal invocation retains the existing predicate and builder controls and adds
+five mapping-identity and five guarded-require controls. Separately select --measure-baseline /absolute/public-source-bfc7.py
+for ONE fixed AB,BA,AB,BA
+measurement, 64 whole-bank passes per side/block, without tuning or retries.
+Both sides use bfc7's unchanged checker; each builds its own original/compact
+snapshot graphs. The older6006 checker remains only an untimed negative-control
+reference, never the performance baseline for this repair.
+The caller must impose CPU60/wall90 and bind the candidate commit/tree plus
+this file's hash before execution. A >=10% aggregate CPU reduction is only a
+model-cost decision, never a CI timing test or proof of hosted schedule fit.
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import builtins
+from collections import Counter
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import time
+from types import SimpleNamespace
+import unittest
+
+
+BASELINE_SHA256 = "ac94a3b81825b7bdbc0743fe576d76b1f9989b7b14701e8aebe7c8369909dd33"
+BFC7_SHA256 = "ac24be2d2010703ae934cf44769348f63374f61ad9f351b0ea97221806c2fda5"
+BUILDER_SHA256 = "5c7ca21eef9fb974e249069e9d53fd843854eb2d3346f5e11f0527ad53e867a5"
+OLD_CHECKER_SHA256 = "727a22e06964a9bd13995e444a4ee7c863e56912572f8644928cd4ef3784953f"
+SOURCE_PINS = {
+    # Failure-only owner-ledger dispatch preserves the predicate and aliases;
+    # selected require/_snapshot_metadata bytes still match 38035f8d. Adopt the
+    # whole supplier only after both reviews; strict equality is unchanged.
+    # Owner-approved bootstrap job600 preserves those selected functions and caps.
+    "run-hosted-initial-recipient-custody.py":
+        "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef",
+    "hosted_test_identity.py": "07faeecd034439ea82dd2b05bcfd2f9ce4d6a44117b959b855d2c39651d3b770",
+    "hosted_test_query.py": "d3b6aa5c6dd95b9c05c829f5b15de40f35ddbfa763d93031cb25fe596b463ca7",
+    "hosted_full_job_budget.py": "95fb79e994746e85439446d39a49017fefa782d2b7182523db4ad1f2b071b1a3",
+}
+MAIN_NAME = "run-hosted-initial-recipient.py"
+CUSTODY_NAME = "run-hosted-initial-recipient-custody.py"
+ORDERS = ("AB", "BA", "AB", "BA")
+ITERATIONS = 64
+MINIMUM_IMPROVEMENT_PERCENT = 10
+
+# Exact independent6006 preimage, including its final newline. This is not
+# produced by reversing the candidate's AST or by calling its implementation.
+OLD_CHECKER = '''def _check_history(nodes):
+    scalars = (type(None), bool, int, float, str, bytes)
+    def same(value, saved):
+        return value is saved or type(value) is type(saved) and type(saved) in scalars and value == saved
+    for value, kind, mode, saved in nodes:
+        require(type(value) is kind, "RECIPIENT_HISTORY_CHANGED")
+        if mode == "record":
+            valid = object.__getattribute__(value, "__dict__") is saved
+        elif mode == "mapping":
+            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)
+                for (key, item), (old_key, old_item) in zip(value.items(), saved))
+        elif mode == "sequence":
+            valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))
+        elif mode == "path":
+            valid = (str(value), value.parts, value.drive, value.root) == saved
+        else:
+            valid = mode == "opaque"
+        require(valid, "RECIPIENT_HISTORY_CHANGED")
+'''
+OLD_SEQUENCE = "valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))"
+NEW_SEQUENCE = ("valid = (kind is tuple and value is saved) or (len(value) == len(saved) and\n"
+    "                all(same(item, old) for item, old in zip(value, saved)))")
+# Independent original builder from reviewed bfc7, not reconstructed from the
+# candidate. The unchanged visited-object bound includes every exact tuple.
+OLD_BUILDER = '''def _history_graph(*roots):
+    """Finite pins of the closed Stage1 records, not a live reader or object codec."""
+    records = (_ReadmissionReturn, _ReadmissionBinding, _ReadmissionClaim, _PreparationBinding,
+        _OriginalPreparation, _OriginalServiceJobAdmission, _EntryWindowBinding, _ReadmissionWindow, SourceReturn, native.Owner,
+        native.OriginalPhase, O.Fence, O.clocks.Reading, O.clocks.ClockIdentity,
+        initial_identity.InitialBootstrapIdentity, acquisition.stages.BootstrapMatch,
+        _AuthorityReturn, _AuthorityState, _RecipientRoster, _RecipientNativeReturn, _RecipientValidationReturn,
+        _RecipientState, _RecipientCryptoOriginals)
+    scalars = (type(None), bool, int, float, str, bytes)
+    pending, seen, nodes = list(roots), set(), []
+    while pending:
+        value = pending.pop()
+        kind = type(value)
+        if kind in scalars or id(value) in seen:
+            continue
+        seen.add(id(value))
+        require(len(seen) <= 10000, "RECIPIENT_HISTORY_LIMIT")
+        if kind is dict:
+            saved, mode = tuple(value.items()), "mapping"
+            require(all(type(key) in scalars for key, _ in saved), "RECIPIENT_HISTORY_KEY")
+            pending.extend(item for pair in saved for item in pair)
+        elif kind in (tuple, list):
+            saved, mode = tuple(value), "sequence"
+            pending.extend(saved)
+        elif kind in records:
+            saved, mode = object.__getattribute__(value, "__dict__"), "record"
+            pending.append(saved)
+        elif kind is type(ROOT):
+            saved, mode = (str(value), value.parts, value.drive, value.root), "path"
+        else:
+            saved, mode = None, "opaque"  # Callbacks/retired resources: reference only, never invoked.
+        nodes.append((value, kind, mode, saved))
+    return tuple(nodes)
+'''
+OLD_BUILDER_SEQUENCE = '''        elif kind in (tuple, list):
+            saved, mode = tuple(value), "sequence"
+            pending.extend(saved)
+'''
+NEW_BUILDER_SEQUENCE = '''        elif kind is tuple:
+            pending.extend(value)
+            continue
+        elif kind is list:
+            saved, mode = tuple(value), "sequence"
+            pending.extend(saved)
+'''
+PURE_BUILTINS = {name: getattr(builtins, name) for name in (
+    "all", "bool", "bytes", "dict", "float", "hasattr", "id", "int", "len", "list",
+    "object", "set", "sorted", "str", "tuple", "type", "zip")}
+
+
+def insist(value, code):
+    if not value:
+        raise AssertionError(code)
+
+
+def sha(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def install_audit(paths):
+    allowed = frozenset(os.path.abspath(os.fspath(path)) for path in paths)
+    writes = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+
+    def audit(event, args):
+        if event == "open":
+            path, mode, flags = args
+            if (not isinstance(path, (str, bytes)) or
+                    os.path.abspath(os.fsdecode(path)) not in allowed or
+                    flags & writes or mode is not None and mode not in ("r", "rb")):
+                raise RuntimeError("HISTORY_MODEL_SOURCE_READS_ONLY")
+        elif event == "import" or event.startswith(("subprocess.", "socket.")) or event in (
+                "ctypes.dlopen", "ctypes.dlsym", "os.system", "os.exec", "os.posix_spawn",
+                "os.fork", "os.forkpty", "pty.spawn", "os.listdir", "os.scandir", "os.chdir",
+                "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.link", "os.symlink",
+                "os.chmod", "os.chown", "os.truncate", "os.utime", "builtins.input"):
+            raise RuntimeError("HISTORY_MODEL_IMPORT_PROCESS_NETWORK_FILESYSTEM_FORBIDDEN")
+
+    sys.addaudithook(audit)
+
+
+def read_public(path):
+    # Explicit public source only; no path discovery, provider or model I/O.
+    before = path.lstat()
+    insist(stat.S_ISREG(before.st_mode) and 0 < before.st_size <= 2 * 1024 * 1024,
+        "PUBLIC_SOURCE_REGULAR_BOUNDED")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(descriptor)
+        insist((opened.st_dev, opened.st_ino, opened.st_size) ==
+            (before.st_dev, before.st_ino, before.st_size), "PUBLIC_SOURCE_IDENTITY")
+        pieces, remaining = [], before.st_size
+        while remaining:
+            piece = os.read(descriptor, min(remaining, 65536))
+            insist(piece, "PUBLIC_SOURCE_SHORT_READ")
+            pieces.append(piece)
+            remaining -= len(piece)
+        insist(os.read(descriptor, 1) == b"", "PUBLIC_SOURCE_EOF")
+        after = os.fstat(descriptor)
+        insist((after.st_size, after.st_mtime_ns, after.st_ctime_ns) ==
+            (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns), "PUBLIC_SOURCE_CHANGED")
+        return b"".join(pieces)
+    finally:
+        os.close(descriptor)
+
+
+def selected(text, filename, name):
+    tree = ast.parse(text, filename=filename)
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+    insist(len(nodes) == 1, "ONE_SELECTED_PURE_FUNCTION")
+    node = nodes[0]
+    insist(not node.decorator_list and not node.args.defaults and not node.args.kw_defaults,
+        "NO_SELECTED_DEFINITION_CALLBACK")
+    insist(not any(isinstance(item, (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal))
+        for item in ast.walk(node)), "NO_SELECTED_IMPORT_OR_GLOBAL_WRITE")
+    lines = text.splitlines(keepends=True)
+    return node, "".join(lines[node.lineno - 1:node.end_lineno])
+
+
+def compile_function(node, filename, environment):
+    # The restricted namespace has no open, import, eval, exec, native or CLI.
+    environment["__builtins__"] = PURE_BUILTINS
+    exec(compile(ast.Module(body=[node], type_ignores=[]), filename, "exec", dont_inherit=True), environment)
+    return environment[node.name]
+
+
+class AdmissionError(ValueError):
+    """Model error type used by the unchanged maintained require function."""
+
+
+class QueryError(RuntimeError):
+    pass
+
+
+class BudgetError(ValueError):
+    pass
+
+
+
+# Exact reviewed first-catch delta; comparison bytes only, never runtime suppliers.
+_FIRST_CATCH_CUSTODY_INVERSES = ((b'        clock.now()\n    except BaseException as error:\n        failure = error\n        if owner '
+  b'is not None:\n            owner.error("before-authority-child", error)\n            failure = owne'
+  b'r._anchor().failure\n',
+  b'        clock.now()\n    except BaseException as error:\n        failure = error\n        try:\n    '
+  b'        B._before_child_failure_remember(error)\n        except BaseException:\n            pass  '
+  b'# First-catch DATA cannot replace the original error or cleanup.\n        if owner is not None:\n '
+  b'           owner.error("before-authority-child", error)\n            failure = owner._anchor().fa'
+  b'ilure\n'),
+ (b'                child.add_argument(flag, required=True, dest=field)\n    args = parser.parse_args'
+  b'()\n    try:\n        if args.operation == "collect-export":\n            native._custody_progress_'
+  b'clear()\n        require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_by'
+  b'tecode,\n',
+  b'                child.add_argument(flag, required=True, dest=field)\n    args = parser.parse_args'
+  b'()\n    try:\n        if args.operation == "_before-authority":\n            try:\n                B'
+  b'._before_child_failure_begin()\n            except BaseException:\n                pass  # Optiona'
+  b'l observation cannot change CLI admission or outcome.\n        if args.operation == "collect-expo'
+  b'rt":\n            native._custody_progress_clear()\n        require(sys.flags.isolated == 1 and sy'
+  b's.flags.no_site == 1 and sys.dont_write_bytecode,\n'),
+ (b'            except BaseException:\n                pass  # Private child DATA cannot replace the '
+  b'generic refusal or exit125.\n        return 125\n\n\nif __name__ == "__main__":\n',
+  b'            except BaseException:\n                pass  # Private child DATA cannot replace the '
+  b'generic refusal or exit125.\n        return 125\n    finally:\n        if args.operation == "_befor'
+  b'e-authority":\n            try:\n                B._before_child_failure_clear()\n            excep'
+  b't BaseException:\n                pass  # Observation teardown cannot replace the original return'
+  b' or error.\n\n\nif __name__ == "__main__":\n'))
+
+
+# Exact reviewed before-clock diagnostic delta; comparison bytes only.
+# Restore the complete555 supplier before every older custody inverse.
+_BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
+  b'def _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, local):\n    """O'
+  b'ptional refusal DATA from existing observations; never a clock/owner check."""\n    frame = None\n'
+  b'    try:\n        if type(anchor) is not _BeforeClockAnchor or type(anchor.binding) is not tuple '
+  b'or len(anchor.binding) != 10:\n            return\n        binding = anchor.binding\n        if typ'
+  b'e(binding[8]) is not tuple or len(binding[8]) != 4 or type(final) is not bool or \\\n             '
+  b'   type(number) is not int or number not in (0, 1) or type(anchor.busy) is not bool or \\\n       '
+  b'         type(binding[4]) is not str or binding[4] not in ("parent", "child") or \\\n             '
+  b'   type(anchor.phase) is not str or anchor.phase not in ("METADATA", "WINDOW_BOUND", "BINDING", "AUT'
+  b'HORITY"):\n            return\n        selected, local_end = binding[8][1 if final else 0], bindin'
+  b'g[8][3 if final else 2]\n        if not all(type(value) is int and 0 <= value <= (1 << 64) - 1 fo'
+  b'r value in (selected, frontier, end)) or \\\n                limit is not None and (type(limit) is'
+  b' not int or not 0 <= limit <= (1 << 64) - 1) or \\\n                not all(type(value) in (int, f'
+  b'loat) and math.isfinite(value) and value >= 0\n                    for value in (local, local_end'
+  b')):\n            return\n        if end != (selected if limit is None else min(selected, limit)):\n'
+  b'            return\n        raw_before_end, busy, failure_clear = frontier < end, anchor.busy, an'
+  b'chor.failure is None\n        if raw_before_end and busy and failure_clear:\n            return\n  '
+  b'      raw_ms = (end - frontier) // 1_000_000\n        local_ms = (local_end - local) * 1000\n     '
+  b'   if not math.isfinite(local_ms):\n            return\n        local_ms = math.floor(local_ms)\n  '
+  b'      paths = {str(SCRIPTS / name): token for name, token in (\n            ("run-hosted-initial-'
+  b'recipient-tail.py", "TAIL"),\n            ("run-hosted-initial-recipient-custody.py", "CUSTODY"),'
+  b'\n            ("run-hosted-initial-recipient.py", "PRIMARY"),\n            ("run-hosted-cache-boot'
+  b'strap.py", "NATIVE"),\n            ("hosted_test_query.py", "QUERY"), ("hosted_test_identity.py",'
+  b' "IDENTITY"),\n            ("hosted_cache_bootstrap_origin.py", "ORIGIN"),\n            ("hosted_c'
+  b'ache_bootstrap_service_time.py", "SERVICE_TIME"),\n            ("hosted_initial_recipient_origina'
+  b'ls.py", "ORIGINALS"), ("hosted_job_clock.py", "CLOCK"),\n            ("hosted_initial_recipient_c'
+  b'ontinuity.py", "CONTINUITY"),\n            ("hosted_initial_recipient_before.py", "BEFORE"),\n    '
+  b'        ("hosted_initial_recipient_tail_evidence.py", "TAIL_EVIDENCE"),\n            ("hosted_ini'
+  b'tial_recipient_tail_handoff.py", "TAIL_HANDOFF"),\n            ("hosted_initial_recipient_tail_ca'
+  b'rrier.py", "TAIL_CARRIER"),\n            ("hosted_initial_recipient_evidence.py", "EVIDENCE"))}\n '
+  b'       sites, count, truncated = [], 0, False\n        frame = sys._getframe(1)\n        while fra'
+  b'me is not None and count < 32:\n            token, line = paths.get(frame.f_code.co_filename), fr'
+  b'ame.f_lineno\n            if token is not None and type(line) is int and 1 <= line <= 1_000_000:\n'
+  b'                if len(sites) == 12:\n                    truncated = True\n                    br'
+  b'eak\n                sites.append({"module": token, "line": line})\n            frame, count = fra'
+  b'me.f_back, count + 1\n        truncated = truncated or frame is not None\n        record = {"schem'
+  b'a": 1, "scope": "INITIAL_RECIPIENT_BEFORE_RAW_FAILURE_V1", "decision": "REJECTED",\n            "'
+  b'side": binding[4], "phase": anchor.phase, "iteration": number, "final": final,\n            "limi'
+  b'tRelation": "NONE" if limit is None else "CLIPPED" if limit < selected else\n                "EQU'
+  b'AL" if limit == selected else "UNCLIPPED",\n            "rawBeforeEnd": raw_before_end, "busy": b'
+  b'usy, "failureClear": failure_clear,\n            "rawRemainingMs": min(900000, max(-900000, raw_m'
+  b's)),\n            "rawRemainingClamped": not -900000 <= raw_ms <= 900000,\n            "sampledLoc'
+  b'alRemainingMs": min(900000, max(-900000, local_ms)),\n            "sampledLocalRemainingClamped":'
+  b' not -900000 <= local_ms <= 900000,\n            "callerSites": sites, "callersTruncated": trunca'
+  b'ted}\n        raw = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True, '
+  b'allow_nan=False)\n        if len(raw) <= 2048:\n            print(raw, file=sys.stderr)\n    except'
+  b' BaseException:\n        pass  # Optional diagnostics cannot replace the original refusal.\n    fi'
+  b'nally:\n        frame = None  # Never retain caller frames or their locals beyond the failing cal'
+  b'l.\n\n\nclass _BeforeClock:\n'),
+ (b'            require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_EXPIRED_O'
+  b'R_CHANGED")\n',
+  b'            try:\n                require(frontier < end and anchor.busy and anchor.failure is No'
+  b'ne, "BEFORE_RAW_EXPIRED_OR_CHANGED")\n            except BaseException:\n                try:\n    '
+  b'                _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, loca'
+  b'l)\n                except BaseException:\n                    pass  # A replaced diagnostic callb'
+  b'ack cannot mask the original refusal.\n                raise\n'))
+
+
+
+
+
+# Exact owner-authorized operational layer; no historical supplier hash changes.
+_OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-custody.py': '54f9549629fd8ea5eea8ae4df4a66aed1bd8a3ff230ab817b45bb60dc1348093'}
+_OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 600 * O.NS', b'basis + 1200 * O.NS', 1)]}
+
+
+
+# Exact final capacity layer restores416 source before every historical inverse.
+_CAPACITY_BASELINES = {'run-hosted-initial-recipient-custody.py': '58f757b25c57f2c34e6d79748776e60d9ba5f71e76a0680219134f2a7f150e84'}
+_CAPACITY_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1200 * O.NS', b'basis + 1800 * O.NS', 1), (b'0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")', b'0 < maximum <= (1245 if final is True else 900), "BEFORE_MECHANISM_MAXIMUM")', 1)]}
+
+# Exact owner-authorized headroom layer; preserve6f9 and every older whole supplier.
+_HEADROOM_BASELINES = {'run-hosted-initial-recipient-custody.py': 'ce007ad8a64b02c1194d5b2db27495250364a93effea97bc48d807d9b0c1e13c'}
+_HEADROOM_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1800 * O.NS', b'basis + 3600 * O.NS', 1), (b'(1245 if final is True else 900)', b'(2445 if final is True else 900)', 1)]}
+
+
+def headroom_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _HEADROOM_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_HEADROOM_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _HEADROOM_BASELINES[name]:
+        return raw  # Exact6f9 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_HEADROOM_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_HEADROOM_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _HEADROOM_BASELINES[name]:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_HEADROOM_WHOLE_6F9_PREIMAGE")
+    return raw
+
+
+def capacity_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _CAPACITY_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
+        return raw  # Exact416 input can already have been normalized by another consumer.
+    raw = headroom_preimage(name, raw)
+    for before, after, count in reversed(_CAPACITY_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _CAPACITY_BASELINES[name]:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_WHOLE_416_PREIMAGE")
+    return raw
+
+def operational_budget_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _OPERATIONAL_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_BYTES")
+    if name == "run-hosted-initial-recipient-custody.py":
+        raw = capacity_preimage(name, raw)
+    for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
+        if raw.count(after) != count or before in raw:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _OPERATIONAL_BASELINES[name]:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_WHOLE_FBC1_PREIMAGE")
+    return raw
+
+def currency_input_preimage(raw):
+    raw = operational_budget_preimage("run-hosted-initial-recipient-custody.py", raw)
+    # Exact guard-scheduling inverse; keep all historical supplier pins.
+    guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+    if type(raw) is not bytes or raw.count(guard_after) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_GUARD_SCHEDULING_EXACT_CONTEXT")
+    raw = raw.replace(guard_after, guard_before, 1)
+    # Normalize only the reviewed original-job gate allocation, not live functions.
+    old_schedule, new_schedule = b'    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', b'    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
+    if type(raw) is not bytes or raw.count(new_schedule) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_GATE_ALLOCATION_EXACT_CONTEXT")
+    raw = raw.replace(new_schedule, old_schedule, 1)
+    # Restore only the reviewed currency input access; retain every historical pin.
+    before, after = b'        raws, _input_metadata, _metadata = _checked_before_input(result.input)\n', b'        _checked_before_input(result.input, _guard_only=True)\n        raws = dict(result.input.originals)\n'
+    if type(raw) is not bytes or raw.count(after) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CURRENCY_INPUT_EXACT_CONTEXT")
+    restored = raw.replace(after, before, 1)
+    if hashlib.sha256(restored).hexdigest() != \
+            "ada25c13de1e74659d074c8c19ce9fb18b7729d0bb978d061f5e44a69605a4e2":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CURRENCY_INPUT_77_WHOLE_PREIMAGE")
+    return restored
+
+def before_clock_diagnostic_custody_preimage(raw):
+    raw = currency_input_preimage(raw)
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CLOCK_DIAGNOSTIC_BYTES")
+    original = raw
+    for before, after in reversed(_BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_CLOCK_DIAGNOSTIC_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CLOCK_DIAGNOSTIC_555_WHOLE_PREIMAGE")
+    return original
+
+
+# Exact reviewed immutable-authority memo delta; comparison bytes only.
+# Restore the complete6d supplier before every older custody inverse.
+_AUTHORITY_PROOF_CUSTODY_INVERSES = ((b'_BEFORE_INPUT_PROOFS = {}\n', b'_BEFORE_INPUT_PROOFS = {}\n_BEFORE_AUTHORITY_PROOFS = {}\n'),
+ (b'        N._check_worker_pins(original_pins, clock.clock.role, closed=True)\n        index = c'
+  b'anonical(index_raw)\n        require(type(index["fileCount"]) is int and index["fileCount"] ='
+  b'= len(originals) == 280 and\n            index["requiredFiles"] == [name for name, _raw in or'
+  b'iginals] and len(index["files"]) == 280 and\n            type(index["directoryCount"]) is int'
+  b' and index["directoryCount"] == len(index["directories"]) == 58 and\n            type(index["'
+  b'totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in originals) '
+  b'<= MAX_BYTES and\n            index["authorityCloseSha256"] == O.digest(raw), "BEFORE_AUTHORI'
+  b'TY_EXHAUSTIVE_ROSTER_CHANGED")\n        for (name, data), row in zip(originals, index["files"'
+  b']):\n            require(row["relative"] == name and type(row["bytes"]) is int and row["bytes'
+  b'"] == len(data) and\n                row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGI'
+  b'NAL_BYTES_CHANGED")\n        require(dict(originals)["authority-close.json"] == raw and\n     '
+  b'       index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == "NOT_K_'
+  b'CAPTURE",\n            "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")\n        _before_entry_current'
+  b'(entry)\n',
+  b'        role = clock.clock.role\n        N._check_worker_pins(original_pins, role, closed=Tru'
+  b'e)\n        if id(result) in _BEFORE_AUTHORITY_PROOFS:\n            proof = _BEFORE_AUTHORITY_'
+  b'PROOFS[id(result)]\n            require(type(proof) is tuple and len(proof) == 2 and proof[0]'
+  b' is saved and\n                type(proof[1]) is type(role) is str and proof[1] == role, "BEF'
+  b'ORE_AUTHORITY_PROOF_CHANGED")\n        else:\n            proof = None\n            # Only immu'
+  b'table byte relations are memoized; native/current checks above still run.\n            requir'
+  b'e(all(type(value) is bytes for value in (raw, readback, writer_close, index_raw)) and\n      '
+  b'          type(originals) is tuple and all(type(row) is tuple and len(row) == 2 and\n        '
+  b'        type(row[0]) is str and type(row[1]) is bytes for row in originals) and type(role) i'
+  b's str,\n                "BEFORE_AUTHORITY_PROOF_IMMUTABLE")\n            index = canonical(ind'
+  b'ex_raw)\n            require(type(index["fileCount"]) is int and index["fileCount"] == len(or'
+  b'iginals) == 280 and\n                index["requiredFiles"] == [name for name, _raw in origin'
+  b'als] and len(index["files"]) == 280 and\n                type(index["directoryCount"]) is int'
+  b' and index["directoryCount"] == len(index["directories"]) == 58 and\n                type(ind'
+  b'ex["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in origina'
+  b'ls) <= MAX_BYTES and\n                index["authorityCloseSha256"] == O.digest(raw), "BEFORE'
+  b'_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")\n            for (name, data), row in zip(originals, i'
+  b'ndex["files"]):\n                require(row["relative"] == name and type(row["bytes"]) is in'
+  b't and row["bytes"] == len(data) and\n                    row["sha256"] == O.digest(data), "BE'
+  b'FORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")\n            require(dict(originals)["authority-close'
+  b'.json"] == raw and\n                index["closeWriterReturn"] == canonical(writer_close) and'
+  b' index["capture"] == "NOT_K_CAPTURE",\n                "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED'
+  b'")\n        _before_entry_current(entry)\n        require(_BEFORE_AUTHORITIES.get(id(result)) '
+  b'is saved and\n            ((id(result) not in _BEFORE_AUTHORITY_PROOFS) if proof is None else'
+  b'\n             _BEFORE_AUTHORITY_PROOFS.get(id(result)) is proof), "BEFORE_AUTHORITY_PROOF_CH'
+  b'ANGED")\n        if proof is None:\n            _BEFORE_AUTHORITY_PROOFS[id(result)] = (saved,'
+  b' role)\n'))
+
+
+def authority_proof_custody_preimage(raw):
+    raw = before_clock_diagnostic_custody_preimage(raw)
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_BYTES")
+    original = raw
+    for before, after in reversed(_AUTHORITY_PROOF_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_6D_WHOLE_PREIMAGE")
+    return original
+
+
+# Exact reviewed immutable-input memo delta; comparison bytes only.
+# Restore the complete72be supplier before every older custody inverse.
+_IMMUTABLE_INPUT_CUSTODY_INVERSES = ((b'_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}\n',
+  b'_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}\n# Immutable-work '
+  b'memo only; never an owner, deadline or transferable authority.\n_BEFORE_INPUT_PROOFS = {}\n'),
+ (b'def _checked_before_input(result):\n    saved = _BEFORE_INPUTS.get(id(result))\n',
+  b'def _checked_before_input(result, *, _guard_only=False):\n    require(type(_guard_only) is bool, "BEFORE_'
+  b'INPUT_GUARD_MODE")\n    saved = _BEFORE_INPUTS.get(id(result))\n'),
+ (b'    value = _before_input_data(canonical(raw), metadata.owner.first.clock.role)\n    require(tuple((row["'
+  b'key"], row["first"]["sha256"]) for row in value["files"]) ==\n        tuple((name, O.digest(data)) for na'
+  b'me, data in originals), "BEFORE_INPUT_HASH_CHANGED")\n    return dict(originals), value, metadata\n',
+  b'    role = metadata.owner.first.clock.role\n    if id(result) in _BEFORE_INPUT_PROOFS:\n        proof '
+  b'= _BEFORE_INPUT_PROOFS[id(result)]\n        require(type(proof) is tuple and len(proof) == 2 and proof[0]'
+  b' is saved and\n            type(proof[1]) is type(role) is str and proof[1] == role, "BEFORE_INPUT_PROOF_'
+  b'CHANGED")\n        if _guard_only:\n            return None\n    else:\n        # Only exact immutable o'
+  b'riginals can avoid repeating pure byte validation.\n        require(type(raw) is bytes and type(originals'
+  b') is tuple and all(type(row) is tuple and len(row) == 2 and\n            type(row[0]) is str and type(row'
+  b'[1]) is bytes for row in originals) and type(role) is str,\n            "BEFORE_INPUT_PROOF_IMMUTABLE'
+  b'")\n    value = _before_input_data(canonical(raw), role)\n    require(tuple((row["key"], row["first"]['
+  b'"sha256"]) for row in value["files"]) ==\n        tuple((name, O.digest(data)) for name, data in original'
+  b's), "BEFORE_INPUT_HASH_CHANGED")\n    if id(result) not in _BEFORE_INPUT_PROOFS:\n        _BEFORE_INPU'
+  b'T_PROOFS[id(result)] = (saved, role)\n    if _guard_only:\n        return None\n    # Consumers still r'
+  b'eceive newly parsed mutable values on every full check.\n    return dict(originals), value, metadata\n'),
+ (b'                _checked_before_input(anchor.bound[0])\n',
+  b'                _checked_before_input(anchor.bound[0], _guard_only=True)\n'),
+ (b'            _checked_before_input(inputs)\n            owner.check()\n',
+  b'            _checked_before_input(inputs, _guard_only=True)\n            owner.check()\n'))
+
+
+def immutable_input_custody_preimage(raw):
+    raw = authority_proof_custody_preimage(raw)
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_BYTES")
+    original = raw
+    for before, after in reversed(_IMMUTABLE_INPUT_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "7dce9f3ca357518b6ee647fe3e5419ff383e8293f334ea790cab6e0657a9899b":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_72BE_WHOLE_PREIMAGE")
+    return original
+
+
+# Exact reviewed export-only source-token insertion, comparison bytes only.
+_EXPORT_PROCESS_CUSTODY_ROW = b'        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n'
+_EXPORT_PROCESS_CUSTODY_CONTEXT = b'        str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",\n        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n    }\n    node = traceback_head'
+
+
+def export_process_custody_preimage(raw):
+    raw = immutable_input_custody_preimage(raw)
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
+            raw.count(_EXPORT_PROCESS_CUSTODY_ROW) != 1 or raw.count(_EXPORT_PROCESS_CUSTODY_CONTEXT) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_EXACT_CONTEXT")
+    original = raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "9b622f09dc28162aeba7d6af8513087a206b2894263b453f09271c8508f314e4":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_F63_PREIMAGE")
+    return original
+
+
+def first_catch_custody_preimage(raw):
+    raw = export_process_custody_preimage(raw)
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_FIRST_CATCH_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_0DA3_WHOLE_PREIMAGE")
+    return original
+
+
+# Exact reviewed diagnostic insertion; only the comparison preimage is restored.
+# Actual source bytes, imported suppliers and compiled functions are never replaced.
+_BEFORE_CHILD_CUSTODY_ADDITION = (
+    b'        elif args.operation == "_before-authority":\n'
+    b'            try:\n'
+    b'                diagnostic = B._before_child_failure_line(error)\n'
+    b'                if type(diagnostic) is str and diagnostic.isascii() and len(diagnostic) <= 2048:\n'
+    b'                    print(diagnostic, file=sys.stderr)\n'
+    b'            except BaseException:\n'
+    b'                pass  # Private child DATA cannot replace the generic refusal or exit125.\n'
+)
+
+
+def before_child_custody_preimage(raw):
+    raw = first_catch_custody_preimage(raw)
+    context = (b"                pass  # Failure-only data cannot change exit125 or authorize a retry.\n" +
+        _BEFORE_CHILD_CUSTODY_ADDITION + b"        return 125\n")
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
+            raw.count(_BEFORE_CHILD_CUSTODY_ADDITION) != 1 or raw.count(context) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXACT_CONTEXT")
+    original = raw.replace(_BEFORE_CHILD_CUSTODY_ADDITION, b"", 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_WHOLE_PREIMAGE")
+    return original
+
+
+# Exact guarded-require scheduling inverse; never repin historical whole suppliers.
+_HISTORY_REQUIRE_BASELINE = "3463f825e5d3864d867d5cb92cfee6d111344da0c7a97ea70b7df3dac5711b22"
+_HISTORY_REQUIRE_CHANGES = [(b'        require(type(value) is kind, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not (type(value) is kind):\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n'), (b'        require(valid, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not valid:\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n')]
+
+
+def guarded_require_preimage(raw):
+    if type(raw) is not bytes:
+        raise AssertionError("MAPPING_IDENTITY_GUARDED_REQUIRE_BYTES")
+    for before, after in reversed(_HISTORY_REQUIRE_CHANGES):
+        if raw.count(after) != 1 or before in raw:
+            raise AssertionError("MAPPING_IDENTITY_GUARDED_REQUIRE_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != _HISTORY_REQUIRE_BASELINE:
+        raise AssertionError("MAPPING_IDENTITY_GUARDED_REQUIRE_WHOLE_52A_PREIMAGE")
+    return raw
+
+
+# Exact e4 mapping-only inverse. Historical whole-source/checker pins below stay unchanged.
+OLD_MAPPING = '            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
+NEW_MAPPING = '            valid = len(value) == len(saved) and all((key is old_key and item is old_item) or\n                (same(key, old_key) and same(item, old_item))\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
+MAPPING_BASELINE_SHA256 = 'fc305aaf82b26d3175a69ee02aa4bc9376ce820f9f6217bd243e13b54e49dcfc'
+
+
+def mapping_identity_preimage(raw):
+    insist(type(raw) is bytes, "MAPPING_IDENTITY_INPUT")
+    source = guarded_require_preimage(raw).decode("utf-8")
+    insist(source.count(NEW_MAPPING) == 1 and OLD_MAPPING not in source, "MAPPING_IDENTITY_DELTA")
+    original = source.replace(NEW_MAPPING, OLD_MAPPING)
+    insist(sha(original.encode("utf-8")) == MAPPING_BASELINE_SHA256, "MAPPING_IDENTITY_WHOLE_E4_PREIMAGE")
+    return original.encode("utf-8")
+
+
+class Sources:
+    def __init__(self, root, own_path, baseline=None):
+        self.paths = {name: root / "scripts" / name for name in (MAIN_NAME, *SOURCE_PINS)}
+        self.raw = {name: read_public(path) for name, path in self.paths.items()}
+        for name, expected in SOURCE_PINS.items():
+            comparison = (before_child_custody_preimage(self.raw[name]) if name == CUSTODY_NAME
+                else self.raw[name])
+            insist(sha(comparison) == expected, "UNCHANGED_PURE_DEPENDENCY:" + name)
+        self.text = {name: raw.decode("utf-8") for name, raw in self.raw.items()}
+        self.pins = {"candidate": sha(self.raw[MAIN_NAME]), "controls": sha(read_public(own_path)),
+            "custody": sha(self.raw[CUSTODY_NAME]), "baseline": BFC7_SHA256,
+            "historicalPredicateBaseline": BASELINE_SHA256,
+            "pureDependencies": {name: sha(self.raw[name]) for name in SOURCE_PINS},
+            "pureDependencyPreimages": dict(SOURCE_PINS),
+            "firstCatchCustodyComparisonPreimage": "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0"}
+        self.cache = {}
+        self.old_node, old_fragment = selected(OLD_CHECKER, "<independent6006-history>", "_check_history")
+        insist(sha(old_fragment.encode("utf-8")) == OLD_CHECKER_SHA256, "INDEPENDENT_OLD_PREDICATE_PIN")
+        candidate, fragment = self.function(MAIN_NAME, "_check_history")
+        expected_source = OLD_CHECKER.replace(OLD_SEQUENCE, NEW_SEQUENCE).replace(OLD_MAPPING, NEW_MAPPING)
+        for before, after in _HISTORY_REQUIRE_CHANGES:
+            expected_source = expected_source.replace(before.decode("utf-8"), after.decode("utf-8"))
+        expected, _ = selected(expected_source, "<approved-history-predicate-and-guarded-requires>", "_check_history")
+        insist(ast.dump(candidate) == ast.dump(expected), "ONLY_APPROVED_PREDICATE_AST")
+        original_builder, original_fragment = selected(OLD_BUILDER, "<independent-bfc7-builder>", "_history_graph")
+        insist(sha(original_fragment.encode("utf-8")) == BUILDER_SHA256, "INDEPENDENT_BFC7_BUILDER_PIN")
+        builder_node, builder = self.function(MAIN_NAME, "_history_graph")
+        expected_builder, _ = selected(OLD_BUILDER.replace(OLD_BUILDER_SEQUENCE, NEW_BUILDER_SEQUENCE),
+            "<reviewed-exact-tuple-elision>", "_history_graph")
+        insist(ast.dump(builder_node) == ast.dump(expected_builder), "ONLY_APPROVED_BUILDER_AST")
+        # Exact two-site52a preimage precedes the older mapping/builder proofs.
+        # Runtime candidate still uses actual source; legacy measure stays predecessor-only.
+        self.guard_predecessor_node, _ = selected(guarded_require_preimage(self.raw[MAIN_NAME]).decode("utf-8"),
+            "<exact52a-unguarded-history>", "_check_history")
+        mapping_preimage = mapping_identity_preimage(self.raw[MAIN_NAME]).decode("utf-8")
+        _, mapping_fragment = selected(mapping_preimage, "<exact-e4-preimage>", "_check_history")
+        historical_builder, _ = selected(mapping_preimage, "<exact-e4-preimage>", "_history_graph")
+        lines = mapping_preimage.splitlines(keepends=True)
+        predecessor = "".join(lines[:historical_builder.lineno - 1]) + OLD_BUILDER + "".join(lines[historical_builder.end_lineno:])
+        insist(sha(predecessor.encode("utf-8")) == BFC7_SHA256, "ALL_OTHER_MAIN_SOURCE_EXACT_BFC7")
+        predecessor_node, predecessor_fragment = selected(predecessor, "<exact-bfc7-preimage>", "_check_history")
+        insist(predecessor_fragment == mapping_fragment, "BFC7_CHECKER_BYTES_UNCHANGED")
+        # Preserve the historical6006 admission too; no old result is relabelled
+        # as execution of this new builder or as a hosted qualification.
+        lines = predecessor.splitlines(keepends=True)
+        inverse = "".join(lines[:predecessor_node.lineno - 1]) + OLD_CHECKER + "".join(lines[predecessor_node.end_lineno:])
+        insist(sha(inverse.encode("utf-8")) == BASELINE_SHA256, "HISTORICAL_OTHER_SOURCE_EXACT6006")
+        self.pins["oldChecker"] = OLD_CHECKER_SHA256
+        self.pins["candidateChecker"] = sha(fragment.encode("utf-8"))
+        self.pins["builder"] = BUILDER_SHA256
+        self.pins["candidateBuilder"] = sha(builder.encode("utf-8"))
+        self.baseline_node = self.old_node
+        self.baseline_filename = "<independent6006-history>"
+        self.original_builder_node = original_builder
+        self.original_builder_filename = "<independent-bfc7-builder>"
+        self.predecessor_node = predecessor_node
+        self.predecessor_filename = "<exact-bfc7-preimage>"
+        if baseline is not None:
+            original = read_public(baseline)
+            insist(sha(original) == BFC7_SHA256, "EXPLICIT_FULL_BASELINE_BFC7_PIN")
+            source = original.decode("utf-8")
+            node, actual = selected(source, str(baseline), "_check_history")
+            insist(actual == predecessor_fragment, "ACTUAL_BFC7_CHECKER_BYTES")
+            original_builder, actual_builder = selected(source, str(baseline), "_history_graph")
+            insist(actual_builder == OLD_BUILDER, "ACTUAL_BFC7_BUILDER_EQUALS_INDEPENDENT_PREIMAGE")
+            self.predecessor_node, self.predecessor_filename = node, str(baseline)
+            self.original_builder_node, self.original_builder_filename = original_builder, str(baseline)
+
+    def function(self, source, name):
+        key = source, name
+        if key not in self.cache:
+            self.cache[key] = selected(self.text[source], str(self.paths[source]), name)
+        return self.cache[key]
+
+    def bind(self, source, name, environment):
+        return compile_function(self.function(source, name)[0], str(self.paths[source]), environment)
+
+
+RECORD_NAMES = (
+    "_ReadmissionReturn", "_ReadmissionBinding", "_ReadmissionClaim", "_PreparationBinding",
+    "_OriginalPreparation", "_OriginalServiceJobAdmission", "_EntryWindowBinding", "_ReadmissionWindow",
+    "SourceReturn", "Owner", "OriginalPhase", "Fence", "Reading", "ClockIdentity",
+    "InitialBootstrapIdentity", "BootstrapMatch", "_AuthorityReturn", "_AuthorityState", "_RecipientRoster",
+    "_RecipientNativeReturn", "_RecipientValidationReturn", "_RecipientState", "_RecipientCryptoOriginals")
+
+
+class Runtime:
+    def __init__(self, sources, root=None, *, original_builder=False):
+        self.records = {name: type(name, (), {}) for name in RECORD_NAMES}
+        identity_require = sources.bind("hosted_test_identity.py", "require", {"AdmissionError": AdmissionError})
+        identity = SimpleNamespace(require=identity_require)
+        self.require = sources.bind(MAIN_NAME, "require", {"I": identity})
+        query = {"QueryError": QueryError, "re": re}
+        sources.bind("hosted_test_query.py", "require", query)
+        component = sources.bind("hosted_test_query.py", "_component", query)
+        wire = {"BudgetError": BudgetError, "json": json, "RECORD_LIMIT": 2 * 1024 * 1024}
+        sources.bind("hosted_full_job_budget.py", "require", wire)
+        self.encoded = sources.bind("hosted_full_job_budget.py", "encoded", wire)
+        self.environment = dict(self.records, require=self.require, ROOT=Path("MODEL_ROOT") if root is None else root,
+            native=SimpleNamespace(Owner=self.records["Owner"], OriginalPhase=self.records["OriginalPhase"]),
+            O=SimpleNamespace(Fence=self.records["Fence"], clocks=SimpleNamespace(
+                Reading=self.records["Reading"], ClockIdentity=self.records["ClockIdentity"])),
+            initial_identity=SimpleNamespace(InitialBootstrapIdentity=self.records["InitialBootstrapIdentity"]),
+            acquisition=SimpleNamespace(stages=SimpleNamespace(BootstrapMatch=self.records["BootstrapMatch"])))
+        self.original_graph = compile_function(sources.original_builder_node,
+            sources.original_builder_filename, dict(self.environment))
+        self.current_graph = sources.bind(MAIN_NAME, "_history_graph", dict(self.environment))
+        self.graph = self.original_graph if original_builder else self.current_graph
+        self.candidate = sources.bind(MAIN_NAME, "_check_history", dict(self.environment))
+        self.guard_predecessor = compile_function(sources.guard_predecessor_node,
+            "<exact52a-unguarded-history>", dict(self.environment))
+        self.baseline = compile_function(sources.baseline_node, sources.baseline_filename, dict(self.environment))
+        self.predecessor = compile_function(sources.predecessor_node, sources.predecessor_filename, dict(self.environment))
+        custody = {"I": identity, "MAX_MEMBERS": 10000, "Q": SimpleNamespace(_component=component),
+            "O": SimpleNamespace(encoded=self.encoded), "stat": stat}
+        sources.bind(CUSTODY_NAME, "require", custody)
+        # Only the POSIX gate's supplied eight-integer stamps are modeled.
+        # Selecting Windows metadata without its genuine class must fail.
+        custody["native"] = SimpleNamespace(windows=SimpleNamespace(FileInfo=type("UnusedWindowsFileInfo", (), {})))
+        self.metadata = sources.bind(CUSTODY_NAME, "_snapshot_metadata", custody)
+
+    def record(self, name, **fields):
+        record = self.records[name]()
+        record.__dict__.update(fields)
+        return record
+
+
+class FalseyFailure(RuntimeError):
+    def __bool__(self):
+        return False
+
+
+class ModelPath:
+    def __init__(self, name, events=None):
+        self.name, self.events, self.hook = name, events, None
+        self.values = {"str": name, "parts": (name,), "drive": "", "root": ""}
+
+    def take(self, field):
+        if self.events is not None:
+            self.events.append(("path", self.name, field))
+        if self.hook is not None:
+            self.hook(field)
+        return self.values[field]
+
+    def __str__(self):
+        return self.take("str")
+
+    parts = property(lambda self: self.take("parts"))
+    drive = property(lambda self: self.take("drive"))
+    root = property(lambda self: self.take("root"))
+
+
+def path_node(path):
+    return path, type(path), "path", (path.name, (path.name,), "", "")
+
+
+def observed(checker, nodes, events):
+    original = checker.__globals__["require"]
+
+    def require(value, code):
+        events.append(("require", bool(value), code))
+        return original(value, code)
+
+    def visits():
+        for ordinal, node in enumerate(nodes):
+            events.append(("node", ordinal))
+            yield node
+
+    checker.__globals__["require"] = require
+    try:
+        result = checker(visits())
+        return ("return", result), None
+    except BaseException as error:
+        return ("raise", type(error).__name__, error.args), error
+    finally:
+        checker.__globals__["require"] = original
+
+
+def history_schedule_trace(events, *, guarded):
+    """Only two AST-pinned success require calls disappear; no data/failure event does."""
+    result = []
+    for event in events:
+        if event[0] == "require":
+            insist(type(event) is tuple and len(event) == 3 and type(event[1]) is bool and
+                type(event[2]) is str and event[2] == "RECIPIENT_HISTORY_CHANGED", "HISTORY_REQUIRE_TRACE")
+            insist(not guarded or event[1] is False, "HISTORY_GUARDED_SUCCESS_CALL")
+            if event[1] is True:
+                continue  # Historical internal success call, not a data callback.
+        result.append(event)
+    return result
+
+
+def stamp(ordinal, directory=False, size=3, device=700):
+    return (device, ordinal, (stat.S_IFDIR | 0o700) if directory else (stat.S_IFREG | 0o600),
+        1, 1000, 0 if directory else size, 1700000000000000000 + ordinal, 1700000000000000000 + ordinal)
+
+
+def gate_entries():
+    """281/58 names from the maintained gate grammar, without original bytes."""
+    directories = {"", "control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries"}
+    files = {"prelude.json", "context.json", "initial-result.json", "service/child-result.json"}
+    phase = ("start.json", "baseline.json", "result.json", "native-start.json", "stdout.log", "stderr.log")
+    files.update("service/" + name for name in phase)
+    source_keys = ("base_policy_entry", "ancestry_raw", "candidate_policy_entry", "candidate_policy_raw")
+    original_keys = ("event", *source_keys, "attempt", "jobs", "approvals", "comment", "environment", "branches",
+        "main", "reviewed_ref", "observation", "match")
+    for group, count in (("source-before", 12), ("acquisition-queries", 24), ("source-after", 12)):
+        directories.add(group + "/query-home")
+        files.update((group + "/owner.json", group + "/session-result.json"))
+        if group != "acquisition-queries":
+            files.add(group + "/source-return.json")
+        for key in original_keys if group == "acquisition-queries" else source_keys:
+            files.add(group + "/" + key + ".bin")
+        for number in range(count):
+            query = group + "/query-" + format(number + 1, "032x")
+            directories.add(query)
+            files.update(query + "/" + name for name in ("start.json", "baseline.json", "result.json", "stdout.log", "stderr.log"))
+    insist(len(files) == 281 and len(directories) == 58 and not files.intersection(directories), "FIXED_GATE281_58")
+    entries = {name: stamp(number + 1, name in directories, 0 if name.endswith(".log") else 3)
+        for number, name in enumerate(sorted(files | directories))}
+    return entries, tuple(sorted(files)), tuple(sorted(directories))
+
+
+def model_bank(runtime):
+    """Actual snapshot/graph compositions; no uniform all-tuples microbenchmark.
+
+    Primary gate:281 files/58 directories, separate handoff, then282 copied
+    members. Retain snapshot.__dict__ graphs exactly as retain_snapshot does,
+    including the original graph-of-graph. A second independent282-member
+    destination snapshot models the existing PRIMARY reread boundary. Mutable
+    decoded copy-map rows and a closed Owner-shaped graph remain in the bank.
+    Each graph is visited once per fixed modeled guard pass; this is NOT an
+    inferred count/weight of actual hosted callbacks or resources.
+    """
+    entries, files, directories = gate_entries()
+    snapshots, graphs = [], []
+
+    def snapshot(name, values):
+        path = Path("MODEL_CUSTODY") / name
+        data = {"group": name, "path": path, "directory": object(), "pin": values[""][:2], "native": None,
+            "original": values, "metadata": runtime.metadata(values, False),
+            "graph": runtime.graph(values, path), "windows": False}
+        snapshots.append(data)
+        graphs.append((name, runtime.graph(data)))
+        return data
+
+    primary = snapshot("primary-source", entries)
+    handoff = snapshot("primary-handoff", {"": stamp(1, True, device=701),
+        "gate-originals.json": stamp(2, device=701)})
+    copied_names = tuple("member-" + str(number).zfill(5) + ".bin" for number in range(282))
+    copied = snapshot("copied-primary-original", {name: stamp(number + 1, not name, device=702)
+        for number, name in enumerate(("", *copied_names))})
+    snapshot("copied-primary-reread", {name: stamp(number + 1, not name, device=702)
+        for number, name in enumerate(("", *copied_names))})
+    file_rows = tuple(("P/" + name, 4096, entries[name][5], "0" * 64, "ORIGINAL_PRIMARY_DECLARATION") for name in files)
+    directory_rows = tuple(("P" + ("/" + name if name else ""), entries[name][:2], "ORIGINAL_DECLARED_DIRECTORY")
+        for name in directories)
+    primary_fields = {"kind": "gate", "role": "linux-x64", "handoff_raw": b"SUPPLIED_HANDOFF_NOT_A_STEP",
+        "inventory_raw": b"SUPPLIED_INDEX", "roots": (("P", primary["path"]),), "directories": directory_rows,
+        "files": file_rows, "embedded": (), "result_sha256": "0" * 64}
+    copy_map = {"members": [{"member": name, "bytes": 3, "sha256": "0" * 64, "origin": "PRIMARY",
+        "destinationWriteMetadata": {"device": 702, "inode": number + 2, "size": 3,
+            "mtime_ns": 1700000000000000000 + number + 2, "ctime_ns": 1700000000000000000 + number + 2}}
+        for number, name in enumerate(copied_names)],
+        "sourceMetadata": [[name, directory, list(identity), count, json.loads(raw)]
+            for name, directory, identity, count, raw in primary["metadata"]],
+        "handoffMetadata": [[name, directory, list(identity), count, json.loads(raw)]
+            for name, directory, identity, count, raw in handoff["metadata"]],
+        "destinationMetadata": [[name, directory, list(identity), count, json.loads(raw)]
+            for name, directory, identity, count, raw in copied["metadata"]],
+        "memberCount": 282, "exportSaveAuthority": False}
+    graphs.append(("primary-record-and-decoded-copy-metadata", runtime.graph(primary_fields, copy_map)))
+    clock = runtime.record("ClockIdentity", role="linux-x64", domain="MODEL_RAW", ticks_per_second=1000000000)
+    first = runtime.record("Reading", clock=clock, nanoseconds=1000000000)
+    cancelled = lambda: (_ for _ in ()).throw(AssertionError("CLOSED_CALLBACK_MUST_NOT_RUN"))
+    fence = runtime.record("Fence", clock=clock, raw=b"SUPPLIED_CLOSED_FENCE", first=1000000000,
+        work=2000000000, final=3000000000, last=1500000000, cancelled=cancelled)
+    rows = [{"label": "directory", "owner": object(), "attempted": True, "closed": True} for _ in range(7)]
+    sources = {group: runtime.record("SourceReturn", records=tuple((key, b"SUPPLIED") for key in
+        ("base_policy_entry", "ancestry_raw", "candidate_policy_entry", "candidate_policy_raw")),
+        session=b"SUPPLIED_QUERY_SESSION", raw=b"SUPPLIED_SOURCE_RETURN") for group in ("source-before", "source-after")}
+    owner = runtime.record("Owner", local_end=3.0, fence=fence, work_limit=None, final_limit=None,
+        first=first, early_last=first.nanoseconds, cancelled=cancelled, resources=rows, errors=[], original=None,
+        unknown=False, closed=True, phase_originals=runtime.record("OriginalPhase", context=b"SUPPLIED_CONTEXT",
+            records=tuple((name, b"SUPPLIED") for name in ("start.json", "baseline.json", "result.json",
+                "native-start.json", "stdout.log", "stderr.log"))), admissions={}, entry_original=None,
+        entry_close_attempted=False, entry_close_original=None, entry_close_snapshot=None, initial_sources=sources)
+    graphs.append(("closed-owner-records", runtime.graph(owner)))
+    return tuple(graphs), {"files": len(files), "directories": len(directories), "copiedPrimaryFiles": 282,
+        "closedOwnerRows": 7, "role": "SUPPLIED_POSIX_GATE_MODEL", "snapshots": len(snapshots)}, rows
+
+
+SOURCES = None
+
+
+class HistoryIdentityControls(unittest.TestCase):
+
+    def test_first_catch_supplier_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
+        raw = SOURCES.raw[CUSTODY_NAME]
+        # Missing, duplicate, moved, pre-coalescing, partial and outside edits must still refuse.
+        guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+        removed_guard = raw.replace(guard_after, b"", 1)
+        for index, changed in enumerate((removed_guard, raw.replace(guard_after, guard_after * 2, 1),
+                removed_guard + guard_after, raw.replace(guard_after, guard_before, 1),
+                raw.replace(guard_after, guard_after.replace(b"anchor.last", b"anchor.frontier"), 1), raw + b"\n")):
+            with self.subTest(guardSchedulingCase=index), self.assertRaises(AssertionError) as caught:
+                before_child_custody_preimage(changed)
+            self.assertTrue(str(caught.exception).startswith("BEFORE_CHILD_CUSTODY_"))
+        restored_555 = before_clock_diagnostic_custody_preimage(raw)
+        self.assertEqual(hashlib.sha256(restored_555).hexdigest(),
+            "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25")
+        self.assertNotEqual(raw, restored_555)
+        for pair_index, (before, after) in enumerate(_BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES):
+            removed = raw.replace(after, before, 1)
+            invalid = (removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # changed exact context\n", 1),
+                raw + b"# unrelated before-clock diagnostic edit\n")
+            for index, changed in enumerate(invalid):
+                with self.subTest(beforeClockPair=pair_index, beforeClockCase=index), \
+                        self.assertRaises(AssertionError):
+                    before_clock_diagnostic_custody_preimage(changed)
+        restored_6d = authority_proof_custody_preimage(raw)
+        self.assertEqual(hashlib.sha256(restored_6d).hexdigest(),
+            "74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098")
+        self.assertNotEqual(raw, restored_6d)
+        for pair_index, (before, after) in enumerate(_AUTHORITY_PROOF_CUSTODY_INVERSES):
+            removed = raw.replace(after, before, 1)
+            invalid = (removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # changed exact context\n", 1),
+                raw + b"# unrelated authority-proof edit\n")
+            for index, changed in enumerate(invalid):
+                with self.subTest(authorityProofPair=pair_index, authorityProofCase=index), \
+                        self.assertRaises(AssertionError):
+                    authority_proof_custody_preimage(changed)
+        restored_72be = immutable_input_custody_preimage(raw)
+        self.assertEqual(hashlib.sha256(restored_72be).hexdigest(),
+            "7dce9f3ca357518b6ee647fe3e5419ff383e8293f334ea790cab6e0657a9899b")
+        self.assertNotEqual(raw, restored_72be)
+        for before, after in _IMMUTABLE_INPUT_CUSTODY_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid = (removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # changed exact context\n", 1),
+                raw + b"# unrelated immutable-input edit\n")
+            for index, changed in enumerate(invalid):
+                with self.subTest(immutableInputCase=index), self.assertRaises(AssertionError):
+                    immutable_input_custody_preimage(changed)
+        for changed in (raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1),
+                raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, _EXPORT_PROCESS_CUSTODY_ROW * 2, 1),
+                raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1) + _EXPORT_PROCESS_CUSTODY_ROW,
+                raw.replace(b'"AUDIT_PROCESS"', b'"AUDIT_OTHER"', 1), raw + b"# unrelated\n"):
+            with self.assertRaises(AssertionError):
+                export_process_custody_preimage(changed)
+        original = first_catch_custody_preimage(raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(),
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0")
+        self.assertNotEqual(raw, original)
+        invalid = [raw + b"# unrelated source edit\n"]
+        for before, after in _FIRST_CATCH_CUSTODY_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid.extend((removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # mutated context\n", 1)))
+        for index, changed in enumerate(invalid):
+            with self.subTest(firstCatchCase=index), self.assertRaises(AssertionError):
+                first_catch_custody_preimage(changed)
+
+    def test_before_child_supplier_admission_is_exact_and_actual_functions_remain_current(self):
+        raw = SOURCES.raw[CUSTODY_NAME]
+        original = before_child_custody_preimage(raw)
+        self.assertEqual(sha(original), SOURCE_PINS[CUSTODY_NAME])
+        self.assertNotEqual(raw, original)
+        self.assertEqual(SOURCES.text[CUSTODY_NAME].encode("utf-8"), raw)
+        self.assertEqual(SOURCES.pins["pureDependencies"][CUSTODY_NAME], sha(raw))
+        self.assertEqual(SOURCES.pins["pureDependencyPreimages"], SOURCE_PINS)
+        for name in ("require", "_snapshot_metadata"):
+            actual_node, actual_fragment = SOURCES.function(CUSTODY_NAME, name)
+            preimage_node, preimage_fragment = selected(original.decode("utf-8"), "<comparison-only>", name)
+            self.assertEqual(actual_fragment, preimage_fragment)
+            self.assertEqual(ast.dump(actual_node), ast.dump(preimage_node))
+        block = _BEFORE_CHILD_CUSTODY_ADDITION
+        removed = raw.replace(block, b"", 1)
+        invalid = (removed, raw.replace(block, block + block, 1), removed + block,
+            raw.replace(block, block.replace(b"<= 2048", b"<= 2049"), 1), raw + b"\n")
+        for index, changed in enumerate(invalid):
+            with self.subTest(case=index), self.assertRaises(AssertionError) as caught:
+                before_child_custody_preimage(changed)
+            self.assertTrue(str(caught.exception).startswith("BEFORE_CHILD_CUSTODY_"))
+
+    def equivalent(self, factory, *, accepts, original_error=None):
+        outcomes = []
+        for label in ("baseline", "candidate"):
+            runtime, events = Runtime(SOURCES), []
+            nodes = factory(runtime, events)
+            result, error = observed(getattr(runtime, label), nodes, events)
+            self.assertEqual(result[0], "return" if accepts else "raise")
+            if original_error is not None:
+                self.assertIs(error, original_error)
+            outcomes.append((result, events))
+        self.assertEqual(outcomes[0][0], outcomes[1][0])
+        self.assertEqual(history_schedule_trace(outcomes[0][1], guarded=False),
+            history_schedule_trace(outcomes[1][1], guarded=True))
+        return outcomes[0]  # Historical raw trace, not current helper-call-count evidence.
+
+    def test_01_builder_tuple_identity_scalars_nan_and_opaque_no_hooks(self):
+        def factory(runtime, events):
+            class Opaque:
+                def __eq__(self, other):
+                    raise AssertionError("OPAQUE_EQUALITY_MUST_NOT_RUN")
+                def __call__(self):
+                    raise AssertionError("OPAQUE_CALLBACK_MUST_NOT_RUN")
+            value = ((), None, False, 1, 1.0, "text", b"bytes", float("nan"), Opaque())
+            original = runtime.original_graph(value)
+            self.assertIs(original[0][0], value)
+            for item, kind, mode, saved in original:
+                if kind is tuple:
+                    self.assertEqual(mode, "sequence")
+                    self.assertIs(item, saved)
+            nodes = runtime.graph(value)
+            self.assertEqual(len(nodes), 1)
+            self.assertIs(nodes[0][0], value[-1])
+            self.assertEqual(nodes[0][2], "opaque")
+            return nodes
+        result, events = self.equivalent(factory, accepts=True)
+        self.assertEqual(result, ("return", None))
+        self.assertEqual(sum(event[0] == "require" for event in events),
+            2 * sum(event[0] == "node" for event in events))
+
+    def test_02_nonidentical_manual_tuple_old_fallback_success(self):
+        def factory(runtime, events):
+            opaque = object()
+            value, saved = tuple([1000, "same", opaque]), tuple([int("1000"), "sa" + "me", opaque])
+            self.assertIsNot(value, saved)
+            return ((value, tuple, "sequence", saved), ((), tuple, "sequence", ()),
+                ((1, 2), tuple, "sequence", [1, 2]))
+        self.equivalent(factory, accepts=True)
+
+    def test_03_manual_tuple_differences_type_nan_and_reference_refusals(self):
+        for actual, saved in (([True], [1]), ([1], [1.0]), ([1], [2]), ([1], []),
+                ([float("nan")], [float("nan")]), ([[]], [[]]), ([{}], [{}]), ([object()], [object()])):
+            with self.subTest(actual_type=type(actual[0]).__name__, saved_length=len(saved)):
+                self.equivalent(lambda runtime, events: ((tuple(actual), tuple, "sequence", tuple(saved)),), accepts=False)
+
+    def test_04_mutable_list_length_order_equal_replacement_and_scalar_aliases(self):
+        for change in ("append", "delete", "order", "reference", "bool", "float"):
+            def factory(runtime, events):
+                value = [1, 2, {"x": 1}]
+                nodes = runtime.graph(value)
+                if change == "append":
+                    value.append(3)
+                elif change == "delete":
+                    value.pop()
+                elif change == "order":
+                    value[:2] = [2, 1]
+                elif change == "reference":
+                    value[2] = {"x": 1}
+                else:
+                    value[0] = True if change == "bool" else 1.0
+                return nodes
+            with self.subTest(change=change):
+                self.equivalent(factory, accepts=False)
+
+    def test_05_mapping_length_order_references_and_key_type_refusals(self):
+        for change in ("append", "delete", "order", "reference", "keytype", "valuetype"):
+            def factory(runtime, events):
+                value = {1: [], "two": 2}
+                nodes = runtime.graph(value)
+                if change == "append":
+                    value["three"] = 3
+                elif change == "delete":
+                    del value["two"]
+                elif change == "order":
+                    value[1] = value.pop(1)
+                elif change == "reference":
+                    value[1] = []
+                elif change == "keytype":
+                    first = value.pop(1)
+                    value.clear()
+                    value.update({True: first, "two": 2})
+                else:
+                    value["two"] = 2.0
+                return nodes
+            with self.subTest(change=change):
+                self.equivalent(factory, accepts=False)
+
+    def test_06_tuple_mutable_descendants_rechecked_on_every_call(self):
+        for mutable in ("dict", "list"):
+            def factory(runtime, events):
+                descendant = {"value": 1} if mutable == "dict" else [1]
+                nodes = runtime.graph(((descendant,),))
+                runtime.baseline(nodes)
+                runtime.candidate(nodes)
+                descendant["value" if mutable == "dict" else 0] = True
+                return nodes
+            with self.subTest(mutable=mutable):
+                self.equivalent(factory, accepts=False)
+
+    def test_07_known_record_dictionary_identity_and_field_descendants(self):
+        for change in ("dictionary", "scalar", "reference", "nested"):
+            def factory(runtime, events):
+                record = runtime.record("SourceReturn", records=[1], session=b"session", raw=b"raw")
+                nodes = runtime.graph((record,))
+                self.assertTrue(any(node[2] == "record" for node in nodes))
+                if change == "dictionary":
+                    record.__dict__ = dict(record.__dict__)
+                elif change == "scalar":
+                    record.raw = "raw"
+                elif change == "reference":
+                    record.records = [1]
+                else:
+                    record.records[0] = True
+                return nodes
+            with self.subTest(change=change):
+                self.equivalent(factory, accepts=False)
+
+    def test_08_path_descendants_all_fields_and_type_before_accessors(self):
+        for field in (None, "str", "parts", "drive", "root", "type"):
+            def factory(runtime, events):
+                path = ModelPath("model", events)
+                runtime.graph.__globals__["ROOT"] = ModelPath("root")
+                nodes = runtime.graph((path,))
+                events.clear()
+                if field == "type":
+                    nodes = ((path, str, "path", nodes[0][3]),)
+                elif field is not None:
+                    path.values[field] = ("changed",) if field == "parts" else "changed"
+                return nodes
+            with self.subTest(field=field):
+                _, events = self.equivalent(factory, accepts=field is None)
+                self.assertEqual([event[-1] for event in events if event[0] == "path"],
+                    [] if field == "type" else ["str", "parts", "drive", "root"])
+
+    def test_09_tuple_subclass_opaque_and_manual_custom_fallback_hooks(self):
+        for manual in (False, True):
+            def factory(runtime, events):
+                class TupleSubclass(tuple):
+                    def __len__(self):
+                        events.append(("custom", "len"))
+                        return super().__len__()
+                    def __iter__(self):
+                        events.append(("custom", "iter"))
+                        return super().__iter__()
+                value = TupleSubclass((1, 2))
+                nodes = ((value, type(value), "sequence", value),) if manual else runtime.graph(value)
+                self.assertEqual(events, [])
+                return nodes
+            with self.subTest(manual=manual):
+                _, events = self.equivalent(factory, accepts=True)
+                self.assertEqual([event[-1] for event in events if event[0] == "custom"],
+                    ["len", "len", "iter", "iter"] if manual else [])
+
+    def test_10_cycles_shared_references_node_order_and_manual_duplicates(self):
+        def factory(runtime, events):
+            shared = []
+            root = (shared, shared)
+            shared.append(root)
+            nodes = runtime.graph(root)
+            self.assertEqual(len(nodes), 1)
+            self.assertIs(nodes[0][0], shared)
+            left, right = ModelPath("left", events), ModelPath("right", events)
+            return (*nodes, path_node(left), path_node(right), path_node(left))
+        _, events = self.equivalent(factory, accepts=True)
+        self.assertEqual([event[1] for event in events if event[0] == "node"], list(range(4)))
+        self.assertEqual([event[1] for event in events if event[0] == "path"], ["left"] * 4 + ["right"] * 4 + ["left"] * 4)
+
+    def test_11_earlier_boundary_mutation_of_later_tuple_descendant_not_skipped(self):
+        def factory(runtime, events):
+            descendant, path = [1], ModelPath("earlier", events)
+            runtime.graph.__globals__["ROOT"] = ModelPath("root")
+            nodes = runtime.graph((descendant, path))
+            events.clear()
+            path.hook = lambda field: descendant.__setitem__(0, True) if field == "str" else None
+            return nodes
+        _, events = self.equivalent(factory, accepts=False)
+        self.assertEqual([event[1] for event in events if event[0] == "node"], [0, 1])
+        self.assertEqual(events[-1], ("require", False, "RECIPIENT_HISTORY_CHANGED"))
+
+    def test_12_invalid_modes_types_and_malformed_manual_nodes(self):
+        cases = (
+            ((object(), object, "INVALID", None),),
+            (([], tuple, "sequence", ()),),
+            (((), tuple, "sequence", None),),
+            ((),),
+            ((object(), object, "opaque", None, None),),
+        )
+        for nodes in cases:
+            with self.subTest(shape=tuple(len(node) for node in nodes)):
+                self.equivalent(lambda runtime, events: nodes, accepts=False)
+
+    def test_13_falsey_original_accessor_and_sequence_exceptions_preserved(self):
+        failure = FalseyFailure("SUPPLIED_FALSEY_ORIGINAL")
+        for site in ("path", "length", "iteration"):
+            def factory(runtime, events):
+                def fail():
+                    events.append(("original-failure", site))
+                    raise failure
+                if site == "path":
+                    path = ModelPath("falsey", events)
+                    path.hook = lambda field: fail()
+                    return (path_node(path),)
+                class Sequence:
+                    def __len__(self):
+                        return fail() if site == "length" else 1
+                    def __iter__(self):
+                        return fail()
+                value = Sequence()
+                return ((value, Sequence, "sequence", (1,)),)
+            with self.subTest(site=site):
+                self.equivalent(factory, accepts=False, original_error=failure)
+
+    def test_14_builder_keys_exact_node_limit_and_node_schema(self):
+        runtime = Runtime(SOURCES)
+        with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_KEY"):
+            runtime.graph({object(): 1})
+        values = [[] for _ in range(9999)]
+        nodes = runtime.graph(values)
+        self.assertEqual(len(nodes), 10000)
+        self.assertTrue(all(type(node) is tuple and len(node) == 4 and node[1] is list and
+            node[2] == "sequence" and type(node[3]) is tuple for node in nodes))
+        values.append([])
+        with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_LIMIT"):
+            runtime.graph(values)
+
+    def test_15_maintained_metadata_model_shape_and_closed_mutable_negative(self):
+        runtime = Runtime(SOURCES)
+        bank, shape, rows = model_bank(runtime)
+        self.assertEqual((shape["files"], shape["directories"], shape["copiedPrimaryFiles"]), (281, 58, 282))
+        self.assertEqual(len(bank), 6)
+        modes = {node[2] for _, nodes in bank for node in nodes}
+        self.assertEqual(modes, {"mapping", "sequence", "record", "path", "opaque"})
+        for _, nodes in bank:
+            runtime.baseline(nodes)
+            runtime.candidate(nodes)
+        rows[-1]["closed"] = False
+        for checker in (runtime.baseline, runtime.candidate):
+            with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_CHANGED"):
+                checker(bank[-1][1])
+        good = {"": stamp(1, True), "file": stamp(2)}
+        self.assertEqual(len(runtime.metadata(good, False)), 2)
+        for entries, windows in ((good, 0), ({"": stamp(1, True), "file": stamp(1)}, False),
+                ({"": stamp(1, True), "file": (700, 2, stat.S_IFREG, 1, 1000, True, 1, 1)}, False)):
+            with self.assertRaises(AdmissionError):
+                runtime.metadata(entries, windows)
+
+
+
+class MappingIdentityControls(unittest.TestCase):
+
+    def equivalent(self, factory, *, accepts, original_error=None):
+        outcomes = []
+        for label in ("predecessor", "candidate"):
+            runtime, events = Runtime(SOURCES), []
+            nodes = factory(runtime, events)
+            result, error = observed(getattr(runtime, label), nodes, events)
+            self.assertEqual(result[0], "return" if accepts else "raise")
+            if original_error is not None:
+                self.assertIs(error, original_error)
+            outcomes.append((result, events))
+        self.assertEqual(outcomes[0][0], outcomes[1][0])
+        self.assertEqual(history_schedule_trace(outcomes[0][1], guarded=False),
+            history_schedule_trace(outcomes[1][1], guarded=True))
+        return outcomes[0]  # Historical raw trace, not current helper-call-count evidence.
+
+    def test_mapping_inverse_is_exact_and_legacy_measure_stays_builder_only(self):
+        raw = SOURCES.raw[MAIN_NAME]
+        self.assertEqual(sha(mapping_identity_preimage(raw)), MAPPING_BASELINE_SHA256)
+        old, new = OLD_MAPPING.encode("utf-8"), NEW_MAPPING.encode("utf-8")
+        removed = raw.replace(new, b"", 1)
+        for changed in (removed, raw.replace(new, new + new, 1), removed + new,
+                raw.replace(new, old, 1), raw.replace(new, new.replace(b"item is old_item", b"item == old_item"), 1), raw + b"\n"):
+            with self.subTest(sha=sha(changed)), self.assertRaisesRegex(AssertionError, "MAPPING_IDENTITY_"):
+                mapping_identity_preimage(changed)
+        own = read_public(Path(__file__).absolute()).decode("utf-8")
+        node, _ = selected(own, "<current-control-source>", "measure")
+        assignments = [item for item in ast.walk(node) if isinstance(item, ast.Assign) and
+            any(isinstance(target, ast.Name) and target.id == "checkers" for target in item.targets)]
+        self.assertEqual(len(assignments), 1)
+        self.assertIsInstance(assignments[0].value, ast.Dict)
+        self.assertEqual([value.attr for value in assignments[0].value.values], ["predecessor", "predecessor"])
+        self.assertNotEqual(ast.dump(SOURCES.predecessor_node), ast.dump(SOURCES.function(MAIN_NAME, "_check_history")[0]))
+
+    def test_mapping_identity_nan_and_equal_scalar_fallback(self):
+        def identities(runtime, events):
+            values = (None, True, 1000, 1.25, "synthetic", b"bytes", float("nan"), object())
+            value = {str(index): item for index, item in enumerate(values)}
+            return ((value, dict, "mapping", tuple(value.items())),)
+        self.equivalent(identities, accepts=True)
+        def equal_new(runtime, events):
+            values = (int("1000"), float("1.25"), "".join(("synthetic", "-value")), bytes(bytearray(b"synthetic")))
+            saved = (int("1000"), float("1.25"), "".join(("synthetic-", "value")), bytes(bytearray(b"synthetic")))
+            self.assertTrue(all(value is not original for value, original in zip(values, saved)))
+            value = {str(index): item for index, item in enumerate(values)}
+            return ((value, dict, "mapping", tuple((key, saved[int(key)]) for key in value)),)
+        self.equivalent(equal_new, accepts=True)
+        for actual, saved in ((True, 1), (1, 1.0), (float("nan"), float("nan")), (object(), object())):
+            with self.subTest(actual_type=type(actual).__name__):
+                self.equivalent(lambda runtime, events: (({"a": actual}, dict, "mapping", (("a", saved),)),), accepts=False)
+
+    def test_mapping_iteration_short_circuit_and_original_callback_failures(self):
+        original = FalseyFailure("mapping-original")
+        for mode in ("success", "length", "key", "item", "items-error", "iterator-error"):
+            def factory(runtime, events):
+                class Mapping(dict):
+                    def items(self):
+                        events.append(("items",))
+                        if mode == "items-error":
+                            raise original
+                        def entries():
+                            try:
+                                for key, value in dict.items(self):
+                                    events.append(("yield", key))
+                                    yield key, value
+                                    if mode == "iterator-error":
+                                        raise original
+                            finally:
+                                events.append(("iterator-finally",))
+                        return entries()
+                value = Mapping(a=1, b=2)
+                saved = (("a", 1), ("b", 2))
+                if mode == "length": saved = saved[:1]
+                elif mode == "key": saved = (("wrong", 1), ("b", 2))
+                elif mode == "item": saved = (("a", 99), ("b", 2))
+                return ((value, Mapping, "mapping", saved),)
+            with self.subTest(mode=mode):
+                _, events = self.equivalent(factory, accepts=mode == "success",
+                    original_error=original if mode.endswith("error") else None)
+                if mode == "length": self.assertFalse(any(event[0] == "items" for event in events))
+                if mode in ("key", "item", "iterator-error"):
+                    self.assertEqual([event for event in events if event[0] == "yield"], [("yield", "a")])
+
+    def test_mapping_nonscalar_fallback_retains_hooks_and_identity_skips_none(self):
+        original = FalseyFailure("mapping-type-membership")
+        for identical in (True, False):
+            def factory(runtime, events):
+                class Meta(type):
+                    def __eq__(cls, other):
+                        events.append(("type-equality",))
+                        raise original
+                class Opaque(metaclass=Meta):
+                    def __eq__(self, other):
+                        raise AssertionError("OPAQUE_VALUE_EQUALITY_NOT_ADMITTED")
+                value = Opaque()
+                saved = value if identical else Opaque()
+                return (({"a": value}, dict, "mapping", (("a", saved),)),)
+            with self.subTest(identical=identical):
+                _, events = self.equivalent(factory, accepts=identical,
+                    original_error=None if identical else original)
+                self.assertEqual(any(event[0] == "type-equality" for event in events), not identical)
+
+    def test_mapping_identity_parents_do_not_skip_later_mutable_descendants(self):
+        for callback in (False, True):
+            def factory(runtime, events):
+                child = {"value": 1}
+                parent = {"child": child}
+                nodes = [(parent, dict, "mapping", tuple(parent.items()))]
+                if callback:
+                    path = ModelPath("mapping-mutation", events)
+                    path.hook = lambda field: child.update(value=2) if field == "str" else None
+                    nodes.append(path_node(path))
+                saved = tuple(child.items())
+                nodes.append((child, dict, "mapping", saved))
+                if not callback: child["value"] = 2
+                return tuple(nodes)
+            with self.subTest(callback=callback):
+                _, events = self.equivalent(factory, accepts=False)
+                self.assertEqual(sum(event[0] == "node" for event in events), 3 if callback else 2)
+
+
+class GuardedRequireControls(unittest.TestCase):
+    """Current two-site scheduling with unwrapped trusted helpers for data callbacks."""
+
+    def equivalent(self, factory, *, accepts, original_error=None):
+        outcomes = []
+        for label in ("guard_predecessor", "candidate"):
+            runtime, events = Runtime(SOURCES), []
+            check = getattr(runtime, label)
+            nodes = factory(runtime, events, check)
+            def visits():
+                for ordinal, node in enumerate(nodes):
+                    events.append(("node", ordinal))
+                    yield node
+            error = None
+            try:
+                result = ("return", check(visits()))
+            except BaseException as caught:
+                error = caught
+                result = ("raise", type(caught).__name__, caught.args)
+            self.assertEqual(result[0], "return" if accepts else "raise")
+            if original_error is not None:
+                self.assertIs(error, original_error)
+            elif not accepts:
+                self.assertIsInstance(error, AdmissionError)
+                self.assertEqual(error.args, ("INITIAL_NATIVE_RECIPIENT_HISTORY_CHANGED",))
+            outcomes.append((result, events))
+        self.assertEqual(outcomes[0], outcomes[1])
+        return outcomes[0][1]
+
+    def truth_node(self, kind, events, truth):
+        if kind == "path":
+            class Comparison:
+                def __eq__(self, other):
+                    events.append(("comparison",))
+                    return truth
+            value = ModelPath("truth", events)
+            return value, ModelPath, "path", Comparison()
+        class Mode:
+            def __eq__(self, target):
+                events.append(("mode", target))
+                return truth if target == "opaque" else False
+        value = object()
+        return value, object, Mode(), None
+
+    def test_guarded_inverse_and_full_condition_ast_are_exact(self):
+        raw = SOURCES.raw[MAIN_NAME]
+        original = guarded_require_preimage(raw)
+        self.assertEqual(sha(original), _HISTORY_REQUIRE_BASELINE)
+        for before, after in _HISTORY_REQUIRE_CHANGES:
+            removed = raw.replace(after, b"", 1)
+            for changed in (removed, raw.replace(after, after + after, 1), removed + after,
+                    raw.replace(after, before, 1), raw.replace(after, after + b" ", 1), raw + b"\n"):
+                with self.subTest(sha=sha(changed)):
+                    self.assertNotEqual(changed, raw)
+                    with self.assertRaisesRegex(AssertionError, "MAPPING_IDENTITY_GUARDED_REQUIRE_"):
+                        guarded_require_preimage(changed)
+        old = SOURCES.guard_predecessor_node
+        new = SOURCES.function(MAIN_NAME, "_check_history")[0]
+        old_loop = next(node for node in old.body if isinstance(node, ast.For))
+        new_loop = next(node for node in new.body if isinstance(node, ast.For))
+        for position in (0, -1):
+            guarded = new_loop.body[position]
+            self.assertIsInstance(guarded, ast.If)
+            self.assertIsInstance(guarded.test, ast.UnaryOp)
+            self.assertIsInstance(guarded.test.op, ast.Not)
+            self.assertEqual(ast.dump(guarded.test.operand), ast.dump(old_loop.body[position].value.args[0]))
+            self.assertEqual(len(guarded.body), 1)
+            self.assertEqual(ast.dump(guarded.body[0].value),
+                ast.dump(ast.parse('require(False, "RECIPIENT_HISTORY_CHANGED")').body[0].value))
+
+    def test_success_calls_disappear_but_each_failure_call_and_order_remain(self):
+        for label in ("guard_predecessor", "candidate"):
+            for case in ("success", "type-failure", "value-failure"):
+                with self.subTest(checker=label, case=case):
+                    runtime, calls, visits = Runtime(SOURCES), [], []
+                    check = getattr(runtime, label)
+                    original = check.__globals__["require"]
+                    def counted(value, code):
+                        self.assertIs(type(value), bool)
+                        calls.append((value, code))
+                        return original(value, code)
+                    record = runtime.record("SourceReturn", records=[])
+                    fields = record.__dict__
+                    nodes = ((record, type(record), "record", fields),
+                        (fields, dict, "mapping", tuple(fields.items())),
+                        (fields["records"], list, "sequence", ()),
+                        path_node(ModelPath("counts")), (object(), object, "opaque", None))
+                    if case == "type-failure": nodes = (([], tuple, "sequence", ()), *nodes)
+                    elif case == "value-failure": nodes = (([1], list, "sequence", (2,)), *nodes)
+                    def iterator():
+                        for number, node in enumerate(nodes):
+                            visits.append(number)
+                            yield node
+                    check.__globals__["require"] = counted
+                    try:
+                        if case == "success": check(iterator())
+                        else:
+                            with self.assertRaisesRegex(AdmissionError, "^INITIAL_NATIVE_RECIPIENT_HISTORY_CHANGED$"):
+                                check(iterator())
+                    finally:
+                        check.__globals__["require"] = original
+                    if case == "success":
+                        self.assertEqual(visits, list(range(len(nodes))))
+                        flags = [True] * (2 * len(nodes)) if label == "guard_predecessor" else []
+                    else:
+                        self.assertEqual(visits, [0])
+                        flags = [True, False] if case == "value-failure" and label == "guard_predecessor" else [False]
+                    self.assertEqual(calls, [(flag, "RECIPIENT_HISTORY_CHANGED") for flag in flags])
+
+    def test_final_truth_and_path_comparison_convert_once(self):
+        for kind in ("mode", "path"):
+            for valid in (True, False):
+                def factory(runtime, events, check):
+                    class Truth:
+                        def __bool__(self):
+                            events.append(("truth", valid))
+                            return valid
+                    return (self.truth_node(kind, events, Truth()),)
+                with self.subTest(kind=kind, valid=valid):
+                    events = self.equivalent(factory, accepts=valid)
+                    self.assertEqual([event for event in events if event[0] == "truth"], [("truth", valid)])
+
+    def test_original_falsey_callback_error_and_first_failure_are_preserved(self):
+        original = FalseyFailure("guarded-original-callback")
+        for kind in ("mode", "path"):
+            def factory(runtime, events, check):
+                class Truth:
+                    def __bool__(self):
+                        events.append(("original-error",))
+                        raise original
+                return (self.truth_node(kind, events, Truth()),)
+            with self.subTest(kind=kind):
+                events = self.equivalent(factory, accepts=False, original_error=original)
+                self.assertEqual(events.count(("original-error",)), 1)
+        def first(runtime, events, check):
+            class Never:
+                def __bool__(self):
+                    events.append(("UNEXPECTED-LATER-TRUTH",))
+                    raise original
+            return (([], tuple, "sequence", ()), self.truth_node("path", events, Never()))
+        self.assertEqual(self.equivalent(first, accepts=False), [("node", 0)])
+        def accessor(runtime, events, check):
+            path = ModelPath("original", events)
+            def fail(field):
+                raise original
+            path.hook = fail
+            return (path_node(path),)
+        self.equivalent(accessor, accepts=False, original_error=original)
+
+    def test_truth_callback_mutation_and_reentry_keep_later_checks(self):
+        for kind in ("mode", "path"):
+            for action in ("mutation", "reentry"):
+                def factory(runtime, events, check):
+                    child = [1]
+                    class Truth:
+                        def __bool__(self):
+                            events.append(("truth", action))
+                            if action == "mutation": child.append(2)
+                            else:
+                                events.append(("nested-start",))
+                                nested = {"x": 1}
+                                check(((nested, dict, "mapping", tuple(nested.items())),))
+                                events.append(("nested-return",))
+                            return True
+                    return (self.truth_node(kind, events, Truth()), (child, list, "sequence", (1,)))
+                with self.subTest(kind=kind, action=action):
+                    events = self.equivalent(factory, accepts=action == "reentry")
+                    self.assertEqual(events.count(("truth", action)), 1)
+                    self.assertEqual([event for event in events if event[0] == "node"], [("node", 0), ("node", 1)])
+                    self.assertEqual(events.count(("nested-return",)), int(action == "reentry"))
+
+
+class CurrentBuilderControls(unittest.TestCase):
+    """Compare actual candidate graphs with the independently pinned bfc7 builder."""
+
+    def pair(self, runtime, *roots):
+        original = runtime.original_graph(*roots)
+        current = runtime.current_graph(*roots)
+        retained = tuple(node for node in original if node[1] is not tuple)
+        self.assertEqual(len(current), len(retained))
+        for actual, old in zip(current, retained):
+            self.assertIs(actual[0], old[0])
+            self.assertIs(actual[1], old[1])
+            self.assertEqual(actual[2], old[2])
+            mode, saved, previous = actual[2], actual[3], old[3]
+            if mode == "mapping":
+                self.assertEqual(len(saved), len(previous))
+                for (key, value), (old_key, old_value) in zip(saved, previous):
+                    self.assertIs(key, old_key)
+                    self.assertIs(value, old_value)
+            elif mode == "sequence":
+                self.assertIs(actual[1], list)
+                self.assertEqual(len(saved), len(previous))
+                for value, old_value in zip(saved, previous):
+                    self.assertIs(value, old_value)
+            elif mode == "path":
+                self.assertEqual(saved, previous)
+            else:
+                self.assertIs(saved, previous)
+        self.assertTrue(all(node[1] is not tuple for node in current))
+        return original, current
+
+    def same_outcome(self, runtime, pair, *, accepts, events=None, original_error=None):
+        events = [] if events is None else events
+        outcomes, traces = [], []
+        for checker, nodes in zip((runtime.predecessor, runtime.candidate), pair):
+            events.clear()
+            result, error = observed(checker, nodes, events)
+            self.assertEqual(result[0], "return" if accepts else "raise")
+            if original_error is not None:
+                self.assertIs(error, original_error)
+            outcomes.append(result)
+            # Only the removed exact-tuple node's two tautological requires
+            # disappear. Every other node/hook/require stays in the same order.
+            normalized, omitted = [], False
+            for event in events:
+                if event[0] == "node":
+                    node = nodes[event[1]]
+                    omitted = node[1] is tuple
+                    if not omitted:
+                        normalized.append(("node", id(node[0]), node[1], node[2]))
+                elif not omitted:
+                    normalized.append(event)
+                else:
+                    self.assertEqual(event, ("require", True, "RECIPIENT_HISTORY_CHANGED"))
+            traces.append(normalized)
+        self.assertEqual(outcomes[0], outcomes[1])
+        self.assertEqual(history_schedule_trace(traces[0], guarded=False),
+            history_schedule_trace(traces[1], guarded=True))
+        return traces[0]  # Preserve the historical builder trace for its existing assertions.
+
+    def test_16_scalar_only_tuple_elision_has_no_remaining_check_nodes(self):
+        runtime = Runtime(SOURCES)
+        values = (((), None, False, 1, 1.0, float("nan")), ("text", b"bytes"))
+        original, current = self.pair(runtime, values)
+        self.assertGreater(len(original), 0)
+        self.assertEqual(current, ())
+        self.same_outcome(runtime, (original, current), accepts=True)
+
+    def test_17_nested_mutable_descendants_remain_live_on_every_check(self):
+        for change in ("list", "mapping", "reference", "append"):
+            with self.subTest(change=change):
+                runtime = Runtime(SOURCES)
+                values = {"row": [1]}
+                pair = self.pair(runtime, (((values,),),))
+                self.same_outcome(runtime, pair, accepts=True)
+                if change == "list":
+                    values["row"][0] = True
+                elif change == "mapping":
+                    values["new"] = None
+                elif change == "reference":
+                    values["row"] = [1]
+                else:
+                    values["row"].append(2)
+                self.same_outcome(runtime, pair, accepts=False)
+
+    def test_18_equal_distinct_tuple_replacement_in_every_mutable_parent_refuses(self):
+        for kind in ("mapping", "list", "record"):
+            with self.subTest(kind=kind):
+                runtime = Runtime(SOURCES)
+                saved = (1, {"nested": []})
+                replacement = tuple(list(saved))
+                self.assertIsNot(saved, replacement)
+                self.assertEqual(saved, replacement)
+                parent = ({"slot": saved} if kind == "mapping" else [saved] if kind == "list" else
+                    runtime.record("SourceReturn", slot=saved))
+                pair = self.pair(runtime, (parent,))
+                self.same_outcome(runtime, pair, accepts=True)
+                if kind == "record":
+                    parent.slot = replacement
+                else:
+                    parent["slot" if kind == "mapping" else 0] = replacement
+                self.same_outcome(runtime, pair, accepts=False)
+
+    def test_19_record_dictionary_identity_and_nested_path_fields_remain_pinned(self):
+        for change in ("dictionary", "field", "path-str", "path-parts", "path-drive", "path-root"):
+            with self.subTest(change=change):
+                runtime, events = Runtime(SOURCES), []
+                path = ModelPath("nested", events)
+                for builder in (runtime.original_graph, runtime.current_graph):
+                    builder.__globals__["ROOT"] = ModelPath("root")
+                record = runtime.record("SourceReturn", data=((path,),), value=1)
+                pair = self.pair(runtime, (record,))
+                self.same_outcome(runtime, pair, accepts=True, events=events)
+                if change == "dictionary":
+                    record.__dict__ = dict(record.__dict__)
+                elif change == "field":
+                    record.value = True
+                else:
+                    field = change.removeprefix("path-")
+                    path.values[field] = ("changed",) if field == "parts" else "changed"
+                self.same_outcome(runtime, pair, accepts=False, events=events)
+
+    def test_20_non_tuple_hook_order_and_original_falsey_exception_are_unchanged(self):
+        for mode in ("late-mutation", "original-error"):
+            with self.subTest(mode=mode):
+                runtime, events = Runtime(SOURCES), []
+                for builder in (runtime.original_graph, runtime.current_graph):
+                    builder.__globals__["ROOT"] = ModelPath("root")
+                descendant, path = [1], ModelPath("earlier", events)
+                pair = self.pair(runtime, ((descendant,), path))
+                failure = FalseyFailure("SUPPLIED_ORIGINAL_PATH_FAILURE")
+                def hook(field):
+                    if field == "str":
+                        if mode == "original-error":
+                            raise failure
+                        descendant[0] = True
+                path.hook = hook
+                trace = self.same_outcome(runtime, pair, accepts=False, events=events,
+                    original_error=failure if mode == "original-error" else None)
+                self.assertEqual([event[-1] for event in trace if event[0] == "path"],
+                    ["str"] if mode == "original-error" else ["str", "parts", "drive", "root"])
+
+    def test_21_cycles_shared_aliases_and_tuple_subclasses_preserve_original_behavior(self):
+        runtime = Runtime(SOURCES)
+        class TupleSubclass(tuple):
+            def __len__(self):
+                raise AssertionError("OPAQUE_TUPLE_SUBCLASS_LENGTH_MUST_NOT_RUN")
+            def __iter__(self):
+                raise AssertionError("OPAQUE_TUPLE_SUBCLASS_ITERATION_MUST_NOT_RUN")
+        opaque = TupleSubclass((1, 2))
+        shared = []
+        root = (shared, shared, opaque)
+        shared.append(root)
+        pair = self.pair(runtime, root)
+        self.assertEqual(len(pair[1]), 2)
+        self.assertEqual([node[2] for node in pair[1]], ["opaque", "sequence"])
+        self.same_outcome(runtime, pair, accepts=True)
+        shared.append(None)
+        self.same_outcome(runtime, pair, accepts=False)
+
+    def test_22_visited10000_cap_includes_elided_tuples_cycles_and_invalid_keys(self):
+        runtime = Runtime(SOURCES)
+        values = [(number,) for number in range(9999)]
+        original, current = self.pair(runtime, values)
+        self.assertEqual((len(original), len(current)), (10000, 1))
+        self.same_outcome(runtime, (original, current), accepts=True)
+        values.append((9999,))
+        for builder in (runtime.original_graph, runtime.current_graph):
+            with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_LIMIT"):
+                builder(values)
+            with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_KEY"):
+                builder({(1,): None})
+        shared = (1,)
+        original, current = self.pair(runtime, [shared] * 10001)
+        self.assertEqual((len(original), len(current)), (2, 1))
+        self.same_outcome(runtime, (original, current), accepts=True)
+        nested = ()
+        for _ in range(9999):
+            nested = (nested,)
+        original, current = self.pair(runtime, nested)
+        self.assertEqual((len(original), len(current)), (10000, 0))
+        for builder in (runtime.original_graph, runtime.current_graph):
+            with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_LIMIT"):
+                builder((nested,))
+
+    def test_23_original_and_current_snapshot_banks_keep_rosters_and_closed_mutable_checks(self):
+        descriptions = []
+        for original_builder in (True, False):
+            runtime = Runtime(SOURCES, original_builder=original_builder)
+            bank, shape, rows = model_bank(runtime)
+            self.assertEqual((shape["files"], shape["directories"], shape["copiedPrimaryFiles"]), (281, 58, 282))
+            self.assertEqual(len(bank), 6)
+            for _, graph in bank:
+                self.assertIsNone(runtime.predecessor(graph))
+                self.assertIsNone(runtime.candidate(graph))
+            descriptions.append((shape, tuple(name for name, _graph in bank)))
+            if not original_builder:
+                self.assertTrue(all(node[1] is not tuple for _, graph in bank for node in graph))
+            rows[-1]["closed"] = False
+            for checker in (runtime.predecessor, runtime.candidate):
+                with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_CHANGED"):
+                    checker(bank[-1][1])
+        self.assertEqual(descriptions[0], descriptions[1])
+
+
+def bank_shape(bank, shape):
+    descriptions = []
+    for name, nodes in bank:
+        descriptions.append({"name": name, "nodes": len(nodes), "modes": dict(sorted(Counter(node[2] for node in nodes).items())),
+            "types": dict(sorted(Counter(node[1].__name__ for node in nodes).items())), "requiresPerPass": 2 * len(nodes)})
+    return dict(shape, graphs=descriptions, nodesPerPass=sum(row["nodes"] for row in descriptions),
+        requiresPerPass=sum(row["requiresPerPass"] for row in descriptions))
+
+
+def validate_bank(checker, bank):
+    for _, nodes in bank:
+        events = []
+        outcome, error = observed(checker, nodes, events)
+        insist(outcome == ("return", None) and error is None, "MODEL_RESULT_AGREEMENT")
+        insist(sum(event[0] == "node" for event in events) == len(nodes) and
+            sum(event[0] == "require" for event in events) == 2 * len(nodes), "MODEL_ALL_NODES_TWO_REQUIRES")
+
+
+def measure(sources):
+    runtimes = {"baseline": Runtime(sources, original_builder=True), "candidate": Runtime(sources)}
+    models = {name: model_bank(runtime) for name, runtime in runtimes.items()}
+    banks = {name: model[0] for name, model in models.items()}
+    descriptions = {name: bank_shape(model[0], model[1]) for name, model in models.items()}
+    insist(models["baseline"][1] == models["candidate"][1] and
+        tuple(name for name, _ in banks["baseline"]) == tuple(name for name, _ in banks["candidate"]),
+        "MODEL_ORIGINAL_AND_CURRENT_ROSTERS_IDENTICAL")
+    # Preserve this legacy builder-only experiment: both sides use the original
+    # bfc7 checker, not the new mapping predicate exercised by normal controls.
+    checkers = {"baseline": runtimes["baseline"].predecessor, "candidate": runtimes["candidate"].predecessor}
+    # Two disclosed untimed correctness/count passes per implementation (one
+    # before, one after). No calibration, warmup loop, adaptive iteration count
+    # or retry. Timed require is the actual unchanged N.require -> I.require;
+    # old6006 checker is not called. Graph construction itself is not timed.
+    for name in ("baseline", "candidate"):
+        validate_bank(checkers[name], banks[name])
+    blocks = []
+    for ordinal, order in enumerate(ORDERS, 1):
+        block = {"ordinal": ordinal, "order": order, "iterationsPerSide": ITERATIONS}
+        for label in order:
+            name = "baseline" if label == "A" else "candidate"
+            checker = checkers[name]
+            wall_start, cpu_start = time.monotonic_ns(), time.process_time_ns()
+            for _ in range(ITERATIONS):
+                for _, nodes in banks[name]:
+                    insist(checker(nodes) is None, "MODEL_TIMED_RESULT_AGREEMENT")
+            cpu_ns, wall_ns = time.process_time_ns() - cpu_start, time.monotonic_ns() - wall_start
+            insist(cpu_ns > 0 and wall_ns > 0, "MODEL_POSITIVE_CLOCK_DIFFERENCES")
+            block[name] = {"cpuNs": cpu_ns, "wallNs": wall_ns, "passes": ITERATIONS}
+        blocks.append(block)
+    for name in ("baseline", "candidate"):
+        validate_bank(checkers[name], banks[name])
+    totals = {name: {clock: sum(block[name][clock] for block in blocks) for clock in ("cpuNs", "wallNs")}
+        for name in ("baseline", "candidate")}
+    old_cpu, new_cpu = totals["baseline"]["cpuNs"], totals["candidate"]["cpuNs"]
+    passed = 100 * new_cpu <= (100 - MINIMUM_IMPROVEMENT_PERCENT) * old_cpu
+    result = {"schema": 2, "scope": "MODEL_HISTORY_GRAPH_COST_ONLY", "passed": passed,
+        "decision": "MEANINGFUL_CPU_REDUCTION" if passed else "NO_MEANINGFUL_CPU_REDUCTION", "agreement": True,
+        "minimumImprovementPercent": MINIMUM_IMPROVEMENT_PERCENT,
+        "baselineCommit": "bfc7b60c0fc8fb894430108425552f8e69061c67", "graphConstruction": "NOT_TIMED",
+        "aggregate": dict(totals, cpuRatio=new_cpu / old_cpu, cpuImprovementPercent=100 * (old_cpu - new_cpu) / old_cpu,
+            wallRatio=totals["candidate"]["wallNs"] / totals["baseline"]["wallNs"]),
+        "blocks": blocks, "shape": descriptions, "iterationsPerImplementation": len(ORDERS) * ITERATIONS,
+        "sourcePins": sources.pins, "validation": {"before": True, "after": True, "allRetainedNodesChecked": True,
+            "identicalOriginalModelRosters": True, "unchangedBfc7CheckerBothSides": True,
+            "untimedPassesPerImplementation": 2, "warmupPasses": 0},
+        "timedNodesPerImplementation": {name: description["nodesPerPass"] * len(ORDERS) * ITERATIONS
+            for name, description in descriptions.items()},
+        "timedRequiresPerImplementation": {name: description["requiresPerPass"] * len(ORDERS) * ITERATIONS
+            for name, description in descriptions.items()},
+        "acceptance": "MODEL_ONLY_NOT_HOSTED_CUSTODY_NATIVE_PROVIDER_OR_SCHEDULE_FIT"}
+    print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False))
+    return 0 if passed else 1
+
+
+def main():
+    global SOURCES
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--measure-baseline", type=Path)
+    options, remainder = parser.parse_known_args()
+    if options.measure_baseline is not None:
+        if remainder:
+            parser.error("measurement accepts only --measure-baseline ABSOLUTE_PUBLIC_SOURCE")
+        if not options.measure_baseline.is_absolute():
+            parser.error("--measure-baseline must be an absolute public source path")
+    own_path = Path(__file__).absolute()
+    root = own_path.parents[2]
+    paths = [own_path, *(root / "scripts" / name for name in (MAIN_NAME, *SOURCE_PINS))]
+    if options.measure_baseline is not None:
+        paths.append(options.measure_baseline)
+    sys.dont_write_bytecode = True
+    install_audit(paths)
+    SOURCES = Sources(root, own_path, options.measure_baseline)
+    if options.measure_baseline is not None:
+        return measure(SOURCES)
+    program = unittest.main(argv=[str(own_path), *remainder], exit=False)
+    return 0 if program.result.wasSuccessful() else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -12,6 +12,8 @@ fail() {
 declare -a mappings=(
     "p2p-core|library/p2p-core"
     "p2p-transport-lan|library/p2p-transport-lan"
+    "p2p-rpc|library/p2p-rpc"
+    "p2p-sample-rpc|samples/p2p-sample-rpc"
     "p2p-network-provisioning-android|library/p2p-network-provisioning-android"
     "p2p-network-provisioning-desktop|library/p2p-network-provisioning-desktop"
     "p2p-sample-diagnostics|samples/p2p-sample-diagnostics"
@@ -37,13 +39,15 @@ for mapping in "${mappings[@]}"; do
         fail "tracked module files remain at obsolete root path $project_name"
 done
 
-grep -Fq 'library/p2p-core/api/**' "$ROOT/.github/workflows/publish-maven-central.yml" ||
-    fail "publication evidence upload still uses the old core API path"
+[[ -d "$ROOT/library/p2p-core/api" ]] &&
+    grep -Fq 'ci_qualification.py verify --source' "$ROOT/.github/workflows/publish-maven-central.yml" ||
+    fail "publication must use exact-source qualification with the relocated API baseline"
 grep -Fq 'library/p2p-transport-lan/build/XCFrameworks/release' "$ROOT/scripts/run-ios-app.sh" ||
     fail "iOS launcher does not use the relocated XCFramework"
 grep -Fq 'samples/iosApp/p2pkit-sample.xcodeproj' "$ROOT/scripts/run-release-gate.sh" ||
     fail "release gate does not build the relocated iOS project"
 
 ruby "$ROOT/scripts/tests/check-android-setup-policy-test.rb"
+python3 "$ROOT/scripts/tests/check-rpc-module-policy-test.py"
 
-echo "RESULT: PASS — 10 Gradle projects use the canonical library/ and samples/ layout"
+echo "RESULT: PASS — 12 Gradle projects use the canonical library/ and samples/ layout"

@@ -8,6 +8,8 @@ CATALOG="$ROOT/gradle/libs.versions.toml"
 PROPERTIES="$ROOT/gradle.properties"
 CORE_BUILD="$ROOT/library/p2p-core/build.gradle.kts"
 LAN_BUILD="$ROOT/library/p2p-transport-lan/build.gradle.kts"
+RPC_BUILD="$ROOT/library/p2p-rpc/build.gradle.kts"
+RPC_SAMPLE_BUILD="$ROOT/samples/p2p-sample-rpc/build.gradle.kts"
 ANDROID_PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-android/build.gradle.kts"
 DESKTOP_PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-desktop/build.gradle.kts"
 CONSUMER_GATE="$ROOT/scripts/check-published-consumers.sh"
@@ -15,7 +17,6 @@ PUBLICATION_GATE="$ROOT/scripts/check-publish-artifacts.sh"
 XCFRAMEWORK_GATE="$ROOT/scripts/check-xcframework-minimum-os.sh"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 RELEASE_GATE="$ROOT/scripts/run-release-gate.sh"
-WORKFLOW_DIR="$ROOT/.github/workflows"
 
 fail() {
     echo "FATAL: $*" >&2
@@ -41,36 +42,24 @@ grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
 # available but not yet qualified here. GitHub builds may keep dependency/wrapper
 # caches, but no Gradle action may restore or persist caches/build-cache-1
 # across runs until a stable patched Kotlin toolchain is qualified.
-gradle_workflow_count=0
-for workflow in "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml; do
-    [[ -f "$workflow" ]] || continue
-    grep -Eq 'uses: gradle/actions/(setup-gradle|dependency-submission)@' "$workflow" || continue
-    gradle_workflow_count=$((gradle_workflow_count + 1))
-    awk '
-        function verify_previous_step() {
-            if (gradle_action && !build_cache_excluded) exit 1
-        }
-        /^[[:space:]]{6}- name:/ {
-            verify_previous_step()
-            gradle_action = 0
-            build_cache_excluded = 0
-        }
-        /uses: gradle\/actions\/(setup-gradle|dependency-submission)@/ {
-            gradle_action = 1
-        }
-        /gradle-home-cache-excludes: caches\/build-cache-1/ {
-            if (gradle_action) build_cache_excluded = 1
-        }
-        END { verify_previous_step() }
-    ' "$workflow" ||
-        fail "Gradle action in $workflow does not exclude persisted build-cache metadata"
-done
-[[ "$gradle_workflow_count" -gt 0 ]] || fail "no Gradle workflow cache policy was inspected"
+ruby "$ROOT/scripts/check-gradle-cache-policy.rb"
+ruby "$ROOT/scripts/tests/check-gradle-cache-policy-test.rb"
+# Fresh owned Apple CI homes need both the JDK21 daemon and JDK17 launcher.
+ruby "$ROOT/scripts/tests/check-ci-owned-jdk-policy-test.rb"
+python3 -I -B -S "$ROOT/scripts/tests/rpc-apple-ci-setup-test.py"
 
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$CORE_BUILD")" == "2" ]] ||
     fail "p2p-core does not preserve both JVM and Android module names"
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$LAN_BUILD")" == "2" ]] ||
     fail "p2p-transport-lan does not preserve both JVM and Android module names"
+[[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$RPC_BUILD")" == "2" ]] ||
+    fail "p2p-rpc does not declare both JVM and Android module names"
+for rpc_build in "$RPC_BUILD" "$RPC_SAMPLE_BUILD"; do
+    grep -Fq 'target.binaries.configureEach {' "$rpc_build" ||
+        fail "$rpc_build does not apply its iOS floor to all binaries, including tests"
+    grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$minimum' "$rpc_build" ||
+        fail "$rpc_build does not use its configured iOS floor"
+done
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$ANDROID_PROVISIONING_BUILD" ||
     fail "Android provisioning does not preserve its module name"
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$DESKTOP_PROVISIONING_BUILD" ||
@@ -89,10 +78,9 @@ grep -Fq 'AGP_VERSION="$(sed ' "$CONSUMER_GATE" ||
     fail "the isolated consumer does not derive AGP from the catalog"
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$IOS_MIN_VERSION' "$CONSUMER_GATE" ||
     fail "the isolated KMP consumer does not link at the canonical iOS floor"
-grep -Fq './gradlew --no-daemon --console=plain publishToMavenLocal' "$CONSUMER_GATE" ||
-    fail "the isolated publication fixture may leave a Gradle daemon racing cleanup"
-grep -Fq './gradlew --no-daemon --console=plain -p "$FIXTURE_DIR"' "$CONSUMER_GATE" ||
-    fail "the isolated consumer fixture may leave a Gradle daemon racing cleanup"
+# The caller selects fixed publication tasks through an array. Guard the actual
+# ordinary/executor publication AND consumer calls, not an obsolete literal task.
+ruby "$ROOT/scripts/check-consumer-gradle-policy.rb" "$CONSUMER_GATE"
 # Consumer versions are inputs, unlike the catalog tripwires above. Enforce
 # the variable-based recipe rather than banning one historical Kotlin pin.
 ruby "$ROOT/scripts/check-version-input-policy.rb" consumer "$CONSUMER_GATE"
@@ -106,27 +94,18 @@ ruby "$ROOT/scripts/tests/check-version-input-policy-test.rb"
 while IFS= read -r legacy_match; do
     legacy_entry="${legacy_match#*:}"
     legacy_entry="${legacy_entry#*:}"
-    case "$legacy_entry" in
-        org.jetbrains.kotlin:abi-tools-api:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:abi-tools:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-klib-abi-reader:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation)
-            ;;
-        *)
-            fail "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain: $legacy_match"
-            ;;
-    esac
+    ruby "$ROOT/scripts/check-version-input-policy.rb" kotlin-abi-entry "$legacy_entry" >/dev/null ||
+        fail "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain: $legacy_match"
 done < <(grep -R -n -E --include='gradle.lockfile' '2\.3\.21' "$ROOT" || true)
 
 grep -Fq 'check_rc2_legacy_jvm_symbols' "$PUBLICATION_GATE" ||
     fail "published artifacts do not retain the supplemental RC2 JVM-symbol guard"
 
 [[ -x "$XCFRAMEWORK_GATE" ]] || fail "the XCFramework minimum-OS gate is not executable"
-grep -Fq 'scripts/check-xcframework-minimum-os.sh' "$CI_WORKFLOW" ||
-    fail "CI does not verify the linked XCFramework deployment floor"
+# Ordinary CI runs the linked minimum-OS/provenance supplement in custody,
+# not a direct YAML command. Check both the caller and its executable supplier.
+ruby "$ROOT/scripts/check-hosted-test-workflow-policy.rb" "$CI_WORKFLOW"
+python3 -I -B -S "$ROOT/scripts/check-hosted-test-composition.py" --root "$ROOT"
 grep -Fq 'scripts/check-xcframework-minimum-os.sh' "$RELEASE_GATE" ||
     fail "the release gate does not verify the linked XCFramework deployment floor"
 

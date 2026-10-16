@@ -1,9 +1,14 @@
+import dev.p2pkit.build.ApplicationReleaseVersion
+import dev.p2pkit.build.GenerateSampleReleaseIdentityTask
+import dev.p2pkit.build.GitCommitValueSource
 import java.time.Duration
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val applicationReleaseVersion = ApplicationReleaseVersion.parse(project.version.toString())
 
 android {
     namespace = "dev.p2pkit.sample.android"
@@ -15,8 +20,8 @@ android {
         applicationId = "dev.p2pkit.sample.android"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.sample.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = applicationReleaseVersion.androidCode
+        versionName = applicationReleaseVersion.name
         // One API37 runtime case, driven explicitly by run-android-art-smoke.py; no third-party test runner.
         testInstrumentationRunner = "dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation"
     }
@@ -46,7 +51,25 @@ android {
     }
 }
 
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        val assets = checkNotNull(variant.sources.assets) { "Android release identity requires assets" }
+        val taskName = "generate${variant.name.replaceFirstChar { it.uppercaseChar() }}SampleReleaseIdentity"
+        val sampleReleaseIdentity = tasks.register<GenerateSampleReleaseIdentityTask>(taskName) {
+            canonicalVersion.set(applicationReleaseVersion.name)
+            sourceCommit.set(providers.of(GitCommitValueSource::class) {
+                parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+            })
+        }
+        // AGP supplies the producer dependency and a distinct output directory for each variant.
+        assets.addGeneratedSourceDirectory(sampleReleaseIdentity) { it.outputDirectory }
+    }
+}
+
 dependencies {
+    // RPC is embedded in the existing app's distributed debug variant. The release
+    // variant intentionally keeps its no-RPC adapter; no variant migration is implied.
+    debugImplementation(project(":p2p-sample-rpc"))
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-android"))

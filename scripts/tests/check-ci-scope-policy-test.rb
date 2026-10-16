@@ -23,7 +23,7 @@ def triggers(workflow)
 end
 
 def scope_steps(workflow)
-    workflow.fetch("jobs").fetch("complete-gate").fetch("steps").select { |step| step["id"] == "scope" }
+    workflow.fetch("jobs").fetch("repository-checks").fetch("steps").select { |step| step["id"] == "scope" }
 end
 
 def check_ci_scope(workflow)
@@ -46,7 +46,7 @@ def check_ci_scope(workflow)
     raise "CI scope must use Bash without conditional or ignored failures" unless
         scope["shell"] == "bash" && !scope.key?("if") && !scope.key?("continue-on-error")
 
-    steps = workflow.fetch("jobs").fetch("complete-gate").fetch("steps")
+    steps = workflow.fetch("jobs").fetch("repository-checks").fetch("steps")
     lightweight = steps.find { |step| step["name"] == "Verify lightweight documentation change" }
     raise "CI lightweight checks must retain the scope policy regression" unless lightweight &&
         lightweight.fetch("run").lines.map(&:strip).include?("ruby scripts/tests/check-ci-scope-policy-test.rb")
@@ -73,7 +73,7 @@ mutations = {
     "unneeded permissions" => ["check-run or write permissions", ->(w) { w["permissions"]["checks"] = "read" }],
     "missing scope" => ["exactly one scope resolver", ->(w) { scope_steps(w).first.delete("id") }],
     "duplicate scope" => ["exactly one scope resolver", ->(w) {
-        w["jobs"]["complete-gate"]["steps"] << scope_steps(w).first.dup
+        w["jobs"]["repository-checks"]["steps"] << scope_steps(w).first.dup
     }],
     "printed scope command" => ["execute the resolver", ->(w) { scope_steps(w).first["run"] = "echo #{SCOPE_COMMAND}" }],
     "constant event" => ["complete event identity", ->(w) { scope_steps(w).first["env"]["EVENT_NAME"] = "push" }],
@@ -86,7 +86,7 @@ mutations = {
     }],
     "wrong scope shell" => ["must use Bash", ->(w) { scope_steps(w).first["shell"] = "sh" }],
     "missing lightweight policy check" => ["retain the scope policy regression", ->(w) {
-        w["jobs"]["complete-gate"]["steps"].find do |step|
+        w["jobs"]["repository-checks"]["steps"].find do |step|
             step["name"] == "Verify lightweight documentation change"
         end["run"].sub!("ruby scripts/tests/check-ci-scope-policy-test.rb", "echo omitted")
     }],
