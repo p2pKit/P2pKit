@@ -51,7 +51,7 @@ FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
 TERMINATION_GRACE_SECONDS = 15
 TERMINATION_KILL_SECONDS = 5
-INTEL_BOOTSTATUS_SECONDS = 300
+INTEL_BOOTSTATUS_SECONDS = 600
 INTEL_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_V1"
 INTEL_RETIREMENT_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_RETIREMENT_V1"
 INTEL_PREPARE = ("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
