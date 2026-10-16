@@ -14,7 +14,7 @@ boundaries. That document also records outstanding activation prerequisites;
 new source controls alone do not establish readiness.
 
 Required secrets and variables remain in the GitHub Environment and must never
-be printed or committed. The workflow validates namespace/publisher access,
+be printed or committed. The workflow checks authenticated namespace-query access,
 the exact tag/commit/version relationship, signing-key fingerprint, credential
 rotation policy, artifact signatures/checksums, bundle shape, SBOM, provenance,
 and coordinate absence before upload.
@@ -30,6 +30,51 @@ The signed bundle builder may be run only with in-memory signing material and
 the expected full fingerprint. It does not upload by itself. Publication must
 remain in the protected workflow; do not invoke Portal mutation scripts merely
 to test credentials.
+
+## Authentication and namespace preflight
+
+`scripts/check-maven-namespace-access.sh` uses the documented, read-only
+[Central Publisher API](https://central.sonatype.org/publish/publish-portal-api/):
+`GET /api/v1/publisher/deployments` with the exact namespace filter, page zero
+and a page size of one. A successful response establishes that the token can
+make that namespace-scoped query. It does **not** establish namespace
+`VERIFIED` state, permission to publish a particular bundle, or publication.
+Central's actual upload authorization, bundle validation, PUBLISHED status and
+remote byte verification remain mandatory in the protected publisher.
+
+The schema-2 `namespace-access.json` records only the source, time, namespace
+and these limited access claims. `namespaceVerificationState: NOT_ASSERTED`
+is deliberate; neither `state: VERIFIED` nor `tokenPublisherAccess: true` is
+inferred from a read-only response. Raw API data and credentials are not
+retained. Authentication/authorization errors, redirects, transport failures,
+malformed responses and unexpected namespace results fail the check.
+
+The former `/api/internal/publisher/namespace` endpoint is not part of the
+documented Publisher API. A token accepted by the public API can receive HTTP
+401 there. Do not rotate a working token solely because that internal endpoint
+refuses it, and do not use browser cookies or fabricated responses as a fix.
+
+Run focused, secret-free mocked controls locally:
+
+```bash
+bash scripts/tests/check-maven-namespace-access-test.sh
+```
+
+The existing **Verify Maven Central namespace** workflow also accepts
+`operation=controls` for those same tests on a hosted runner, without an
+environment or secrets. `operation=verify` remains the protected real check.
+Mocked controls are not evidence of real Central access.
+
+### Repairs after a release tag already exists
+
+A publisher rerun uses its original immutable tag's workflow and source, not
+a later repair on `main`. Do not move/recreate a tag, replace tagged files at
+runtime, or relabel an older application set as a new source/version. The
+read-only recovery workflow applies only after a retained PUBLISHED deployment;
+it cannot repair a failure before signing or upload. A pre-publication source
+repair therefore needs a separately approved release identity and matching
+qualification, unless an explicit tag-preserving tooling path is independently
+designed, reviewed and authorized. No such additional path is introduced here.
 
 ## Local signed bundle preparation
 
