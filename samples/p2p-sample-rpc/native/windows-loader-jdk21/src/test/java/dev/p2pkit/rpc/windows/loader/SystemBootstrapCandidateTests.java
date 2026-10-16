@@ -1,6 +1,9 @@
 package dev.p2pkit.rpc.windows.loader;
 
 import java.io.InputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -129,6 +132,9 @@ public final class SystemBootstrapCandidateTests {
                 check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
             }
             scope = "DEVELOPMENT_JVM_FILE_LEASE_NOT_INSTALLED_ACL_ANCESTOR_MAPPING_OR_PROFILE";
+        } else if (args[0].equals("file-pipeline")) {
+            policy = filePipeline();
+            scope = "DEVELOPMENT_JVM_SHARED_FILE_PIPELINE_NOT_DLL_OR_INSTALLATION_AUTHORITY";
         } else if (args[0].equals("bytes")) {
             WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
             WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();
@@ -287,4 +293,110 @@ public final class SystemBootstrapCandidateTests {
         }
         System.out.println("WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=" + args[0] + " scope=" + scope + policy);
     }
+
+    private static String filePipeline() throws Exception {
+        WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
+        WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();
+        WindowsOriginalJvmFileCandidate file = runtime.inspectFile();
+        WindowsOriginalFileLease lease = (WindowsOriginalFileLease) originalField(file, "lease");
+        MemorySegment handle = (MemorySegment) originalField(lease, "handle");
+        Arena handleArena = (Arena) originalField(lease, "handleArena");
+        long rawHandle = (long) originalField(lease, "rawHandle");
+        check(file.completed() && file.leaseHeld() && lease.completed() && handleArena.scope().isAlive());
+        check(rawHandle > 0 && handle.address() == rawHandle && handle.scope().equals(handleArena.scope()));
+        check(originalField(original, "originalJvm") == runtime && originalField(runtime, "file") == file);
+        check(originalField(lease, "originalOwner") == file);
+        check(((WindowsOriginalFileLease.Failure) originalField(lease, "failure")).retainedCandidate == lease);
+        char[] runtimePath = (char[]) originalField(runtime, "observedModulePath");
+        char[] leasePath = (char[]) originalField(lease, "sourcePath");
+        check(leasePath != runtimePath && java.util.Arrays.equals(leasePath, runtimePath));
+
+        WindowsOriginalJvmSecurityCandidate security = file.inspectSecurity();
+        check(security.completed() && originalField(security, "fileHandle") == handle &&
+            originalField(security, "fileArena") == handleArena);
+        boolean filePolicy = security.descriptorPolicyAccepted();
+        WindowsOriginalJvmAncestorsCandidate ancestors = security.inspectAncestors();
+        check(ancestors.completed() && ancestors.ancestorCount() >= 1 && ancestors.ancestorCount() <= 63);
+        check(originalField(ancestors, "originalFileHandle") == handle &&
+            originalField(ancestors, "originalFileArena") == handleArena);
+        boolean ancestorPolicy = ancestors.descriptorPoliciesAccepted();
+        WindowsOriginalJvmBytesCandidate bytes = file.inspectBytes();
+        check(bytes.completed() && originalField(bytes, "fileHandle") == handle &&
+            originalField(bytes, "fileArena") == handleArena);
+        check(bytes.byteCount() > 0 && bytes.byteCount() <= 512L * 1024 * 1024);
+
+        // Independent bounded read of the DEVELOPMENT fixture, not an expected installed/runtime pin.
+        MessageDigest reference = MessageDigest.getInstance("SHA-256", "SUN");
+        long count = 0;
+        byte[] chunk = new byte[65_536];
+        try (InputStream input = Files.newInputStream(
+            Path.of(System.getProperty("java.home"), "bin", "server", "jvm.dll"), LinkOption.NOFOLLOW_LINKS)) {
+            int read;
+            while ((read = input.read(chunk)) != -1) {
+                check(read > 0);
+                count += read;
+                check(count <= bytes.byteCount());
+                reference.update(chunk, 0, read);
+            }
+        } finally {
+            java.util.Arrays.fill(chunk, (byte) 0);
+        }
+        check(count == bytes.byteCount() && MessageDigest.isEqual(reference.digest(), bytes.sha256()));
+        WindowsOriginalFileLease substitute = new WindowsOriginalFileLease(file);
+        pipelineRefused(substitute::observe);
+        check(!(boolean) originalField(substitute, "attempted") && originalField(substitute, "frameArena") == null);
+        pipelineRefused(runtime::inspectFile);
+        pipelineRefused(file::inspectSecurity);
+        pipelineRefused(security::inspectAncestors);
+        pipelineRefused(file::inspectBytes);
+        pipelineRefused(lease::observe);
+
+        AtomicReference<Throwable> unexpected = new AtomicReference<>();
+        Thread worker = Thread.startVirtualThread(() -> {
+            try {
+                pipelineRefused(file::leaseHeld);
+                pipelineRefused(lease::completed);
+                pipelineRefused(security::descriptorPolicyAccepted);
+                pipelineRefused(ancestors::descriptorPoliciesAccepted);
+                pipelineRefused(bytes::sha256);
+                pipelineRefused(file::inspectSecurity);
+                pipelineRefused(file::inspectBytes);
+            } catch (Throwable failure) { unexpected.set(failure); }
+        });
+        worker.join();
+        check(unexpected.get() == null);
+        System.gc(); // GC is not an assertion that any particular object was collected.
+        check(originalField(file, "lease") == lease && originalField(lease, "handle") == handle &&
+            (long) originalField(lease, "rawHandle") == rawHandle && handleArena.scope().isAlive());
+        check(originalField(original, "originalJvm") == runtime && originalField(runtime, "file") == file &&
+            originalField(lease, "originalOwner") == file);
+        check(bytes.completed() && bytes.byteCount() == count && lease.completed() && file.leaseHeld());
+        check(security.descriptorPolicyAccepted() == filePolicy &&
+            ancestors.descriptorPoliciesAccepted() == ancestorPolicy && runtime.completed() && original.completed());
+        try {
+            WindowsLoader.openInstalledProvider();
+            throw new AssertionError("Shared file pipeline enabled productive loading");
+        } catch (UnsupportedOperationException expected) {
+            check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
+        }
+        return " descriptorPolicy=" + (filePolicy ? "ACCEPTED" : "REFUSED") +
+            " descriptorPolicies=" + (ancestorPolicy ? "ACCEPTED" : "REFUSED");
+    }
+
+    private static Object originalField(Object owner, String name) throws ReflectiveOperationException {
+        Field field = owner.getClass().getDeclaredField(name);
+        field.setAccessible(true); // Test-patched module only; not a production pointer/owner observation API.
+        return field.get(owner);
+    }
+
+    private interface PipelineAction { void run(); }
+    private static void pipelineRefused(PipelineAction action) {
+        try {
+            action.run();
+            throw new AssertionError("Shared file pipeline accepted a duplicate/substitute/thread access");
+        } catch (IllegalStateException expected) {
+            // All original ownership refusals precede further native effects.
+        }
+    }
+
 }

@@ -760,3 +760,23 @@ logical libraries are explicitly refused by this bounded component pending the
 full provider-policy integration. No full-provider or installed-runtime claim
 follows from the kernel32-only development test, and productive loading remains
 unavailable.
+
+### Original file-lease composition
+
+The original JVM file facade now delegates its unchanged native acquisition,
+metadata and retained-handle mechanics to one concrete `WindowsOriginalFileLease`.
+This isolates the existing algorithm for later independent DLL custody without
+copying it or substituting a DLL path into the JVM observation. The current core
+accepts only its exact original JVM facade; no second DLL owner or installation
+authority is claimed. The private original path is copied, and the core/facade
+and preallocated failure carrier remain rooted before native effects.
+
+Security, ancestor and byte observations still attach to that original facade
+and use the same original file handle. Their existing implementations and policy
+decisions are unchanged. A Windows-only combined observation exercises all three
+children together, checks original ownership after retirement and reports leaf
+and ancestor policy acceptance separately. A completed diagnostic with refused
+ACL policies is **not** an admitted file. Neither the combined development-JVM
+observation nor inert owner/frame controls qualifies a production DLL or an
+installed protected profile. No handle/module unloading or productive activation
+is introduced.

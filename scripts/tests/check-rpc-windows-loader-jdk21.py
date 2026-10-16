@@ -66,6 +66,7 @@ def main():
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
                         "SystemImportResolutionTests" in name or
+                        "OriginalFileLeaseTests" in name or
                         "InstallationSecurityTests" in name or
                         "AncestorRetirementTests" in name or
                         "ByteReadInvocationTests" in name or
@@ -224,6 +225,12 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".SystemImportResolutionTests", case], 0,
             "WINDOWS_SYSTEM_IMPORT_RESOLUTION_PASS case=" + re.escape(case) +
             r" scope=INERT_INVENTORY_AND_OWNERSHIP_NOT_NATIVE_OR_AUTHORITY\n", "")
+    lease_cases = ["owner-refusal", "substitution", "snapshot", "retirement", "retirement-failures", "thread"]
+    for case in lease_cases:
+        run("original-file-lease-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".OriginalFileLeaseTests", case], 0,
+            "WINDOWS_ORIGINAL_FILE_LEASE_PASS case=" + re.escape(case) +
+            r" scope=INERT_ORIGINAL_OWNER_AND_FRAME_NOT_FILE_CUSTODY_OR_AUTHORITY\n", "")
     # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
     owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
                    "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]
@@ -306,6 +313,9 @@ def main():
     original_ancestor_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_ancestor_policies = "NOT_EXECUTED"
     original_bytes_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_pipeline_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_pipeline_policy = "NOT_EXECUTED"
+    original_pipeline_ancestor_policies = "NOT_EXECUTED"
     if os.name == "nt":
         original_jvm_scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE"
         run("system-bootstrap-jvm", base + access + bootstrap_entry + ["jvm"], 0,
@@ -326,6 +336,12 @@ def main():
         original_bytes_scope = "DEVELOPMENT_JVM_HANDLE_BYTES_NOT_INSTALLED_IDENTITY_MAPPING_OR_PROFILE"
         run("system-bootstrap-bytes", base + access + bootstrap_entry + ["bytes"], 0,
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=bytes scope=" + original_bytes_scope + r"\n", "")
+        original_pipeline_scope = "DEVELOPMENT_JVM_SHARED_FILE_PIPELINE_NOT_DLL_OR_INSTALLATION_AUTHORITY"
+        pipeline, _ = run("system-bootstrap-file-pipeline", base + access + bootstrap_entry + ["file-pipeline"], 0,
+            "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=file-pipeline scope=" + original_pipeline_scope +
+            r" descriptorPolicy=(ACCEPTED|REFUSED) descriptorPolicies=(ACCEPTED|REFUSED)\n", "")
+        original_pipeline_policy = pipeline.strip().split()[-2].split("=", 1)[1]
+        original_pipeline_ancestor_policies = pipeline.strip().split()[-1].split("=", 1)[1]
     run("test-dll-compiler-budget", [sys.executable, "-I", "-B",
         ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm/test-build-test-dll.py"], 0,
         r"WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=30 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION\n", "")
@@ -402,6 +418,9 @@ def main():
               "originalJvmDescriptorPolicy": original_security_policy, "originalJvmAncestorScope": original_ancestor_scope,
               "originalJvmAncestorPolicies": original_ancestor_policies,
               "originalJvmBytesScope": original_bytes_scope,
+              "originalFilePipelineScope": original_pipeline_scope,
+              "originalFilePipelineDescriptorPolicy": original_pipeline_policy,
+              "originalFilePipelineAncestorPolicies": original_pipeline_ancestor_policies,
               "loadedRegistrationScope": loaded_registration_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
