@@ -80,6 +80,28 @@ assert_fails \
     "missing CI simulator name is rejected" \
     select_latest_available_simulator_udid "iPhone 18" "$DEVICE_JSON"
 
+# Exact runtime selection tolerates the same name in other runtimes, but no
+# arbitrary tie break, unavailable device, wrong runtime or malformed identity.
+RUNTIME_JSON='{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
+{"name":"iPhone 17","udid":"11111111-1111-1111-1111-111111111111","isAvailable":true,"state":"Shutdown"}],
+"com.apple.CoreSimulator.SimRuntime.iOS-26-2":[
+{"name":"iPhone 17","udid":"22222222-2222-2222-2222-222222222222","isAvailable":true,"state":"Booted"}]}}'
+assert_equal "$UUID_PHONE_17_A" \
+    "$(select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' "$RUNTIME_JSON")" \
+    "exact runtime avoids duplicate-name ambiguity"
+assert_fails "missing exact runtime is not a fallback" \
+    select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-27-0' "$RUNTIME_JSON"
+assert_fails "unavailable exact device is rejected" \
+    select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' "${RUNTIME_JSON//true/false}"
+assert_fails "malformed exact identity is rejected" \
+    select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' "${RUNTIME_JSON//$UUID_PHONE_17_A/not-a-uuid}"
+assert_fails "duplicate runtime device is not arbitrarily selected" \
+    select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' \
+    "$(jq '.devices["com.apple.CoreSimulator.SimRuntime.iOS-26-5"] *= 2' <<< "$RUNTIME_JSON")"
+assert_equal "$UUID_PHONE_17_B" \
+    "$(select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-2' "$RUNTIME_JSON")" \
+    "already booted exact runtime device remains admissible"
+
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-ios-run-test.XXXXXX")"
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
 

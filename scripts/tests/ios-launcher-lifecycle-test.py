@@ -19,7 +19,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 BASH = os.environ.get("P2PKIT_TEST_BASH", "bash")
 UDID = "11111111-1111-1111-1111-111111111111"
 FAKE_TOOL = r'''#!/usr/bin/env python3
-import os, pathlib, sys, time
+import os, pathlib, sys, time, json
 tool = pathlib.Path(sys.argv[0]).name
 root = pathlib.Path(os.environ["FAKE_IOS_ROOT"])
 args = sys.argv[1:]
@@ -27,7 +27,14 @@ with (root / "tools.log").open("a") as log:
     log.write(tool + " " + " ".join(args) + "\n")
 if tool == "xcrun":
     assert args[0] == "simctl", args
-    if args[1] == "list":
+    if args[1:3] == ["list", "--json"]:
+        print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+            {"name": "iPhone 17", "udid": "11111111-1111-1111-1111-111111111111",
+             "state": "Shutdown", "isAvailable": True}],
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-2": [
+            {"name": "iPhone 17", "udid": "22222222-2222-2222-2222-222222222222",
+             "state": "Shutdown", "isAvailable": True}]}}))
+    elif args[1] == "list":
         print("    iPhone 17 (11111111-1111-1111-1111-111111111111) (Shutdown)")
     elif args[1] == "install":
         (root / "installed-path").write_text(args[3])
@@ -89,10 +96,36 @@ class LauncherLifecycleTest(unittest.TestCase):
         bash_env.write_text("function /usr/libexec/PlistBuddy { printf '%s\\n' p2pkit-sample; }\n")
         self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
                         FAKE_IOS_ROOT=str(self.root), BASH_ENV=str(bash_env), SIM_UDID=UDID)
-        for name in ("IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE"):
+        for name in ("SIM_RUNTIME", "IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE"):
             self.env.pop(name, None)
         self.processes = []
         self.addCleanup(self.stop_processes)
+
+    def test_ui_runtime_selection_reaches_existing_launcher_without_explicit_udid(self):
+        self.finish(self.start('run-ios-ui-tests.sh', SIM_UDID='',
+                               SIM_RUNTIME='com.apple.CoreSimulator.SimRuntime.iOS-26-5'))
+        tools = (self.root / 'tools.log').read_text()
+        self.assertIn('simctl bootstatus ' + UDID + ' -b', tools)
+        self.assertIn('-destination platform=iOS Simulator,id=' + UDID, tools)
+        self.assertIn('xcodebuild ', tools)
+        self.assertFalse(self.lock.exists())
+
+    def test_ui_runtime_selection_rejects_conflicting_explicit_udid_before_mutation(self):
+        self.finish(self.start('run-ios-ui-tests.sh', SIM_UDID='22222222-2222-2222-2222-222222222222',
+                               SIM_RUNTIME='com.apple.CoreSimulator.SimRuntime.iOS-26-5'), expected=1)
+        tools = (self.root / 'tools.log').read_text()
+        self.assertNotIn('bootstatus', tools)
+        self.assertNotIn('xcodegen', tools)
+        self.assertNotIn('xcodebuild', tools)
+        self.assertFalse(self.lock.exists())
+
+    def test_ui_missing_runtime_refuses_without_name_fallback_or_mutation(self):
+        self.finish(self.start('run-ios-ui-tests.sh', SIM_UDID='',
+                               SIM_RUNTIME='com.apple.CoreSimulator.SimRuntime.iOS-27-0'), expected=5)
+        tools = (self.root / 'tools.log').read_text()
+        self.assertNotIn('bootstatus', tools)
+        self.assertNotIn('xcodebuild', tools)
+        self.assertFalse(self.lock.exists())
 
     def stop_processes(self):
         for process in self.processes:

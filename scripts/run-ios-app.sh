@@ -72,6 +72,21 @@ resolve_simulator_udid() {
     esac
 }
 
+# CI pins a reviewed runtime rather than choosing an arbitrary duplicate name.
+# Local callers without SIM_RUNTIME retain the explicit-UDID/name behavior.
+select_runtime_simulator_udid() {
+    local requested_name="$1" requested_runtime="$2" device_json="$3"
+    jq -er --arg name "$requested_name" --arg runtime "$requested_runtime" '
+        [.devices[$runtime][]?
+         | select(.name == $name and .isAvailable == true
+                  and (.state == "Shutdown" or .state == "Booted"))
+         | .udid]
+        | if length == 1 and (.[0] | type == "string" and
+             test("^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")) then .[0]
+          else error("expected one available device in the selected iOS runtime") end
+    ' <<< "$device_json"
+}
+
 select_latest_available_simulator_udid() {
     local requested_name="$1"
     local device_json="$2"

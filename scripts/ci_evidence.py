@@ -126,7 +126,7 @@ TASK_NAMES = frozenset({
     'intel-advertising-prepare', 'intel-advertising-restore',
     "release-tag-controls", "release-identity-controls", "maven-environment-controls",
     "maven-namespace-controls", "maven-coordinate-controls", "maven-upload-controls",
-    "wrapper", "layout", "links", "release-metadata", "workflow-contract", "workflow-controls", "workflow-syntax",
+    "wrapper", "layout", "links", "release-metadata", "ios-launcher-controls", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
     "embedded-jmdns-aar-test.py", "embedded-jmdns-archive-controls", "intel-bonjour-environment-test.py",

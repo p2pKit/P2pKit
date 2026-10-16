@@ -74,6 +74,7 @@ def commands(component):
             ('layout', bash + ['scripts/tests/check-repository-layout.sh']),
             ('links', bash + ['scripts/tests/check-markdown-links.sh']),
             ('release-metadata', bash + ['scripts/check-release-metadata.sh']),
+            ('ios-launcher-controls', bash + ['scripts/tests/run-ios-app-test.sh']),
             *[(name, bash + ['scripts/tests/' + script + '-test.sh']) for name, script in (
                 ('release-tag-controls', 'check-release-tag'),
                 ('release-identity-controls', 'check-release-identity'),
@@ -153,7 +154,8 @@ def commands(component):
                 ('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh']),
                 ('xcframework', gradle + [':p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance']),
                 ('minimum-apple-os', bash + ['scripts/check-xcframework-minimum-os.sh']),
-                ('swift-ui', bash + ['scripts/run-ios-ui-tests.sh'])]
+                ('swift-ui', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
+                              *bash, 'scripts/run-ios-ui-tests.sh'])]
     if component == 'security':
         # The existing pinned scanner wrapper preserves findings, errors and SARIF.
         return [('osv-lock-coverage', bash + ['scripts/tests/check-osv-lockfile-coverage.sh']),

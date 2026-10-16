@@ -151,6 +151,16 @@ class ComponentTests(unittest.TestCase):
                                 ('desktop-windows', ':p2p-sample-desktop-ui:packageMsi'),
                                 ('desktop-macos', ':p2p-sample-desktop-ui:packageDmg')]:
             self.assertTrue(any(task in argv for _, argv in C.commands(component)))
+    def test_swift_ui_uses_exact_reviewed_runtime_and_retains_launcher_controls(self):
+        command = dict(C.commands('compatibility'))['swift-ui']
+        self.assertEqual(command, ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
+                                   'bash', 'scripts/run-ios-ui-tests.sh'])
+        spec = importlib.util.spec_from_file_location('swift_simulator_policy', ROOT / 'scripts/hosted_full_simulator.py')
+        policy = importlib.util.module_from_spec(spec); spec.loader.exec_module(policy)
+        self.assertEqual(command[1], 'SIM_RUNTIME=' + policy.HOSTS['macos-arm64']['runtime'])
+        self.assertEqual(dict(C.commands('source'))['ios-launcher-controls'],
+                         ['bash', 'scripts/tests/run-ios-app-test.sh'])
+
     def test_compatibility_has_actual_checks(self):
         names = {x[0] for x in C.commands('compatibility')}
         self.assertTrue({'abi-graph', 'api-abi', 'documentation', 'sbom', 'publication-shape',
