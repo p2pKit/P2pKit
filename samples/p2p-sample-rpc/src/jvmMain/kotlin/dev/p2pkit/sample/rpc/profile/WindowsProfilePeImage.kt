@@ -35,12 +35,25 @@ internal object WindowsProfilePeImage {
         return Reader(image.copyOf()).verify()
     }
 
+    /** Internal byte observations for the dormant code comparator; never a native memory view. */
+    internal data class CodeSection(val rva: Long, val virtualBytes: Int, val rawBytes: ByteArray,
+        val relocations: List<Int>)
+    internal data class CodeLayout(val sha256: String, val fileBytes: Int, val imageBytes: Long,
+        val preferredBase: Long, val sections: List<CodeSection>)
+
+    internal fun codeLayout(image: ByteArray): CodeLayout {
+        require(image.size in 512..MAXIMUM_BYTES) { "Unsupported PE image size" }
+        return Reader(image.copyOf()).codeLayout()
+    }
+
     private class Reader(private val bytes: ByteArray) {
         private data class Section(val virtual: Long, val size: Long, val raw: Long, val rawSize: Long,
-            val mappedSize: Long, val executable: Boolean)
+            val mappedSize: Long, val executable: Boolean, val discardable: Boolean)
         private val sections = mutableListOf<Section>()
         private val directories = mutableListOf<Pair<Long, Long>>()
         private val immutableMetadata = mutableListOf<LongRange>()
+        private var preferredBase = 0L
+        private var relocationWrites: List<Long> = emptyList()
         private fun check(value: Boolean) = require(value) { "Unsupported or malformed Windows profile PE image" }
         private fun span(at: Long, count: Long): Int {
             check(at >= 0 && count >= 0 && at <= bytes.size.toLong() && count <= bytes.size.toLong() - at)
@@ -100,6 +113,7 @@ internal object WindowsProfilePeImage {
             val optional = pe + 24
             span(optional, 240)
             check(u16(optional) == 0x20b && u64(optional + 24) > 0 && u64(optional + 24) % 65536 == 0L)
+            preferredBase = u64(optional + 24)
             val sectionAlignment = u32(optional + 32)
             val fileAlignment = u32(optional + 36)
             check(powerOfTwo(fileAlignment) && fileAlignment in 512..65536 &&
@@ -136,7 +150,8 @@ internal object WindowsProfilePeImage {
                 }
                 val mappedSize = align(maxOf(size, rawSize), sectionAlignment)
                 check(virtual <= imageSize && mappedSize <= imageSize - virtual)
-                sections += Section(virtual, size, raw, rawSize, mappedSize, executable)
+                sections += Section(virtual, size, raw, rawSize, mappedSize, executable,
+                    flags and 0x02000000 != 0L)
             }
             val virtual = sections.sortedBy { it.virtual }
             check(virtual.zipWithNext().all { (a, b) -> a.virtual + a.mappedSize <= b.virtual })
@@ -165,6 +180,25 @@ internal object WindowsProfilePeImage {
                 Collections.unmodifiableSet(namedExports.mapTo(linkedSetOf()) { it.name }),
                 Collections.unmodifiableList(namedExports), imageSize, certificate)
         }
+        fun codeLayout(): CodeLayout {
+            val image = verify()
+            val executable = sections.filter { it.executable }
+            check(executable.isNotEmpty() && executable.none { it.discardable })
+            val code = executable.map { section ->
+                // PE VirtualSize is the loaded logical size. File/page padding needs separate verification.
+                val rawBytes = minOf(section.size, section.rawSize)
+                val offset = span(section.raw, rawBytes)
+                val relocations = relocationWrites.filter {
+                    it >= section.virtual && it < section.virtual + section.size
+                }
+                    .map { (it - section.virtual).toInt() }
+                CodeSection(section.virtual, section.size.toInt(), bytes.copyOfRange(offset, offset + rawBytes.toInt()),
+                    Collections.unmodifiableList(relocations))
+            }
+            return CodeLayout(image.sha256, bytes.size, image.imageBytes, preferredBase,
+                Collections.unmodifiableList(code))
+        }
+
         private fun certificateTable(rawEnd: Long): Boolean {
             val (offset, size) = directories[4]
             if (size == 0L) { check(rawEnd == bytes.size.toLong()); return false }
@@ -332,6 +366,7 @@ internal object WindowsProfilePeImage {
             check(cursor == size)
             writes.sort()
             for (index in 1 until writes.size) check(writes[index - 1] + 8 <= writes[index])
+            relocationWrites = writes
         }
     }
 }

@@ -651,3 +651,29 @@ Inert regression images cover an actual address slot overlapping a referenced ex
 nonoverlapping tables, and declared IAT ranges enclosing other metadata. These checks do not resolve imports,
 execute Windows loader behavior, identify actual import providers or authorize a candidate DLL. They add no
 bootstrap authority and do not enable the partial native component or change its ABI/capabilities.
+
+## Dormant mapped-code and import comparisons
+
+`WindowsProfileMappedCode.prepare` privately snapshots and reparses the original DLL and requires its digest,
+file length and `SizeOfImage` to match the independently supplied byte authorization. Its bounded comparison
+requires every executable section exactly once at the same actual module base. It compares logical
+`VirtualSize` bytes: original raw-backed bytes, validated AMD64 `DIR64` updates using unsigned 64-bit addition,
+and any logical zero-filled tail. It rejects executable discardable sections for this supported plan rather
+than assuming their continued availability. This does not narrow the existing structural-only PE reader.
+
+File-alignment and page-alignment padding are deliberately **not compared**; executable padding and actual
+page protections need separate verification before productive use. Headers, writable data, other metadata,
+native mapping identity and physical module ownership are also outside this comparator. No arbitrary masking
+of executable code or hotpatch tolerance is introduced. Inputs are inert bounded readbacks, not native views.
+
+`WindowsProfileImportAddresses` separately requires every original logical DLL/function pair and actual IAT
+slot exactly once. Each observed slot value must equal that import's independently resolved original export
+address, not merely an address inside some allowed library. Legitimate forwarding or linker folding may yield
+the same target for distinct names. The logical import name does not identify or authorize the physical
+forwarded provider; the productive loader must independently establish and retain its original identity.
+Import terminators and padding require separate checks.
+
+Neither helper performs Windows calls, establishes first-load authority, opens a profile, publishes a provider,
+or changes ABI13/`0x43`, availability, the MSI or application selector. Their tests prove bounded byte/address
+algorithms only. Trusted bootstrap/installed-root authority, productive constrained loading, actual mapping and
+provider observations, full-provider activation, and real Windows qualification remain distinct requirements.
