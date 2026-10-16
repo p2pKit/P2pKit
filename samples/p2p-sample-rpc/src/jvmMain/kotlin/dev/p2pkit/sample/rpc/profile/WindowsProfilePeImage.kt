@@ -55,6 +55,15 @@ internal object WindowsProfilePeImage {
         return Reader(image.copyOf()).iatLayout()
     }
 
+    /** Exact already-verified export directory bounds for the fixed non-forwarded lookup mechanism. */
+    internal data class ExportLayout(val sha256: String, val fileBytes: Int, val imageBytes: Long,
+        val directoryRva: Long, val directoryBytes: Long, val namedExports: List<NamedExport>)
+
+    internal fun exportLayout(image: ByteArray): ExportLayout {
+        require(image.size in 512..MAXIMUM_BYTES) { "Unsupported PE image size" }
+        return Reader(image.copyOf()).exportLayout()
+    }
+
     private class Reader(private val bytes: ByteArray) {
         private data class Section(val virtual: Long, val size: Long, val raw: Long, val rawSize: Long,
             val mappedSize: Long, val executable: Boolean, val discardable: Boolean)
@@ -221,6 +230,12 @@ internal object WindowsProfilePeImage {
             val offset = mapped(rva, size).toInt()
             return IatLayout(image.sha256, bytes.size, image.imageBytes, rva,
                 bytes.copyOfRange(offset, offset + size.toInt()), image.namedImports)
+        }
+
+        fun exportLayout(): ExportLayout {
+            val image = verify()
+            val (rva, size) = directories[0]
+            return ExportLayout(image.sha256, bytes.size, image.imageBytes, rva, size, image.namedExports)
         }
 
         private fun certificateTable(rawEnd: Long): Boolean {

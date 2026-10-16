@@ -598,3 +598,30 @@ Held-file hashing is **not** loaded-image identity, protection from pre-existing
 writable mappings, first-call authority, installed package approval or productive
 provider activation. Windows loading and original JNI/provider assembly still
 require the independently established startup/package/runtime boundary.
+
+## Fixed packaged byte-verifier connection
+
+`WindowsPackagedVerifier` connects this named module to the existing Java17
+`WindowsProfilePackagedVerifier` in the maintained application's system
+classloader. It uses only fixed public method signatures and fixed class names;
+there is no caller-selected classloader, accessibility override, module-read
+change or classpath fallback for the adapter. The original compiled JNI
+declaring class is retained without initializing it or calling any native method.
+
+The Java17 helper reuses the maintained PE, manifest, mapped-header/code,
+full-IAT and JNI-plan verifiers rather than copying their parsers. It snapshots
+bounded inputs before multiple comparisons. Plans expose defensive copies of
+original image/export bounds, import/export inventories and page-bounded read
+requests. Complete readback comparison returns the 23 JNI addresses in their
+fixed registration order plus the separate registrar address. The named-module
+side independently bounds returned arrays, ranges, names and address relations.
+
+These are **data comparisons, not native-call authority**. Input pins must later
+come from an independently approved package; supplied addresses and page arrays
+must later come from the loader's original retained owners and constrained reads.
+Matching data, a system classloader relationship or a returned declaring class
+does not establish installation, loaded mappings, import-provider identity or
+permission to register JNI. No library is loaded by this bridge, and the public
+productive loader continues to refuse. Test fixtures remain outside both
+production artifacts; connected development-JVM tests are not installed-runtime
+or protected-profile qualification.

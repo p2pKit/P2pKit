@@ -7,6 +7,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import java.security.MessageDigest
 import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 
@@ -199,23 +200,38 @@ val rpcWindowsLoaderJdk21Jar = tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
 val windowsControlsJdk17 = extensions.getByType<JavaToolchainService>().launcherFor {
     languageVersion.set(JavaLanguageVersion.of(17))
 }
+// Only explicit adapter verification/Windows JVM tests compile this inert connection fixture.
+// Depend on compilation outputs, never jvmTest itself (which already depends on verification on Windows).
+val windowsVerifierCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test")
+val windowsVerifierClasspath = files(mainCompilation.output.allOutputs, mainCompilation.runtimeDependencyFiles,
+    windowsVerifierCompilation.output.allOutputs, windowsVerifierCompilation.runtimeDependencyFiles)
 val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJdk21") {
     group = "verification"
     description = "Exercise disabled-adapter invocation/refusal controls; not installed Windows qualification."
     dependsOn(rpcWindowsLoaderJdk21Jar)
+    dependsOn(windowsVerifierClasspath)
     workingDir(rootProject.layout.projectDirectory)
     inputs.file(rootProject.file("scripts/tests/check-rpc-windows-loader-jdk21.py"))
     inputs.dir(layout.projectDirectory.dir("native/windows-loader-jdk21/src/test/java"))
+    inputs.files(windowsVerifierClasspath)
     outputs.upToDateWhen { false }
     doFirst {
         val reports = rootProject.layout.buildDirectory.dir("reports/rpc-windows-loader-jdk21").get().asFile.toPath()
         Files.createDirectories(reports)
         // Never erase or overwrite a prior result. The maintained runner creates its fresh controls directory.
         val attempt = Files.createTempDirectory(reports, "attempt-").resolve("controls")
+        val applicationClasspath = attempt.parent.resolve("application-classpath.json")
+        Files.writeString(applicationClasspath, JsonOutput.toJson(mapOf(
+            "schema" to 1,
+            "mainClassDirectories" to mainCompilation.output.classesDirs.files.filter { it.isDirectory }
+                .map { it.absolutePath },
+            "classpath" to windowsVerifierClasspath.files.filter { it.exists() }.map { it.absolutePath },
+        )) + "\n", StandardOpenOption.CREATE_NEW)
         commandLine("python3", "-I", "-B", "scripts/tests/check-rpc-windows-loader-jdk21.py",
             "--java21", windowsLoaderJdk21.get().metadata.installationPath.asFile.absolutePath,
             "--java17", windowsControlsJdk17.get().metadata.installationPath.asFile.absolutePath,
             "--jar", rpcWindowsLoaderJdk21Jar.get().archiveFile.get().asFile.absolutePath,
+            "--application-classpath", applicationClasspath.toString(),
             "--output", attempt.toString())
     }
 }

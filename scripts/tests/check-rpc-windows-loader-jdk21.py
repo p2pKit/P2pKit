@@ -46,7 +46,7 @@ def observation(text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("java21", "java17", "jar", "output"):
+    for name in ("java21", "java17", "jar", "output", "application-classpath"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
     require(not any(os.environ.get(name) for name in (
@@ -67,6 +67,7 @@ def main():
                         "InstallationSecurityTests" in name or
                         "AncestorRetirementTests" in name or
                         "ByteReadInvocationTests" in name or
+                        "PackagedVerifierTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -78,6 +79,44 @@ def main():
     java17 = args.java17.resolve(strict=True) / "bin" / ("java" + suffix)
     javac = args.java21.resolve(strict=True) / "bin" / ("javac" + suffix)
     records = []
+
+    # Real development application classes enter only the new connection JVMs, never the existing
+    # isolated refusal/native-mechanics controls. This manifest is test provenance, not installed authority.
+    classpath_file = args.application_classpath.resolve(strict=True)
+    require(classpath_file.stat().st_size <= 65536, "Unbounded development application classpath")
+    application = json.loads(classpath_file.read_text(encoding="utf-8"))
+    require(isinstance(application, dict) and set(application) == {"schema", "mainClassDirectories", "classpath"} and
+            type(application["schema"]) is int and application["schema"] == 1,
+            "Unexpected development classpath descriptor")
+
+    def paths(values, limit):
+        require(isinstance(values, list) and 1 <= len(values) <= limit and
+                all(isinstance(item, str) and 0 < len(item) <= 4096 and Path(item).is_absolute() and
+                    not any(char in item for char in "\x00\r\n") for item in values), "Invalid application classpath entries")
+        result = [Path(item).resolve(strict=True) for item in values]
+        require(len(result) == len(set(result)), "Duplicate application classpath entries")
+        return result
+
+    main_directories = paths(application["mainClassDirectories"], 16)
+    application_paths = paths(application["classpath"], 256)
+    require(all(path.is_dir() and path in application_paths for path in main_directories),
+            "Actual main class outputs are missing from the development classpath")
+    resources = ["dev/p2pkit/sample/rpc/profile/" + name + ".class" for name in
+                 ("WindowsProfilePackagedVerifier", "WindowsProfileCustodyJni")]
+    candidates = [path for path in main_directories if all((path / resource).is_file() for resource in resources)]
+    require(len(candidates) == 1, "Original compiled helper/JNI class output is ambiguous or absent")
+    main_directory = candidates[0]
+    bindings = []
+    for resource in resources:
+        with (main_directory / resource).open("rb") as source:
+            value = source.read(1024 * 1024 + 1)
+        require(8 <= len(value) <= 1024 * 1024 and value[:8] == bytes.fromhex("cafebabe0000003d"),
+                "Connection requires actual Java-17 helper/JNI class bytes")
+        bindings.append({"resource": resource, "bytes": len(value), "sha256": hashlib.sha256(value).hexdigest()})
+    (output / "application-bindings.json").write_text(json.dumps({
+        "scope": "DEVELOPMENT_MAIN_CLASS_BINDING_NOT_INSTALLED_AUTHORITY", "mainClassDirectory": str(main_directory),
+        "classpath": [str(path) for path in application_paths], "classes": bindings,
+    }, indent=2) + "\n", encoding="utf-8")
 
     def run(name, command, expected, stdout=None, stderr=None):
         # Fixed compiler/controls, including Windows system-only investigation. Not installed-app supervision.
@@ -125,6 +164,27 @@ def main():
     run("compile-models", [javac, "-J-Xmx256m", "--release", "21", "--enable-preview", "-proc:none",
                            "-encoding", "UTF-8", "-Xlint:all,-preview", "-Werror", "--module-path", jar,
                            "--patch-module", MODULE + "=" + str(test_sources), "-d", classes, *sources], 0)
+    packaged_cases = ["success", "missing-helper", "invalid-pin", "manifest-pin", "header-byte", "code-byte",
+                      "iat-byte", "export-address", "page-count"]
+    empty_classpath = output / "empty-application-classpath"
+    empty_classpath.mkdir()
+    for case in packaged_cases:
+        connected = base[1:] + access + ["--patch-module", MODULE + "=" + str(classes)]
+        connected += ["--class-path", str(empty_classpath) if case == "missing-helper" else
+                      os.pathsep.join(str(path) for path in application_paths)]
+        connected += ["--module", MODULE + "/" + PACKAGE + ".PackagedVerifierTests", case, str(main_directory),
+                      bindings[0]["sha256"], bindings[1]["sha256"]]
+        # Java argument files avoid Windows' process-command limit. Quote every token, including backslashes;
+        # do not use a shell or an ambient/current-directory classpath fallback.
+        require(all(not any(char in str(item) for char in "\x00\r\n") for item in connected), "Invalid Java argument")
+        arguments = "\n".join('"' + str(item).replace("\\", "\\\\").replace('"', '\\"') + '"' for item in connected) + "\n"
+        require(len(arguments.encode("utf-8")) <= 256 * 1024, "Unbounded connected Java command")
+        argument_file = output / ("packaged-verifier-" + case + ".args")
+        with argument_file.open("x", encoding="utf-8", newline="\n") as target:
+            target.write(arguments)
+        run("packaged-verifier-" + case, [java21, "@" + str(argument_file)], 0,
+            "WINDOWS_PACKAGED_VERIFIER_PASS case=" + re.escape(case) +
+            r" scope=REAL_JDK21_TO_JDK17_BYTE_COMPARISON_NOT_LOAD_OR_AUTHORITY\n", "")
     models, _ = run("models", base + access + ["--patch-module", MODULE + "=" + str(classes),
                          "--module", MODULE + "/" + PACKAGE + ".ModelTests"], 0,
                    r"WINDOWS_LOADER_JDK21_MODELS_PASS tests=14 "
@@ -240,6 +300,11 @@ def main():
         run("system-bootstrap-bytes", base + access + bootstrap_entry + ["bytes"], 0,
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=bytes scope=" + original_bytes_scope + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
+    for binding in bindings:
+        with (main_directory / binding["resource"]).open("rb") as source:
+            value = source.read(1024 * 1024 + 1)
+        require(len(value) == binding["bytes"] and hashlib.sha256(value).hexdigest() == binding["sha256"],
+                "Actual main helper/JNI class bytes changed during controls")
     result = {"scope": "JDK21_CONTROLS_AND_CONDITIONAL_SYSTEM_BOOTSTRAP_NOT_INSTALLED_OR_PROFILE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
               "observation": actual, "modelResult": models.strip(),
