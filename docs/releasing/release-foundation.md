@@ -13,16 +13,29 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current source is not yet a published `0.8.0-rc1`. The landing candidate is
-combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466), preserving both the
-modular Foundation history (`6014595493b59e57a1a17fc3c67d378ca5accbbe`) and agreed
-RPC history (`68d470189773d56d939c0add0a39ef929739e7bb`), with their subsequent
-integration fixes. This supersedes the earlier separate Foundation-first landing
-plan; it does not authorize a merge or closing [RPC PR #463](https://github.com/p2pKit/P2pKit/pull/463).
-The combined revision and its 14-lockfile graph must pass the protected checks
-and receive final exact-head owner approval. Historical branch results do not
-qualify a new combined commit, and the actual main merge needs its own release
-qualification before separately approved tagging or publication.
+The current source prepares unpublished **`0.8.0-rc2`**; owner authorization covers
+preparation only, not merge, tagging, signing or publication. Combined
+[PR #466](https://github.com/p2pKit/P2pKit/pull/466) and release-admission
+[PR #467](https://github.com/p2pKit/P2pKit/pull/467) have already merged, preserving
+both Foundation history (`6014595493b59e57a1a17fc3c67d378ca5accbbe`) and agreed
+RPC history (`68d470189773d56d939c0add0a39ef929739e7bb`) with integration fixes.
+This replaced the earlier separate Foundation-first landing plan; it does not
+change [RPC PR #463](https://github.com/p2pKit/P2pKit/pull/463)'s status or authorize
+any further merge.
+
+Immutable `v0.8.0-rc1` remains at main commit
+`8700583a5ae5aeaf5c77edee2a3ed4f5bd9a2d2c`. Its Maven
+[run38941438027/1](https://github.com/p2pKit/P2pKit/actions/runs/38941438027) failed
+before signing/upload because the internal namespace preflight returned HTTP401.
+The rc2 candidate carries the reviewed supported-API preflight repair described in
+[the Maven release guide](maven-central.md); it does not alter the old tag or
+reclassify its failure. No Maven release or sample publication is claimed.
+
+The new exact source/version and 14-lockfile graph must pass required checks and
+receive final exact-head merge approval, followed by qualification on the actual
+new main commit and its own four application artifacts. Neither earlier branch
+results nor rc1's qualification/frozen artifacts qualify rc2. Separate tag,
+frozen-set signing/Maven and sample-publication approvals remain required.
 
 ## Independent components
 
