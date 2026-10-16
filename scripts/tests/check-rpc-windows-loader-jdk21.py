@@ -313,7 +313,7 @@ def main():
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=bytes scope=" + original_bytes_scope + r"\n", "")
     run("test-dll-compiler-budget", [sys.executable, "-I", "-B",
         ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm/test-build-test-dll.py"], 0,
-        r"WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=12 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION\n", "")
+        r"WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=13 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION\n", "")
     loaded_registration_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     if os.name == "nt":
         # A distinct development fixture, never the productive DLL or profile backend. Finish the existing

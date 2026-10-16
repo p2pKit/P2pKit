@@ -146,7 +146,10 @@ def compile_fixture(progress):
     environment = {"PATH": ";".join(str(path) for path in (system32,
                        system32 / "WindowsPowerShell/v1.0", system32 / "Wbem")),
                    "SystemRoot": str(system), "WINDIR": str(system),
-                   "ComSpec": str(command_processor), "SystemDrive": system.drive, "VSLANG": "1033"}
+                   "ComSpec": str(command_processor), "SystemDrive": system.drive, "VSLANG": "1033",
+                   # Microsoft STL CI uses this supported optional setup-telemetry opt-out. Apply it
+                   # only to our reconstructed child environment, never machine/user configuration.
+                   "VSCMD_SKIP_SENDTELEMETRY": "1"}
     # VS setup may query these fixed installed-tool locations; no credentials, Java overrides or compiler
     # response flags are inherited. Actual compiler flags are cleared again inside each batch child.
     for name in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
@@ -162,6 +165,7 @@ def compile_fixture(progress):
     records = []
     receipt = {"schema": 1, "scope": SCOPE, **original, "result": "FAIL",
                "inputScope": "SELECTED_DIRECT_INPUTS_NOT_TRANSITIVE_SDK_PROVENANCE",
+               "vsDevCmdEnvironment": {"VSCMD_SKIP_SENDTELEMETRY": environment["VSCMD_SKIP_SENDTELEMETRY"]},
                "sources": source_inputs, "tools": selected_tools, "commands": records,
                "nativeExecution": "NOT_PERFORMED", "profileBackend": "NOT_LINKED", "packaging": "NOT_PERFORMED"}
 

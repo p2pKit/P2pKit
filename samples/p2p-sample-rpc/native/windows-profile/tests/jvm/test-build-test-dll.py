@@ -127,6 +127,14 @@ class BudgetTests(unittest.TestCase):
             self.assertEqual(receipt["nativeExecution"], "NOT_PERFORMED")
             self.assertNotIn("dll", receipt)
 
+    def test_compiler_environment_explicitly_skips_optional_vs_telemetry(self):
+        source = ast.parse(SCRIPT.read_text())
+        environment = next(node.value for node in ast.walk(source) if isinstance(node, ast.Assign) and
+                           any(isinstance(target, ast.Name) and target.id == "environment"
+                               for target in node.targets))
+        settings = {ast.literal_eval(key): value for key, value in zip(environment.keys, environment.values)}
+        self.assertEqual(ast.literal_eval(settings["VSCMD_SKIP_SENDTELEMETRY"]), "1")
+
     def test_only_compiler_wrapper_has_a_distinct_total_budget(self):
         root = SCRIPT.resolve().parents[6]
         checker = ast.parse((root / "scripts/tests/check-rpc-windows-loader-jdk21.py").read_text())
@@ -145,7 +153,7 @@ if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(BudgetTests)
     transcript = io.StringIO()
     result = unittest.TextTestRunner(stream=transcript).run(suite)
-    if not result.wasSuccessful():
+    if not result.wasSuccessful() or result.testsRun != 13:
         print(transcript.getvalue())
         raise SystemExit(1)
-    print("WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=12 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION")
+    print("WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=13 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION")

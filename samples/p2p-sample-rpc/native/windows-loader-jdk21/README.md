@@ -669,9 +669,17 @@ observations and hashing. Each tool/Git call keeps its existing 15/60-second
 phase cap, shortened to the remaining total. Only its outer wrapper permits
 180 seconds so terminal receipts/retirement do not compete with the compiler's
 work budget. All existing JVM controls and actual DLL/JNI children retain their
-60-second bounds; canonical whole-component supervision is unchanged. Twelve
+60-second bounds; canonical whole-component supervision is unchanged. Thirteen
 portable inert-clock regressions verify this composition and failure reporting,
 not real compiler timing. A timeout records an uncompleted command instead of
 losing it or inventing an exit; original diagnostics stay private and public
 failure labels contain only the fixed phase/timeout category. Neither an inner
 timeout nor a receipt alone proves descendant retirement.
+
+Both compiler setup calls explicitly opt out of optional Visual Studio command
+telemetry through `VSCMD_SKIP_SENDTELEMETRY=1` in the child environment only. The
+fresh reconstructed environment must not accidentally re-enable this unrelated
+tool activity. The receipt records that fixed setting. This follows Microsoft's
+STL CI setup practice; no machine environment, registry, installed tool, compiler
+security flag, execution policy or native-test deadline is changed. It does not
+prove that telemetry caused any previously observed setup timeout.
