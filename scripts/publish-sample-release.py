@@ -489,9 +489,17 @@ def checks(api, sha, contexts, event, pull_number=None):
         row = latest([x for x in rows if x.get("name") == name], "Missing required check: " + name)
         need(row.get("head_sha") == sha and row.get("status") == "completed" and row.get("conclusion") == "success",
              "Required check not successful: " + name)
-        app = row.get("app", {}).get("slug")
+        publisher = row.get("app")
+        need(type(publisher) is dict, "Missing required-check publisher")
+        app = publisher.get("slug")
         if name == "osv-scanner":
-            need(app == "github-code-scanning", "Unexpected OSV required-check publisher")
+            # SARIF checks are issued by GitHub Advanced Security, not the
+            # workflow uploader or the historical synthetic fixture slug.
+            owner = publisher.get("owner")
+            need(app == "github-advanced-security" and type(publisher.get("id")) is int and
+                 publisher["id"] == 57789 and type(owner) is dict and owner.get("login") == "github" and
+                 type(owner.get("id")) is int and owner["id"] == 9919,
+                 "Unexpected OSV required-check publisher")
         else:
             need(app == "github-actions", "Unexpected required-check publisher")
             match = re.fullmatch(r"https://github\.com/" + re.escape(REPO) + r"/actions/runs/([1-9][0-9]*)/job/([1-9][0-9]*)",

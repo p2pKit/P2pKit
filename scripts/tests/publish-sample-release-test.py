@@ -31,6 +31,9 @@ SOURCE, TREE, HEAD = "1" * 40, "2" * 40, "3" * 40
 PR_CONTEXTS = {"complete-gate", "review", "scan / osv-scan", "osv-scanner"}
 MAIN_CONTEXTS = {"complete-gate", "scan / osv-scan"}
 OWNER = {"login": R.OWNER_LOGIN, "id": R.OWNER_ID, "type": "User"}
+# Actual GitHub SARIF-check publisher observed on PR466; no publication authority.
+OSV_PUBLISHER = {"slug": "github-advanced-security", "id": 57789,
+                 "owner": {"login": "github", "id": 9919}}
 CREATED, EXPIRES = "2026-09-15T10:15:00Z", "2026-09-29T10:15:00Z"
 NOW = R.timestamp("2026-09-20T15:00:00Z")
 
@@ -80,7 +83,7 @@ class FakeApi:
             for i, name in enumerate(sorted(contexts), start=100 if sha == HEAD else 200):
                 rows.append({"id": i, "name": name, "head_sha": sha, "status": "completed", "conclusion": "success",
                     "completed_at": "2026-09-15T09:00:00Z" if sha == HEAD else "2026-09-15T10:30:00Z",
-                    "app": {"slug": "github-code-scanning" if name == "osv-scanner" else "github-actions"},
+                    "app": copy.deepcopy(OSV_PUBLISHER) if name == "osv-scanner" else {"slug": "github-actions"},
                     "details_url": f"https://github.com/{R.REPO}/actions/runs/{i}/job/{i}"})
                 if name != "osv-scanner":
                     self.data[f"/actions/runs/{i}"] = run(i, R.CHECK_WORKFLOWS[name], sha, event)
@@ -364,6 +367,63 @@ class ReleaseTest(unittest.TestCase):
                 with self.subTest(name=name, change=change), self.assertRaises(R.Hold):
                     self.plan()
         self.assertEqual([], self.api.mutations)
+
+    def test_actual_github_security_check_projection_admits_without_publication(self):
+        # Minimal exact public projection of check116913888164. This is only
+        # checks() admission, not a fabricated owner approval or live publication.
+        source = "b94d0708235c0df7f20a3bd1c9db3c316fc64ad1"
+        path = f"/commits/{source}/check-runs?filter=all"
+        row = {"id": 116913888164, "name": "osv-scanner", "head_sha": source,
+               "status": "completed", "conclusion": "success", "completed_at": "2026-10-16T09:48:33Z",
+               "app": {"slug": "github-advanced-security", "id": 57789,
+                       "owner": {"login": "github", "id": 9919}},
+               "details_url": "https://github.com/p2pKit/P2pKit/runs/116913888164"}
+        self.api.collections[path] = [row]
+        result = R.checks(self.api, source, {"osv-scanner"}, "pull_request", 466)
+        self.assertEqual(result, [{"id": row["id"], "name": "osv-scanner", "sha": source,
+                                  "app": "github-advanced-security", "completedAt": row["completed_at"],
+                                  "url": row["details_url"]}])
+        self.assertEqual(self.api.mutations, [])
+
+    def test_security_check_requires_exact_typed_app_and_owner_identity(self):
+        path = f"/commits/{HEAD}/check-runs?filter=all"
+        row = next(x for x in self.api.collections[path] if x["name"] == "osv-scanner")
+        bad_apps = [None, [], "github-advanced-security", {},
+                    {**OSV_PUBLISHER, "owner": None}, {**OSV_PUBLISHER, "owner": []}]
+        for field, values in (("slug", (None, "github-code-scanning", "github-actions", "other")),
+                              ("id", (None, "57789", True, 57789.0, 57790))):
+            bad_apps.extend({**copy.deepcopy(OSV_PUBLISHER), field: value} for value in values)
+        for field, values in (("login", (None, "GitHub", "other")),
+                              ("id", (None, "9919", True, 9919.0, 9920))):
+            bad_apps.extend({**copy.deepcopy(OSV_PUBLISHER),
+                             "owner": {**OSV_PUBLISHER["owner"], field: value}} for value in values)
+        for field in ("slug", "id", "owner"):
+            app = copy.deepcopy(OSV_PUBLISHER); del app[field]; bad_apps.append(app)
+        for field in ("login", "id"):
+            app = copy.deepcopy(OSV_PUBLISHER); del app["owner"][field]; bad_apps.append(app)
+        for app in bad_apps:
+            row["app"] = app
+            with self.subTest(app=app), self.assertRaises(R.Hold):
+                R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+        del row["app"]
+        with self.assertRaises(R.Hold):
+            R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+        row["app"] = copy.deepcopy(OSV_PUBLISHER)
+        self.assertEqual(len(R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)), 4)
+        self.assertEqual(self.api.mutations, [])
+
+    def test_genuine_security_publisher_does_not_hide_latest_failed_or_wrong_source_check(self):
+        path = f"/commits/{HEAD}/check-runs?filter=all"
+        original = next(x for x in self.api.collections[path] if x["name"] == "osv-scanner")
+        for change in ({"status": "in_progress", "conclusion": None}, {"conclusion": "failure"},
+                       {"conclusion": "skipped"}, {"head_sha": SOURCE},
+                       {"app": {**copy.deepcopy(OSV_PUBLISHER), "id": 57790}}):
+            latest = {**copy.deepcopy(original), "id": original["id"] + 1000, **change}
+            self.api.collections[path].append(latest)
+            with self.subTest(change=change), self.assertRaises(R.Hold):
+                R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+            self.api.collections[path].pop()
+        self.assertEqual(self.api.mutations, [])
 
     def test_each_main_workflow_check_is_required_despite_successful_pr_checks(self):
         path = f"/commits/{SOURCE}/check-runs?filter=all"
