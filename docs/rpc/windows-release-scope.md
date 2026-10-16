@@ -23,6 +23,17 @@ carry the accepted testing risk into its existing candidate/approval records. A 
 enforced by that pipeline is not satisfied by changing its result to PASS or deleting it.
 No version, runtime, installer, availability flag or loading path changes in this record.
 
+## Current candidate preparation — 2026-10-16
+
+The owner authorized preparing **0.8.0-rc2** after rc1's Central preflight failure.
+This changes release metadata and the supported namespace-query preflight, not
+Windows implementation, MSI packaging or any limitation listed below. The dated
+October13 decision above remains historical; this preparation note does not
+manufacture renewed publication approval or claim deferred tests have passed.
+The new exact candidate still needs its required checks, artifact freeze and
+separate merge/tag/signing/publication approvals. Windows sample RPC Host/Client
+remains technically unavailable, with the existing fail-closed paths preserved.
+
 ## Experimental Windows status — implementation is not merely untested
 
 The shared JVM RPC library and the Windows sample's native protected-profile provider are
