@@ -253,7 +253,7 @@ class RecoveryTests(unittest.TestCase):
         value = self.original()
         self.assertEqual("failure", value["originalConclusion"])
         self.assertEqual(4, len(value["qualification"]["artifacts"]))
-        self.assertEqual(13, len(value["qualification"]["evidence"]))
+        self.assertEqual(14, len(value["qualification"]["evidence"]))
         self.assertEqual(self.frozen_plan["frozenApplicationSet"], value["frozenApplicationSet"])
         self.assertEqual("failure", self.api.data["/actions/runs/900"]["conclusion"])
         with self.assertRaises(ValueError):
