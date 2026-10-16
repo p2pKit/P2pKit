@@ -66,6 +66,7 @@ def main():
                         "SystemBootstrapCandidateTests" in name or
                         "InstallationSecurityTests" in name or
                         "AncestorRetirementTests" in name or
+                        "ByteReadInvocationTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -166,6 +167,13 @@ def main():
                   "retired-frame", "null-module", "unaligned-module", "high-module", "readback-failure",
                   "clear-failure", "closed-entry", "late-scope-close", "return-failure"]
     capture_scope = "WINDOWS_GET_LAST_ERROR" if os.name == "nt" else "NOT_EXECUTED"
+    byte_cases = ["full", "short", "eof", "false", "pending", "throw-after-return", "excess-count",
+                  "unsigned-count", "thread", "bounds", "limit"]
+    for case in byte_cases:
+        run("file-byte-read-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".ByteReadInvocationTests", case], 0,
+            "WINDOWS_FILE_BYTE_READ_PASS case=" + re.escape(case) +
+            " scope=INERT_READ_AND_RETIREMENT_NOT_FILE_CUSTODY_OR_AUTHORITY capture=" + capture_scope + r"\n", "")
     for case in load_cases:
         run("library-load-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
             "--module", MODULE + "/" + PACKAGE + ".LibraryLoadInvocationTests", case], 0,
@@ -210,6 +218,7 @@ def main():
     original_security_policy = "NOT_EXECUTED"
     original_ancestor_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_ancestor_policies = "NOT_EXECUTED"
+    original_bytes_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     if os.name == "nt":
         original_jvm_scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE"
         run("system-bootstrap-jvm", base + access + bootstrap_entry + ["jvm"], 0,
@@ -227,6 +236,9 @@ def main():
             "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=ancestors scope=" + original_ancestor_scope +
             r" descriptorPolicies=(ACCEPTED|REFUSED)\n", "")
         original_ancestor_policies = ancestors.strip().rsplit("=", 1)[1]
+        original_bytes_scope = "DEVELOPMENT_JVM_HANDLE_BYTES_NOT_INSTALLED_IDENTITY_MAPPING_OR_PROFILE"
+        run("system-bootstrap-bytes", base + access + bootstrap_entry + ["bytes"], 0,
+            "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=bytes scope=" + original_bytes_scope + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_CONTROLS_AND_CONDITIONAL_SYSTEM_BOOTSTRAP_NOT_INSTALLED_OR_PROFILE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
@@ -234,7 +246,8 @@ def main():
               "systemBootstrapScope": bootstrap_scope, "originalJvmScope": original_jvm_scope,
               "originalJvmFileScope": original_file_scope, "originalJvmSecurityScope": original_security_scope,
               "originalJvmDescriptorPolicy": original_security_policy, "originalJvmAncestorScope": original_ancestor_scope,
-              "originalJvmAncestorPolicies": original_ancestor_policies, "commands": records}
+              "originalJvmAncestorPolicies": original_ancestor_policies,
+              "originalJvmBytesScope": original_bytes_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
 

@@ -25,7 +25,7 @@ final class WindowsSystemBootstrapCandidate {
         "GetCurrentProcessId", "GetModuleHandleExW", "GetModuleFileNameW", "GetSystemDirectoryW",
         "GetProcAddress", "LoadLibraryExW", "VirtualQuery", "ReadProcessMemory",
         "CreateFileW", "GetFileInformationByHandleEx", "GetFinalPathNameByHandleW",
-        "GetVolumeInformationByHandleW", "GetDriveTypeW"
+        "GetVolumeInformationByHandleW", "GetDriveTypeW", "ReadFile"
     };
     private static final FunctionDescriptor PID = FunctionDescriptor.of(ValueLayout.JAVA_INT);
     // withTargetLayout is restricted in JDK21. Construct these only after inspect's runtime/access guard,
@@ -349,5 +349,10 @@ final class WindowsSystemBootstrapCandidate {
         requireOriginalJvm(candidate);
         if (index < 0 || index > 1) throw new IllegalArgumentException("Unknown fixed JVM ancestors entry");
         return entries[11 + index];
+    }
+
+    MemorySegment originalJvmReadEntry(WindowsOriginalJvmCandidate candidate) {
+        requireOriginalJvm(candidate);
+        return entries[13];
     }
 }

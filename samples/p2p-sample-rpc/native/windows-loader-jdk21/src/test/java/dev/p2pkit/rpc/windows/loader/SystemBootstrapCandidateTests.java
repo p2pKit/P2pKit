@@ -1,5 +1,10 @@
 package dev.p2pkit.rpc.windows.loader;
 
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Actual system-call investigation on Windows, never installed authority or protected-profile admission. */
@@ -19,7 +24,7 @@ public final class SystemBootstrapCandidateTests {
         }
     }
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) throws Exception {
         check(args.length == 1);
         String scope;
         String policy = "";
@@ -124,6 +129,68 @@ public final class SystemBootstrapCandidateTests {
                 check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
             }
             scope = "DEVELOPMENT_JVM_FILE_LEASE_NOT_INSTALLED_ACL_ANCESTOR_MAPPING_OR_PROFILE";
+        } else if (args[0].equals("bytes")) {
+            WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
+            WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();
+            WindowsOriginalJvmFileCandidate file = runtime.inspectFile();
+            WindowsOriginalJvmBytesCandidate bytes = file.inspectBytes();
+            check(bytes.completed() && bytes.byteCount() > 0 && bytes.byteCount() <= 512L * 1024 * 1024);
+            // Independent read of the selected DEVELOPMENT JDK fixture. This pathname and its digest
+            // are test observations only; neither supplies production expected-runtime provenance.
+            MessageDigest reference = MessageDigest.getInstance("SHA-256", "SUN");
+            long count = 0;
+            byte[] chunk = new byte[65_536];
+            try (InputStream input = Files.newInputStream(
+                Path.of(System.getProperty("java.home"), "bin", "server", "jvm.dll"), LinkOption.NOFOLLOW_LINKS)) {
+                int read;
+                while ((read = input.read(chunk)) != -1) {
+                    check(read > 0);
+                    count += read;
+                    check(count <= bytes.byteCount());
+                    reference.update(chunk, 0, read);
+                }
+            } finally {
+                java.util.Arrays.fill(chunk, (byte) 0);
+            }
+            check(count == bytes.byteCount() && MessageDigest.isEqual(reference.digest(), bytes.sha256()));
+            byte[] copy = bytes.sha256();
+            check(copy.length == 32);
+            copy[0] ^= 1;
+            check(!MessageDigest.isEqual(copy, bytes.sha256()));
+            try {
+                file.inspectBytes();
+                throw new AssertionError("Original file bytes were read a second time");
+            } catch (IllegalStateException expected) {
+                // No reopen, seek or second use of the original file pointer.
+            }
+            AtomicReference<Throwable> unexpected = new AtomicReference<>();
+            Thread worker = Thread.startVirtualThread(() -> {
+                try {
+                    try {
+                        bytes.sha256();
+                        throw new AssertionError("Original file digest crossed its owner thread");
+                    } catch (IllegalStateException expected) {
+                        // Private original file ownership is not transferred through a digest.
+                    }
+                    try {
+                        file.inspectBytes();
+                        throw new AssertionError("Original byte acquisition crossed its owner thread");
+                    } catch (IllegalStateException expected) {
+                        // Refuse before a native read.
+                    }
+                } catch (Throwable failure) { unexpected.set(failure); }
+            });
+            worker.join();
+            check(unexpected.get() == null);
+            System.gc();
+            check(bytes.completed() && bytes.byteCount() == count && file.leaseHeld() && runtime.completed());
+            try {
+                WindowsLoader.openInstalledProvider();
+                throw new AssertionError("Original file digest enabled productive loading");
+            } catch (UnsupportedOperationException expected) {
+                check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
+            }
+            scope = "DEVELOPMENT_JVM_HANDLE_BYTES_NOT_INSTALLED_IDENTITY_MAPPING_OR_PROFILE";
         } else if (args[0].equals("security")) {
             WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
             WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();

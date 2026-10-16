@@ -349,4 +349,9 @@ final class WindowsOriginalJvmCandidate {
         requireOriginalFile(candidate);
         return bootstrap.originalJvmAncestorsEntry(this, index);
     }
+
+    MemorySegment originalFileReadEntry(WindowsOriginalJvmFileCandidate candidate) {
+        requireOriginalFile(candidate);
+        return bootstrap.originalJvmReadEntry(this);
+    }
 }

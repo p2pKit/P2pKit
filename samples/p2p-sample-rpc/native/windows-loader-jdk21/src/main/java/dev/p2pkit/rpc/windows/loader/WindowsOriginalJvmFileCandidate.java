@@ -79,6 +79,8 @@ final class WindowsOriginalJvmFileCandidate {
     private boolean succeeded;
     private boolean securityAttempted;
     private WindowsOriginalJvmSecurityCandidate security;
+    private boolean bytesAttempted;
+    private WindowsOriginalJvmBytesCandidate bytes;
 
     WindowsOriginalJvmFileCandidate(WindowsOriginalJvmCandidate runtime, Linker linker, Arena bootstrapArena,
                                    MemorySegment createEntry, MemorySegment informationEntry, MemorySegment finalPathEntry,
@@ -314,6 +316,23 @@ final class WindowsOriginalJvmFileCandidate {
 
     boolean completed() { requireCompleted(); return true; }
     boolean leaseHeld() { requireCompleted(); return true; }
+
+    WindowsOriginalJvmBytesCandidate inspectBytes() {
+        requireCompleted();
+        if (bytesAttempted) throw new IllegalStateException("Original JVM file bytes were already attempted");
+        bytesAttempted = true;
+        bytes = new WindowsOriginalJvmBytesCandidate(this, linker, bootstrapArena, handleArena, handle,
+            runtime.originalFileReadEntry(this), informationEntry, first);
+        bytes.observe();
+        return bytes;
+    }
+
+    void requireOriginalBytes(WindowsOriginalJvmBytesCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || bytes != candidate) {
+            throw new IllegalStateException("Byte candidate is not this file's original retained attachment");
+        }
+    }
 
     WindowsOriginalJvmSecurityCandidate inspectSecurity() {
         requireCompleted();

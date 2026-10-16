@@ -556,3 +556,45 @@ The fresh-process Windows ancestry control executes the actual calls and records
 the actual ancestor policy decision, while retaining duplicate/thread/public
 factory refusal checks. Neither ACCEPTED nor REFUSED is installed authority.
 Productive DLL/provider activation and real installed qualification remain open.
+
+### Original retained-handle byte identity observation
+
+`WindowsOriginalJvmFileCandidate.inspectBytes()` attaches one original
+`WindowsOriginalJvmBytesCandidate` before any read. It uses the already-held
+synchronous `CreateFileW` handle, not a second pathname open. This private handle
+starts at offset zero; the other existing metadata/security/ancestor observations
+do not move its file pointer. There is no seek, reopen or retry. Fixed `ReadFile`
+is resolved and physically pinned with the other original system entries.
+
+The original identity, allocation/EOF length, link count, attributes, reparse and
+delete/directory state are checked before and after reading. At most 512 MiB are
+read in exact 64-KiB chunks, followed by a one-byte EOF probe: at most 8,193 read
+calls with a reused bounded frame. A short body or extra EOF byte refuses the
+observation rather than retrying. SHA-256 consumes only each actual bounded
+chunk through the boot SUN provider; the final 32-byte result is privately owned
+and callers receive a defensive copy. Neither provider naming nor the observed
+digest independently establishes the runtime's provenance or approved identity.
+
+Before each native read the candidate marks completion unconfirmed. Only a TRUE
+result with a bounded returned DWORD count permits reuse or retirement of its
+private buffers. A thrown call, FALSE (including pending), or contradictory count
+retains the entire frame and original owners without further calls from this
+candidate, clearing or closure. Short/EOF semantic refusal after confirmed native
+completion can retire its private frame. Original handles and arenas never close
+here. Byte/call bounds are not a wall-clock cancellation guarantee; the outer
+execution deadline remains separate. This candidate does not globally seal other
+independent original-file metadata attachments after its failure.
+
+Eleven fresh-process inert upcall controls cover count/return bounds, confirmed
+retirement, uncertain-frame preservation, thread/call limits and no retry. On
+Windows they use actual Windows argument/error-capture mechanics, not actual
+filesystem I/O. The separate Windows `bytes` control executes real `ReadFile`
+against the original development-JVM file and compares its digest/length with a
+separate bounded JDK read of the selected development runtime fixture. That test
+path is not a production input or Foundation's independent expected runtime pin.
+No bytes, pathname or digest is printed by the fixed test result.
+
+Held-file hashing is **not** loaded-image identity, protection from pre-existing
+writable mappings, first-call authority, installed package approval or productive
+provider activation. Windows loading and original JNI/provider assembly still
+require the independently established startup/package/runtime boundary.
