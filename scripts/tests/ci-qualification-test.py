@@ -80,7 +80,7 @@ class Fixture:
             if platform == "Darwin":
                 manifest["outcome"].update(ownershipBoundary="GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1",
                                            outsideDomainObservations=0)
-            if component == "consumers":
+            if component in ("consumers", "macos-shared"):
                 manifest["tools"]["xcode"] = {"version": "16.2", "executableSha256": "e" * 64}
             self.manifests[component] = manifest
             self.artifact(5000 + i, f"ci-evidence-{component}-300-1",
@@ -116,32 +116,33 @@ class QualificationTests(unittest.TestCase):
         result = self.f.qualify()
         actual, binding = Q.load_qualification(self.api, SOURCE)
         self.assertEqual(result, actual)
-        self.assertEqual(13, len(actual["components"]))
+        self.assertEqual(14, len(actual["components"]))
         self.assertEqual(4, len(actual["applications"]))
         self.assertEqual(8001, binding["artifactId"])
         self.assertEqual("failure", self.f.run["conclusion"])
 
-    def test_consumers_missing_wrong_runner_arch_or_xcode_cannot_qualify(self):
-        self.assertEqual(Q.COMPONENTS['consumers'], ('Darwin', 'arm64'))
-        self.assertEqual(Q.RUNNERS['consumers'], 'macos-14')
-        selection = self.f.selection()
-        missing = {**selection, 'components': [row for row in selection['components'] if row['component'] != 'consumers']}
-        with self.assertRaisesRegex(Q.AdmissionError, 'Missing/duplicate required components'):
-            Q.aggregate(self.api, missing)
-        job = next(row for row in self.f.jobs if row['name'] == 'consumers / Execute component')
-        for labels in (['macos-26'], ['macos-latest'], ['macos-14', 'self-hosted']):
-            with mock.patch.dict(job, {'labels': labels}), self.assertRaisesRegex(Q.AdmissionError, 'runner labels'):
-                Q.aggregate(self.api, selection)
-        for group, change in (('host', {'arch': 'x86_64'}), ('tools', {}),
-                              ('tools', {'xcode': {'version': '26.5', 'executableSha256': 'e' * 64}}),
-                              ('tools', {'xcode': {'version': '16.2', 'executableSha256': 'invalid'}})):
-            manifests = copy.deepcopy(self.f.manifests)
-            if group == 'host':
-                manifests['consumers'][group].update(change)
-            else:
-                manifests['consumers'][group] = change
-            with self.subTest(group=group, change=change), self.assertRaises(Q.AdmissionError):
-                Q.aggregate(self.api, selection, manifests=manifests)
+    def test_supported_cli_components_missing_wrong_runner_arch_or_xcode_cannot_qualify(self):
+        for component in ("consumers", "macos-shared"):
+            self.assertEqual(Q.COMPONENTS[component], ('Darwin', 'arm64'))
+            self.assertEqual(Q.RUNNERS[component], 'macos-14')
+            selection = self.f.selection()
+            missing = {**selection, 'components': [row for row in selection['components'] if row['component'] != component]}
+            with self.assertRaisesRegex(Q.AdmissionError, 'Missing/duplicate required components'):
+                Q.aggregate(self.api, missing)
+            job = next(row for row in self.f.jobs if row['name'] == component + ' / Execute component')
+            for labels in (['macos-26'], ['macos-latest'], ['macos-14', 'self-hosted']):
+                with mock.patch.dict(job, {'labels': labels}), self.assertRaisesRegex(Q.AdmissionError, 'runner labels'):
+                    Q.aggregate(self.api, selection)
+            for group, change in (('host', {'arch': 'x86_64'}), ('tools', {}),
+                                  ('tools', {'xcode': {'version': '26.5', 'executableSha256': 'e' * 64}}),
+                                  ('tools', {'xcode': {'version': '16.2', 'executableSha256': 'invalid'}})):
+                manifests = copy.deepcopy(self.f.manifests)
+                if group == 'host':
+                    manifests[component][group].update(change)
+                else:
+                    manifests[component][group] = change
+                with self.subTest(group=group, change=change), self.assertRaises(Q.AdmissionError):
+                    Q.aggregate(self.api, selection, manifests=manifests)
 
     def test_missing_duplicate_and_unknown_components_refuse(self):
         original = self.f.selection()
@@ -151,7 +152,7 @@ class QualificationTests(unittest.TestCase):
                 Q.aggregate(self.api, {**original, "components": rows})
 
     def test_optional_diagnostics_cannot_replace_or_extend_qualification(self):
-        self.assertEqual(len(Q.COMPONENTS), 13)
+        self.assertEqual(len(Q.COMPONENTS), 14)
         for name in ('bundle-diagnostic', 'jmdns-diagnostic', 'consumers-pom-diagnostic'):
             self.assertNotIn(name, Q.COMPONENTS)
             original = self.f.selection()
@@ -210,7 +211,7 @@ class QualificationTests(unittest.TestCase):
         selection = self.f.selection()
         manifests = copy.deepcopy(self.f.manifests)
         manifests["desktop-macos"]["outcome"]["outsideDomainObservations"] = 52
-        self.assertEqual(len(Q.aggregate(self.api, selection, manifests=manifests)["components"]), 13)
+        self.assertEqual(len(Q.aggregate(self.api, selection, manifests=manifests)["components"]), 14)
         for field, value in (("ownershipBoundary", None), ("ownershipBoundary", "STRICT_OLD_SCOPE"),
                              ("outsideDomainObservations", None), ("outsideDomainObservations", True),
                              ("outsideDomainObservations", -1), ("outsideDomainObservations", 1_000_001),
@@ -352,7 +353,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual({row["platform"]: row["runAttempt"] for row in selection["applications"]},
                          {"android": 1, "linux": 1, "windows": 2, "macos": 1})
         document = Q.aggregate(self.api, selection)
-        self.assertEqual(13, len(document["components"]))
+        self.assertEqual(14, len(document["components"]))
         self.assertEqual(4, len(document["applications"]))
         windows = next(row for row in document["applications"] if row["platform"] == "windows")
         self.assertEqual(9001, windows["id"])
@@ -363,7 +364,7 @@ class QualificationTests(unittest.TestCase):
         self.retry()
         selected = Q.collect(self.api, SOURCE, 300, 2)
         self.assertEqual(original, selected)
-        self.assertEqual(13, len(Q.aggregate(self.api, selected)["components"]))
+        self.assertEqual(14, len(Q.aggregate(self.api, selected)["components"]))
 
     def test_latest_failed_skipped_cancelled_or_incomplete_execution_never_falls_back(self):
         job = self.retry("desktop-windows")

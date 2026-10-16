@@ -37,6 +37,11 @@ PROFILES = {
     "ios-lan-arm64": [":p2p-transport-lan:iosSimulatorArm64Test"],
     "ios-lan-x64": [":p2p-transport-lan:iosX64Test"],
 }
+# The hosted shared lane keeps the original aggregate check and its non-test
+# dependencies. Only these eight tests are delegated to mandatory native lanes;
+# exclusions are source-owned exact tasks, not a caller-controlled skip list.
+MACOS_SHARED_NATIVE_TASKS = (*PROFILES["ios-arm64"], *PROFILES["ios-x64"])
+PROFILES["macos-shared"] = ["check", *[arg for task in MACOS_SHARED_NATIVE_TASKS for arg in ("-x", task)]]
 # These existing tasks require independently produced native/bundle fixtures.
 # They have never been dependencies of portable `check`. Keep them in the exact
 # configured inventory, but never infer their qualification from this driver.
@@ -141,6 +146,11 @@ def required_tasks(policy, profile, arch):
         required = set(PROFILES[profile])
         require(required <= tasks, "ARM simulator test targets are missing from the committed model")
         return required
+    if profile == "macos-shared":
+        require(arch == "arm64", "macos-shared requires an Apple Silicon macOS host")
+        delegated = set(MACOS_SHARED_NATIVE_TASKS)
+        require(len(delegated) == 8 and delegated <= tasks, "Delegated native tasks differ from the committed model")
+        return tasks - delegated - set(SEPARATE_QUALIFICATION_TASKS)
     require(profile == "full" and arch in ("arm64", "x64"), "Unsupported platform-test profile/host")
     unavailable = "iosX64Test" if arch == "arm64" else "iosSimulatorArm64Test"
     return {task for task in tasks if not task.endswith(":" + unavailable)

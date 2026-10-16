@@ -202,9 +202,37 @@ class CoveragePolicyTest(unittest.TestCase):
         self.assertNotIn(":p2p-core:iosX64Test", arm)
         self.assertNotIn(":p2p-core:iosSimulatorArm64Test", intel)
 
+    def test_macos_shared_and_native_union_preserves_complete_check_inventory(self):
+        shared = self.assess(example_report("macos-shared"), "macos-shared")
+        arm = self.assess(example_report("ios-arm64"), "ios-arm64")
+        intel = self.assess(example_report("ios-x64", "x64"), "ios-x64", "x64")
+        configured = {task for entry in POLICY["model"].values() for task in entry["tests"]}
+        self.assertEqual((16, 4, 4), (len(shared), len(arm), len(intel)))
+        self.assertEqual(26, len(configured))
+        self.assertEqual(configured - set(GATE.SEPARATE_QUALIFICATION_TASKS), shared | arm | intel)
+        self.assertFalse(shared & (arm | intel))
+        self.assertFalse(arm & intel)
+        self.assertEqual(["check"], GATE.PROFILES["full"])
+        command = GATE.PROFILES["macos-shared"]
+        self.assertEqual("check", command[0])
+        self.assertEqual(["-x"] * 8, command[1::2])
+        self.assertEqual(arm | intel, set(command[2::2]))
+        self.assertEqual(17, len(command))
+        self.assertTrue({":p2p-sample-diagnostics:test", ":sample-kmp-shared:jvmTest",
+                         ":sample-kmp-shared:testAndroidHostTest"} <= shared)
+        self.assertEqual(9, sum(task.endswith((":test", ":jvmTest")) for task in shared))
+        self.assertEqual(7, len(shared) - 9)
+        with self.assertRaisesRegex(ValueError, "Apple Silicon"):
+            GATE.required_tasks(POLICY, "macos-shared", "x64")
+        mutated = copy.deepcopy(POLICY)
+        mutated["model"][":p2p-core"]["tests"].remove(":p2p-core:iosSimulatorArm64Test")
+        with self.assertRaisesRegex(ValueError, "Delegated native tasks"):
+            GATE.required_tasks(mutated, "macos-shared", "arm64")
+
     def test_every_expected_task_must_execute_fresh_successful_cases(self):
         for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64"),
-                              ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64")):
+                              ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64"),
+                              ("macos-shared", "arm64")):
             baseline = example_report(profile, arch)
             for name in GATE.required_tasks(POLICY, profile, arch):
                 changes = [("outcome", outcome) for outcome in (
@@ -283,7 +311,8 @@ class CoveragePolicyTest(unittest.TestCase):
 
     def test_auxiliary_execution_failure_disabled_state_and_counts_cannot_pass(self):
         for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64"),
-                              ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64")):
+                              ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64"),
+                              ("macos-shared", "arm64")):
             for task in GATE.SEPARATE_QUALIFICATION_TASKS:
                 changes = [("outcome", value) for value in
                            ("EXECUTED", "FAILED", "SKIPPED", "UP-TO-DATE", "FROM-CACHE", "NO_SOURCE",
@@ -1418,6 +1447,23 @@ class DriverLifecycleTest(unittest.TestCase):
         self.assertEqual([], summary["errors"])
         self.assertEqual(summary["commit"], summary["sourceAfter"]["commit"])
         self.assertEqual(summary["diffSha256"], summary["sourceAfter"]["diffSha256"])
+
+    def test_shared_driver_keeps_check_only_delegates_native_and_stops(self):
+        (self.root / "fixture.json").write_text(json.dumps(example_report("macos-shared")))
+        subprocess.run(["git", "add", "fixture.json"], cwd=self.root, check=True, capture_output=True)
+        subprocess.run(["git", "-c", "user.name=Test Fixture", "-c", "user.email=fixture@example.invalid",
+                        "-c", "commit.gpgsign=false", "commit", "-qm", "Shared fixture"],
+                       cwd=self.root, check=True, capture_output=True)
+        with mock.patch.dict(os.environ, standalone_fixture_environment("pass"), clear=True), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, GATE.run("macos-shared"))
+        calls = self.calls()
+        self.assertEqual(2, len(calls))
+        self.assertEqual(["--stop"], calls[-1])
+        self.assertEqual(GATE.PROFILES["macos-shared"] + GATE.FLAGS,
+                         calls[0][:len(GATE.PROFILES["macos-shared"]) + len(GATE.FLAGS)])
+        self.assertEqual("PASS", self.summaries()[0]["result"])
+        self.assertEqual("macos-shared", self.summaries()[0]["profile"])
 
     def test_failure_modes_cannot_pass_and_always_stop(self):
         for mode in ("no-report", "stale-token", "malformed", "exit-failure", "build-failure", "stop-failure"):

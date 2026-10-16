@@ -58,7 +58,7 @@ class FrozenApplicationTests(unittest.TestCase):
         self.assertEqual(SUPPORT.SOURCE, document["qualification"]["source"]["commit"])
         self.assertEqual(SUPPORT.TREE, document["qualification"]["source"]["tree"])
         self.assertEqual(SUPPORT.VERSION, document["qualification"]["versionBinding"]["canonicalVersion"])
-        self.assertEqual(4 + 13, len(document["qualification"]["artifacts"] + document["qualification"]["evidence"]))
+        self.assertEqual(4 + 14, len(document["qualification"]["artifacts"] + document["qualification"]["evidence"]))
         self.assertEqual(["android", "linux", "windows", "macos"], [x["platform"] for x in document["packages"]])
         self.assertFalse(self.api.mutations)
 

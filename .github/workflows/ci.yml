@@ -9,7 +9,7 @@ on:
         description: all, one component, or a focused diagnostic (not qualification)
         default: all
         type: choice
-        options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, bundle-diagnostic, jmdns-diagnostic, consumers-pom-diagnostic]
+        options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, macos-shared, bundle-diagnostic, jmdns-diagnostic, consumers-pom-diagnostic]
       qualification_selection:
         description: Optional exact-source selection JSON to aggregate previously successful components without rebuilding
         default: ''

@@ -721,7 +721,8 @@ class ReleaseTest(unittest.TestCase):
         with self.assertRaises(R.Hold):
             self.plan()
 
-    def test_all_thirteen_exact_component_evidence_uploads_are_required(self):
+    def test_all_fourteen_exact_component_evidence_uploads_are_required(self):
+        self.assertEqual(14, len(R.QUAL.COMPONENTS))
         self.assertEqual(list(R.QUAL.COMPONENTS), [x["component"] for x in self.plan()["evidence"]])
         original = copy.deepcopy(self.api.collections)
         for change in ("missing", "expired", "other_attempt", "wrong_source", "duplicate"):

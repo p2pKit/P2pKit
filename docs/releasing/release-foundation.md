@@ -28,14 +28,29 @@ Foundation or RPC historical result qualifies that new combined commit.
 | dependencies | Locks, SHA-256 integrity, approved dependency floors / Ubuntu |
 | jvm-linux, jvm-windows | Real library JVM tests / Ubuntu, Windows x64 |
 | android | Android unit tests, build and native APK inspection / Ubuntu |
-| apple-arm64 | Maintained FULL checks and native Apple execution / macOS ARM64 |
+| apple-arm64 | Four native Apple ARM64 test tasks / macOS 26 ARM64 |
+| macos-shared | Original aggregate `check`, delegating only eight native test tasks to the two mandatory Apple lanes / macOS 14 ARM64, Xcode 16.2 |
 | apple-x64 | Actual `iosX64` execution, not cross-compilation / macOS Intel |
 | desktop-linux, desktop-windows, desktop-macos | Desktop tests and DEB/MSI/ARM64-DMG packaging |
 | security | Pinned OSV scan, unchanged expiring exceptions / Ubuntu |
 | compatibility | API/ABI, strict Dokka, SBOM, publication, XCFramework and Swift / macOS 26 ARM64 |
 | consumers | Complete isolated published-coordinate JVM/Android/KMP/iOS consumers / macOS 14 ARM64, Xcode 16.2 |
 
-All thirteen components are mandatory for the same source; splitting consumers
+All fourteen components are mandatory for the same source. The `macos-shared`
+profile runs the original `check` with `-x` for exactly four ARM64 and four Intel
+native test tasks, each required in its matching Apple component. It retains all
+16 JVM/Android-host test tasks and the non-test dependencies of `check`, including
+BuildInfo reproducibility, Android SDK-matrix verification and plugin checks.
+The three profiles cover all 24 portable policy tasks; the two already separate
+opt-in bundle/JNI tasks remain honestly unqualified here. No task is disabled and
+the standalone `full` profile is unchanged.
+
+The prior macOS 26 FULL [run](https://github.com/p2pKit/P2pKit/actions/runs/38823809770)
+failed actual JmDNS close tests with `NoRouteToHostException`; that failure is not
+reclassified as passed. Required shared CLI tests now execute on the reviewed
+macOS 14 baseline, not as proof of macOS 26 JVM multicast functionality. New
+current-source results from all fourteen components are required, with all four
+application artifacts (18 frozen inputs total). Splitting consumers likewise
 does not omit or weaken their tests. The full dependency-update candidate writer
 also uses the macOS 14 / Xcode 16.2 CLI baseline. The existing protected Maven
 `publish-release` and read-only `verify-recovery` jobs use this same explicit
@@ -140,7 +155,7 @@ cleanup and file hashes. Genuine failed-task evidence is retained too. Missing
 or unreadable evidence is not success. Public diagnostics contain safe task names
 and result codes, never private log text.
 
-`ci_qualification.py` validates all thirteen successful component jobs and four
+`ci_qualification.py` validates all fourteen successful component jobs and four
 application producers. It compares exact source/tree/version, host, workflow,
 run/attempt, job completion, original artifact metadata and downloaded digests.
 There is **no fixed job-step count**. Failed overall matrix runs may still supply
