@@ -65,6 +65,7 @@ def main():
                         "ExportLookupInvocationTests" in name or
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
+                        "SystemImportResolutionTests" in name or
                         "InstallationSecurityTests" in name or
                         "AncestorRetirementTests" in name or
                         "ByteReadInvocationTests" in name or
@@ -216,6 +217,13 @@ def main():
         "--module", MODULE + "/" + PACKAGE + ".AncestorRetirementTests"], 0,
         r"WINDOWS_ANCESTOR_RETIREMENT_PASS tests=2 "
         r"scope=INERT_FRAME_QUARANTINE_NOT_PENDING_OS_IO_OR_AUTHORITY\n", "")
+    import_cases = ["valid", "bounds", "unsupported", "names", "duplicate", "snapshot", "owner-refusal",
+                    "retirement-known", "retirement-unknown"]
+    for case in import_cases:
+        run("system-import-resolution-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".SystemImportResolutionTests", case], 0,
+            "WINDOWS_SYSTEM_IMPORT_RESOLUTION_PASS case=" + re.escape(case) +
+            r" scope=INERT_INVENTORY_AND_OWNERSHIP_NOT_NATIVE_OR_AUTHORITY\n", "")
     # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
     owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
                    "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]

@@ -144,6 +144,7 @@ ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".cl
     "WindowsOriginalJvmSecurityCandidate", "WindowsOriginalJvmSecurityCandidate$Failure",
     "WindowsOriginalJvmAncestorsCandidate", "WindowsOriginalJvmAncestorsCandidate$Failure",
     "WindowsOriginalJvmBytesCandidate", "WindowsOriginalJvmBytesCandidate$Failure",
+    "WindowsSystemImportResolution", "WindowsSystemImportResolution$Failure",
     "WindowsPackagedVerifier",
 ))))
 ADAPTER_OPTIONS = (

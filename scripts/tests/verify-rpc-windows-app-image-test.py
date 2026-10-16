@@ -86,6 +86,8 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsOriginalJvmAncestorsCandidate$Failure.class",
     ADAPTER_PREFIX + "WindowsOriginalJvmBytesCandidate.class",
     ADAPTER_PREFIX + "WindowsOriginalJvmBytesCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsSystemImportResolution.class",
+    ADAPTER_PREFIX + "WindowsSystemImportResolution$Failure.class",
     ADAPTER_PREFIX + "WindowsPackagedVerifier.class",
 )
 ADAPTER_OPTIONS = (

@@ -738,3 +738,25 @@ and arbitrary rebased values. Every neighboring header byte, header-page tail,
 executable byte and validated DIR64 update remains checked. Unsupported mapping
 modes that do not satisfy this exact relationship still refuse. This comparison
 provides no initial loading authority or ownership by itself.
+
+### Conditional system-import resolution
+
+The named module now owns the kernel32-only import resolver previously confined
+to the development fixture. It takes the original byte-verifier plan through an
+exclusive typed attachment to the original bootstrap. It refuses unsupported
+logical libraries, malformed names, ordinals, duplicates and oversized inventories
+before any resolver native effect. Original module PINs, raw entry addresses and
+scopes remain retained on success and failure; an uncertain native return
+quarantines its private frame instead of clearing or freeing it. There is no
+unload, generic owner token, fallback search path or caller-selected system DLL.
+
+The actual development test resolves these independent targets **before** loading
+the test DLL, then compares the complete loaded IAT to those targets. It does not
+derive expected addresses from the IAT. This is still conditional mechanics:
+`GetProcAddress` may load a forwarded provider before its later physical-path
+observation. A trusted startup and forwarder policy must precede productive use.
+The production native DLL also imports advapi32, ntdll, shell32 and ole32; those
+logical libraries are explicitly refused by this bounded component pending the
+full provider-policy integration. No full-provider or installed-runtime claim
+follows from the kernel32-only development test, and productive loading remains
+unavailable.

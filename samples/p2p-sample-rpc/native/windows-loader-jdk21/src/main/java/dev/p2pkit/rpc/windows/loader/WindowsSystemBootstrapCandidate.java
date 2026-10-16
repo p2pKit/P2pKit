@@ -90,6 +90,8 @@ final class WindowsSystemBootstrapCandidate {
     private boolean succeeded;
     private boolean originalJvmAttempted;
     private WindowsOriginalJvmCandidate originalJvm;
+    private boolean importsAttempted;
+    private WindowsSystemImportResolution imports;
 
     private WindowsSystemBootstrapCandidate(Linker linker) { this.linker = linker; }
 
@@ -324,6 +326,25 @@ final class WindowsSystemBootstrapCandidate {
         originalJvm = new WindowsOriginalJvmCandidate(this, linker, originalArena, entries[1], entries[2], entries[4]);
         originalJvm.observe();
         return originalJvm;
+    }
+
+    WindowsSystemImportResolution resolveSystemImports(WindowsPackagedVerifier plan) {
+        requireCompleted();
+        if (importsAttempted) throw new IllegalStateException("System imports were already attempted");
+        importsAttempted = true;
+        imports = new WindowsSystemImportResolution(this, plan, linker, originalArena,
+            entries[1], entries[2], entries[3], entries[4]);
+        // The exact typed attachment permanently roots the original plan, scopes and failure carrier
+        // BEFORE the first resolver native effect. The plan is comparison data, not startup authority.
+        imports.observe();
+        return imports;
+    }
+
+    void requireOriginalImports(WindowsSystemImportResolution candidate) {
+        requireCompleted();
+        if (candidate == null || imports != candidate) {
+            throw new IllegalStateException("System imports are not this bootstrap's retained attachment");
+        }
     }
 
     void requireOriginalJvm(WindowsOriginalJvmCandidate candidate) {
