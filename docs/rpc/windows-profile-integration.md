@@ -724,3 +724,12 @@ reimplemented. Actual development-Windows system-call results, when executed,
 remain separate from installed authority and W01–W11. The productive factory,
 partial ABI13/0x43 and availability gates remain unchanged until the real contract
 is implemented and admitted; this is not merely a deferred-testing limitation.
+
+The next connected slice obtains an existing JVM module through that same dormant
+candidate, checks the fixed invocation export's physical provider, and uses the
+existing `WindowsJvmAcquisitionInvocation` to observe exactly one VM. Original
+module/export/VM ownership is retained rather than reconstructed from a supplied
+number. This is a real development-runtime call path, not JNI registration or
+proof of the independently expected installed runtime. Basename/path observations
+must not substitute for Foundation's runtime identity or resolve loaded-module
+ambiguity by assumption. Productive provider assembly and activation remain open.

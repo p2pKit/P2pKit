@@ -86,6 +86,8 @@ final class WindowsSystemBootstrapCandidate {
     private int phase;
     private boolean frameRetired;
     private boolean succeeded;
+    private boolean originalJvmAttempted;
+    private WindowsOriginalJvmCandidate originalJvm;
 
     private WindowsSystemBootstrapCandidate(Linker linker) { this.linker = linker; }
 
@@ -312,4 +314,20 @@ final class WindowsSystemBootstrapCandidate {
     long processId() { requireCompleted(); return pid; }
     int observedProviderCount() { requireCompleted(); return providers; }
     boolean completed() { requireCompleted(); return true; }
+
+    WindowsOriginalJvmCandidate inspectOriginalJvm() {
+        requireCompleted();
+        if (originalJvmAttempted) throw new IllegalStateException("Original JVM candidate was already attempted");
+        originalJvmAttempted = true;
+        originalJvm = new WindowsOriginalJvmCandidate(this, linker, originalArena, entries[1], entries[2], entries[4]);
+        originalJvm.observe();
+        return originalJvm;
+    }
+
+    void requireOriginalJvm(WindowsOriginalJvmCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || originalJvm != candidate) {
+            throw new IllegalStateException("Original JVM candidate is not this bootstrap's retained attachment");
+        }
+    }
 }

@@ -47,6 +47,43 @@ public final class SystemBootstrapCandidateTests {
                 check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
             }
             scope = "DEVELOPMENT_JVM_SYSTEM_CALLS_NOT_INSTALLED_AUTHORITY_OR_PROFILE";
+        } else if (args[0].equals("jvm")) {
+            WindowsSystemBootstrapCandidate original = WindowsSystemBootstrapCandidate.inspect();
+            WindowsOriginalJvmCandidate runtime = original.inspectOriginalJvm();
+            check(runtime.completed() && runtime.singleVirtualMachineObserved());
+            try {
+                original.inspectOriginalJvm();
+                throw new AssertionError("Original runtime acquisition was repeated");
+            } catch (IllegalStateException expected) {
+                // The exact original attachment remains retained, without another native lookup/call.
+            }
+            AtomicReference<Throwable> unexpected = new AtomicReference<>();
+            Thread worker = Thread.startVirtualThread(() -> {
+                try {
+                    try {
+                        runtime.singleVirtualMachineObserved();
+                        throw new AssertionError("Original runtime observation crossed its owner thread");
+                    } catch (IllegalStateException expected) {
+                        // Scoped ownership is not transferred to a different thread by exposing a result.
+                    }
+                    try {
+                        original.inspectOriginalJvm();
+                        throw new AssertionError("Original runtime acquisition crossed its owner thread");
+                    } catch (IllegalStateException expected) {
+                        // Refuse before another native operation.
+                    }
+                } catch (Throwable failure) { unexpected.set(failure); }
+            });
+            worker.join();
+            check(unexpected.get() == null);
+            check(runtime.completed() && runtime.singleVirtualMachineObserved() && original.completed());
+            try {
+                WindowsLoader.openInstalledProvider();
+                throw new AssertionError("Original runtime observations enabled productive loading");
+            } catch (UnsupportedOperationException expected) {
+                check(WindowsLoader.REFUSAL.equals(expected.getMessage()));
+            }
+            scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE";
         } else {
             throw new IllegalArgumentException("Unknown system bootstrap control");
         }

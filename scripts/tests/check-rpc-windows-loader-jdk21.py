@@ -194,11 +194,17 @@ def main():
                        else "RUNTIME_REFUSAL_NO_SYSTEM_BOOTSTRAP")
     run("system-bootstrap-" + bootstrap_case, base + access + bootstrap_entry + [bootstrap_case], 0,
         "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=" + bootstrap_case + " scope=" + bootstrap_scope + r"\n", "")
+    original_jvm_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    if os.name == "nt":
+        original_jvm_scope = "DEVELOPMENT_JVM_ONE_VM_NOT_INSTALLED_AUTHORITY_REGISTRATION_OR_PROFILE"
+        run("system-bootstrap-jvm", base + access + bootstrap_entry + ["jvm"], 0,
+            "WINDOWS_SYSTEM_BOOTSTRAP_CANDIDATE_PASS case=jvm scope=" + original_jvm_scope + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_CONTROLS_AND_CONDITIONAL_SYSTEM_BOOTSTRAP_NOT_INSTALLED_OR_PROFILE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
               "observation": actual, "modelResult": models.strip(),
-              "systemBootstrapScope": bootstrap_scope, "commands": records}
+              "systemBootstrapScope": bootstrap_scope, "originalJvmScope": original_jvm_scope,
+              "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
 

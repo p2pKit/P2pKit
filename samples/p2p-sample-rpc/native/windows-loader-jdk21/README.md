@@ -411,3 +411,27 @@ change is involved. Its result explicitly distinguishes these system calls from
 the existing inert controls and from unperformed installed-runtime qualification.
 The test class stays outside the packaged adapter. No `ALL-UNNAMED`, internal-JDK
 opening, alternate launcher or new native producer is introduced.
+
+### Existing JVM acquisition connection
+
+The dormant system candidate also owns a single `WindowsOriginalJvmCandidate`
+attachment. It selects an **already-loaded** `jvm.dll` with
+`GetModuleHandleExW(PIN)`, retains that original module and bounded path observation,
+resolves only `JNI_GetCreatedJavaVMs`, and pins the resolved address's physical
+provider. That provider must equal the selected original module, not a forwarded
+function in another module. It then invokes the existing
+`WindowsJvmAcquisitionInvocation` and requires exactly one non-null VM. This
+attachment makes no explicit library-load, VM-creation, attach/detach, native
+registration or storage call. `GetProcAddress` may implicitly load a forwarded
+provider before the later same-module check; only prior expected-runtime/export
+authority can exclude that effect. Its original module, export, invocation and VM scope remain
+retained after independent temporary-frame retirement and after failure.
+
+The fixed module name, observed path and returned VM do **not** independently prove
+that this is Foundation's expected installed runtime, eliminate loaded-name
+ambiguity, or establish pre-bootstrap authority. Those comparisons remain required
+before productive assembly. No `java.home`, environment path or supplied reference
+becomes a trusted runtime pin. The development-only Windows test exercises this
+actual call chain in a fresh JVM, with duplicate/thread refusals and unchanged
+productive-loader refusal. Non-Windows hosts compile it but explicitly report this
+Windows-only execution as unperformed.

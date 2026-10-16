@@ -68,6 +68,8 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsImageReadInvocation$Kind.class",
     ADAPTER_PREFIX + "WindowsSystemBootstrapCandidate.class",
     ADAPTER_PREFIX + "WindowsSystemBootstrapCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmCandidate$Failure.class",
 )
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
