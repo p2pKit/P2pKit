@@ -6,6 +6,7 @@ import groovy.json.JsonOutput
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import java.security.MessageDigest
+import java.nio.file.Files
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 
@@ -183,7 +184,7 @@ val compileRpcWindowsLoaderJdk21 = tasks.register<JavaCompile>("compileRpcWindow
     options.encoding = "UTF-8"
     options.compilerArgs.addAll(listOf("--enable-preview", "-proc:none", "-Xlint:all,-preview", "-Werror"))
 }
-tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
+val rpcWindowsLoaderJdk21Jar = tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
     group = "verification"
     description = "Package only the disabled adapter; never publish it as a Maven coordinate."
     from(compileRpcWindowsLoaderJdk21.flatMap { it.destinationDirectory })
@@ -192,6 +193,35 @@ tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
     duplicatesStrategy = DuplicatesStrategy.FAIL
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
+}
+// Keep the existing adapter controls in the ordinary Windows component, not an obsolete hosted dispatch lane.
+// This is development-JDK invocation/refusal testing only; no candidate DLL or protected profile is opened.
+val windowsControlsJdk17 = extensions.getByType<JavaToolchainService>().launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(17))
+}
+val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJdk21") {
+    group = "verification"
+    description = "Exercise disabled-adapter invocation/refusal controls; not installed Windows qualification."
+    dependsOn(rpcWindowsLoaderJdk21Jar)
+    workingDir(rootProject.layout.projectDirectory)
+    inputs.file(rootProject.file("scripts/tests/check-rpc-windows-loader-jdk21.py"))
+    inputs.dir(layout.projectDirectory.dir("native/windows-loader-jdk21/src/test/java"))
+    outputs.upToDateWhen { false }
+    doFirst {
+        val reports = rootProject.layout.buildDirectory.dir("reports/rpc-windows-loader-jdk21").get().asFile.toPath()
+        Files.createDirectories(reports)
+        // Never erase or overwrite a prior result. The maintained runner creates its fresh controls directory.
+        val attempt = Files.createTempDirectory(reports, "attempt-").resolve("controls")
+        commandLine("python3", "-I", "-B", "scripts/tests/check-rpc-windows-loader-jdk21.py",
+            "--java21", windowsLoaderJdk21.get().metadata.installationPath.asFile.absolutePath,
+            "--java17", windowsControlsJdk17.get().metadata.installationPath.asFile.absolutePath,
+            "--jar", rpcWindowsLoaderJdk21Jar.get().archiveFile.get().asFile.absolutePath,
+            "--output", attempt.toString())
+    }
+}
+tasks.named<Test>("jvmTest") {
+    // Other host library tests still require only JDK17. Explicit adapter verification remains available there.
+    dependsOn(rpcJvmTestHost.map { if (it == "windows") listOf(verifyRpcWindowsLoaderJdk21) else emptyList() })
 }
 // Application-owned, opt-in lab integration. It is not part of the sample's main
 // artifact or any library publication, and is never an automatic transport fallback.

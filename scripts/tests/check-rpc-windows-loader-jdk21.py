@@ -59,6 +59,8 @@ def main():
         entries = archive.namelist()
         require(len(entries) == len(set(entries)) and "module-info.class" in entries and
                 not any("ModelTests" in name or "RegistrationOwnerTests" in name or "RegistrationInvocationTests" in name or
+                        "VmAcquisitionInvocationTests" in name or
+                        "LibraryLoadInvocationTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
         probe = archive.read(PACKAGE.replace(".", "/") + "/Probe.class")
@@ -138,6 +140,24 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".RegistrationInvocationTests", case], 0,
             "WINDOWS_JNI_FFM_INVOCATION_PASS case=" + re.escape(case) +
             r" scope=JDK_UPCALL_MARSHALING_NOT_WINDOWS_JNI_OR_AUTHORITY\n", "")
+    vm_cases = ["success", "arguments", "virtual", "thread", "reentrant", "close-after-result", "retired-frame",
+                "status", "zero-count", "multiple-count", "negative-count", "null-vm", "unaligned-vm",
+                "high-vm", "frame-alias", "partial-frame-alias", "clear-failure", "count-clear-failure",
+                "readback-cleanup", "closed-entry"]
+    for case in vm_cases:
+        run("vm-acquisition-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".VmAcquisitionInvocationTests", case], 0,
+            "WINDOWS_JVM_FFM_ACQUISITION_PASS case=" + re.escape(case) +
+            r" scope=JDK_UPCALL_MARSHALING_NOT_VM_LOOKUP_OR_AUTHORITY\n", "")
+    load_cases = ["success", "arguments", "virtual", "thread", "reentrant", "duplicate", "close-after-result",
+                  "retired-frame", "null-module", "unaligned-module", "high-module", "readback-failure",
+                  "clear-failure", "closed-entry"]
+    capture_scope = "WINDOWS_GET_LAST_ERROR" if os.name == "nt" else "NOT_EXECUTED"
+    for case in load_cases:
+        run("library-load-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".LibraryLoadInvocationTests", case], 0,
+            "WINDOWS_LIBRARY_FFM_LOAD_PASS case=" + re.escape(case) +
+            " scope=JDK_UPCALL_MARSHALING_NOT_DLL_LOADING_OR_AUTHORITY capture=" + capture_scope + r"\n", "")
     require(jar.read_bytes() == data, "Adapter changed during controls")
     result = {"scope": "JDK21_PREVIEW_REFUSALS_AND_PORTABLE_MODELS_NOT_OS_JNI_OR_RELEASE", "result": "PASS",
               "jar": {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},

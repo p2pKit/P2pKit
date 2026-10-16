@@ -268,3 +268,45 @@ constraints and frame retirement. The callback never invokes JNI or storage and 
 escape its native boundary. A test-only reflective read-only-buffer fault verifies retained retirement failure;
 no production fault-injection hook is added. These are host-ABI FFM mechanics, **not Windows ABI/JNI registration,
 DLL loading, protected NTFS, installed application or production authority qualification**.
+
+## Original JVM acquisition and constrained-load call mechanics
+
+`WindowsJvmAcquisitionInvocation` implements the fixed post-admission
+`JNI_GetCreatedJavaVMs(JavaVM** vmBuf, jsize bufLen, jsize* nVMs)` call. It supplies one zero-initialized,
+disjoint eight-byte VM output and four-byte count output, requires status zero and exactly one positive,
+aligned VM pointer, and rejects pointers into its own output buffers. Its result retains the original runtime
+owner, arena and entry; retiring private buffers neither invalidates the original VM view nor closes its owner.
+There is no lookup, `JNI_CreateJavaVM`, attach/detach fallback or production numeric-address construction.
+A future caller must transfer the whole result's ownership to the permanent JNI registration owner, not pass
+only a borrowed address. Count/address validation alone is not proof of the original JVM's identity.
+
+`WindowsLibraryLoadInvocation` implements the fixed post-admission `LoadLibraryExW` call with a bounded
+canonical absolute DLL path, NULL reserved file argument and `LOAD_LIBRARY_SEARCH_SYSTEM32` only. Real
+preparation checks the original boot `java.base` Windows-x64 linker, not mutable OS/architecture hints. It
+captures `GetLastError` in the same downcall, retains the returned HMODULE before later validation, and does
+not require zero error state on a successful call. No search-path mutation or `FreeLibrary` API exists.
+One permanent process owner is reserved before invocation and retains the original installation, runtime,
+file and call owners on success or failure; uncertain outcomes cannot authorize retry or unload.
+
+These package-private mechanisms remain dormant. Their owner references, scopes and path grammar **do not
+establish authority**. The productive loader still refuses because independently trusted bootstrap,
+installation/runtime custody, actual mapping/protection/import checks and full-provider activation are missing.
+The fixed-call components must never be substituted for those prerequisites.
+
+Controls use JDK-generated inert upcalls, not an actual DLL load or original-JVM discovery. Cross-host load
+controls reflectively exercise only private call-frame mechanics; no validation bypass is exposed in production.
+Windows additionally exercises real Windows-linker/captured-error preparation against the inert upcall. Tests
+never execute the candidate DLL, open protected storage or claim installed application qualification.
+
+Run the maintained task explicitly with the development JDK17 and JDK21 toolchains available:
+
+```bash
+./gradlew :p2p-sample-rpc:verifyRpcWindowsLoaderJdk21 --no-build-cache --dependency-verification=strict
+```
+
+Ordinary Windows `jvmTest` now requires this task, so the modular Windows component cannot omit the adapter
+controls after retirement of the old dedicated dispatch lane. Other-host ordinary JVM tests retain their
+JDK17-only requirement. Each execution preserves a new report directory under
+`build/reports/rpc-windows-loader-jdk21/`; existing canonical CI captures these reports without a new workflow,
+packaging identity, release route, scope relaxation or qualification claim. Preview classes remain confined to
+the dedicated, unpublished adapter; test classes are excluded by the exact packaged-class inventory.
