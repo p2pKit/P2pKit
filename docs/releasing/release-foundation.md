@@ -13,10 +13,16 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current source is not yet a published `0.8.0-rc1`. Foundation lands first via
-its own reviewed PR. RPC PR #463 then integrates the histories in isolation and
-qualifies the combined source, including its expanded dependency graph. No
-Foundation or RPC historical result qualifies that new combined commit.
+The current source is not yet a published `0.8.0-rc1`. The landing candidate is
+combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466), preserving both the
+modular Foundation history (`6014595493b59e57a1a17fc3c67d378ca5accbbe`) and agreed
+RPC history (`68d470189773d56d939c0add0a39ef929739e7bb`), with their subsequent
+integration fixes. This supersedes the earlier separate Foundation-first landing
+plan; it does not authorize a merge or closing [RPC PR #463](https://github.com/p2pKit/P2pKit/pull/463).
+The combined revision and its 14-lockfile graph must pass the protected checks
+and receive final exact-head owner approval. Historical branch results do not
+qualify a new combined commit, and the actual main merge needs its own release
+qualification before separately approved tagging or publication.
 
 ## Independent components
 
@@ -104,8 +110,13 @@ On a same-run retry, collection automatically preserves each untouched successfu
 component's original attempt and pairs its application with that same attempt.
 It selects the latest execution, not the latest success: a newer failed, skipped
 or incomplete component cannot fall back to an older pass. A qualifier-only retry
-can reuse all unchanged originals. Collection uses the current run attempt;
-already frozen selections are revalidated without being silently reselected.
+can reuse all unchanged originals. GitHub may copy successful job records into
+that attempt with new job IDs but the original execution times, steps and runner.
+Collection follows such copies only when the authenticated attempt records and
+immediately preceding execution match exactly and the execution finished before
+the new attempt began. It never falls back merely because an artifact is absent.
+Collection uses the current run attempt; already frozen selections are revalidated
+without being silently reselected.
 
 The plan reports reasonable external wall limits (30–180 minutes per component,
 plus 10 minutes for evidence/upload). No special CPU20, initializer120 or
