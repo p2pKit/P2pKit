@@ -284,8 +284,11 @@ only a borrowed address. Count/address validation alone is not proof of the orig
 `WindowsLibraryLoadInvocation` implements the fixed post-admission `LoadLibraryExW` call with a bounded
 canonical absolute DLL path, NULL reserved file argument and `LOAD_LIBRARY_SEARCH_SYSTEM32` only. Real
 preparation checks the original boot `java.base` Windows-x64 linker, not mutable OS/architecture hints. It
-captures `GetLastError` in the same downcall, retains the returned HMODULE before later validation, and does
-not require zero error state on a successful call. No search-path mutation or `FreeLibrary` API exists.
+captures `GetLastError` in the same downcall and captures the Windows-x64 HMODULE return register as a
+primitive `long` before any allocating segment wrapper, error readback or scope recheck. Only after those
+checks does it create the original-arena view. A late readback/scope failure retains the raw return; a
+downcall that does not complete normally retains the permanent owner without inventing a returned handle.
+It does not require zero error state on a successful call. No search-path mutation or `FreeLibrary` API exists.
 One permanent process owner is reserved before invocation and retains the original installation, runtime,
 file and call owners on success or failure; uncertain outcomes cannot authorize retry or unload.
 
@@ -296,8 +299,11 @@ The fixed-call components must never be substituted for those prerequisites.
 
 Controls use JDK-generated inert upcalls, not an actual DLL load or original-JVM discovery. Cross-host load
 controls reflectively exercise only private call-frame mechanics; no validation bypass is exposed in production.
-Windows additionally exercises real Windows-linker/captured-error preparation against the inert upcall. Tests
-never execute the candidate DLL, open protected storage or claim installed application qualification.
+Windows additionally exercises real Windows-linker/captured-error preparation against the inert upcall.
+The load fixture independently returns an ADDRESS while the downcall captures the primitive return register;
+late scope closure and interrupted MethodHandle return controls distinguish an observed handle from an
+uncertain call. Tests never execute the candidate DLL, open protected storage or claim installed application
+qualification.
 
 Run the maintained task explicitly with the development JDK17 and JDK21 toolchains available:
 

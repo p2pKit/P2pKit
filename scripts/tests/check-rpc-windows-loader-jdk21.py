@@ -164,7 +164,7 @@ def main():
             r" scope=JDK_UPCALL_MARSHALING_NOT_VM_LOOKUP_OR_AUTHORITY\n", "")
     load_cases = ["success", "arguments", "virtual", "thread", "reentrant", "duplicate", "close-after-result",
                   "retired-frame", "null-module", "unaligned-module", "high-module", "readback-failure",
-                  "clear-failure", "closed-entry"]
+                  "clear-failure", "closed-entry", "late-scope-close", "return-failure"]
     capture_scope = "WINDOWS_GET_LAST_ERROR" if os.name == "nt" else "NOT_EXECUTED"
     for case in load_cases:
         run("library-load-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),

@@ -20,7 +20,9 @@ final class WindowsLibraryLoadInvocation {
     static final int MAXIMUM_PATH_CHARS = 260;
     static final int SEARCH_SYSTEM32 = 0x00000800;
     static final MemoryLayout PATH = MemoryLayout.sequenceLayout(MAXIMUM_PATH_CHARS, ValueLayout.JAVA_SHORT);
-    static final FunctionDescriptor DESCRIPTOR = FunctionDescriptor.of(ValueLayout.ADDRESS,
+    // On the guarded Windows-x64 ABI both an opaque HMODULE pointer and this 64-bit integer return
+    // occupy RAX. The primitive carrier preserves returned bits before FFM can allocate a segment view.
+    static final FunctionDescriptor DESCRIPTOR = FunctionDescriptor.of(ValueLayout.JAVA_LONG,
         ValueLayout.ADDRESS.withTargetLayout(PATH), ValueLayout.ADDRESS, ValueLayout.JAVA_INT);
 
     static final class Result {
@@ -76,6 +78,8 @@ final class WindowsLibraryLoadInvocation {
     private long errorOffset;
     private MethodHandle call;
     private MemorySegment module;
+    private long rawModule;
+    private boolean nativeReturned;
     private int lastError;
     private boolean errorObserved;
     private boolean attempted;
@@ -207,8 +211,9 @@ final class WindowsLibraryLoadInvocation {
                 requireOriginalScope();
                 active = true;
                 try {
-                    module = (MemorySegment) call.invokeExact(
+                    rawModule = (long) call.invokeExact(
                         capturedState, pathView, MemorySegment.NULL, SEARCH_SYSTEM32);
+                    nativeReturned = true;
                 }
                 finally { active = false; }
             } catch (Throwable caught) {
@@ -216,15 +221,15 @@ final class WindowsLibraryLoadInvocation {
                 throw failure;
             }
             try {
-                // Preserve the actual returned handle before reading any other state or allocating its scoped view.
+                // rawModule is already retained even if this scope/error read or later view allocation fails.
                 requireOriginalScope();
                 lastError = capturedState.get(ValueLayout.JAVA_INT, errorOffset);
                 errorObserved = true;
-                if (module.address() <= 0 || (module.address() & 65_535) != 0) {
+                if (rawModule <= 0 || (rawModule & 65_535) != 0) {
                     throw new IllegalStateException("Windows library load returned no valid original module");
                 }
                 // Success does not require lastError==0: successful Windows calls may leave stale error state.
-                module = module.reinterpret(originalArena, null);
+                module = MemorySegment.ofAddress(rawModule).reinterpret(originalArena, null);
                 accepted = true;
             } catch (Throwable caught) {
                 failure.readbackFailure = caught;
