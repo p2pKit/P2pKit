@@ -726,3 +726,15 @@ development deny-storage DLL deliberately has the same raw ABI and is **not**
 sufficient. Profile Stop cannot unload that owner. Availability/UI gates remain
 unchanged until productive admission exists; neither these model tests nor the
 actual cross-module typed-refusal test qualifies installed Windows operation.
+
+### Exact ASLR header comparison
+
+For the supported `DYNAMIC_BASE` image mapping, the byte comparator requires the
+loaded PE header's eight-byte `ImageBase` to equal the original module mapping
+base. Its field offset comes from the independently pinned and structurally
+verified PE header, not a compiler-specific constant or loaded metadata. This
+is one exact derived expectation, **not** a mask or acceptance of both original
+and arbitrary rebased values. Every neighboring header byte, header-page tail,
+executable byte and validated DIR64 update remains checked. Unsupported mapping
+modes that do not satisfy this exact relationship still refuse. This comparison
+provides no initial loading authority or ownership by itself.

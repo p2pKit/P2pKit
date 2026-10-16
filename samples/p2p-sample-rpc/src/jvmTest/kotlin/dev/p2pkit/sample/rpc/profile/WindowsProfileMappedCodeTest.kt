@@ -183,7 +183,9 @@ class WindowsProfileMappedCodeTest {
         WindowsProfileMappedCode.Readback(base + 0x1000, bytes.copyOfRange(0x400, 0x600).copyOf(size))
 
     private fun header(bytes: ByteArray, base: Long = PREFERRED) =
-        WindowsProfileMappedCode.Readback(base, bytes.copyOfRange(0, 0x400).copyOf(0x1000))
+        WindowsProfileMappedCode.Readback(base, bytes.copyOfRange(0, 0x400).copyOf(0x1000).apply {
+            buffer().putLong(0x98 + 24, base)
+        })
 
     private fun prepare(bytes: ByteArray) = WindowsProfileMappedCode.prepare(bytes, authorize(bytes))
 

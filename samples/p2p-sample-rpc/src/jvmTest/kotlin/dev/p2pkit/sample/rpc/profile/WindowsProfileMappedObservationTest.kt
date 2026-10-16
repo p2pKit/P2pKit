@@ -84,6 +84,7 @@ class WindowsProfileMappedObservationTest {
         val requests = longArrayOf(base, 4096, 0, base + 4096, 4096, 1)
         val pages = arrayOf(bytes.copyOfRange(0, 0x400).copyOf(4096),
             bytes.copyOfRange(0x400, 0x600).copyOf(4096)).apply {
+            ByteBuffer.wrap(this[0]).order(ByteOrder.LITTLE_ENDIAN).putLong(0x98 + 24, base)
             if (relocations) ByteBuffer.wrap(this[1]).order(ByteOrder.LITTLE_ENDIAN)
                 .putLong(0x81, Long.MAX_VALUE + base - BASE)
         }

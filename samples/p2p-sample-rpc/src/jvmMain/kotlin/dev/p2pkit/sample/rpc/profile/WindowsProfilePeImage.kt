@@ -39,7 +39,7 @@ internal object WindowsProfilePeImage {
     internal data class CodeSection(val rva: Long, val mappedBytes: Int, val rawBytes: ByteArray,
         val relocations: List<Int>, val executable: Boolean)
     internal data class CodeLayout(val sha256: String, val fileBytes: Int, val imageBytes: Long,
-        val preferredBase: Long, val sections: List<CodeSection>)
+        val preferredBase: Long, val headerImageBaseOffset: Int, val sections: List<CodeSection>)
 
     internal fun codeLayout(image: ByteArray): CodeLayout {
         require(image.size in 512..MAXIMUM_BYTES) { "Unsupported PE image size" }
@@ -71,6 +71,7 @@ internal object WindowsProfilePeImage {
         private val directories = mutableListOf<Pair<Long, Long>>()
         private val immutableMetadata = mutableListOf<LongRange>()
         private var preferredBase = 0L
+        private var headerImageBaseOffset = 0
         private var sectionAlignment = 0L
         private var headersSize = 0L
         private var relocationWrites: List<Long> = emptyList()
@@ -134,6 +135,7 @@ internal object WindowsProfilePeImage {
             span(optional, 240)
             check(u16(optional) == 0x20b && u64(optional + 24) > 0 && u64(optional + 24) % 65536 == 0L)
             preferredBase = u64(optional + 24)
+            headerImageBaseOffset = span(optional + 24, 8)
             sectionAlignment = u32(optional + 32)
             val fileAlignment = u32(optional + 36)
             check(powerOfTwo(fileAlignment) && fileAlignment in 512..65536 &&
@@ -220,7 +222,7 @@ internal object WindowsProfilePeImage {
             }
             val header = CodeSection(0, align(headersSize, 4096).toInt(),
                 bytes.copyOfRange(0, headersSize.toInt()), emptyList(), false)
-            return CodeLayout(image.sha256, bytes.size, image.imageBytes, preferredBase,
+            return CodeLayout(image.sha256, bytes.size, image.imageBytes, preferredBase, headerImageBaseOffset,
                 Collections.unmodifiableList(listOf(header) + code))
         }
 

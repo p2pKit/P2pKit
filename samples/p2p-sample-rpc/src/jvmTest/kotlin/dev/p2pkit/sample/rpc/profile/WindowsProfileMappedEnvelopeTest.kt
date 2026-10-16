@@ -100,7 +100,10 @@ class WindowsProfileMappedEnvelopeTest {
         plan.regions(base, IMAGE).map { region ->
             val contents = ByteArray(region.bytes)
             when (region.address - base) {
-                0L -> bytes.copyInto(contents, 0, 0, minOf(contents.size, 0x400))
+                0L -> {
+                    bytes.copyInto(contents, 0, 0, minOf(contents.size, 0x400))
+                    contents.buffer().putLong(0x98 + 24, base)
+                }
                 4096L -> bytes.copyInto(contents, 0, 0x400, 0x400 + minOf(contents.size, 0x200))
                 else -> error("Unexpected inert fixture region")
             }

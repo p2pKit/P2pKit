@@ -43,6 +43,10 @@ internal object WindowsProfileLoadedNativeFixture {
                 page.copyInto(actual, offset)
             }
             val expected = section.rawBytes.copyOf(section.mappedBytes)
+            if (!section.executable) {
+                for (byte in 0..7) expected[layout.headerImageBaseOffset + byte] =
+                    (moduleBase ushr (byte * 8)).toByte()
+            }
             val relocated = BooleanArray(section.mappedBytes)
             for (offset in section.relocations) {
                 var original = 0L

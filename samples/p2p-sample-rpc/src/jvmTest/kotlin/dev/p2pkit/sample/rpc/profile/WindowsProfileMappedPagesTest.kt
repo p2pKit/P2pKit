@@ -98,7 +98,9 @@ class WindowsProfileMappedPagesTest {
         added.buffer().putLong(0xffc, ORIGINAL + base - BASE)
         return plan.regions(base, IMAGE).map { range ->
             val payload = when (range.address - base) {
-                0L -> bytes.copyOfRange(0, 0x400).copyOf(range.bytes)
+                0L -> bytes.copyOfRange(0, 0x400).copyOf(range.bytes).apply {
+                    buffer().putLong(0x98 + 24, base)
+                }
                 0x1000L -> bytes.copyOfRange(0x400, 0x600).copyOf(range.bytes)
                 0x4000L -> added.copyOfRange(0, range.bytes)
                 0x5000L -> added.copyOfRange(0x1000, 0x1000 + range.bytes)

@@ -4,7 +4,8 @@ import java.util.Collections
 
 /**
  * Exact headers and complete executable-page comparison against independently pinned file bytes, including AMD64 DIR64
- * relocation. This is a dormant loader algorithm, NOT a loader, native memory reader or loading authority.
+ * relocation and the loader's exact ImageBase update for the required DYNAMIC_BASE image.
+ * This is a dormant loader algorithm, NOT a loader, native memory reader or loading authority.
  * A productive caller must separately establish original file/module/ancestor custody, system-call authority,
  * readable mappings and protections, import providers and lifetime before obtaining actual readbacks.
  * Matching caller-supplied arrays establishes none of those prerequisites or Windows provider availability.
@@ -57,6 +58,19 @@ internal class WindowsProfileMappedCode private constructor(private val layout: 
         layout.sections.forEachIndexed { index, section ->
             val actual = snapshots[index]
             var cursor = 0
+            if (!section.executable) {
+                // The required DYNAMIC_BASE image's loaded PE header contains the actual base, not its
+                // on-disk preferred base. Derive exactly these eight expected bytes from the original
+                // module mapping; never mask them, accept an arbitrary value or rewrite the file snapshot.
+                // The field offset comes from the verified original PE header, never loaded metadata.
+                check(section.rva == 0L && section.relocations.isEmpty())
+                val field = layout.headerImageBaseOffset
+                compareUnchanged(section.rawBytes, actual, 0, field)
+                for (byte in 0..7) require(actual[field + byte] == (moduleBase ushr (byte * 8)).toByte()) {
+                    "Windows profile mapped header ImageBase differs"
+                }
+                cursor = field + 8
+            }
             for (relocation in section.relocations) {
                 compareUnchanged(section.rawBytes, actual, cursor, relocation)
                 var original = 0L
