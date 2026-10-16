@@ -136,7 +136,9 @@ class Api:
         return self.opener.open(urllib.request.Request(url, headers=headers, method=method, data=data), timeout=30)
 
     def json(self, path, *, method="GET", value=None, missing=False, upload=None):
-        need(path.startswith("/") and ".." not in path and "#" not in path, "Invalid API path")
+        # GitHub's exact commit-comparison delimiter is not a path traversal.
+        comparison = re.fullmatch(r"/compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}", path) is not None
+        need(path.startswith("/") and (".." not in path or comparison) and "#" not in path, "Invalid API path")
         try:
             if upload is None:
                 response = self.open(API + PREFIX + path, method=method,
@@ -485,6 +487,7 @@ def latest(rows, reason):
 def checks(api, sha, contexts, event, pull_number=None):
     rows = api.pages(f"/commits/{sha}/check-runs?filter=all", "check_runs")
     result = []
+    merged_pull = None
     for name in sorted(contexts):
         row = latest([x for x in rows if x.get("name") == name], "Missing required check: " + name)
         need(row.get("head_sha") == sha and row.get("status") == "completed" and row.get("conclusion") == "success",
@@ -509,8 +512,28 @@ def checks(api, sha, contexts, event, pull_number=None):
             path = CHECK_WORKFLOWS[name]
             trusted_run(run, path, sha, MAIN_EVENTS[path] if event == "main" else event)
             if pull_number is not None:
-                need(any(x.get("number") == pull_number and x.get("head", {}).get("sha") == sha
-                         for x in run.get("pull_requests", [])), "Check does not bind the reviewed PR head")
+                associations = run.get("pull_requests")
+                need(type(associations) is list, "Malformed check PR association")
+                if associations:
+                    need(any(x.get("number") == pull_number and x.get("head", {}).get("sha") == sha
+                             for x in associations), "Check does not bind the reviewed PR head")
+                else:
+                    # GitHub can clear this dynamic association after merge.
+                    # Validate commit-bound checks against the actual merged PR;
+                    # this does not reconstruct the original event's PR pointer.
+                    if merged_pull is None:
+                        merged_pull = api.json("/pulls/" + str(number(pull_number)))
+                    need(event == "pull_request" and merged_pull.get("number") == pull_number and
+                         merged_pull.get("merged") is True and merged_pull.get("state") == "closed" and
+                         merged_pull.get("base", {}).get("ref") == "main" and
+                         merged_pull.get("base", {}).get("repo", {}).get("full_name") == REPO and
+                         merged_pull.get("head", {}).get("repo", {}).get("full_name") == REPO and
+                         merged_pull.get("head", {}).get("sha") == sha and
+                         type(merged_pull["head"].get("ref")) is str and merged_pull["head"]["ref"] and
+                         merged_pull["head"]["ref"] == run.get("head_branch") and
+                         timestamp(merged_pull.get("created_at")) <= timestamp(run.get("created_at")) <=
+                         timestamp(row.get("completed_at")) <= timestamp(merged_pull.get("merged_at")),
+                         "Empty check association lacks exact merged-PR source and timing")
         result.append({"id": row["id"], "name": name, "sha": sha, "app": app,
                        "completedAt": row["completed_at"], "url": row["details_url"]})
         if app == "github-actions":

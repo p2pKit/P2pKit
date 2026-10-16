@@ -495,6 +495,79 @@ class ReleaseTest(unittest.TestCase):
             with self.subTest(event=event), self.assertRaises(R.Hold):
                 self.plan()
 
+    def detached_merged_pr_checks(self):
+        pull = self.api.data["/pulls/99"]
+        pull.update(state="closed", created_at="2026-09-15T08:00:00Z")
+        pull["head"]["ref"] = "reviewed-feature"
+        for row in self.api.collections[f"/commits/{HEAD}/check-runs?filter=all"]:
+            if row["app"]["slug"] == "github-actions":
+                self.api.data[f"/actions/runs/{row['id']}"].update(
+                    pull_requests=[], head_branch="reviewed-feature", created_at="2026-09-15T08:30:00Z")
+
+    def test_merged_pr_checks_survive_empty_dynamic_associations(self):
+        self.detached_merged_pr_checks()
+        with mock.patch.object(self.api, "json", wraps=self.api.json) as requests:
+            checked = R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+        self.assertEqual(4, len(checked))
+        self.assertEqual(1, sum(call.args[0] == "/pulls/99" for call in requests.call_args_list))
+        self.assertEqual(HEAD, self.plan()["pullRequest"]["head"])
+        self.assertEqual([], self.api.mutations)
+
+    def test_empty_pr_association_requires_actual_merged_source_branch_and_timing(self):
+        self.detached_merged_pr_checks()
+        original = copy.deepcopy(self.api.data)
+        pull = original["/pulls/99"]
+        changes = [
+            ("/pulls/99", {"number": 100}), ("/pulls/99", {"merged": False}),
+            ("/pulls/99", {"state": "open"}),
+            ("/pulls/99", {"base": {**pull["base"], "ref": "topic"}}),
+            ("/pulls/99", {"base": {**pull["base"], "repo": {"full_name": "fork/P2pKit"}}}),
+            ("/pulls/99", {"head": {**pull["head"], "repo": {"full_name": "fork/P2pKit"}}}),
+            ("/pulls/99", {"head": {**pull["head"], "sha": SOURCE}}),
+            ("/pulls/99", {"head": {**pull["head"], "ref": ""}}),
+            ("/pulls/99", {"created_at": "2026-09-15T09:01:00Z"}),
+            ("/pulls/99", {"merged_at": "2026-09-15T08:59:00Z"}),
+        ]
+        gate = next(row for row in self.api.collections[f"/commits/{HEAD}/check-runs?filter=all"]
+                    if row["name"] == "complete-gate")
+        path = f"/actions/runs/{gate['id']}"
+        changes.extend((path, change) for change in (
+            {"created_at": "2026-09-15T07:59:00Z"}, {"created_at": "2026-09-15T09:01:00Z"},
+            {"head_branch": "other-feature"}, {"head_sha": SOURCE}, {"event": "push"},
+            {"repository": {"full_name": "fork/P2pKit"}},
+            {"head_repository": {"full_name": "fork/P2pKit"}},
+        ))
+        for path, change in changes:
+            self.api.data = copy.deepcopy(original)
+            self.api.data[path].update(change)
+            with self.subTest(path=path, change=change), self.assertRaises(R.Hold):
+                R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+
+    def test_nonempty_or_malformed_pr_association_never_uses_merged_fallback(self):
+        self.detached_merged_pr_checks()
+        gate = next(row for row in self.api.collections[f"/commits/{HEAD}/check-runs?filter=all"]
+                    if row["name"] == "complete-gate")
+        run = self.api.data[f"/actions/runs/{gate['id']}"]
+        for associations in ([{"number": 100, "head": {"sha": HEAD}}],
+                             [{"number": 99, "head": {"sha": SOURCE}}], {}, None, "missing"):
+            if associations == "missing":
+                run.pop("pull_requests", None)
+            else:
+                run["pull_requests"] = associations
+            with mock.patch.object(self.api, "json", wraps=self.api.json) as requests:
+                with self.subTest(associations=associations), self.assertRaises(R.Hold):
+                    R.checks(self.api, HEAD, PR_CONTEXTS, "pull_request", 99)
+            self.assertFalse(any(call.args[0] == "/pulls/99" for call in requests.call_args_list))
+
+    def test_merged_fallback_never_hides_latest_failed_or_incomplete_check(self):
+        self.detached_merged_pr_checks()
+        original = copy.deepcopy(self.api.collections)
+        for change in ({"conclusion": "failure"}, {"conclusion": "skipped"}, {"status": "in_progress"}):
+            self.api.collections = copy.deepcopy(original)
+            self.newer_check("complete-gate", "pull_request", sha=HEAD, change=change)
+            with self.subTest(change=change), self.assertRaises(R.Hold):
+                self.plan()
+
     def test_trigger_event_set_is_explicit_for_each_maintained_workflow(self):
         for name, path in R.TRIGGERS.items():
             event_payload = {"name": name, "id": 900, "head_sha": SOURCE}
@@ -1138,6 +1211,54 @@ class ReleaseTest(unittest.TestCase):
                 self.assertEqual(1, R.main())
         self.assertEqual([(SOURCE, 900, 1, None)] * 3, captured)
         self.assertEqual([], self.api.mutations)
+
+    def test_real_api_admits_only_exact_sha_comparison_urls(self):
+        api = R.Api("synthetic-fixture-token-not-a-credential")
+        api.opener = mock.Mock()
+        for target in (SOURCE, HEAD):
+            path = f"/compare/{SOURCE}...{target}"
+            expected = {"status": "identical" if target == SOURCE else "ahead",
+                        "merge_base_commit": {"sha": SOURCE}}
+            api.opener.open.return_value = io.BytesIO(R.encoded(expected))
+            with self.subTest(target=target):
+                self.assertEqual(expected, api.json(path))
+                request = api.opener.open.call_args.args[0]
+                self.assertEqual(R.API + R.PREFIX + path, request.full_url)
+                self.assertEqual("GET", request.get_method())
+                self.assertEqual("Bearer synthetic-fixture-token-not-a-credential",
+                                 request.get_header("Authorization"))
+                self.assertEqual({"timeout": 30}, api.opener.open.call_args.kwargs)
+        self.assertEqual(2, api.opener.open.call_count)
+
+    def test_real_api_compare_exception_does_not_admit_invalid_paths(self):
+        api = R.Api("synthetic-fixture-token-not-a-credential")
+        api.opener = mock.Mock()
+        valid = f"/compare/{SOURCE}...{HEAD}"
+        paths = (
+            valid + "/files", valid + "?page=1", valid + "#fragment", valid + "\n",
+            valid + "/../actions", valid + "%2f..%2factions", valid + "/%2e%2e/actions",
+            f"/compare/{'A' * 40}...{HEAD}", f"/compare/{SOURCE}...{'A' * 40}",
+            f"/compare/{SOURCE[:-1]}...{HEAD}", f"/compare/{SOURCE}0...{HEAD}",
+            f"/compare/{SOURCE}...{'g' * 40}", f"/compare/{SOURCE}..{HEAD}",
+            f"/compare/{SOURCE}....{HEAD}", f"/compare/%2f{SOURCE}...{HEAD}",
+            "/../actions/runs", "/actions/../runs", valid.removeprefix("/"),
+            "//other.example" + valid,
+        )
+        for path in paths:
+            with self.subTest(path=path), self.assertRaisesRegex(R.Hold, "Invalid API path"):
+                api.json(path)
+        api.opener.open.assert_not_called()
+
+    def test_real_api_preserves_ordinary_repository_query_routes(self):
+        api = R.Api("synthetic-fixture-token-not-a-credential")
+        api.opener = mock.Mock()
+        api.opener.open.return_value = io.BytesIO(b'{"fixture":true}')
+        path = "/contents/gradle.properties?ref=" + SOURCE
+        self.assertEqual({"fixture": True}, api.json(path))
+        api.opener.open.assert_called_once()
+        request = api.opener.open.call_args.args[0]
+        self.assertEqual(R.API + R.PREFIX + path, request.full_url)
+        self.assertEqual("GET", request.get_method())
 
     def test_github_binary_transfer_keeps_json_accept_and_separate_binary_content_type(self):
         calls = []
