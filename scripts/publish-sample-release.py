@@ -136,7 +136,9 @@ class Api:
         return self.opener.open(urllib.request.Request(url, headers=headers, method=method, data=data), timeout=30)
 
     def json(self, path, *, method="GET", value=None, missing=False, upload=None):
-        need(path.startswith("/") and ".." not in path and "#" not in path, "Invalid API path")
+        # GitHub's exact commit-comparison delimiter is not a path traversal.
+        comparison = re.fullmatch(r"/compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}", path) is not None
+        need(path.startswith("/") and (".." not in path or comparison) and "#" not in path, "Invalid API path")
         try:
             if upload is None:
                 response = self.open(API + PREFIX + path, method=method,

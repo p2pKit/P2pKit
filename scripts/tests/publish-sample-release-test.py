@@ -1139,6 +1139,54 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual([(SOURCE, 900, 1, None)] * 3, captured)
         self.assertEqual([], self.api.mutations)
 
+    def test_real_api_admits_only_exact_sha_comparison_urls(self):
+        api = R.Api("synthetic-fixture-token-not-a-credential")
+        api.opener = mock.Mock()
+        for target in (SOURCE, HEAD):
+            path = f"/compare/{SOURCE}...{target}"
+            expected = {"status": "identical" if target == SOURCE else "ahead",
+                        "merge_base_commit": {"sha": SOURCE}}
+            api.opener.open.return_value = io.BytesIO(R.encoded(expected))
+            with self.subTest(target=target):
+                self.assertEqual(expected, api.json(path))
+                request = api.opener.open.call_args.args[0]
+                self.assertEqual(R.API + R.PREFIX + path, request.full_url)
+                self.assertEqual("GET", request.get_method())
+                self.assertEqual("Bearer synthetic-fixture-token-not-a-credential",
+                                 request.get_header("Authorization"))
+                self.assertEqual({"timeout": 30}, api.opener.open.call_args.kwargs)
+        self.assertEqual(2, api.opener.open.call_count)
+
+    def test_real_api_compare_exception_does_not_admit_invalid_paths(self):
+        api = R.Api("synthetic-fixture-token-not-a-credential")
+        api.opener = mock.Mock()
+        valid = f"/compare/{SOURCE}...{HEAD}"
+        paths = (
+            valid + "/files", valid + "?page=1", valid + "#fragment", valid + "\n",
+            valid + "/../actions", valid + "%2f..%2factions", valid + "/%2e%2e/actions",
+            f"/compare/{'A' * 40}...{HEAD}", f"/compare/{SOURCE}...{'A' * 40}",
+            f"/compare/{SOURCE[:-1]}...{HEAD}", f"/compare/{SOURCE}0...{HEAD}",
+            f"/compare/{SOURCE}...{'g' * 40}", f"/compare/{SOURCE}..{HEAD}",
+            f"/compare/{SOURCE}....{HEAD}", f"/compare/%2f{SOURCE}...{HEAD}",
+            "/../actions/runs", "/actions/../runs", valid.removeprefix("/"),
+            "//other.example" + valid,
+        )
+        for path in paths:
+            with self.subTest(path=path), self.assertRaisesRegex(R.Hold, "Invalid API path"):
+                api.json(path)
+        api.opener.open.assert_not_called()
+
+    def test_real_api_preserves_ordinary_repository_query_routes(self):
+        api = R.Api("synthetic-fixture-token-not-a-credential")
+        api.opener = mock.Mock()
+        api.opener.open.return_value = io.BytesIO(b'{"fixture":true}')
+        path = "/contents/gradle.properties?ref=" + SOURCE
+        self.assertEqual({"fixture": True}, api.json(path))
+        api.opener.open.assert_called_once()
+        request = api.opener.open.call_args.args[0]
+        self.assertEqual(R.API + R.PREFIX + path, request.full_url)
+        self.assertEqual("GET", request.get_method())
+
     def test_github_binary_transfer_keeps_json_accept_and_separate_binary_content_type(self):
         calls = []
         api = R.Api("synthetic-fixture-token-not-a-credential")
