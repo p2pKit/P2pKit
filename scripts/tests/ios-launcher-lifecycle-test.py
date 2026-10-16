@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import shutil
+import shlex
 import signal
 import stat
 import subprocess
@@ -12,10 +13,14 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from unittest import mock
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(REPO / "scripts"))
+import audit_processes as ownership
 BASH = os.environ.get("P2PKIT_TEST_BASH", "bash")
 UDID = "11111111-1111-1111-1111-111111111111"
 FAKE_TOOL = r'''#!/usr/bin/env python3
@@ -136,13 +141,55 @@ class LauncherLifecycleTest(unittest.TestCase):
                 pass
             process.communicate(timeout=5)
 
+    def launcher_environment(self, overrides):
+        # Fixture inputs may select a different audit state, but must not mutate
+        # an inherited controller's ownership domain in a new OS process.
+        state = overrides.get(ownership.STATE_ENV)
+        environment = dict(self.env)
+        if state and environment.get(ownership.CHAIN_ENV):
+            environment = ownership.ownership_environment(
+                environment, environment[ownership.JOB_ENV], uuid.uuid4().hex,
+                state, environment["GRADLE_USER_HOME"], allow_new_context=True)
+        environment.update({key: value for key, value in overrides.items()
+                            if key != ownership.STATE_ENV or state})
+        if ownership.STATE_ENV in overrides and not state:
+            # Exercise the real missing-state refusal INSIDE Bash, after its
+            # path lookup children and before the child-free case/exit boundary.
+            # The initial OS environment remains coherently owned. Never erase
+            # the ancestor markers or exempt this child from outer supervision.
+            boundary = 'action="${1:-}"'
+            self.assertIn("\n" + boundary + "\n", (self.repo / "scripts/run-ios-ui-tests.sh").read_text())
+            hook = ('if [[ "$BASH_COMMAND" == ' + shlex.quote(boundary) + ' ]]; then '
+                    'printf "%s\\n" fired > "$FAKE_IOS_ROOT/missing-state-hook"; '
+                    'unset P2PKIT_AUDIT_STATE_DIR; trap - DEBUG; fi')
+            bash_env = self.root / ("missing-state-env-" + uuid.uuid4().hex)
+            bash_env.write_text(pathlib.Path(environment["BASH_ENV"]).read_text() +
+                                "trap " + shlex.quote(hook) + " DEBUG\n")
+            environment["BASH_ENV"] = str(bash_env)
+        return environment
+
+    def test_fixture_state_inputs_preserve_original_ancestor_ownership(self):
+        job, invocation = uuid.uuid4().hex, uuid.uuid4().hex
+        state, home = str(self.root / "outer-state"), str(self.root / "outer-home")
+        self.env = ownership.ownership_environment(self.env, job, invocation, state, home, allow_new_context=True)
+        controller = object.__new__(ownership.PosixScope)
+        controller.job, controller.invocation, controller.state, controller.home = job, invocation, state, home
+        for selected in (str(self.root / "nested-state"), ""):
+            environment = self.launcher_environment({ownership.STATE_ENV: selected})
+            self.assertTrue(controller._ours({key.encode(): value.encode() for key, value in environment.items()}))
+            domains = ownership.ownership_domains(environment[ownership.CHAIN_ENV], environment[ownership.DOMAINS_ENV])
+            self.assertIn({"id": invocation, "job": job, "state": state, "home": home}, domains)
+            self.assertEqual(selected or state, domains[-1]["state"])
+            self.assertEqual(home, domains[-1]["home"])
+            self.assertEqual(selected or state, environment[ownership.STATE_ENV])
+
     def start(self, script="run-ios-app.sh", cwd=None, absolute=False, arguments=(), **overrides):
         cwd = cwd or self.repo
         path = self.repo / "scripts" / script
         # The default matches Gradle's repository-root, relative-path invocation.
         argument = str(path) if absolute else os.path.relpath(path, cwd)
         process = subprocess.Popen([BASH, argument, *arguments], cwd=cwd,
-                                   env=dict(self.env, **overrides), stdout=subprocess.PIPE,
+                                   env=self.launcher_environment(overrides), stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, start_new_session=True)
         self.processes.append(process)
         return process
@@ -393,7 +440,12 @@ printf 'invoked\\n' >> fake-gradle-invocations
                 with self.subTest(action=action, missing=missing):
                     environment = {"P2PKIT_AUDIT_STATE_DIR": str(self.root / "audit-state"),
                                    "IOS_RUN_DIR": str(self.root / action), "SIM_UDID": UDID, missing: ""}
+                    hook = self.root / "missing-state-hook"
+                    hook.unlink(missing_ok=True)
                     self.finish(self.start("run-ios-ui-tests.sh", arguments=(action,), **environment), expected=2)
+                    self.assertEqual(missing == ownership.STATE_ENV, hook.exists())
+                    if hook.exists():
+                        self.assertEqual("fired\n", hook.read_text())
                     self.assertFalse((self.root / "tools.log").exists())
                     self.assertFalse(self.build.exists())
 
