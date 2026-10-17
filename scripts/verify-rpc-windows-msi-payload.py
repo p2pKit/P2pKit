@@ -30,6 +30,22 @@ MAX_MSI = 1024 * 1024 * 1024
 IMAGE_METADATA = "app/.jpackage.xml"
 
 
+class PayloadPathMismatch(ValueError):
+    """A refusal with bounded observations of the original unequal sets, not path authority."""
+    def __init__(self, installed, payload, pinned):
+        super().__init__("MSI and completed image application paths differ")
+        missing, extra = set(installed) - set(payload), set(payload) - set(installed)
+        self.diagnostic = {
+            "imageFiles": len(installed), "msiFiles": len(payload),
+            "missingFiles": len(missing), "extraFiles": len(extra),
+            "caseFoldEqual": {name.casefold() for name in installed} == {name.casefold() for name in payload},
+            "missingNameSha256": sorted(digest(name.encode("utf-8")) for name in missing)[:16],
+            "extraNameSha256": sorted(digest(name.encode("utf-8")) for name in extra)[:16],
+        }
+        # Same already-completed fixed component observations as the passing receipt.
+        self.compared_files = [dict(item) for item in pinned]
+
+
 def require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -259,7 +275,8 @@ def full_payload(rows, extracted, image, pinned):
     installed = {name: value for name, value in before.items() if name != IMAGE_METADATA}
     require(all(installed.get(item["target"]) == {"bytes": item["bytes"], "sha256": item["sha256"]}
                 for item in pinned), "Full image differs from earlier pinned components")
-    require(set(payload) == set(installed), "MSI and completed image application paths differ")
+    if set(payload) != set(installed):
+        raise PayloadPathMismatch(installed, payload, pinned)
     require(payload == installed, "MSI application payload differs from completed image")
     require(image_inventory(image) == before and extracted_inventory(extracted, rows) == payload,
             "Application payload changed during full inspection")

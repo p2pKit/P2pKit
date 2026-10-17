@@ -147,7 +147,25 @@ def inspect_package(root, environment):
     with (reports / "decompiled-product.wxs").open("xb") as stream:
         stream.write(xml)
     require(M.read(reports / "decompiled-product.wxs", M.XML_LIMIT) == xml, "Retained MSI metadata differs")
-    payload = M.inspect(wxs, extracted, image, inspection, msi)
+    try:
+        payload = M.inspect(wxs, extracted, image, inspection, msi)
+    except M.PayloadPathMismatch as error:
+        try:
+            diagnostic = E.rpc_package_path_mismatch(error.diagnostic)
+            require(type(error) is M.PayloadPathMismatch and diagnostic is not None,
+                    "Invalid finite MSI path-mismatch observation")
+            write_json(reports / "msi-payload-refusal.json", {
+                "scope": M.SCOPE, "result": "REFUSED", "reason": "RPC_MSI_PAYLOAD_PATHS",
+                "source": source, "msi": msi_before,
+                "imageInspectionSha256": P.file_hash(inspection, 65536)["sha256"],
+                "wxsSha256": hashlib.sha256(xml).hexdigest(),
+                "comparedFiles": error.compared_files, "pathMismatch": diagnostic,
+                "installation": "NOT_PERFORMED", "nativeExecution": "NOT_PERFORMED",
+            })
+        except (OSError, ValueError, RuntimeError):
+            # Supplemental evidence cannot replace the original payload refusal.
+            print("RPC_WINDOWS_PACKAGE_REFUSAL_RECORD_FAILED", file=sys.stderr)
+        raise
     require(payload["source"] == source["commit"] and payload["tree"] == source["tree"] and
             payload["scope"] == M.SCOPE and payload["result"] == "PASS" and
             len(payload["comparedFiles"]) == 4, "Incomplete source-bound MSI adapter inspection")
@@ -178,7 +196,7 @@ def failure_diagnostic(error):
     category = None
     # Only a real MSI-checker frame admits its finite message. An unrelated
     # package/tool exception cannot lend the MSI inspector its identity.
-    if lines and type(error) is ValueError and len(error.args) == 1 and type(error.args[0]) is str:
+    if lines and type(error) in (ValueError, M.PayloadPathMismatch) and len(error.args) == 1 and type(error.args[0]) is str:
         category = E.RPC_PACKAGE_ERRORS.get(error.args[0])
     return category, lines
 
@@ -195,6 +213,11 @@ def main():
             print("RPC_WINDOWS_PACKAGE_FAILURE " + category, file=sys.stderr)
         if lines:
             print("RPC_WINDOWS_PACKAGE_CHECK_LINES " + ",".join(map(str, lines)), file=sys.stderr)
+        if category == "RPC_MSI_PAYLOAD_PATHS" and type(error) is M.PayloadPathMismatch:
+            diagnostic = E.rpc_package_path_mismatch(error.diagnostic)
+            if diagnostic is not None:
+                print("RPC_WINDOWS_PACKAGE_PATHS " + json.dumps(diagnostic, sort_keys=True,
+                      separators=(",", ":")), file=sys.stderr)
         print("RPC_WINDOWS_PACKAGE_INSPECTION_REFUSED", file=sys.stderr)
         return 1
 

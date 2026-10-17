@@ -18,6 +18,80 @@ SPEC.loader.exec_module(V)
 
 
 class PackageInspectionTests(unittest.TestCase):
+    def test_path_mismatch_retains_prior_comparisons_and_nonzero_finite_output(self):
+        # Real MSI-module raise frame, with only its already observed dictionaries modeled.
+        pinned = [{"target": "app/fixed-component", "bytes": 1, "sha256": "a" * 64}]
+        def mismatch(*_):
+            with patch.object(V.M, "image_inventory", return_value={"app/fixed-component": {
+                    "bytes": 1, "sha256": "a" * 64}, "app/PRIVATE-image": {}}), \
+                    patch.object(V.M, "extracted_inventory", return_value={"app/fixed-component": {
+                        "bytes": 1, "sha256": "a" * 64}, "app/PRIVATE-msi": {}}):
+                V.M.full_payload([], None, None, pinned)
+        public = io.StringIO()
+        with patch.object(V.M, "inspect", side_effect=mismatch), patch.object(V, "ROOT", self.root), \
+                patch.object(V.os, "environ", self.env), patch.object(V.sys, "argv", [str(SCRIPT)]), \
+                contextlib.redirect_stderr(public):
+            self.assertEqual(V.main(), 1)
+        lines = public.getvalue().splitlines()
+        self.assertEqual(lines[0], "RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_PATHS")
+        self.assertTrue(lines[1].startswith("RPC_WINDOWS_PACKAGE_CHECK_LINES "))
+        self.assertTrue(lines[2].startswith("RPC_WINDOWS_PACKAGE_PATHS "))
+        self.assertEqual(lines[3], "RPC_WINDOWS_PACKAGE_INSPECTION_REFUSED")
+        self.assertEqual(len(lines), 4)
+        self.assertNotIn("PRIVATE", public.getvalue())
+        receipt = json.loads((self.reports / "msi-payload-refusal.json").read_text())
+        self.assertEqual(receipt["result"], "REFUSED")
+        self.assertEqual(receipt["source"], self.source)
+        self.assertEqual(receipt["msi"], V.P.file_hash(self.msi, 1024 ** 3))
+        self.assertEqual(receipt["comparedFiles"], pinned)
+        self.assertEqual(receipt["pathMismatch"], json.loads(lines[2].split(" ", 1)[1]))
+        self.assertEqual(receipt["imageInspectionSha256"],
+                         hashlib.sha256((self.reports / "app-image-inspection.json").read_bytes()).hexdigest())
+        self.assertEqual(receipt["wxsSha256"],
+                         hashlib.sha256((self.reports / "decompiled-product.wxs").read_bytes()).hexdigest())
+        self.assertFalse((self.reports / "result.json").exists())
+        self.assertFalse((self.reports / "msi-payload-inspection.json").exists())
+        self.assertEqual(len(self.calls), 2)
+
+    def test_invalid_typed_mismatch_metadata_cannot_escape_or_produce_failed_receipt(self):
+        error = V.M.PayloadPathMismatch({"app/a": {}}, {"app/b": {}}, [])
+        error.diagnostic["PRIVATE"] = "PRIVATE_INPUT"
+        public = io.StringIO()
+        with patch.object(V.M, "inspect", side_effect=error), contextlib.redirect_stderr(public), \
+                self.assertRaises(V.M.PayloadPathMismatch) as raised:
+            self.inspect()
+        self.assertIs(raised.exception, error)
+        self.assertEqual(public.getvalue(), "RPC_WINDOWS_PACKAGE_REFUSAL_RECORD_FAILED\n")
+        self.assertFalse((self.reports / "msi-payload-refusal.json").exists())
+        self.assertFalse((self.reports / "result.json").exists())
+
+    def test_failed_supplemental_receipt_preserves_original_path_refusal_and_public_counts(self):
+        def mismatch(*_):
+            with patch.object(V.M, "image_inventory", return_value={"app/PRIVATE-a": {}}), \
+                    patch.object(V.M, "extracted_inventory", return_value={"app/PRIVATE-b": {}}):
+                V.M.full_payload([], None, None, [])
+        original_write = V.write_json
+        def fail_receipt(path, *args, **kwargs):
+            if path.name == "msi-payload-refusal.json":
+                raise OSError("PRIVATE_FILE_SYSTEM_FAILURE")
+            return original_write(path, *args, **kwargs)
+        public = io.StringIO()
+        with patch.object(V.M, "inspect", side_effect=mismatch), patch.object(V, "ROOT", self.root), \
+                patch.object(V.os, "environ", self.env), patch.object(V.sys, "argv", [str(SCRIPT)]), \
+                patch.object(V, "write_json", side_effect=fail_receipt), contextlib.redirect_stderr(public):
+            self.assertEqual(V.main(), 1)
+        lines = public.getvalue().splitlines()
+        self.assertEqual(lines[0], "RPC_WINDOWS_PACKAGE_REFUSAL_RECORD_FAILED")
+        self.assertEqual(lines[1], "RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_PATHS")
+        self.assertTrue(lines[2].startswith("RPC_WINDOWS_PACKAGE_CHECK_LINES "))
+        self.assertTrue(lines[3].startswith("RPC_WINDOWS_PACKAGE_PATHS "))
+        self.assertEqual(json.loads(lines[3].split(" ", 1)[1])["missingFiles"], 1)
+        self.assertEqual(lines[4], "RPC_WINDOWS_PACKAGE_INSPECTION_REFUSED")
+        self.assertEqual(len(lines), 5)
+        self.assertNotIn("PRIVATE", public.getvalue())
+        self.assertNotIn("PASS", public.getvalue())
+        self.assertFalse((self.reports / "result.json").exists())
+
     def test_failure_diagnostic_uses_only_exact_source_errors_and_numeric_frames(self):
         source = Path(V.M.__file__).read_text()
         for message, category in V.E.RPC_PACKAGE_ERRORS.items():

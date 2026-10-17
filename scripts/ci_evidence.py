@@ -1021,6 +1021,32 @@ RPC_PACKAGE_ERRORS = {
     "Application payload changed during full inspection": "RPC_MSI_PAYLOAD_CHANGED",
 }
 
+
+def rpc_package_path_mismatch(value):
+    """Closed finite metadata only; name digests are observations, never a passing inventory."""
+    counts = ("imageFiles", "msiFiles", "missingFiles", "extraFiles")
+    lists = ("missingNameSha256", "extraNameSha256")
+    if (type(value) is not dict or set(value) != {*counts, *lists, "caseFoldEqual"} or
+            any(type(value[key]) is not int or not 0 <= value[key] <= 50_000 for key in counts) or
+            type(value["caseFoldEqual"]) is not bool):
+        return None
+    image, msi, missing, extra = (value[key] for key in counts)
+    if (not image or not msi or not missing + extra or missing > image or extra > msi or
+            image - missing != msi - extra or
+            value["caseFoldEqual"] and (image != msi or missing != extra)):
+        return None
+    for key, count in zip(lists, (missing, extra)):
+        items = value[key]
+        if (type(items) is not list or len(items) != min(count, 16) or
+                any(type(item) is not str or re.fullmatch(r"[0-9a-f]{64}", item) is None for item in items) or
+                items != sorted(set(items))):
+            return None
+    if set(value[lists[0]]) & set(value[lists[1]]):
+        return None
+    return {**{key: value[key] for key in (*counts, "caseFoldEqual")},
+            **{key: list(value[key]) for key in lists}}
+
+
 def failure_diagnostics(root, command_directory, source_commit="HEAD", *, include_reports=True):
     """Public error identifiers only; logs/payloads/paths remain encrypted.
 
@@ -1029,6 +1055,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     """
     categories, tasks, publication_lines, platform_lines = set(), set(), [], []
     rpc_package_lines = []
+    rpc_path_observations = []
     dependency_exits, duplicate_dependency_steps = {}, set()
     generator_phases, duplicate_generator_phases = {}, set()
     phase_observations, duplicate_phases = {}, set()
@@ -1084,12 +1111,25 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 # The captures themselves are bounded; cap each parsed line too.
                 if len(line) > 4096:
                     continue
+                if re.fullmatch(rb"RPC_WINDOWS_PACKAGE_REFUSAL_RECORD_FAILED\r?\n?", line):
+                    categories.add("RPC_MSI_REFUSAL_RECORD_FAILED")
                 package_error = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_FAILURE ([A-Z_]{1,64})\r?\n?", line)
                 if package_error and package_error[1].decode("ascii") in RPC_PACKAGE_ERRORS.values():
                     categories.add(package_error[1].decode("ascii"))
                 location = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_CHECK_LINES ([1-9][0-9]{0,4}(?:,[1-9][0-9]{0,4}){0,15})\r?\n?", line)
                 if location and not rpc_package_lines:
                     rpc_package_lines = [int(value) for value in location[1].split(b",")]
+                path_marker = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_PATHS ([ -~]{1,3500})\r?\n?", line)
+                if path_marker:
+                    try:
+                        decoded = json.loads(path_marker[1])
+                        observation = rpc_package_path_mismatch(decoded)
+                        if (observation is not None and json.dumps(decoded, sort_keys=True,
+                                separators=(",", ":")).encode("ascii") == path_marker[1]):
+                            if len(rpc_path_observations) < 2:
+                                rpc_path_observations.append(observation)
+                    except (ValueError, TypeError, UnicodeError):
+                        pass
                 consumer_keys = ("index", "listeners", "added", "resolved", "other_added", "other_resolved",
                                  "remote_srv", "remote_txt", "peers", "sees_other")
                 consumer = re.fullmatch(rb"CONSUMER_DISCOVERY_SNAPSHOT " + b" ".join(
@@ -1208,6 +1248,8 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     inventory_fields = {"centralInventory": inventory_observations[0]} if len(inventory_observations) == 1 else {}
     if rpc_package_lines:
         inventory_fields["rpcWindowsPackageCheckLines"] = rpc_package_lines
+    if len(rpc_path_observations) == 1:
+        inventory_fields["rpcWindowsPackagePathMismatch"] = rpc_path_observations[0]
     if consumer_snapshots:
         inventory_fields["consumerDiscoverySnapshots"] = [consumer_snapshots[key] for key in sorted(consumer_snapshots)
                                                          if key not in duplicate_consumers]

@@ -22,6 +22,54 @@ SPEC.loader.exec_module(CHECK)
 
 
 class StaticMsiPayloadTest(unittest.TestCase):
+    def test_path_mismatch_records_original_sets_without_raw_names_or_acceptance(self):
+        (self.image / "app/PRIVATE-not-packaged.bin").write_bytes(b"PRIVATE_BYTES")
+        (self.image / "runtime/release").unlink()
+        with self.assertRaises(CHECK.PayloadPathMismatch) as raised:
+            self.inspect()
+        error = raised.exception
+        self.assertEqual(str(error), "MSI and completed image application paths differ")
+        self.assertEqual(error.diagnostic, {
+            "imageFiles": 9, "msiFiles": 9, "missingFiles": 1, "extraFiles": 1,
+            "caseFoldEqual": False,
+            "missingNameSha256": [CHECK.digest(b"app/PRIVATE-not-packaged.bin")],
+            "extraNameSha256": [CHECK.digest(b"runtime/release")],
+        })
+        self.assertEqual(len(error.compared_files), 3)
+        self.assertEqual({item["target"] for item in error.compared_files},
+                         {"app/" + self.jar.name, "app/resources/rpc-profile/windows-x64/" + CHECK.DLL,
+                          "app/resources/rpc-profile/windows-x64/component.manifest"})
+        self.assertNotIn("PRIVATE", json.dumps(error.diagnostic))
+        self.assertNotIn(str(self.root), json.dumps(error.diagnostic))
+
+    def test_case_only_mismatch_is_diagnostic_not_an_exemption(self):
+        node = next(node for node in self.xml.iter(CHECK.NS + "File") if node.get("Id") == "runtimeRelease")
+        node.set("Name", "RELEASE")
+        self.save_xml()
+        with self.assertRaises(CHECK.PayloadPathMismatch) as raised:
+            self.inspect()
+        observed = raised.exception.diagnostic
+        self.assertTrue(observed["caseFoldEqual"])
+        self.assertEqual(observed["missingFiles"], 1)
+        self.assertEqual(observed["extraFiles"], 1)
+        self.assertEqual(observed["missingNameSha256"], [CHECK.digest(b"runtime/release")])
+        self.assertEqual(observed["extraNameSha256"], [CHECK.digest(b"runtime/RELEASE")])
+
+    def test_path_mismatch_hash_lists_are_bounded_deterministic_and_counts_complete(self):
+        image = {"app/PRIVATE-image-%d" % i: {} for i in range(35)}
+        payload = {"app/PRIVATE-msi-%d" % i: {} for i in range(23)}
+        with mock.patch.object(CHECK, "image_inventory", return_value=image), \
+                mock.patch.object(CHECK, "extracted_inventory", return_value=payload), \
+                self.assertRaises(CHECK.PayloadPathMismatch) as raised:
+            CHECK.full_payload([], self.extracted, self.image, [])
+        value = raised.exception.diagnostic
+        self.assertEqual((value["imageFiles"], value["msiFiles"], value["missingFiles"], value["extraFiles"]),
+                         (35, 23, 35, 23))
+        self.assertEqual(value["missingNameSha256"], sorted(CHECK.digest(s.encode()) for s in image)[:16])
+        self.assertEqual(value["extraNameSha256"], sorted(CHECK.digest(s.encode()) for s in payload)[:16])
+        self.assertLess(len("RPC_WINDOWS_PACKAGE_PATHS " + json.dumps(value, sort_keys=True, separators=(",", ":"))), 3500)
+        self.assertNotIn("PRIVATE", json.dumps(value))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

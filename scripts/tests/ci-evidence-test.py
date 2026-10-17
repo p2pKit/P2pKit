@@ -27,6 +27,45 @@ PUBLIC_FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_rpc_msi_path_mismatch_projection_accepts_only_original_bounded_metadata(self):
+        value = {"imageFiles": 50, "msiFiles": 45, "missingFiles": 35, "extraFiles": 30,
+                 "caseFoldEqual": False,
+                 "missingNameSha256": [format(i, "064x") for i in range(16)],
+                 "extraNameSha256": [format(i, "064x") for i in range(16, 32)]}
+        line = "RPC_WINDOWS_PACKAGE_PATHS " + json.dumps(value, sort_keys=True, separators=(",", ":")) + "\r\n"
+        self.assertLess(len(line), 4096)
+        for reports in (False, True):
+            (self.root / "stderr.log").write_bytes(line.encode())
+            result = E.failure_diagnostics(self.root, self.root, include_reports=reports)
+            self.assertEqual(result["rpcWindowsPackagePathMismatch"], value)
+            self.assertEqual(result["categories"], [])  # Observations cannot fabricate success/failure authority.
+        (self.root / "stderr.log").write_text(line + line)
+        self.assertNotIn("rpcWindowsPackagePathMismatch", E.failure_diagnostics(self.root, self.root))
+        (self.root / "stderr.log").write_text("RPC_WINDOWS_PACKAGE_REFUSAL_RECORD_FAILED\n" + line)
+        result = E.failure_diagnostics(self.root, self.root)
+        self.assertEqual(result["categories"], ["RPC_MSI_REFUSAL_RECORD_FAILED"])
+        self.assertEqual(result["rpcWindowsPackagePathMismatch"], value)
+
+    def test_rpc_msi_path_mismatch_projection_rejects_private_incoherent_or_duplicate_fields(self):
+        value = {"imageFiles": 2, "msiFiles": 2, "missingFiles": 1, "extraFiles": 1,
+                 "caseFoldEqual": False, "missingNameSha256": ["a" * 64], "extraNameSha256": ["b" * 64]}
+        mutations = (("PRIVATE", "PRIVATE_INPUT"), ("imageFiles", True), ("imageFiles", 50001),
+                     ("msiFiles", 3), ("missingFiles", -1), ("caseFoldEqual", 1),
+                     ("missingNameSha256", []), ("missingNameSha256", ["PRIVATE"]),
+                     ("extraNameSha256", ["a" * 64]), ("extraNameSha256", ["A" * 64]),
+                     ("missingNameSha256", ["a" * 64] * 17))
+        raws = [json.dumps({**value, key: other}, sort_keys=True, separators=(",", ":"))
+                for key, other in mutations]
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
+        raws.extend([canonical.replace('"imageFiles":2', '"imageFiles":1,"imageFiles":2'),
+                     " " + canonical, canonical + " PRIVATE", canonical + "x" * 4096])
+        for raw in raws:
+            with self.subTest(raw=raw[:100]):
+                (self.root / "stderr.log").write_text("RPC_WINDOWS_PACKAGE_PATHS " + raw + "\n")
+                result = E.failure_diagnostics(self.root, self.root, include_reports=False)
+                self.assertNotIn("rpcWindowsPackagePathMismatch", result)
+                self.assertNotIn("PRIVATE", json.dumps(result))
+
     def test_rpc_msi_diagnostics_parse_finite_producer_codes_and_locations(self):
         for category in E.RPC_PACKAGE_ERRORS.values():
             for include_reports in (False, True):
