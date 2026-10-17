@@ -86,6 +86,7 @@ final class WindowsSystemBootstrapCandidate {
     private long kernel32Base;
     private long kernelbaseBase;
     private int phase;
+    private boolean nativeReturnUnconfirmed;
     private boolean frameRetired;
     private boolean succeeded;
     private boolean originalJvmAttempted;
@@ -141,7 +142,7 @@ final class WindowsSystemBootstrapCandidate {
             systemPathCall = linker.downcallHandle(entries[3], systemPathDescriptor,
                 Linker.Option.captureCallState("GetLastError"));
             phase = 2;
-            pidReturn = (int) pidCall.invokeExact(buffers[3]);
+            callProcessId();
             observeError(0);
             pid = Integer.toUnsignedLong(pidReturn);
             if (pid == 0 || pid != ProcessHandle.current().pid()) {
@@ -149,7 +150,7 @@ final class WindowsSystemBootstrapCandidate {
             }
             buffers[2].fill((byte) 0x7f);
             phase = 3;
-            systemPathReturn = (int) systemPathCall.invokeExact(buffers[3], buffers[2], PATH_CHARS);
+            callSystemPath();
             observeError(1);
             int systemLength = validatePath(buffers[2], systemPathReturn);
             // Supported path subset is deliberately absolute ASCII, not locale-sensitive Unicode folding.
@@ -163,7 +164,7 @@ final class WindowsSystemBootstrapCandidate {
             failure.operationFailure = caught;
         } finally {
             retireFrame();
-            succeeded = accepted && !failure.retirementFailed();
+            succeeded = accepted && frameRetired && !nativeReturnUnconfirmed && !failure.retirementFailed();
         }
         if (!succeeded) throw failure;
     }
@@ -205,9 +206,7 @@ final class WindowsSystemBootstrapCandidate {
         buffers[0].fill((byte) 0);
         phase = 4 + index * 2;
         // FROM_ADDRESS | PIN: no arbitrary library-name lookup, and no corresponding FreeLibrary/CloseHandle.
-        pinReturns[index] = (int) pinCall.invokeExact(buffers[3], 0x00000005, entries[index], buffers[0]);
-        // Retain the actual primitive before error decoding, view construction or pathname allocation.
-        rawModules[index] = buffers[0].get(ValueLayout.JAVA_LONG, 0);
+        callProviderPin(index);
         observeError(2 + index * 2);
         long raw = rawModules[index];
         if (pinReturns[index] == 0 || raw <= 0 || (raw & 65_535) != 0 || raw > Long.MAX_VALUE - 65_536) {
@@ -221,7 +220,7 @@ final class WindowsSystemBootstrapCandidate {
         modules[index] = MemorySegment.ofAddress(raw).reinterpret(originalArena, null);
         buffers[1].fill((byte) 0x7f);
         phase++;
-        pathReturns[index] = (int) modulePathCall.invokeExact(buffers[3], modules[index], buffers[1], PATH_CHARS);
+        callModulePath(index);
         observeError(3 + index * 2);
         int length = validatePath(buffers[1], pathReturns[index]);
         if (matchesSystemPath(length, systemLength, "kernel32.dll")) {
@@ -240,6 +239,44 @@ final class WindowsSystemBootstrapCandidate {
         boolean first = true;
         for (int prior = 0; prior < index; prior++) if (rawModules[prior] == raw) first = false;
         if (first && ++providers > 2) throw new IllegalStateException("Ambiguous original system provider inventory");
+    }
+
+    // These fixed call sites expose no callback or caller-selected native entry. A thrown downcall
+    // leaves its private output frame quarantined; it is not proof that an asynchronous API was used.
+    private void requireCallFrame() {
+        if (Thread.currentThread() != thread || frameRetired || nativeReturnUnconfirmed) {
+            throw new IllegalStateException("System bootstrap call has no available original frame");
+        }
+    }
+
+    private void callProcessId() throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        pidReturn = (int) pidCall.invokeExact(buffers[3]);
+        nativeReturnUnconfirmed = false;
+    }
+
+    private void callSystemPath() throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        systemPathReturn = (int) systemPathCall.invokeExact(buffers[3], buffers[2], PATH_CHARS);
+        nativeReturnUnconfirmed = false;
+    }
+
+    private void callProviderPin(int index) throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        pinReturns[index] = (int) pinCall.invokeExact(buffers[3], 0x00000005, entries[index], buffers[0]);
+        // Preserve the permanent PIN result before error decoding or allocating any pointer view.
+        rawModules[index] = buffers[0].get(ValueLayout.JAVA_LONG, 0);
+        nativeReturnUnconfirmed = false;
+    }
+
+    private void callModulePath(int index) throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        pathReturns[index] = (int) modulePathCall.invokeExact(buffers[3], modules[index], buffers[1], PATH_CHARS);
+        nativeReturnUnconfirmed = false;
     }
 
     private void validateEntry(MemorySegment entry) {
@@ -296,7 +333,8 @@ final class WindowsSystemBootstrapCandidate {
     }
 
     private void retireFrame() {
-        if (frameRetired) return;
+        if (Thread.currentThread() != thread) throw new IllegalStateException("System bootstrap frame belongs to another thread");
+        if (frameRetired || nativeReturnUnconfirmed) return;
         frameRetired = true;
         for (int index = 0; index < buffers.length; index++) {
             if (buffers[index] != null) {
@@ -311,7 +349,7 @@ final class WindowsSystemBootstrapCandidate {
     }
 
     private void requireCompleted() {
-        if (Thread.currentThread() != thread || !succeeded || !frameRetired || originalArena == null ||
+        if (Thread.currentThread() != thread || !succeeded || !frameRetired || nativeReturnUnconfirmed || originalArena == null ||
             !originalArena.scope().isAlive()) {
             throw new IllegalStateException("System bootstrap candidate has no completed observation on this thread");
         }

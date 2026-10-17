@@ -65,6 +65,7 @@ def main():
                         "ExportLookupInvocationTests" in name or
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
+                        "BootstrapReturnTests" in name or
                         "SystemImportResolutionTests" in name or
                         "SystemExportPlanTests" in name or
                         "OriginalFileLeaseTests" in name or
@@ -358,6 +359,15 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".ImageReadInvocationTests", case], 0,
             "WINDOWS_IMAGE_FFM_READ_PASS case=" + re.escape(case) +
             " scope=JDK_UPCALL_MARSHALING_NOT_OS_MEMORY_READ_OR_AUTHORITY capture=" + capture_scope + r"\n", "")
+    bootstrap_return_cases = [name + "-" + outcome for name in
+        ("bootstrap-pid", "bootstrap-system-path", "bootstrap-pin", "bootstrap-module-path",
+         "jvm-module-pin", "jvm-path", "jvm-resolve", "jvm-provider-pin") for outcome in ("known", "unknown")]
+    bootstrap_return_cases += ["bootstrap-thread", "jvm-thread"]
+    for case in bootstrap_return_cases:
+        run("bootstrap-return-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".BootstrapReturnTests", case], 0,
+            "WINDOWS_BOOTSTRAP_RETURN_PASS case=" + re.escape(case) +
+            r" scope=INERT_FIXED_CALL_RETURN_AND_RETIREMENT_NOT_BOOTSTRAP_OR_NATIVE_COMPLETION\n", "")
     bootstrap_entry = ["--patch-module", MODULE + "=" + str(classes), "--module",
                        MODULE + "/" + PACKAGE + ".SystemBootstrapCandidateTests"]
     run("system-bootstrap-runtime", base + bootstrap_entry + ["runtime"], 0,

@@ -67,6 +67,7 @@ final class WindowsOriginalJvmCandidate {
     private MemorySegment returnedProvider;
     private long rawModule;
     private long rawProvider;
+    private long rawEntry;
     private MemorySegment module;
     private MemorySegment entry;
     private WindowsJvmAcquisitionInvocation acquisition;
@@ -79,6 +80,7 @@ final class WindowsOriginalJvmCandidate {
     private int providerPinReturn;
     private int phase;
     private boolean attempted;
+    private boolean nativeReturnUnconfirmed;
     private boolean frameRetired;
     private boolean succeeded;
     private boolean fileAttempted;
@@ -106,32 +108,30 @@ final class WindowsOriginalJvmCandidate {
             phase = 1;
             buffers[0].fill((byte) 0);
             // PIN only, by the one fixed existing module name. This API does not load a missing JVM.
-            modulePinReturn = (int) pinCall.invokeExact(buffers[4], 0x00000001, buffers[2], buffers[0]);
-            // Preserve the actual permanent PIN effect before allocating a segment wrapper or decoding errors.
-            rawModule = buffers[0].get(ValueLayout.JAVA_LONG, 0);
-            returnedModule = buffers[0].get(ValueLayout.ADDRESS, 0);
+            callModulePin();
+            returnedModule = MemorySegment.ofAddress(rawModule);
             observeError(0);
             validateModule(returnedModule, modulePinReturn);
             module = returnedModule.reinterpret(runtimeArena, null);
 
             phase = 2;
             buffers[1].fill((byte) 0x7f);
-            modulePathReturn = (int) pathCall.invokeExact(buffers[4], module, buffers[1], PATH_CHARS);
+            callModulePath();
             observeError(1);
             validateModulePath();
 
             phase = 3;
             // Fixed ASCII name; a private pointer above 0xffff cannot be interpreted as an ordinal.
-            returnedEntry = (MemorySegment) resolveCall.invokeExact(buffers[4], module, buffers[3]);
+            callResolve();
+            returnedEntry = MemorySegment.ofAddress(rawEntry);
             observeError(2);
             validateReturnedEntry();
             entry = returnedEntry.reinterpret(runtimeArena, null);
 
             phase = 4;
             buffers[0].fill((byte) 0);
-            providerPinReturn = (int) pinCall.invokeExact(buffers[4], 0x00000005, entry, buffers[0]);
-            rawProvider = buffers[0].get(ValueLayout.JAVA_LONG, 0);
-            returnedProvider = buffers[0].get(ValueLayout.ADDRESS, 0);
+            callProviderPin();
+            returnedProvider = MemorySegment.ofAddress(rawProvider);
             observeError(3);
             validateModule(returnedProvider, providerPinReturn);
             if (returnedProvider.address() != module.address()) {
@@ -149,7 +149,7 @@ final class WindowsOriginalJvmCandidate {
             failure.operationFailure = caught;
         } finally {
             retireFrame();
-            succeeded = accepted && !failure.retirementFailed();
+            succeeded = accepted && frameRetired && !nativeReturnUnconfirmed && !failure.retirementFailed();
         }
         if (!succeeded) throw failure;
     }
@@ -168,7 +168,8 @@ final class WindowsOriginalJvmCandidate {
             ValueLayout.ADDRESS, ValueLayout.ADDRESS.withTargetLayout(ValueLayout.JAVA_LONG));
         FunctionDescriptor path = FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
             ValueLayout.ADDRESS.withTargetLayout(PATH), ValueLayout.JAVA_INT);
-        FunctionDescriptor resolve = FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+        // Actual Windows x64 pointer return is retained from RAX as a primitive before view allocation.
+        FunctionDescriptor resolve = FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
             ValueLayout.ADDRESS.withTargetLayout(EXPORT_NAME));
         pinCall = linker.downcallHandle(pinEntry, pin, Linker.Option.captureCallState("GetLastError"));
         pathCall = linker.downcallHandle(pathEntry, path, Linker.Option.captureCallState("GetLastError"));
@@ -209,6 +210,42 @@ final class WindowsOriginalJvmCandidate {
         for (int index = 0; index < JNI_NAME.length(); index++) {
             buffers[3].setAtIndex(ValueLayout.JAVA_BYTE, index, (byte) JNI_NAME.charAt(index));
         }
+    }
+
+    private void requireCallFrame() {
+        if (Thread.currentThread() != thread || frameRetired || nativeReturnUnconfirmed) {
+            throw new IllegalStateException("Original JVM call has no available original frame");
+        }
+    }
+
+    private void callModulePin() throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        modulePinReturn = (int) pinCall.invokeExact(buffers[4], 0x00000001, buffers[2], buffers[0]);
+        rawModule = buffers[0].get(ValueLayout.JAVA_LONG, 0);
+        nativeReturnUnconfirmed = false;
+    }
+
+    private void callModulePath() throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        modulePathReturn = (int) pathCall.invokeExact(buffers[4], module, buffers[1], PATH_CHARS);
+        nativeReturnUnconfirmed = false;
+    }
+
+    private void callResolve() throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        rawEntry = (long) resolveCall.invokeExact(buffers[4], module, buffers[3]);
+        nativeReturnUnconfirmed = false;
+    }
+
+    private void callProviderPin() throws Throwable {
+        requireCallFrame();
+        nativeReturnUnconfirmed = true;
+        providerPinReturn = (int) pinCall.invokeExact(buffers[4], 0x00000005, entry, buffers[0]);
+        rawProvider = buffers[0].get(ValueLayout.JAVA_LONG, 0);
+        nativeReturnUnconfirmed = false;
     }
 
     private void requireOriginalBootstrap() {
@@ -297,7 +334,8 @@ final class WindowsOriginalJvmCandidate {
     }
 
     private void retireFrame() {
-        if (frameRetired) return;
+        if (Thread.currentThread() != thread) throw new IllegalStateException("Original JVM frame belongs to another thread");
+        if (frameRetired || nativeReturnUnconfirmed) return;
         frameRetired = true;
         for (int index = 0; index < buffers.length; index++) {
             if (buffers[index] != null) {
@@ -313,7 +351,7 @@ final class WindowsOriginalJvmCandidate {
 
     private void requireCompleted() {
         requireOriginalBootstrap();
-        if (!succeeded || !frameRetired || runtimeArena == null || !runtimeArena.scope().isAlive() || acquired == null) {
+        if (!succeeded || !frameRetired || nativeReturnUnconfirmed || runtimeArena == null || !runtimeArena.scope().isAlive() || acquired == null) {
             throw new IllegalStateException("Original JVM candidate has no completed observation");
         }
         acquired.virtualMachine();
