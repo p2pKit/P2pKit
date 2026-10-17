@@ -476,6 +476,18 @@ def retire_group(process):
     process.wait(timeout=5)
 
 
+def terminal_consumers(source_root, source_identity, environment, directory, deadline):
+    """Use the current controller's retained Terminal lease in this process.
+
+    Never place a LaunchServices-owned application below the old two-second
+    process-group retirement path. The adapter owns its complete finalization.
+    """
+    spec = importlib.util.spec_from_file_location("release_consumer_terminal", ROOT / "scripts/run-ci-terminal-component.py")
+    adapter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adapter)
+    return adapter.run_release_consumers(source_root, source_identity, environment, directory, deadline)
+
+
 def run_command(request, source_root, purpose, directory, deadline, bundle=None):
     """No test-mode/version/profile overrides; capture no output in Actions logs."""
     original, context = request["original"], request["recovery"]
@@ -499,21 +511,36 @@ def run_command(request, source_root, purpose, directory, deadline, bundle=None)
     # rollback cannot grant more command time; the hosted 90-minute job remains.
     monotonic_deadline = monotonic_start + min(JOB_SECONDS, deadline - wall_start)
     process, failure, closure_error, receipt = None, None, None, None
+    command_exit = None
     phase, failed_phase = "start", None
     try:
-        with output.open("xb") as stream:
-            os.chmod(output, 0o600)
-            process = subprocess.Popen(command, cwd=source_root, env=env, stdin=subprocess.DEVNULL,
-                                       stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+        if purpose == "consumers":
             phase = "execution"
-            while process.poll() is None:
-                P.need(time.monotonic() < monotonic_deadline and output.stat().st_size <= LOG_LIMIT,
-                       "Recovery command exceeded its remaining job/output safety budget")
-                time.sleep(0.25)
-        phase = "exit"
-        P.need(process.returncode == 0, "Original " + purpose + " verification failed; no retry or publication authority")
-        phase = "process-group-close"
-        P.need(not group_exists(process.pid), "Recovery command left live same-group processes")
+            outcome = terminal_consumers(source_root, {"commit": invocation["source"], "tree": original["tree"]},
+                                         env, directory, monotonic_deadline)
+            command_exit = outcome.get("exitCode")
+            phase = "terminal-close"
+            P.need(outcome.get("cleanupKnown") is True and outcome.get("capturesClosed") is True,
+                   "Recovery consumer Terminal/capture cleanup remains unknown")
+            phase = "exit"
+            P.need(outcome.get("code") == "PASS" and type(command_exit) is int and command_exit == 0 and
+                   outcome.get("timedOut") is False,
+                   "Original consumers verification failed; no retry or publication authority")
+        else:
+            with output.open("xb") as stream:
+                os.chmod(output, 0o600)
+                process = subprocess.Popen(command, cwd=source_root, env=env, stdin=subprocess.DEVNULL,
+                                           stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+                phase = "execution"
+                while process.poll() is None:
+                    P.need(time.monotonic() < monotonic_deadline and output.stat().st_size <= LOG_LIMIT,
+                           "Recovery command exceeded its remaining job/output safety budget")
+                    time.sleep(0.25)
+            command_exit = process.returncode
+            phase = "exit"
+            P.need(command_exit == 0, "Original " + purpose + " verification failed; no retry or publication authority")
+            phase = "process-group-close"
+            P.need(not group_exists(process.pid), "Recovery command left live same-group processes")
         completed = int(time.time())
         phase = "timing-and-source"
         P.need(time.monotonic() <= monotonic_deadline, "Recovery command exceeded its remaining job window")
@@ -538,7 +565,7 @@ def run_command(request, source_root, purpose, directory, deadline, bundle=None)
         # ephemeral runner's disposal is not a retained failure-evidence claim.
         status = {"purpose": purpose, "result": "PASS" if failure is closure_error is None else "HOLD",
                   "phase": failed_phase or ("retirement" if closure_error else "complete"),
-                  "exitCode": None if process is None else process.returncode,
+                  "exitCode": command_exit if process is None else process.returncode,
                   "errorType": None if failure is None else type(failure).__name__,
                   "retirementErrorType": None if closure_error is None else type(closure_error).__name__}
         try:

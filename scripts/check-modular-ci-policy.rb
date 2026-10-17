@@ -56,8 +56,9 @@ module ModularCI
       java = steps.filter_map { |step| step.dig('with', 'java-version').to_s if
                                 step['uses'].to_s.start_with?('actions/setup-java@') }
       require!(setup && java == %w[21 17], 'Publication/recovery must prepare the reviewed consumer tools')
-      consumer = steps.index { |step| step['run'].to_s.include?('scripts/check-published-consumers.sh') ||
-                                     step['run'].to_s.include?('scripts/maven_recovery.py verify-consumers ') }
+      consumer_command = environment == 'maven-central' ?
+        'python3 -I -B -S scripts/run-published-consumers.py' : 'scripts/maven_recovery.py verify-consumers '
+      consumer = steps.index { |step| step['run'].to_s.include?(consumer_command) }
       require!(consumer && setup < consumer && !steps[consumer]['if'] && !steps[consumer]['continue-on-error'],
                'Complete remote consumers must remain required after supported setup')
     end

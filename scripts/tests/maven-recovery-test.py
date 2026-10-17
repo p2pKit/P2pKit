@@ -34,6 +34,7 @@ def module(name, relative):
 
 
 R = module("recovery_controls", "scripts/maven_recovery.py")
+U = module("published_consumer_controls", "scripts/run-published-consumers.py")
 S = module("sample_fixture_only", "scripts/tests/publish-sample-release-test.py")
 B = module("bundle_fixture_only", "scripts/tests/central-bundle-evidence-test.py")
 P = S.R
@@ -669,10 +670,15 @@ class CommandControls(unittest.TestCase):
         self.source = self.base / "original"
         (self.source / "scripts").mkdir(parents=True)
         (self.source / R.CONSUMER_SCRIPT).write_bytes(b"synthetic script; not executed\n")
+        (self.source / R.REMOTE_SCRIPT).write_bytes(b"synthetic remote script; not executed\n")
+        self.bundle = self.base / "synthetic-original.zip"
+        self.bundle.write_bytes(b"synthetic signed input identity only; not an archive")
         self.work = self.base / "owned-command"
         self.work.mkdir()
         self.request = {"recovery": {"id": 1, "attempt": 1, "source": CONTROLLER, "tree": CONTROLLER_TREE},
-                        "original": {"maven": {"source": SOURCE, "version": VERSION}, "tree": TREE}}
+                        "original": {"maven": {"source": SOURCE, "version": VERSION}, "tree": TREE},
+                        "bundle": {"bundleSizeBytes": self.bundle.stat().st_size,
+                                   "bundleSha256": hashlib.sha256(self.bundle.read_bytes()).hexdigest()}}
         self.checkout = mock.patch.object(R, "verify_checkout")
         self.checkout.start()
         self.addCleanup(self.checkout.stop)
@@ -685,8 +691,8 @@ class CommandControls(unittest.TestCase):
         process.poll.return_value = None if running else code
         process.wait.return_value = code
         def spawn(command, **options):
-            self.assertEqual(["bash", str(self.source / R.CONSUMER_SCRIPT)], command)
-            self.assertEqual("complete", options["env"]["P2PKIT_CONSUMER_PROFILE"])
+            self.assertEqual(["bash", str(self.source / R.REMOTE_SCRIPT), "published", str(self.bundle)], command)
+            self.assertNotIn("P2PKIT_CONSUMER_PROFILE", options["env"])
             self.assertNotIn("GH_TOKEN", options["env"])
             options["stdout"].write(b"synthetic command output only\n")
             options["stdout"].flush()
@@ -698,7 +704,7 @@ class CommandControls(unittest.TestCase):
                 mock.patch.object(R.time, "monotonic", side_effect=[0.0, 61.0] if running else None, return_value=0.0), \
                 mock.patch.object(R.time, "sleep"), mock.patch.object(R, "LOG_LIMIT", 1 if large_output else 64 * R.P.MIB):
             try:
-                return R.run_command(self.request, self.source, "consumers", self.work, 160.0)
+                return R.run_command(self.request, self.source, "remote", self.work, 160.0, self.bundle)
             finally:
                 self.assertEqual(1, popen.call_count)
                 if running:
@@ -712,7 +718,7 @@ class CommandControls(unittest.TestCase):
         self.assertTrue((self.work / "command.log").is_file())
 
     def test_failure_preserves_original_output_and_sanitized_phase_exit(self):
-        with self.assertRaisesRegex(ValueError, "Original consumers verification failed"):
+        with self.assertRaisesRegex(ValueError, "Original remote verification failed"):
             self.run_fake(code=7)
         status = R.read_record(self.work, "command-status.json")
         self.assertEqual(7, status["exitCode"])
@@ -739,6 +745,167 @@ class CommandControls(unittest.TestCase):
             self.run_fake(large_output=True)
         self.assertEqual("HOLD", R.read_record(self.work, "command-status.json")["result"])
         self.assertTrue((self.work / "command.log").is_file())
+
+
+class TerminalConsumerControls(unittest.TestCase):
+    def setUp(self):
+        CommandControls.setUp(self)
+
+    def run_fake(self, changes=None, *, raises=None, wall_after=100.0, monotonic_after=1.0,
+                 oversized=False, mutate=False):
+        outcome = {"code": "PASS", "exitCode": 0, "cleanupKnown": True, "capturesClosed": True, "timedOut": False}
+        outcome.update(changes or {})
+
+        def call(source, identity, env, directory, deadline):
+            self.assertEqual((self.source, {"commit": SOURCE, "tree": TREE}, self.work, 60.0),
+                             (source, identity, directory, deadline))
+            self.assertEqual(str(self.work / "home"), env["HOME"])
+            self.assertEqual(str(self.work / "tmp"), env["TMPDIR"])
+            self.assertEqual("complete", env["P2PKIT_CONSUMER_PROFILE"])
+            self.assertEqual("https://repo.maven.apache.org/maven2", env["P2PKIT_CONSUMER_REPOSITORY_URL"])
+            self.assertNotIn("GH_TOKEN", env)
+            self.assertNotIn("JAVA_TOOL_OPTIONS", env)
+            (directory / "command.log").write_bytes(b"closed synthetic captures\n")
+            if raises:
+                raise raises
+            if mutate:
+                R.verify_checkout.side_effect = ValueError("synthetic changed source")
+            return outcome
+
+        with mock.patch.object(R, "terminal_consumers", side_effect=call) as adapter, \
+                mock.patch.object(R.subprocess, "Popen", side_effect=AssertionError("No consumer outer Popen")), \
+                mock.patch.object(R, "retire_group", side_effect=AssertionError("No detached native two-second kill")), \
+                mock.patch.object(R.time, "time", side_effect=[100.0, wall_after]), \
+                mock.patch.object(R.time, "monotonic", side_effect=[0.0, monotonic_after, monotonic_after]), \
+                mock.patch.object(R, "LOG_LIMIT", 1 if oversized else 64 * R.P.MIB):
+            try:
+                return R.run_command(self.request, self.source, "consumers", self.work, 160.0)
+            finally:
+                self.assertEqual(1, adapter.call_count)
+
+    def test_original_source_script_private_home_and_native_close_are_bound(self):
+        receipt = self.run_fake()
+        self.assertEqual({"commit": SOURCE, "tree": TREE}, receipt["source"])
+        self.assertEqual(R.COMMANDS["consumers"], receipt["command"])
+        self.assertEqual(R.P.PACK.file_hash(self.source / R.CONSUMER_SCRIPT, R.P.JSON_LIMIT), receipt["script"])
+        self.assertTrue(receipt["ownedProcessGroupRetired"])
+        self.assertEqual("PASS", R.read_record(self.work, "command-status.json")["result"])
+
+    def test_nonzero_original_consumer_is_not_a_recovery_receipt(self):
+        with self.assertRaisesRegex(ValueError, "Original consumers verification failed"):
+            self.run_fake({"code": "COMMAND_FAILED", "exitCode": 7})
+        self.assertEqual(7, R.read_record(self.work, "command-status.json")["exitCode"])
+
+    def test_unknown_cleanup_remains_failure_even_with_zero_exit(self):
+        with self.assertRaisesRegex(ValueError, "cleanup remains unknown"):
+            self.run_fake({"cleanupKnown": False})
+        self.assertEqual("HOLD", R.read_record(self.work, "command-status.json")["result"])
+
+    def test_unclosed_capture_remains_failure(self):
+        with self.assertRaisesRegex(ValueError, "cleanup remains unknown"):
+            self.run_fake({"capturesClosed": False})
+
+    def test_timeout_flag_cannot_be_overridden_by_zero_exit(self):
+        with self.assertRaises(ValueError):
+            self.run_fake({"timedOut": True})
+
+    def test_native_lease_failure_does_not_use_old_group_kill_or_erase_originals(self):
+        with self.assertRaisesRegex(RuntimeError, "synthetic native lease"):
+            self.run_fake(raises=RuntimeError("synthetic native lease"))
+        self.assertTrue((self.work / "command.log").is_file())
+        self.assertEqual("HOLD", R.read_record(self.work, "command-status.json")["result"])
+
+    def test_original_monotonic_cutoff_survives_wall_rollback(self):
+        with self.assertRaisesRegex(ValueError, "remaining job window"):
+            self.run_fake(wall_after=20.0, monotonic_after=61.0)
+
+    def test_closed_log_limit_is_still_enforced(self):
+        with self.assertRaises(ValueError):
+            self.run_fake(oversized=True)
+
+    def test_post_execution_source_change_refuses_receipt(self):
+        with self.assertRaisesRegex(ValueError, "synthetic changed source"):
+            self.run_fake(mutate=True)
+
+
+class PublishedConsumerControls(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="p2pkit-publisher-consumer-control-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        (self.root / "scripts").mkdir()
+        (self.root / R.CONSUMER_SCRIPT).write_bytes(b"synthetic original consumer script\n")
+        (self.root / "gradle.properties").write_text("VERSION_NAME=" + VERSION + "\n")
+        self.context = {"source": SOURCE, "id": 101, "attempt": 2, "tag": "v" + VERSION}
+        self.invocation = {**self.context, "version": VERSION}
+        self.job = {"name": "publish-release", "run_id": 101, "run_attempt": 2, "head_sha": SOURCE,
+                    "status": "in_progress", "conclusion": None, "completed_at": None,
+                    "started_at": "1970-01-01T00:00:00Z"}
+        self.api = mock.Mock()
+        self.api.json.return_value = {"sha": SOURCE, "tree": {"sha": TREE}}
+        self.api.pages.return_value = [self.job]
+        for patch in (mock.patch.object(U, "ROOT", self.root), mock.patch.object(U.F, "hosted_context", return_value=self.context),
+                      mock.patch.object(U.P, "maven_invocation", return_value=self.invocation),
+                      mock.patch.object(U.R, "verify_checkout"), mock.patch.object(U.time, "time", return_value=100.0),
+                      mock.patch.object(U.time, "monotonic", return_value=20.0)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.env = {"RUNNER_OS": "macOS", "RUNNER_ARCH": "X64", "RUNNER_TEMP": str(self.root),
+                    "PATH": "/synthetic", "JAVA_HOME": "/synthetic-java", "ANDROID_HOME": "/synthetic-sdk",
+                    "GH_TOKEN": "synthetic never forwarded", "MAVEN_SIGNING_PASSWORD": "synthetic never forwarded"}
+
+    def test_exact_active_job_uses_remaining_original_150_minutes_not_new_window(self):
+        invocation, source, deadline = U.publication_context(self.api, self.env)
+        self.assertEqual(self.invocation, invocation)
+        self.assertEqual({"commit": SOURCE, "tree": TREE}, source)
+        self.assertEqual(8860.0, deadline)
+
+    def test_stale_wrong_source_attempt_or_completed_job_is_rejected(self):
+        for fields in ({"head_sha": CONTROLLER}, {"run_attempt": 3}, {"run_id": 102},
+                       {"status": "completed"}, {"conclusion": "success"}, {"completed_at": "1970-01-01T00:01:30Z"},
+                       {"started_at": "1970-01-01T00:02:00Z"}):
+            with self.subTest(fields=fields):
+                self.api.pages.return_value = [{**self.job, **fields}]
+                with self.assertRaises(ValueError):
+                    U.publication_context(self.api, self.env)
+
+    def test_missing_duplicate_and_expired_provider_cannot_start_consumers(self):
+        for rows in ([], [self.job, self.job]):
+            self.api.pages.return_value = rows
+            with self.assertRaises(ValueError):
+                U.publication_context(self.api, self.env)
+        self.api.pages.return_value = [self.job]
+        with mock.patch.object(U.time, "time", return_value=8940.0), self.assertRaises(ValueError):
+            U.publication_context(self.api, self.env)
+
+    def test_original_source_version_must_match_tag(self):
+        self.invocation["version"] = "0.9.0-rc1"
+        with self.assertRaisesRegex(ValueError, "version differs"):
+            U.publication_context(self.api, self.env)
+
+    def test_success_keeps_credentials_outside_original_complete_consumer(self):
+        def execute(source, identity, env, directory, deadline):
+            self.assertEqual(self.root, source)
+            self.assertEqual({"commit": SOURCE, "tree": TREE}, identity)
+            self.assertEqual(8860.0, deadline)
+            self.assertFalse({"GH_TOKEN", "MAVEN_SIGNING_PASSWORD"} & env.keys())
+            self.assertEqual(str(directory / "home"), env["HOME"])
+            self.assertEqual("complete", env["P2PKIT_CONSUMER_PROFILE"])
+            self.assertEqual("https://repo.maven.apache.org/maven2", env["P2PKIT_CONSUMER_REPOSITORY_URL"])
+            (directory / "command.log").write_bytes(b"synthetic closed private output\n")
+            return {"code": "PASS", "exitCode": 0, "cleanupKnown": True, "capturesClosed": True, "timedOut": False}
+        with mock.patch.object(U.R, "terminal_consumers", side_effect=execute):
+            result = U.execute(self.api, self.env)
+        self.assertEqual("COMPLETE_REMOTE_CONSUMERS_VERIFIED_NOT_PUBLISHED", result["result"])
+        self.assertEqual({"commit": SOURCE, "tree": TREE}, result["source"])
+
+    def test_failed_or_unknown_outcome_cannot_be_reported_as_publication_success(self):
+        for fields in ({"code": "TIMEOUT"}, {"exitCode": 1}, {"cleanupKnown": False},
+                       {"capturesClosed": False}, {"timedOut": True}):
+            outcome = {"code": "PASS", "exitCode": 0, "cleanupKnown": True, "capturesClosed": True, "timedOut": False, **fields}
+            with self.subTest(fields=fields), mock.patch.object(U.R, "terminal_consumers", return_value=outcome), \
+                    self.assertRaises(ValueError):
+                U.execute(self.api, self.env)
 
 
 if __name__ == "__main__":
