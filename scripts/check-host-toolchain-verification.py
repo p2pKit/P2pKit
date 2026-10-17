@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 # Independent approval inputs. Review these with the catalog/toolchain update;
 # do not infer either the versions or supported hosts from verification XML.
-KOTLIN = "2.4.10"
+KOTLIN = "2.4.20"
 AGP = "9.3.1"
 AAPT2 = "9.3.1-15703166"
 NATIVE_HOSTS = (

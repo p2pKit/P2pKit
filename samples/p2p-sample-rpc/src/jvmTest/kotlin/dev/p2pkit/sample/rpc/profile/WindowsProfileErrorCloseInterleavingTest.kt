@@ -159,7 +159,13 @@ class WindowsProfileErrorCloseInterleavingTest {
 
     private fun awaitWaiting(worker: Thread) {
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (worker.state != Thread.State.WAITING && worker.isAlive && System.nanoTime() < end) Thread.yield()
-        assertEquals(Thread.State.WAITING, worker.state)
+        // Thread.getState is a snapshot: an observed waiter may transiently run
+        // again before a second read. Assert the same observation we awaited.
+        var observed = worker.state
+        while (observed != Thread.State.WAITING && worker.isAlive && System.nanoTime() < end) {
+            Thread.yield()
+            observed = worker.state
+        }
+        assertEquals(Thread.State.WAITING, observed)
     }
 }

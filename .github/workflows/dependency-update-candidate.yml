@@ -28,8 +28,8 @@ permissions:
 jobs:
   generate:
     if: ${{ github.repository == 'p2pKit/P2pKit' }}
-    # Temporary supported CLI baseline; macos-14 retires 2026-11-02.
-    runs-on: macos-14
+    # Match the explicit macOS 15 Intel / Xcode 26.3 CLI consumer baseline.
+    runs-on: macos-15-intel
     timeout-minutes: 210
     defaults:
       run:

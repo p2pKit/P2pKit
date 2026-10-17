@@ -62,7 +62,7 @@ def scan(scanner, directory, argument_text):
     sarif = directory / "results.sarif"
     log = directory / "scanner.log"
     # --all-vulns preserves strict advisory handling for locks and upstream input.
-    # The expiring repository exceptions are still applied by the scanner first.
+    # The preflight admits only an empty/comment-only repository configuration.
     command = [scanner, "scan", "source", "--all-vulns", "--format=sarif", f"--output-file={sarif}", *arguments]
     (directory / "scan-command.json").write_text(json.dumps(command) + "\n", encoding="utf-8")
     with log.open("xb") as output:

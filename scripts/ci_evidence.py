@@ -138,7 +138,7 @@ TASK_NAMES = frozenset({
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
     "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "shared-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
-    "isolated-consumers", "published-pom-diagnostic", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
+    "isolated-consumers", "published-pom-diagnostic", "published-consumers-diagnostic", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
     "prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop", "gradle-stop", "component-setup"})
 
 
@@ -276,7 +276,11 @@ def _hosted_darwin_context(environment):
         environment.get("RUNNER_ENVIRONMENT") == "github-hosted" and
         environment.get("GITHUB_REPOSITORY") == "p2pKit/P2pKit" and separator == "@" and bool(ref) and
         workflow in {"p2pKit/P2pKit/.github/workflows/ci.yml",
-                     "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml"} and
+                     "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml",
+                     "p2pKit/P2pKit/.github/workflows/publish-maven-central.yml",
+                     "p2pKit/P2pKit/.github/workflows/recover-maven-central.yml"} and
+        (not workflow.endswith("/publish-maven-central.yml") or environment.get("GITHUB_JOB") == "publish-release") and
+        (not workflow.endswith("/recover-maven-central.yml") or environment.get("GITHUB_JOB") == "verify-recovery") and
         re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None and
         environment.get("GITHUB_WORKFLOW_SHA") == environment.get("GITHUB_SHA"))
 
@@ -287,7 +291,7 @@ def _command_scope(job, invocation, private, home, environment):
 
 
 def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
-                log_limit=MAX_LOG_BYTES, cleanup_seconds=15.0):
+                log_limit=MAX_LOG_BYTES, cleanup_seconds=15.0, create_gradle_home=True):
     """Actual command + native ownership, with the explicit hosted Darwin domain.
 
     Ordinary hosted-runner trust: POSIX marker-inheriting descendants, Windows
@@ -296,15 +300,20 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
     """
     require(type(timeout) in (int, float) and 0 < timeout <= 21600)
     require(type(log_limit) is int and 0 < log_limit <= MAX_LOG_BYTES)
+    require(type(create_gradle_home) is bool)
     private = Path(private)
     private.mkdir(mode=0o700, parents=False, exist_ok=False)
     job, invocation = uuid.uuid4().hex, uuid.uuid4().hex
     home = Path(environment.get("GRADLE_USER_HOME", str(private / "gradle-home"))).absolute()
-    home.mkdir(parents=True, exist_ok=True)
+    if create_gradle_home:
+        home.mkdir(parents=True, exist_ok=True)
     env = audit_processes.ownership_environment(dict(environment), job, invocation,
         str(private), str(home), allow_new_context=True)
     begin = time.monotonic()
     end = begin + timeout
+    # Source-owned deadline for bounded nested operations; never trust a caller
+    # override or reset the enclosing command's clock in a Terminal descendant.
+    env["P2PKIT_CI_COMMAND_DEADLINE_NS"] = str(int(end * 1_000_000_000))
     scope, child, captures = None, None, []
     code, returncode, cleanup_known = "PASS", None, False
     native_error = None
@@ -430,6 +439,17 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
             "elapsedSeconds": round(time.monotonic() - begin, 6)}
 
 
+def pending_failure_kind(message):
+    """Reuse source-owned Darwin failure labels; never return message content."""
+    if type(message) is not str or len(message) > 4096:
+        return "OTHER"
+    kind = PENDING_FAILURES.get(message, "OTHER")
+    for operation, label in PENDING_OPERATIONS.items():
+        if message.startswith("Darwin " + operation + " unresolved after bounded observation: "):
+            return label
+    return kind
+
+
 def pending_context_diagnostic(scope):
     """Bounded recorded counts only; no native call or ownership/exit authority."""
     try:
@@ -444,14 +464,7 @@ def pending_context_diagnostic(scope):
             session = record.get("auditSessionExclusion")
             label = session if type(session) is str and session in audit_processes.DARWIN_SESSION_EXCLUSIONS else "NOT_RECORDED"
             result["sessionExclusions"][label] = result["sessionExclusions"].get(label, 0) + 1
-            message = record.get("lastFailure")
-            kind = "OTHER"
-            if type(message) is str and len(message) <= 4096:
-                kind = PENDING_FAILURES.get(message, "OTHER")
-                for operation, label in PENDING_OPERATIONS.items():
-                    if message.startswith("Darwin " + operation + " unresolved after bounded observation: "):
-                        kind = label
-                        break
+            kind = pending_failure_kind(record.get("lastFailure"))
             result["failureKinds"][kind] = result["failureKinds"].get(kind, 0) + 1
         return public_pending_context(result)
     except BaseException:
@@ -1228,6 +1241,38 @@ def native_error_diagnostic(error):
                      "Command executable does not resolve to an existing file": "EXECUTABLE_UNAVAILABLE"}
             if message in fixed:
                 result.update(kind="OWNERSHIP", operation=fixed[message])
+    # Finite source-owned type labels distinguish an ownership/shape/timeout
+    # error without reading unclosed logs or exposing exception text/arguments.
+    if result["kind"] == "UNKNOWN":
+        labels = {audit_processes.OwnershipError: "OWNERSHIP_ERROR",
+                  audit_processes.DiscoveryUncertain: "DISCOVERY_UNCERTAIN",
+                  audit_processes.DarwinObservationExhausted: "DARWIN_OBSERVATION_EXHAUSTED",
+                  audit_processes.DarwinObservationError: "DARWIN_OBSERVATION_ERROR",
+                  subprocess.TimeoutExpired: "TIMEOUT_EXPIRED",
+                  RuntimeError: "RUNTIME_ERROR", ValueError: "VALUE_ERROR", TypeError: "TYPE_ERROR",
+                  KeyError: "KEY_ERROR", IndexError: "INDEX_ERROR", AttributeError: "ATTRIBUTE_ERROR",
+                  AssertionError: "ASSERTION_ERROR", OverflowError: "OVERFLOW_ERROR",
+                  MemoryError: "MEMORY_ERROR", RecursionError: "RECURSION_ERROR"}
+        result["exceptionType"] = labels.get(type(error), "UNKNOWN")
+        if type(error) in (audit_processes.DiscoveryUncertain, audit_processes.DarwinObservationExhausted):
+            result["failureKind"] = pending_failure_kind(error.args[0] if len(error.args) == 1 else None)
+        # Source-bound line numbers locate an otherwise opaque internal failure.
+        # No function names, caller paths, frame locals, or exception text escape.
+        scripts = Path(__file__).resolve().parent
+        owned_files = {str(scripts / name): label for name, label in (
+            ("ci_evidence.py", "EVIDENCE"), ("audit_processes.py", "OWNERSHIP"),
+            ("audit_exec_gate.py", "EXEC_GATE"))}
+        frames, cursor = [], error.__traceback__
+        for _ in range(64):
+            if cursor is None:
+                break
+            label = owned_files.get(cursor.tb_frame.f_code.co_filename)
+            if label is not None and type(cursor.tb_lineno) is int and 0 < cursor.tb_lineno <= 1000000:
+                frames.append({"source": label, "line": cursor.tb_lineno})
+                frames = frames[-3:]
+            cursor = cursor.tb_next
+        if frames:
+            result["sourceFrames"] = frames
     return result
 
 
@@ -1254,6 +1299,31 @@ def gpg_failure_categories(directory):
         return sorted({category for token, category in tokens.items() if token in raw.lower()})
     except OSError:
         return []
+
+
+def deferred_remote_consumer_home(component, environment):
+    """Keep the original remote script's future home in its initial domain.
+
+    The unchanged script first requires a new/empty borrowed work directory,
+    then creates its own Gradle home. Do not populate that work ahead of it.
+    """
+    if component != "published-consumers-diagnostic":
+        return False
+    work = Path(environment.get("P2PKIT_CONSUMER_WORK_DIR", ""))
+    home = Path(environment.get("GRADLE_USER_HOME", ""))
+    parent = work.parent
+    runner = Path(environment.get("RUNNER_TEMP", "")).resolve(strict=True)
+    require(work.is_absolute() and work == work.resolve() and work.name == "consumer" and
+            parent.parent == runner and parent.name.startswith("ci-terminal-") and
+            home == work / "gradle-home" and not work.exists(), "INPUT")
+    for path in (parent, parent / "home", parent / "tmp"):
+        require(path == path.resolve(strict=True) and not path.is_symlink(), "INPUT")
+        info = path.stat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and
+                stat.S_IMODE(info.st_mode) == 0o700, "INPUT")
+    require(environment.get("HOME") == str(parent / "home") and
+            environment.get("TMPDIR") == str(parent / "tmp"), "INPUT")
+    return True
 
 
 def main(argv=None):
@@ -1289,8 +1359,9 @@ def main(argv=None):
         environment["CI_EVIDENCE_TOOLS_FILE"] = str(tools_file)
         stage = "COMMAND"
         cleanup_known = False
+        options = {"create_gradle_home": False} if deferred_remote_consumer_home(args.component, environment) else {}
         outcome = run_command(command, cwd=root, environment=environment, private=private / "command",
-                              timeout=args.timeout_seconds, cancelled=cancelled.is_set)
+                              timeout=args.timeout_seconds, cancelled=cancelled.is_set, **options)
         cleanup_known = outcome["cleanupKnown"]
         require(cleanup_known, "CLEANUP")
         stage = "SOURCE"

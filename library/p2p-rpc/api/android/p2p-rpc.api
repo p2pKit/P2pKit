@@ -50,7 +50,6 @@ public final class dev/p2pkit/rpc/RpcCallStage : java/lang/Enum {
 
 public final class dev/p2pkit/rpc/RpcClient {
 	public static final field Companion Ldev/p2pkit/rpc/RpcClient$Companion;
-	public synthetic fun <init> (Ldev/p2pkit/core/P2pKit;Ldev/p2pkit/rpc/RpcTrust;Lkotlinx/coroutines/CoroutineScope;Ldev/p2pkit/transport/lan/OrganizationLan;Lkotlinx/coroutines/flow/MutableStateFlow;Lkotlinx/coroutines/flow/MutableStateFlow;Ldev/p2pkit/core/PayloadBudget;Ldev/p2pkit/rpc/internal/RpcClock;Ldev/p2pkit/rpc/internal/RpcClientEngine;Ljava/util/Map;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun call-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun call-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun callWithDetails-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -220,7 +219,6 @@ public final class dev/p2pkit/rpc/RpcFailurePhase : java/lang/Enum {
 
 public final class dev/p2pkit/rpc/RpcHost {
 	public static final field Companion Ldev/p2pkit/rpc/RpcHost$Companion;
-	public synthetic fun <init> (Ldev/p2pkit/core/P2pKit;Ldev/p2pkit/rpc/RpcTrust;Lkotlinx/coroutines/CoroutineScope;Ldev/p2pkit/transport/lan/OrganizationLan;ZLjava/util/Map;Ldev/p2pkit/rpc/internal/RpcHostEngine;Ldev/p2pkit/rpc/internal/RpcClock;Ldev/p2pkit/rpc/internal/EnrollmentGate;ZLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun endpoint (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getAdvertisingState ()Lkotlinx/coroutines/flow/StateFlow;

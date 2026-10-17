@@ -6,8 +6,8 @@ make documented breaking changes before `1.0.0` in a new version.
 
 - Published Maven coordinates and Git tags are immutable.
 - All P2pKit modules used by one application should have the same version.
-- Public Kotlin ABI is guarded by committed JVM/KLIB baselines plus
-  Kotlin-metadata-aware Android bytecode baselines for Android-only APIs.
+- Public Kotlin ABI is guarded by committed JVM/KLIB and built-in Android
+  baselines plus a separate BCV Android bytecode view in `api/android-bcv/`.
   These checks do not promise Java-source callability of the whole JVM API.
 - Swift consumes a source-built XCFramework; generated names and exported ABI
   are checked by Apple builds and Swift warnings-as-errors gates.
@@ -19,8 +19,9 @@ make documented breaking changes before `1.0.0` in a new version.
 Supported build targets for the `0.7` line are Android API 24+, JVM 17, and
 iOS/iPadOS 14+ through `iosArm64`, `iosSimulatorArm64`, and `iosX64`. The iOS
 sample currently targets iOS 15 for its application UI; that does not raise
-the library compatibility floor. Current development uses Kotlin 2.4.10,
-whose default linked-binary floor is iOS 15. Repository-built XCFrameworks
+the library compatibility floor. The development toolchain is configured for
+Kotlin 2.4.20; the immutable `0.8.0-rc2` release used Kotlin 2.4.10. Kotlin 2.4's
+default linked-binary floor is iOS 15. Repository-built XCFrameworks
 override that default with the canonical `IOS_MIN_VERSION=14.0` property, and
 the release gate inspects every Mach-O device/simulator slice.
 
@@ -65,8 +66,8 @@ The SDK's authorization checks remain exhaustive and fail closed.
 
 Kotlin visibility and JVM field visibility differ: a `const val` in a private
 companion can still become a public static field on its outer class. The Kotlin
-JVM dumper omits some such fields; Android's metadata-aware dumper records the
-existing provisioning constants, but can omit internal constants in public file
+JVM/Android built-in dumper omits some such fields; the separate BCV Android
+dumper records the existing provisioning constants, but can omit internal constants in public file
 facades. `checkJvmPublicConstants` / `checkAndroidPublicConstants` therefore inspect
 actual compiled fields using JDK `javap`, under the normal ABI and module `check`
 tasks. Their scope is owners in the committed Kotlin-visible baselines, not every
@@ -74,7 +75,10 @@ raw JVM-internal class, and field signatures, not constant values.
 
 New unrecorded constants fail. Only JVM `NOT_IN_V01` and Desktop
 `DEFAULT_POLL_INTERVAL_MS` need explicit retained-field exceptions; Android's
-`NOT_IN_V01`, `OS_CALLBACK_TIMEOUT_MS` and `CLOSE_TIMEOUT_MS` are already baselined.
+`NOT_IN_V01`, `OS_CALLBACK_TIMEOUT_MS` and `CLOSE_TIMEOUT_MS` remain in the BCV baselines.
+The BCV core baseline also retains `P2pError`'s synthetic default-mask constructor,
+which the built-in format omits. Both Android comparisons remain mandatory;
+switching dump formats must not remove coverage of these binary symbols.
 Do not remove or rename these published RC2/RC3 fields in the stabilization line,
 or add newly leaked fields to the exception list. New implementation constants
 need an explicit `private` modifier on the property, not just its companion.

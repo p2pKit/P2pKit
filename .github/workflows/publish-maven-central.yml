@@ -85,8 +85,8 @@ jobs:
 
   publish-release:
     needs: [freeze-applications, verify-release]
-    # Same temporary CLI baseline as complete consumers; retires 2026-11-02.
-    runs-on: macos-14
+    # Match the explicit macOS 15 Intel / Xcode 26.3 CLI consumer baseline.
+    runs-on: macos-15-intel
     timeout-minutes: 150
     environment:
       name: maven-central
@@ -120,7 +120,7 @@ jobs:
             caches/*/groovy-dsl
 
       - name: Install reviewed publication CLI platform tools
-        # Assert macOS 14 ARM64/Xcode 16.2; prepare both maintained Android SDKs.
+        # Assert macOS 15 Intel/Xcode 26.3; prepare both maintained Android SDKs.
         run: bash scripts/setup-ci-component.sh consumers
 
       - name: Revalidate frozen applications and exact owner approval
@@ -230,12 +230,14 @@ jobs:
           overwrite: false
 
       - name: Verify immutable remote bytes and consumers
+        env:
+          # Read-only current job/source timing; never forwarded to consumers.
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
           scripts/check-maven-central-version.sh published \
             "build/central/p2pkit-$VERSION-central-bundle.zip"
-          P2PKIT_CONSUMER_REPOSITORY_URL=https://repo.maven.apache.org/maven2 \
-            scripts/check-published-consumers.sh
+          python3 -I -B -S scripts/run-published-consumers.py
 
       - name: Upload publication evidence
         if: always()

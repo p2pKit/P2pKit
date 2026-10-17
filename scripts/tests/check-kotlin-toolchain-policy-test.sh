@@ -25,7 +25,7 @@ fail() {
 
 # Tripwire: gradle/libs.versions.toml [versions].kotlin; review both on updates,
 # never derive this expectation from its subject. See docs/testing/local.md.
-grep -Fq 'kotlin = "2.4.10"' "$CATALOG" || fail "Kotlin 2.4.10 is not the catalog toolchain"
+grep -Fq 'kotlin = "2.4.20"' "$CATALOG" || fail "Kotlin 2.4.20 is not the catalog toolchain"
 # Tripwire: gradle/libs.versions.toml [versions].binary-compatibility-validator.
 # This independent metadata-reader expectation must move only after review.
 grep -Fq 'binary-compatibility-validator = "0.18.1"' "$CATALOG" ||
@@ -38,10 +38,10 @@ grep -Fqx 'IOS_MIN_VERSION=14.0' "$PROPERTIES" || fail "the iOS 14 floor is not 
 grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
     fail "Apple Silicon host-mismatch handling is not explicit"
 
-# Pinned Kotlin 2.4.10 remains affected by CVE-2026-53914. Stable 2.4.20 is
-# available but not yet qualified here. GitHub builds may keep dependency/wrapper
-# caches, but no Gradle action may restore or persist caches/build-cache-1
-# across runs until a stable patched Kotlin toolchain is qualified.
+# Stable Kotlin 2.4.20 is the remediation candidate for CVE-2026-53914;
+# changing the pin alone does not establish qualification. Keep the existing
+# cache isolation even after the compiler update: GitHub builds may retain
+# dependency/wrapper caches, never caches/build-cache-1 across trust boundaries.
 ruby "$ROOT/scripts/check-gradle-cache-policy.rb"
 ruby "$ROOT/scripts/tests/check-gradle-cache-policy-test.rb"
 # Fresh owned Apple CI homes need both the JDK21 daemon and JDK17 launcher.
@@ -86,10 +86,10 @@ ruby "$ROOT/scripts/check-consumer-gradle-policy.rb" "$CONSUMER_GATE"
 ruby "$ROOT/scripts/check-version-input-policy.rb" consumer "$CONSUMER_GATE"
 ruby "$ROOT/scripts/tests/check-version-input-policy-test.rb"
 
-# Kotlin 2.4.10 intentionally embeds the preceding ABI-tools release in its
-# isolated kotlinInternalAbiValidation configuration. The Android-only ABI
-# guard uses the same metadata reader in its isolated androidAbiRuntime
-# configuration. No 2.3.21 component may leak into compiler, application,
+# Retain only the previously reviewed isolated ABI-reader exceptions while
+# the maintained writer establishes the new KGP ABI graph. The Android-only
+# guard still pins its separate 2.3.21 metadata reader; it is not the affected
+# Kotlin Gradle plugin. No 2.3.21 component may leak into compiler, application,
 # test, publication, or consumer classpaths.
 while IFS= read -r legacy_match; do
     legacy_entry="${legacy_match#*:}"

@@ -86,7 +86,7 @@ class Fixture:
                 manifest["outcome"].update(ownershipBoundary="GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1",
                                            outsideDomainObservations=0)
             if component in ("consumers", "macos-shared"):
-                manifest["tools"]["xcode"] = {"version": "16.2", "executableSha256": "e" * 64}
+                manifest["tools"]["xcode"] = {"version": "26.3", "executableSha256": "e" * 64}
             self.manifests[component] = manifest
             self.artifact(5000 + i, f"ci-evidence-{component}-300-1",
                           zip_bytes({"manifest.json": Q.encoded(manifest), "evidence.tar.gz.gpg": cipher}))
@@ -128,19 +128,20 @@ class QualificationTests(unittest.TestCase):
 
     def test_supported_cli_components_missing_wrong_runner_arch_or_xcode_cannot_qualify(self):
         for component in ("consumers", "macos-shared"):
-            self.assertEqual(Q.COMPONENTS[component], ('Darwin', 'arm64'))
-            self.assertEqual(Q.RUNNERS[component], 'macos-14')
+            self.assertEqual(Q.COMPONENTS[component], ('Darwin', 'x86_64'))
+            self.assertEqual(Q.RUNNERS[component], 'macos-15-intel')
             selection = self.f.selection()
             missing = {**selection, 'components': [row for row in selection['components'] if row['component'] != component]}
             with self.assertRaisesRegex(Q.AdmissionError, 'Missing/duplicate required components'):
                 Q.aggregate(self.api, missing)
             job = next(row for row in self.f.jobs if row['name'] == component + ' / Execute component')
-            for labels in (['macos-26'], ['macos-latest'], ['macos-14', 'self-hosted']):
+            for labels in (['macos-14'], ['macos-26'], ['macos-latest'], ['macos-15-intel', 'self-hosted']):
                 with mock.patch.dict(job, {'labels': labels}), self.assertRaisesRegex(Q.AdmissionError, 'runner labels'):
                     Q.aggregate(self.api, selection)
-            for group, change in (('host', {'arch': 'x86_64'}), ('tools', {}),
+            for group, change in (('host', {'arch': 'arm64'}), ('tools', {}),
                                   ('tools', {'xcode': {'version': '26.5', 'executableSha256': 'e' * 64}}),
-                                  ('tools', {'xcode': {'version': '16.2', 'executableSha256': 'invalid'}})):
+                                  ('tools', {'xcode': {'version': '16.2', 'executableSha256': 'e' * 64}}),
+                                  ('tools', {'xcode': {'version': '26.3', 'executableSha256': 'invalid'}})):
                 manifests = copy.deepcopy(self.f.manifests)
                 if group == 'host':
                     manifests[component][group].update(change)
@@ -158,7 +159,7 @@ class QualificationTests(unittest.TestCase):
 
     def test_optional_diagnostics_cannot_replace_or_extend_qualification(self):
         self.assertEqual(len(Q.COMPONENTS), 14)
-        for name in ('bundle-diagnostic', 'jmdns-diagnostic', 'consumers-pom-diagnostic'):
+        for name in ('bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic'):
             self.assertNotIn(name, Q.COMPONENTS)
             original = self.f.selection()
             diagnostic = {**original['components'][-1], 'component': name}

@@ -38,10 +38,10 @@ CORE_BUILD="$ROOT/library/p2p-core/build.gradle.kts"
 LAN_BUILD="$ROOT/library/p2p-transport-lan/build.gradle.kts"
 RPC_BUILD="$ROOT/library/p2p-rpc/build.gradle.kts"
 PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-android/build.gradle.kts"
-CORE_API="$ROOT/library/p2p-core/api/android/p2p-core.api"
-LAN_API="$ROOT/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
-RPC_API="$ROOT/library/p2p-rpc/api/android/p2p-rpc.api"
-PROVISIONING_API="$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api"
+CORE_API="$ROOT/library/p2p-core/api/android-bcv/p2p-core.api"
+LAN_API="$ROOT/library/p2p-transport-lan/api/android-bcv/p2p-transport-lan.api"
+RPC_API="$ROOT/library/p2p-rpc/api/android-bcv/p2p-rpc.api"
+PROVISIONING_API="$ROOT/library/p2p-network-provisioning-android/api/android-bcv/p2p-network-provisioning-android.api"
 
 for required_file in \
     "$ROOT_BUILD" \
@@ -88,6 +88,15 @@ done
     fail "module check tasks do not select the Android ABI comparison exactly once"
 [[ "$(grep -Fc 'dependsOn(checkAndroidAbi)' "$ROOT_BUILD")" == "1" ]] ||
     fail "module check tasks do not depend on the Android ABI comparison exactly once"
+# The custom BCV format must not overwrite or compare against Kotlin's newly
+# enrolled Android target dump. Keep its compiled-field guard on the same view.
+for binding in \
+    '        projectApiFile.set(layout.projectDirectory.file("api/android-bcv/${project.name}.api"))' \
+    '        apiBaseline.set(layout.projectDirectory.file("api/android-bcv/${project.name}.api"))' \
+    '        into(layout.projectDirectory.dir("api/android-bcv"))'; do
+    [[ "$(grep -Fxc "$binding" "$ROOT_BUILD")" == "1" ]] ||
+        fail "the custom Android ABI namespace must bind comparison, constants and update exactly once"
+done
 if grep -Fq 'classes/kotlin/android/main' "$ROOT_BUILD" ||
     grep -Fq 'dependsOn("compileAndroidMain")' "$ROOT_BUILD"; then
     fail "the Android ABI guard reconstructs compiler output ownership"
@@ -153,6 +162,24 @@ for signature in "${required_provisioning[@]}"; do
     grep -Fq "$signature" "$PROVISIONING_API" ||
         fail "the provisioning Android ABI baseline omits $signature"
 done
+
+# These published binary symbols are omitted by the built-in format but remain
+# in BCV's Android view. A same-shaped member on another owner is not retention.
+require_core_binary_symbol() {
+    local owner="$1" member="$2"
+    awk -v owner="$owner" -v member="$member" '
+        $0 == owner { inside = 1; owners++; next }
+        $0 == "}" { inside = 0 }
+        inside && $0 == member { members++ }
+        END { exit !(owners == 1 && members == 1) }
+    ' "$CORE_API" || fail "the custom Android ABI baseline lost retained binary symbol on $owner"
+}
+require_core_binary_symbol \
+    'public abstract class dev/p2pkit/core/P2pError : java/lang/Exception {' \
+    $'\tpublic synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V'
+require_core_binary_symbol \
+    'public final class dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager : dev/p2pkit/core/provisioning/NetworkProvisioningManager {' \
+    $'\tpublic static final field NOT_IN_V01 Ljava/lang/String;'
 
 # Metadata-aware extraction intentionally omits Kotlin-internal implementation
 # classes even though their JVM bytecode is present in the compiler output.

@@ -237,9 +237,9 @@ tasks.named<Test>("jvmTest") {
     }
 }
 
-// Kotlin's built-in ABI validator excludes Android targets. Feed the
-// supplemental metadata-aware guard from the compiler's declared output;
-// flatMap retains producer ownership if Kotlin relocates that output.
+// Keep the supplemental BCV view alongside Kotlin's built-in Android dump.
+// Feed it from the compiler's declared output; flatMap retains producer
+// ownership if Kotlin relocates that output.
 val compileAndroidMain = tasks.named<KotlinCompile>("compileAndroidMain")
 tasks.named<KotlinApiBuildTask>("buildAndroidAbi") {
     inputClassesDirs.from(compileAndroidMain.flatMap { it.destinationDirectory })

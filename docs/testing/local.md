@@ -236,13 +236,13 @@ and no parallel tasks. Shared dependency caches remain available.
 Both simulator architectures share the network-test serialization service.
 The Intel and ARM profiles each request four native test tasks: core, LAN, RPC
 and the RPC sample. Modular CI executes these on their matching native hosts.
-Its required `macos-shared` profile runs original `check` on macOS 14/Xcode 16.2,
+Its required `macos-shared` profile runs original `check` on the macOS 15 Intel/Xcode 26.3 replacement candidate,
 excluding only those eight tasks with explicit `-x` arguments because both
 native lanes are separately mandatory. All 16 shared tests and non-test `check`
 dependencies remain required. The standalone `full` profile is unchanged;
 `ios-x64-tests.yml` also provides a secret-free weekly/manual Intel job. See the
-[release foundation](../releasing/release-foundation.md) for the temporary runner
-retirement limitation and the preserved macOS 26 JVM multicast failure.
+[release foundation](../releasing/release-foundation.md) for replacement qualification requirements
+and the preserved macOS 26 JVM multicast failure.
 Keep failures blocking; a configured workflow is not hosted execution evidence.
 
 The caller-managed Intel `intel-bootstatus` command has a 600-second work ceiling
@@ -703,13 +703,15 @@ Every newly added archive still needs the byte/signature review above, and host 
 separate gate. Preserve reviewed historical artifacts and strict verification; do not disable Native
 tasks or checksum verification to work around an incomplete current-host refresh.
 
-Kotlin's built-in ABI validator covers JVM and KLIB outputs but not Android
-KMP artifacts. The separate `checkAndroidAbi` tasks read Kotlin metadata from
-the compiled Android bytecode, so Android-only declarations such as
-`P2pKitAndroid`, the URI file-transfer helper, and Android LAN/provisioning
-entry points cannot change silently. An intentional Android API change
-requires a manual review followed by the affected module's
-`updateAndroidAbi` task.
+Kotlin 2.4.20's built-in ABI validator also covers the four AGP KMP Android
+targets, using `api/android/` alongside the existing JVM/KLIB baselines.
+The separate `checkAndroidAbi` tasks retain the BCV metadata-aware view in
+`api/android-bcv/`, including published compiler-generated symbols omitted by
+the built-in format. Both comparisons remain mandatory. Android declarations
+such as `P2pKitAndroid`, the URI file-transfer helper, and LAN/provisioning
+entry points cannot change silently. An intentional Android API change needs
+manual review of both generated views; the affected module's `updateAndroidAbi`
+task writes only the BCV baseline, never the built-in Android baseline.
 
 The supplemental `checkJvmPublicConstants` and `checkAndroidPublicConstants`
 tasks inspect compiled fields on baselined public owners, closing Kotlin-metadata

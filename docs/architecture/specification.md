@@ -2,8 +2,9 @@
 
 This document is the maintained high-level contract for the `0.7` release
 candidate line. Public ABI files under each library module are the executable
-binary-compatibility baselines; `api/android/` protects Android-only bytecode
-that Kotlin's built-in JVM/KLIB validator does not inspect.
+binary-compatibility baselines. Kotlin's built-in Android view uses
+`api/android/`; the separate BCV view in `api/android-bcv/` retains additional
+published compiler-generated symbols. Both checks remain required.
 
 The [July design record](../archive/remediation/2026-07/P2pKit-Spec.md) is frozen
 historical rationale, **not a current normative specification**. Its dated

@@ -12,6 +12,24 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef P2PKIT_MODULAR_CI
+#include <mach/mach_time.h>
+#include <stdlib.h>
+/* Python's system-wide macOS monotonic clock is mach_absolute_time. This
+ * nested phase retains the enclosing collector's deadline, not a new budget. */
+static double modularRemaining(NSString *raw) {
+    if (![raw isKindOfClass:NSString.class] || raw.length < 1 || raw.length > 20 ||
+        [raw rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location != NSNotFound) return -1;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long deadline = strtoull(raw.UTF8String, &end, 10);
+    mach_timebase_info_data_t scale = {0};
+    if (errno || !end || *end || !deadline || mach_timebase_info(&scale) != KERN_SUCCESS || !scale.denom) return -1;
+    __uint128_t current = (__uint128_t)mach_absolute_time() * scale.numer / scale.denom;
+    if (current >= deadline || (__uint128_t)deadline - current > 10800ULL * 1000000000ULL) return -1;
+    return (double)((__uint128_t)deadline - current) / 1000000000.0;
+}
+#endif
 #ifdef P2PKIT_APPLE_CI_CANDIDATE
 #include <mach/mach_time.h>
 #include <math.h>
@@ -360,6 +378,18 @@ int main(int argc, const char **argv) {
         BOOL ciMode = [executionMode isEqualToString:@"ci"];
         if (ciMode) childBound = @0; /* Only the immutable envelope supplies bounds. */
 #endif
+#ifdef P2PKIT_MODULAR_CI
+        /* Fixed modular commands, not the historical CI envelope. Each
+         * collector retains its unchanged component command deadline. */
+        NSNumber *modularCommand = @{@"modular-jmdns":@1800, @"modular-shared":@7200,
+            @"modular-consumers":@7200, @"modular-published-consumers":@7200,
+            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200}[executionMode];
+        if (!modularCommand) return 125;
+        childBound = @(modularCommand.doubleValue + 240);
+        BOOL modularGenerate = [executionMode isEqualToString:@"modular-dependency-generate"];
+        BOOL modularRelease = [executionMode isEqualToString:@"modular-release-consumers"];
+        NSString *modularDeadline = nil;
+#endif
         if (!childBound) return 125;
         NSURL *directory = [NSURL fileURLWithPath:@(argv[1]) isDirectory:YES];
         struct stat parent, console;
@@ -427,6 +457,55 @@ int main(int argc, const char **argv) {
             configuration.addsToRecentItems = NO;
             configuration.promptsUserIfNeeded = NO;
             configuration.environment = @{@"PATH":@"/usr/bin:/bin:/usr/sbin:/sbin"};
+#ifdef P2PKIT_MODULAR_CI
+            /* Preserve the original runner's cancellation custody across
+             * LaunchServices. No credentials pass. The nested dependency phase
+             * also preserves its existing enclosing ownership domain below. */
+            const char *trackingValue = getenv("RUNNER_TRACKING_ID");
+            NSString *tracking = trackingValue ? [NSString stringWithUTF8String:trackingValue] : nil;
+            NSCharacterSet *trackingCharacters = [NSCharacterSet characterSetWithCharactersInString:
+                @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"];
+            result[@"failureCheck"] = @"RUNNER_TRACKING";
+            id component = config[@"component"];
+            NSString *expectedMode = [component isKindOfClass:NSString.class] ?
+                @{@"jmdns-diagnostic":@"modular-jmdns", @"macos-shared":@"modular-shared",
+                  @"consumers":@"modular-consumers",
+                  @"published-consumers-diagnostic":@"modular-published-consumers",
+                  @"dependency-generate":@"modular-dependency-generate",
+                  @"release-consumers":@"modular-release-consumers"}[component] : nil;
+            if (![expectedMode isEqualToString:executionMode] || !tracking.length || tracking.length > 200 ||
+                [tracking rangeOfCharacterFromSet:trackingCharacters.invertedSet].location != NSNotFound ||
+                ![config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking]) break;
+            NSMutableDictionary *modularEnvironment = [@{@"PATH":@"/usr/bin:/bin:/usr/sbin:/sbin", @"RUNNER_TRACKING_ID":tracking} mutableCopy];
+            if (modularGenerate) {
+                result[@"failureCheck"] = @"DEPENDENCY_CONTEXT";
+                for (NSString *key in @[@"P2PKIT_AUDIT_JOB_ID", @"P2PKIT_AUDIT_OWNERSHIP_CHAIN",
+                    @"P2PKIT_AUDIT_OWNERSHIP_DOMAINS", @"P2PKIT_AUDIT_STATE_DIR", @"P2PKIT_AUDIT_DARWIN_PIPES", @"GRADLE_USER_HOME",
+                    @"P2PKIT_CI_COMMAND_DEADLINE_NS"]) {
+                    const char *original = getenv(key.UTF8String);
+                    NSString *value = config[@"environment"][key];
+                    if (![value isKindOfClass:NSString.class] || !value.length || !original ||
+                        ![value isEqualToString:[NSString stringWithUTF8String:original]]) break;
+                    modularEnvironment[key] = value;
+                }
+                if (modularEnvironment.count != 9) break;
+                modularDeadline = modularEnvironment[@"P2PKIT_CI_COMMAND_DEADLINE_NS"];
+                if (modularRemaining(modularDeadline) <= 450) break;
+            }
+            if (modularRelease) {
+                result[@"failureCheck"] = @"RELEASE_CONTEXT";
+                const char *original = getenv("P2PKIT_CI_COMMAND_DEADLINE_NS");
+                modularDeadline = config[@"environment"][@"P2PKIT_CI_COMMAND_DEADLINE_NS"];
+                NSString *job = config[@"environment"][@"GITHUB_JOB"];
+                double maximum = [job isEqualToString:@"publish-release"] ? 9000 :
+                    [job isEqualToString:@"verify-recovery"] ? 5400 : 0;
+                if (![modularDeadline isKindOfClass:NSString.class] || !original ||
+                    ![modularDeadline isEqualToString:[NSString stringWithUTF8String:original]] ||
+                    modularRemaining(modularDeadline) <= 450 || modularRemaining(modularDeadline) > maximum) break;
+                modularEnvironment[@"P2PKIT_CI_COMMAND_DEADLINE_NS"] = modularDeadline;
+            }
+            configuration.environment = modularEnvironment;
+#endif
 #ifdef P2PKIT_APPLE_CI_CANDIDATE
             uint64_t ciOpenEnd = 0;
             if (ciMode) {
@@ -480,6 +559,13 @@ int main(int argc, const char **argv) {
             NSURL *childURL = [directory URLByAppendingPathComponent:@"child-result.json"];
             NSURL *shellURL = [directory URLByAppendingPathComponent:@"shell-result.txt"];
             BOOL childCompleted;
+#ifdef P2PKIT_MODULAR_CI
+            if (modularGenerate || modularRelease) {
+                double remaining = modularRemaining(modularDeadline);
+                if (remaining <= 120) break;
+                childBound = @(remaining - 120);
+            }
+#endif
 #ifdef P2PKIT_APPLE_CI_CANDIDATE
             if (ciMode) {
                 /* Product cutoff belongs to the keeper. This exact child also

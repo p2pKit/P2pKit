@@ -43,18 +43,29 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', consumers-pom-diagnostic]', ']')
     altered('.github/workflows/ci.yml', "inputs.component != 'consumers-pom-diagnostic' && inputs.component", 'inputs.component')
   end
+  def test_published_consumer_diagnostic_requires_choice_and_cannot_qualify
+    altered('.github/workflows/ci.yml', ', published-consumers-diagnostic,', ',')
+    altered('.github/workflows/ci.yml', "inputs.component != 'published-consumers-diagnostic' && inputs.component", 'inputs.component')
+    altered('.github/workflows/ci.yml', "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'published-consumers-diagnostic' && inputs.component",
+            "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component")
+  end
   def test_complete_consumers_remain_independently_required
     altered('.github/workflows/ci.yml', ', consumers,', ',')
   end
+
+  def test_publisher_remote_consumers_cannot_revert_to_unqualified_cli_context
+    altered('.github/workflows/publish-maven-central.yml',
+            'python3 -I -B -S scripts/run-published-consumers.py', 'scripts/check-published-consumers.sh')
+  end
   def test_writer_cannot_select_floating_or_native_toolchain_baseline
-    altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-14', 'runs-on: macos-latest')
+    altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-15-intel', 'runs-on: macos-latest')
     altered('.github/workflows/dependency-update-candidate.yml', 'setup-ci-component.sh dependency-update',
             'setup-ci-component.sh dependencies')
   end
   def test_publication_and_recovery_require_supported_complete_consumer_context
     %w[publish-maven-central recover-maven-central].each do |workflow|
       path = ".github/workflows/#{workflow}.yml"
-      altered(path, 'runs-on: macos-14', 'runs-on: macos-26')
+      altered(path, 'runs-on: macos-15-intel', 'runs-on: macos-26')
       altered(path, 'run: bash scripts/setup-ci-component.sh consumers', 'run: true')
       altered(path, 'java-version: "21"', 'java-version: "17"')
       step = workflow == 'publish-maven-central' ? 'Verify immutable remote bytes and consumers' :
