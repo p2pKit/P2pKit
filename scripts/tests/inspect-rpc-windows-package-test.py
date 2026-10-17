@@ -25,7 +25,8 @@ class PackageInspectionTests(unittest.TestCase):
             with patch.object(V.M, "image_inventory", return_value={"app/fixed-component": {
                     "bytes": 1, "sha256": "a" * 64}, "app/PRIVATE-image": {}}), \
                     patch.object(V.M, "extracted_inventory", return_value={"app/fixed-component": {
-                        "bytes": 1, "sha256": "a" * 64}, "app/PRIVATE-msi": {}}):
+                        "bytes": 1, "sha256": "a" * 64}, "app/PRIVATE-msi": {},
+                        "app/.package": {"bytes": 13, "sha256": hashlib.sha256(b"P2pKit Sample").hexdigest()}}):
                 V.M.full_payload([], None, None, pinned)
         public = io.StringIO()
         with patch.object(V.M, "inspect", side_effect=mismatch), patch.object(V, "ROOT", self.root), \
@@ -68,7 +69,8 @@ class PackageInspectionTests(unittest.TestCase):
     def test_failed_supplemental_receipt_preserves_original_path_refusal_and_public_counts(self):
         def mismatch(*_):
             with patch.object(V.M, "image_inventory", return_value={"app/PRIVATE-a": {}}), \
-                    patch.object(V.M, "extracted_inventory", return_value={"app/PRIVATE-b": {}}):
+                    patch.object(V.M, "extracted_inventory", return_value={"app/PRIVATE-b": {},
+                        "app/.package": {"bytes": 13, "sha256": hashlib.sha256(b"P2pKit Sample").hexdigest()}}):
                 V.M.full_payload([], None, None, [])
         original_write = V.write_json
         def fail_receipt(path, *args, **kwargs):

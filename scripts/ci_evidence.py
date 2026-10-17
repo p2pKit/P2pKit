@@ -1019,6 +1019,8 @@ RPC_PACKAGE_ERRORS = {
     "MSI and completed image application paths differ": "RPC_MSI_PAYLOAD_PATHS",
     "MSI application payload differs from completed image": "RPC_MSI_PAYLOAD_BYTES",
     "Application payload changed during full inspection": "RPC_MSI_PAYLOAD_CHANGED",
+    "MSI package metadata differs from fixed package name": "RPC_MSI_PACKAGE_METADATA",
+    "Original image package metadata conflicts with installer": "RPC_MSI_IMAGE_PACKAGE_METADATA",
 }
 
 

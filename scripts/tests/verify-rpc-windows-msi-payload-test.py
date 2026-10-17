@@ -59,7 +59,8 @@ class StaticMsiPayloadTest(unittest.TestCase):
         image = {"app/PRIVATE-image-%d" % i: {} for i in range(35)}
         payload = {"app/PRIVATE-msi-%d" % i: {} for i in range(23)}
         with mock.patch.object(CHECK, "image_inventory", return_value=image), \
-                mock.patch.object(CHECK, "extracted_inventory", return_value=payload), \
+                mock.patch.object(CHECK, "extracted_inventory", return_value={**payload,
+                    CHECK.INSTALLER_METADATA: {"bytes": 13, "sha256": CHECK.digest(b"P2pKit Sample")}}), \
                 self.assertRaises(CHECK.PayloadPathMismatch) as raised:
             CHECK.full_payload([], self.extracted, self.image, [])
         value = raised.exception.diagnostic
@@ -120,6 +121,10 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.dll_node = self.add_file(self.arch, "nativeDll", self.dll)
         self.manifest_node = self.add_file(self.arch, "manifest", self.manifest)
         self.jar_node = self.add_file(self.app, "pinJar", self.jar)
+        # JDK21 creates this only in its MSI working copy, after copying the input image.
+        self.package_metadata = self.root / ".package"
+        self.package_metadata.write_bytes(b"P2pKit Sample")
+        self.package_node = self.add_file(self.app, "packageMarker", self.package_metadata)
         for path, identifier in (("P2pKit Sample.exe", "launcher"), ("app/P2pKit Sample.cfg", "launcherCfg"),
                                  ("runtime/release", "runtimeRelease"), ("runtime/lib/modules", "runtimeModules"),
                                  ("runtime/bin/server/jvm.dll", "runtimeJvm"), ("runtime/bin/jli.dll", "runtimeJli")):
@@ -188,11 +193,80 @@ class StaticMsiPayloadTest(unittest.TestCase):
         canonical = json.dumps(files, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
         self.assertEqual({"scope": "STATIC_APPLICATION_FILES_NOT_INSTALLED_OR_STARTUP_AUTHORITY",
                           "files": 10, "bytes": sum(value["bytes"] for value in files.values()),
-                          "inventorySha256": CHECK.digest(canonical), "excludedImageMetadata": []},
+                          "inventorySha256": CHECK.digest(canonical), "excludedImageMetadata": [],
+                          "installerGeneratedMetadata": [{"target": "app/.package", "bytes": 13,
+                              "sha256": CHECK.digest(b"P2pKit Sample"), "presentInOriginalImage": False}]},
                          result["applicationPayload"])
         with self.assertRaisesRegex(ValueError, "bound"):
             CHECK.file_hash(self.files / "emptyNotice", CHECK.MAX_MSI)
         self.assertEqual(3, len(result["comparedFiles"]))
+
+    def test_installer_metadata_matches_exact_jdk_package_name_without_entering_app_inventory(self):
+        result = self.inspect()["applicationPayload"]
+        self.assertEqual(result["files"], 9)
+        self.assertFalse((self.image / "app/.package").exists())
+        self.assertEqual(result["installerGeneratedMetadata"], [{"target": "app/.package", "bytes": 13,
+            "sha256": CHECK.digest(b"P2pKit Sample"), "presentInOriginalImage": False}])
+
+    def test_installer_metadata_requires_exact_bytes_including_no_newline_or_bom(self):
+        marker = self.files / "packageMarker"
+        for data in (b"", b"Other Package", b"P2pKit Sample\n", b"P2pKit Sample\x00",
+                     b"\xef\xbb\xbfP2pKit Sample", b"p2pkit sample"):
+            marker.write_bytes(data)
+            with self.subTest(data=data), self.assertRaisesRegex(ValueError, "metadata differs"):
+                self.inspect()
+
+    def test_installer_metadata_is_required_at_only_exact_path(self):
+        # Relocating/case-changing the marker is not a license for arbitrary metadata.
+        for name in (".PACKAGE", ".package-other"):
+            self.package_node.set("Name", name)
+            self.save_xml()
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "metadata differs"):
+                self.inspect()
+        self.package_node.set("Name", ".package")
+        owner = next(node for node in self.app if self.package_node in node)
+        self.app.remove(owner)
+        self.install.append(owner)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "metadata differs"):
+            self.inspect()
+        self.install.remove(owner)
+        (self.files / "packageMarker").unlink()
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "metadata differs"):
+            self.inspect()
+
+    def test_installer_metadata_cannot_be_duplicated(self):
+        duplicate = self.add_file(self.app, "anotherPackageMarker", self.package_metadata)
+        duplicate.set("Name", ".PACKAGE")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            self.inspect()
+
+    def test_original_image_metadata_is_not_silently_overwritten_or_excluded(self):
+        marker = self.image / "app/.package"
+        marker.write_bytes(b"conflicting image data")
+        with self.assertRaisesRegex(ValueError, "image package metadata conflicts"):
+            self.inspect()
+        marker.write_bytes(b"P2pKit Sample")
+        result = self.inspect()["applicationPayload"]
+        self.assertEqual(result["files"], 10)
+        self.assertTrue(result["installerGeneratedMetadata"][0]["presentInOriginalImage"])
+
+    def test_installer_metadata_is_rechecked_with_complete_extraction(self):
+        original = CHECK.extracted_inventory
+        calls = 0
+        def mutate(*args):
+            nonlocal calls
+            result = original(*args)
+            calls += 1
+            if calls == 1:
+                (self.files / "packageMarker").write_bytes(b"changed-after-inspection")
+            return result
+        with mock.patch.object(CHECK, "extracted_inventory", side_effect=mutate), \
+                self.assertRaisesRegex(ValueError, "changed during full inspection"):
+            self.inspect()
+        self.assertEqual(calls, 2)
 
     def test_full_payload_detects_changed_launcher_configuration_and_runtime(self):
         for identifier in ("launcher", "launcherCfg", "runtimeRelease", "runtimeModules", "runtimeJvm", "runtimeJli"):

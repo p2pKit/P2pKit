@@ -28,6 +28,8 @@ XML_LIMIT = 8 * 1024 * 1024
 MAX_ELEMENTS = 50_000
 MAX_MSI = 1024 * 1024 * 1024
 IMAGE_METADATA = "app/.jpackage.xml"
+INSTALLER_METADATA = "app/.package"
+PACKAGE_NAME_BYTES = b"P2pKit Sample"
 
 
 class PayloadPathMismatch(ValueError):
@@ -270,20 +272,35 @@ def extracted_inventory(extracted, rows):
 def full_payload(rows, extracted, image, pinned):
     before = image_inventory(image)
     payload = extracted_inventory(extracted, rows)
+    # The fixed JDK21 WinMsiBundler.prepareProto copies the image, then
+    # PackageFile.save writes UTF-8 app/.package containing APP_NAME (no newline).
+    # Validate these installer-created bytes, rather than exempting an arbitrary file.
+    # Source: adoptium/jdk21u@1c417fbfc2f70ab03a565b0af0a5a3c6f5e15ad6,
+    # src/jdk.jpackage/{windows,share}/classes/jdk/jpackage/internal/.
+    metadata = {"bytes": len(PACKAGE_NAME_BYTES), "sha256": digest(PACKAGE_NAME_BYTES)}
+    require(payload.get(INSTALLER_METADATA) == metadata,
+            "MSI package metadata differs from fixed package name")
+    require(INSTALLER_METADATA not in before or before[INSTALLER_METADATA] == metadata,
+            "Original image package metadata conflicts with installer")
+    # If it already existed in the input image, keep it in the full comparison too.
+    application = {name: value for name, value in payload.items()
+                   if name != INSTALLER_METADATA or name in before}
     # Source-pinned JDK21 WixAppImageFragmentBuilder excludes exactly AppImageFile's
     # Windows app/.jpackage.xml. No other hidden file or metadata pattern is exempt.
     installed = {name: value for name, value in before.items() if name != IMAGE_METADATA}
     require(all(installed.get(item["target"]) == {"bytes": item["bytes"], "sha256": item["sha256"]}
                 for item in pinned), "Full image differs from earlier pinned components")
-    if set(payload) != set(installed):
-        raise PayloadPathMismatch(installed, payload, pinned)
-    require(payload == installed, "MSI application payload differs from completed image")
+    if set(application) != set(installed):
+        raise PayloadPathMismatch(installed, application, pinned)
+    require(application == installed, "MSI application payload differs from completed image")
     require(image_inventory(image) == before and extracted_inventory(extracted, rows) == payload,
             "Application payload changed during full inspection")
     canonical = json.dumps(installed, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     return {"scope": "STATIC_APPLICATION_FILES_NOT_INSTALLED_OR_STARTUP_AUTHORITY",
             "files": len(installed), "bytes": sum(value["bytes"] for value in installed.values()),
             "inventorySha256": digest(canonical),
+            "installerGeneratedMetadata": [{"target": INSTALLER_METADATA, **metadata,
+                                             "presentInOriginalImage": INSTALLER_METADATA in before}],
             "excludedImageMetadata": ([{"target": IMAGE_METADATA, **before[IMAGE_METADATA]}]
                                       if IMAGE_METADATA in before else [])}
 
