@@ -3,8 +3,6 @@ public final class dev/p2pkit/provisioning/android/AndroidDslKt {
 }
 
 public final class dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager : dev/p2pkit/core/provisioning/NetworkProvisioningManager {
-	public static final field CLOSE_TIMEOUT_MS J
-	public static final field OS_CALLBACK_TIMEOUT_MS J
 	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun createManualPeer (Ljava/lang/String;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun createManualPeer-lFwcZpA (Ljava/lang/String;ILjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

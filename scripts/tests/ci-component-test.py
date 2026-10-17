@@ -548,4 +548,115 @@ class SecurityInputTests(unittest.TestCase):
                 '--lockfile=gradle.lockfile:./settings-gradle.lockfile'])
 
 
+class AndroidAbiNamespaceTests(unittest.TestCase):
+    BASELINES = ('p2p-core', 'p2p-transport-lan', 'p2p-rpc', 'p2p-network-provisioning-android')
+
+    def test_both_android_dumper_views_have_separate_nonempty_baselines(self):
+        for module in self.BASELINES:
+            with self.subTest(module=module):
+                paths = [ROOT / f'library/{module}/api/{namespace}/{module}.api'
+                         for namespace in ('android', 'android-bcv')]
+                for path in paths:
+                    self.assertTrue(path.is_file(), str(path.relative_to(ROOT)))
+                    self.assertFalse(path.is_symlink())
+                    self.assertIn(b'public ', path.read_bytes())
+                self.assertFalse(paths[0].samefile(paths[1]))
+
+    def fixture(self, root):
+        paths = ['build.gradle.kts', 'scripts/run-release-gate.sh',
+                 'scripts/tests/check-kotlin-toolchain-policy-test.sh', 'scripts/check-modular-ci-policy.rb']
+        paths += [str(p.relative_to(ROOT)) for p in (ROOT / '.github/workflows').glob('*.yml')]
+        for module in self.BASELINES:
+            paths += [f'library/{module}/build.gradle.kts', f'library/{module}/api/android-bcv/{module}.api']
+        for relative in paths:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((ROOT / relative).read_bytes())
+
+    def check(self, root):
+        return subprocess.run(['bash', str(ROOT / 'scripts/check-android-abi-guard.sh'),
+                               '--root', str(root), '--static-only'], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+
+    def test_custom_baselines_and_all_eight_comparisons_are_retained(self):
+        argv = dict(C.commands('compatibility'))['api-abi']
+        for module in self.BASELINES:
+            path = ROOT / f'library/{module}/api/android-bcv/{module}.api'
+            self.assertTrue(path.is_file(), str(path.relative_to(ROOT)))
+            for task in ('checkKotlinAbi', 'checkAndroidAbi'):
+                self.assertEqual(argv.count(f':{module}:{task}'), 1)
+        self.assertNotIn('-x', argv)
+        self.assertEqual(dict(C.commands('compatibility'))['abi-graph'],
+                         ['bash', 'scripts/check-android-abi-guard.sh'])
+
+    def test_actual_static_guard_accepts_separate_custom_namespace(self):
+        with tempfile.TemporaryDirectory(prefix='android-abi-namespace-') as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            result = self.check(root)
+            self.assertEqual(result.returncode, 0, result.stdout.decode())
+
+    def test_comparison_constant_and_update_cannot_reuse_builtin_namespace(self):
+        lines = (
+            '        projectApiFile.set(layout.projectDirectory.file("api/android-bcv/${project.name}.api"))',
+            '        apiBaseline.set(layout.projectDirectory.file("api/android-bcv/${project.name}.api"))',
+            '        into(layout.projectDirectory.dir("api/android-bcv"))',
+        )
+        with tempfile.TemporaryDirectory(prefix='android-abi-namespace-') as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            path = root / 'build.gradle.kts'
+            original = path.read_text()
+            for line in lines:
+                self.assertEqual(original.count(line), 1)
+                for replacement in (line.replace('android-bcv', 'android'), line + '\n' + line, ''):
+                    with self.subTest(line=line, replacement=replacement):
+                        path.write_text(original.replace(line, replacement))
+                        result = self.check(root)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(b'custom Android ABI namespace', result.stdout)
+
+    def test_missing_custom_baseline_is_not_replaced_by_builtin_file(self):
+        with tempfile.TemporaryDirectory(prefix='android-abi-namespace-') as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            for module in self.BASELINES:
+                with self.subTest(module=module):
+                    path = root / f'library/{module}/api/android-bcv/{module}.api'
+                    raw = path.read_bytes()
+                    builtin = root / f'library/{module}/api/android/{module}.api'
+                    builtin.parent.mkdir(parents=True)
+                    builtin.write_bytes(raw)
+                    path.unlink()
+                    result = self.check(root)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b'Android ABI policy input is missing:', result.stdout)
+                    path.write_bytes(raw)
+
+    def test_legacy_constructor_and_constant_remain_bound_to_original_owners(self):
+        members = (
+            ('public abstract class dev/p2pkit/core/P2pError : java/lang/Exception {',
+             '\tpublic synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V'),
+            ('public final class dev/p2pkit/core/provisioning/UnsupportedNetworkProvisioningManager : dev/p2pkit/core/provisioning/NetworkProvisioningManager {',
+             '\tpublic static final field NOT_IN_V01 Ljava/lang/String;'),
+        )
+        with tempfile.TemporaryDirectory(prefix='android-abi-namespace-') as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            path = root / 'library/p2p-core/api/android-bcv/p2p-core.api'
+            original = path.read_text()
+            for owner, member in members:
+                with self.subTest(member=member):
+                    start = original.index(owner + '\n')
+                    end = original.index('\n}', start) + 2
+                    block = original[start:end]
+                    self.assertEqual(block.count(member), 1)
+                    # A same-shaped member on another class must not hide loss.
+                    path.write_text(original[:start] + block.replace(member + '\n', '') + original[end:] +
+                                    '\npublic final class synthetic/Decoy {\n' + member + '\n}\n')
+                    result = self.check(root)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b'custom Android ABI baseline lost retained binary symbol', result.stdout)
+
+
 if __name__ == '__main__': unittest.main()

@@ -1,0 +1,31 @@
+public final class dev/p2pkit/provisioning/android/AndroidDslKt {
+	public static final fun android (Ldev/p2pkit/core/dsl/NetworkProvisioningConfigBuilder;Landroid/content/Context;)V
+}
+
+public final class dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager : dev/p2pkit/core/provisioning/NetworkProvisioningManager {
+	public static final field CLOSE_TIMEOUT_MS J
+	public static final field OS_CALLBACK_TIMEOUT_MS J
+	public fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun createManualPeer (Ljava/lang/String;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun createManualPeer-lFwcZpA (Ljava/lang/String;ILjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public fun getManualConnectionInfo (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getNetworkState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun joinLocalNetwork (Ldev/p2pkit/core/provisioning/WifiCredentials;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun startLocalNetwork (Ldev/p2pkit/core/provisioning/LocalNetworkConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stopLocalNetwork (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/provisioning/android/AndroidP2pPermissionManager : dev/p2pkit/core/permission/P2pPermissionManager {
+	public fun <init> (Landroid/content/Context;)V
+	public fun hasRequiredPermissions (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun missingPermissions (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requiredPermissions (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/provisioning/android/AndroidProvisioningFactory : dev/p2pkit/core/provisioning/NetworkProvisioningFactory {
+	public fun <init> (Landroid/content/Context;)V
+	public fun build (Ldev/p2pkit/core/provisioning/ProvisioningContext;)Ldev/p2pkit/core/provisioning/NetworkProvisioningManager;
+}
+

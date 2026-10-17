@@ -703,13 +703,15 @@ Every newly added archive still needs the byte/signature review above, and host 
 separate gate. Preserve reviewed historical artifacts and strict verification; do not disable Native
 tasks or checksum verification to work around an incomplete current-host refresh.
 
-Kotlin's built-in ABI validator covers JVM and KLIB outputs but not Android
-KMP artifacts. The separate `checkAndroidAbi` tasks read Kotlin metadata from
-the compiled Android bytecode, so Android-only declarations such as
-`P2pKitAndroid`, the URI file-transfer helper, and Android LAN/provisioning
-entry points cannot change silently. An intentional Android API change
-requires a manual review followed by the affected module's
-`updateAndroidAbi` task.
+Kotlin 2.4.20's built-in ABI validator also covers the four AGP KMP Android
+targets, using `api/android/` alongside the existing JVM/KLIB baselines.
+The separate `checkAndroidAbi` tasks retain the BCV metadata-aware view in
+`api/android-bcv/`, including published compiler-generated symbols omitted by
+the built-in format. Both comparisons remain mandatory. Android declarations
+such as `P2pKitAndroid`, the URI file-transfer helper, and LAN/provisioning
+entry points cannot change silently. An intentional Android API change needs
+manual review of both generated views; the affected module's `updateAndroidAbi`
+task writes only the BCV baseline, never the built-in Android baseline.
 
 The supplemental `checkJvmPublicConstants` and `checkAndroidPublicConstants`
 tasks inspect compiled fields on baselined public owners, closing Kotlin-metadata
