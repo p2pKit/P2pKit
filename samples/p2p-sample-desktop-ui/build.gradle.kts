@@ -225,6 +225,31 @@ if (detectedDesktopLockTarget == "windows-x64") {
     val previewRuntime = extensions.getByType<JavaToolchainService>().launcherFor {
         languageVersion.set(JavaLanguageVersion.of(21))
     }
+    val runtimeSupplierArchive = providers.environmentVariable("P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE")
+    val runtimeSupplierReceipt = layout.buildDirectory.file("rpc-windows-runtime/supplier.json")
+    val verifyRpcWindowsJdk21 = tasks.register<Exec>("verifyRpcWindowsJdk21") {
+        group = "verification"
+        description = "Compare the actual Windows packaging JDK with its reviewed supplier archive."
+        val verifier = rootProject.layout.projectDirectory.file("scripts/verify-rpc-windows-jdk21.py")
+        val supplier = adapterProject.layout.projectDirectory.file(
+            "native/windows-loader-jdk21/runtime-supplier.properties",
+        )
+        inputs.files(verifier, supplier)
+        inputs.file(runtimeSupplierArchive)
+        inputs.dir(previewRuntime.map { it.metadata.installationPath })
+        outputs.file(runtimeSupplierReceipt)
+        // A previous observation is not a lease on today's mutable build tool directory.
+        outputs.upToDateWhen { false }
+        doFirst {
+            val result = runtimeSupplierReceipt.get().asFile.toPath()
+            Files.createDirectories(result.parent)
+            Files.deleteIfExists(result)
+            commandLine("python3", "-I", "-B", verifier.asFile.absolutePath,
+                "--archive", runtimeSupplierArchive.get(),
+                "--jdk-home", previewRuntime.get().metadata.installationPath.asFile.absolutePath,
+                "--output", result.toString())
+        }
+    }
     val sourceCommit = providers.of(GitCommitValueSource::class) {
         parameters.rootDirectory.set(rootProject.layout.projectDirectory)
     }
@@ -307,10 +332,24 @@ if (detectedDesktopLockTarget == "windows-x64") {
         if (previewAdapter) {
             // Selecting jpackage alone does not select the linked application runtime.
             tasks.withType<AbstractJLinkTask>().configureEach {
+                dependsOn(verifyRpcWindowsJdk21)
+                inputs.file(runtimeSupplierReceipt).withPropertyName("rpcWindowsRuntimeSupplier")
                 javaHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+                doFirst {
+                    check(javaHome.get() == previewRuntime.get().metadata.installationPath.asFile.absolutePath) {
+                        "Linked runtime tool does not match the verified Windows supplier"
+                    }
+                }
             }
             tasks.withType<AbstractCheckNativeDistributionRuntime>().configureEach {
+                dependsOn(verifyRpcWindowsJdk21)
+                inputs.file(runtimeSupplierReceipt).withPropertyName("rpcWindowsRuntimeSupplier")
                 jdkHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+                doFirst {
+                    check(jdkHome.get() == previewRuntime.get().metadata.installationPath.asFile.absolutePath) {
+                        "Runtime check does not match the verified Windows supplier"
+                    }
+                }
             }
         }
         val imageTasks = setOf("createDistributable", "createReleaseDistributable")
@@ -324,8 +363,15 @@ if (detectedDesktopLockTarget == "windows-x64") {
                 appResourcesDir.set(layout.dir(rpcWindowsApplicationResources.map { it.destinationDir }))
                 if (previewAdapter) {
                     // Do not change public/Kotlin bytecode targets or silently run a21-preview class on17.
-                    // This is a family constraint for the investigation, not Foundation's eventual supplier pin.
+                    // Resolve the toolchain normally, then verify every byte against the fixed supplier.
+                    dependsOn(verifyRpcWindowsJdk21)
                     javaHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+                    inputs.file(runtimeSupplierReceipt).withPropertyName("rpcWindowsRuntimeSupplier")
+                    doFirst {
+                        check(javaHome.get() == previewRuntime.get().metadata.installationPath.asFile.absolutePath) {
+                            "Packager does not match the verified Windows supplier"
+                        }
+                    }
                     launcherJvmArgs.addAll(listOf(
                         "--enable-preview",
                         "--module-path=\$APPDIR/resources/rpc-loader-jdk21",

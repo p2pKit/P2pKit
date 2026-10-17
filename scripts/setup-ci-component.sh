@@ -62,6 +62,22 @@ if [[ "$component" == security ]]; then
     echo 'P2PKIT_OSV_ARGS'
   } >> "$GITHUB_ENV"
 fi
+# The Windows preview runtime is still disabled for productive RPC, but its
+# packaging tools must come from the reviewed exact supplier archive. Standard
+# setup-java provides the installation; Gradle compares its actual bytes below.
+if [[ "$component" == desktop-windows ]]; then
+  pin=samples/p2p-sample-rpc/native/windows-loader-jdk21/runtime-supplier.properties
+  archive="$RUNNER_TEMP/p2pkit-windows-runtime-supplier.zip"
+  url="$(sed -n 's/^url=//p' "$pin")"
+  expected="$(sed -n 's/^sha256=//p' "$pin")"
+  [[ "$url" == https://github.com/adoptium/temurin21-binaries/releases/download/* ]]
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+  test ! -e "$archive"
+  curl --fail --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 600 \
+    --output "$archive" "$url"
+  printf '%s  %s\n' "$expected" "$archive" | sha256sum --check
+  echo "P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE=$(cygpath -w "$archive")" >> "$GITHUB_ENV"
+fi
 # Hosted images differ; GPG is used only with the pinned public recipient.
 if ! command -v gpg >/dev/null; then
   if [[ "${RUNNER_OS:-}" == macOS ]]; then

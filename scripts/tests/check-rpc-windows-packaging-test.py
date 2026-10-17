@@ -59,6 +59,28 @@ def preview_staging_contract(build):
 
 
 class WindowsPackagingWiringTest(unittest.TestCase):
+    def test_supplier_archive_precedes_each_actual_preview_tool(self):
+        verifier = BUILD[BUILD.index('val verifyRpcWindowsJdk21 ='):BUILD.index('val sourceCommit =',
+                         BUILD.index('val verifyRpcWindowsJdk21 ='))]
+        for value in ('inputs.files(verifier, supplier)', 'inputs.file(runtimeSupplierArchive)',
+                      'inputs.dir(previewRuntime.map { it.metadata.installationPath })',
+                      'outputs.upToDateWhen { false }', '"--jdk-home", previewRuntime.get()',
+                      '"--archive", runtimeSupplierArchive.get()'):
+            self.assertIn(value, verifier)
+        self.assertEqual(BUILD.count('dependsOn(verifyRpcWindowsJdk21)'), 3)
+        self.assertEqual(BUILD.count('inputs.file(runtimeSupplierReceipt).withPropertyName("rpcWindowsRuntimeSupplier")'), 3)
+        self.assertEqual(BUILD.count('javaHome.get() == previewRuntime.get().metadata.installationPath'), 2)
+        self.assertIn('jdkHome.get() == previewRuntime.get().metadata.installationPath', BUILD)
+        workflow = (ROOT / '.github/workflows/ci-component.yml').read_text()
+        self.assertIn("inputs.component == 'desktop-windows' && '21.0.12+101.0' || '21'", workflow)
+        setup = (ROOT / 'scripts/setup-ci-component.sh').read_text()
+        block = setup[setup.index('if [[ "$component" == desktop-windows ]]; then'):setup.index(
+            '# Hosted images differ;')]
+        self.assertIn('runtime-supplier.properties', block)
+        self.assertIn('sha256sum --check', block)
+        self.assertIn('P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE=', block)
+        self.assertLess(block.index('sha256sum --check'), block.index('P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE='))
+
     def test_windows_tasks_are_inside_actual_host_guard(self):
         start = BUILD.index('if (detectedDesktopLockTarget == "windows-x64") {')
         end = BUILD.index('\ncompose.desktop {', start)
@@ -117,7 +139,11 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         self.assertIn('tasks.register<Jar>("rpcWindowsParentPinJar") {\n'
                       '        dependsOn(stageRpcWindowsProfileNative)\n        from(parentPinResources)', BUILD)
         self.assertIn('files.from(rpcWindowsParentPinJar.flatMap { it.archiveFile })', BUILD)
-        self.assertNotIn('tasks.named<ProcessResources>', BUILD)
+        # Foundation's ordinary ProcessResources carries canonical release identity.
+        # The native parent pin must still be staged only in the Windows package block.
+        windows = BUILD[BUILD.index('if (detectedDesktopLockTarget == "windows-x64") {'):
+                        BUILD.index('\ncompose.desktop {')]
+        self.assertNotIn('tasks.named<ProcessResources>', windows)
         self.assertIn('include("META-INF/p2pkit/windows-profile-parent.properties")', BUILD)
         self.assertIn('META-INF/p2pkit/windows-profile-parent.properties', STAGER)
         self.assertIn('PACKAGED_COMPONENT_PIN_NOT_LOAD_AUTHORITY', STAGER)
