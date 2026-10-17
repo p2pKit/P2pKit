@@ -14,6 +14,7 @@ GROUP = "io.github.apdelrahman1911"
 SNAPSHOT = "9.8.7-SNAPSHOT"
 RELEASE = "9.8.7-rc6"
 PUBLISHED = "9.8.6-rc2"
+LEGACY_MIGRATION = "0.7.0-rc3"
 RECORD = f"docs/releases/{PUBLISHED}.md"
 JAVA = "buildSrc/src/main/java/dev/p2pkit/build/P2pPomMetadata.java"
 URL = "https://github.com/p2pKit/P2pKit"
@@ -42,7 +43,7 @@ class ReleaseMetadataTest(unittest.TestCase):
             "CLAUDE.md": "Repository guidance\n",
             "build.gradle.kts": f'group = providers.gradleProperty("GROUP").orNull ?: "{GROUP}"\n',
             "docs/architecture/specification.md": "# Current high-level API and protocol contract\n",
-            "docs/guides/migrating-to-0.7.md": f"# Migrating from 0.6.x to {PUBLISHED}\n`{GROUP}`\n",
+            "docs/guides/migrating-to-0.7.md": f"# Migrating from 0.6.x to {LEGACY_MIGRATION}\n`{GROUP}`\n",
             RECORD: f"`{GROUP}:p2p-core:{PUBLISHED}`\n",
             "docs/releasing/maven-central.md": f"`{GROUP}`\n",
             "samples/iosApp/Info.plist": "<string>_p2pkit2._tcp</string>\n",
@@ -94,6 +95,14 @@ class ReleaseMetadataTest(unittest.TestCase):
         self.select_release()
         self.check()
 
+    def test_historical_migration_guide_survives_a_new_minor_publication(self):
+        # The 0.6-to-0.7 guide is not a mutable latest-release announcement.
+        self.write("docs/guides/migrating-to-0.7.md",
+                   f"# Migrating from 0.6.x to {LEGACY_MIGRATION}\n`{GROUP}`\n")
+        self.check()
+        self.select_release()
+        self.check()
+
     def test_formatting_and_java_modifier_order_do_not_change_values(self):
         self.select_release()
         self.replace("README.md", f"**Current source version:** `{RELEASE}` release candidate.",
@@ -102,8 +111,8 @@ class ReleaseMetadataTest(unittest.TestCase):
                      f"Latest published version: `{PUBLISHED}`!")
         self.replace("CHANGELOG.md", f"## {RELEASE} — release candidate", f"##  `{RELEASE}` - release candidate")
         self.replace("CHANGELOG.md", f"## {PUBLISHED} — release candidate", f"## {PUBLISHED} -- release candidate")
-        self.replace("docs/guides/migrating-to-0.7.md", f"# Migrating from 0.6.x to {PUBLISHED}",
-                     f"#  Migrating  from 0.6.x to `{PUBLISHED}`: upgrade guide")
+        self.replace("docs/guides/migrating-to-0.7.md", f"# Migrating from 0.6.x to {LEGACY_MIGRATION}",
+                     f"#  Migrating  from 0.6.x to `{LEGACY_MIGRATION}`: upgrade guide")
         self.replace("docs/architecture/specification.md", "# Current high-level API and protocol contract",
                      "#  Current  high-level API and protocol contract  #")
         self.replace(JAVA, DECLARATION,
@@ -115,7 +124,7 @@ class ReleaseMetadataTest(unittest.TestCase):
             ("README.md", f"`{SNAPSHOT}`.", f"`{SNAPSHOT}-extra`."),
             ("README.md", f"`{PUBLISHED}`.", f"`{PUBLISHED}0`."),
             ("CHANGELOG.md", f"## {PUBLISHED}", f"## {PUBLISHED}-extra"),
-            ("docs/guides/migrating-to-0.7.md", f"to {PUBLISHED}", f"to {PUBLISHED}0"),
+            ("docs/guides/migrating-to-0.7.md", f"to {LEGACY_MIGRATION}", f"to {LEGACY_MIGRATION}0"),
             ("docs/architecture/specification.md", "high-level API and protocol contract",
              "API and protocol specification"),
         ):
@@ -126,6 +135,19 @@ class ReleaseMetadataTest(unittest.TestCase):
                     self.check(False, "release contract token")
                 finally:
                     self.write(name, original)
+
+    def test_historical_migration_cannot_be_rewritten_as_latest_release(self):
+        for wrong in (PUBLISHED, LEGACY_MIGRATION + "0", LEGACY_MIGRATION + "-extra"):
+            with self.subTest(wrong=wrong):
+                self.write("docs/guides/migrating-to-0.7.md",
+                           f"# Migrating from 0.6.x to {wrong}\n`{GROUP}`\n")
+                self.check(False, "release contract token")
+
+    def test_current_release_record_must_exist_and_name_current_coordinate(self):
+        self.write(RECORD, f"`{GROUP}:p2p-core:{LEGACY_MIGRATION}`\n")
+        self.check(False, "release contract text")
+        (self.root / RECORD).unlink()
+        self.check(False, "guarded file is missing or unreadable")
 
     def test_wrong_release_day_source_field_is_rejected(self):
         self.select_release()

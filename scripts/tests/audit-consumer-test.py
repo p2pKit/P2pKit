@@ -1457,7 +1457,45 @@ class ConsumerGateTest(unittest.TestCase):
                                             "--output", str(self.work / "repository" / relative)])
         self.assert_ancestor_bindings(self.calls("curl") + self.calls("gradle") + self.calls("xcrun"))
 
-    def test_latest_published_keeps_historical_upstream_graph_and_original_ten_tasks(self):
+    def select_latest_published_fixture(self, version):
+        # Only synthetic local boundaries change version; no real publication
+        # or dependency resolution is performed by these selector controls.
+        (self.root / "gradle.properties").write_text(
+            f"GROUP={GROUP}\nVERSION_NAME={VERSION}\nLATEST_PUBLISHED_VERSION={version}\nIOS_MIN_VERSION=14.0\n"
+        )
+        if not hasattr(self, "published_boundary_template"):
+            self.published_boundary_template = (self.root / "gradlew").read_text()
+        for path in (self.root / "gradlew", self.tools / "executor with spaces", self.tools / "xcrun",
+                     self.tools / "curl", self.tools / "git"):
+            path.write_text(self.published_boundary_template.replace(VERSION, version))
+
+    def test_latest_published_rc2_uses_complete_rpc_and_relocated_lan_contract(self):
+        version = "0.8.0-rc2"
+        self.select_latest_published_fixture(version)
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "P2PKIT_CONSUMER_WORK_DIR": str(self.work)},
+                               arguments=("--latest-published",), home=self.work / "gradle-home")
+        self.assert_pass(result)
+        leaves = self.calls("gradle")
+        self.assertEqual(len(leaves), 1)
+        self.assertEqual(leaves[0]["argv"], ["--no-daemon", "--console=plain", "-p", str(self.work / "consumer"),
+                                            "-PconsumerRepo=https://repository.example.invalid/maven",
+                                            "--refresh-dependencies", *EXPECTED_TASKS])
+        self.assertEqual(leaves[0]["home"], str(self.work / "gradle-home"))
+        downloads = self.calls("curl")
+        self.assertEqual(len(downloads), 9)
+        for name in ("p2p-rpc-jvm", "p2p-rpc-android", "p2p-transport-lan-android"):
+            self.assertTrue(any(f"/{name}/{version}/{name}-{version}.pom" in call["argv"][4]
+                                for call in downloads), name)
+        self.assertEqual((self.work / "consumer" / PACKAGING_REPORT_PATH).read_bytes(), PACKAGING_REPORT_BYTES)
+        self.assertEqual((self.work / "consumer" / RPC_REPORT_PATH).read_bytes(), RPC_REPORT_BYTES)
+        self.assertIn(f"{GROUP}:p2p-rpc:{version}",
+                      (self.work / "consumer/kmpConsumer/build.gradle.kts").read_text())
+        self.assertEqual(len(self.calls("xcrun")), 1)
+        self.assertFalse(self.calls("executor"))
+
+    def assert_historical_latest_published_contract(self, version):
+        self.select_latest_published_fixture(version)
         result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
                                 "P2PKIT_CONSUMER_WORK_DIR": str(self.work), "FAKE_LEGACY_JMDNS": "1",
                                 "FAKE_MISSING_PACKAGING_REPORT": "1", "FAKE_MISSING_APK": "debug"},
@@ -1474,7 +1512,7 @@ class ConsumerGateTest(unittest.TestCase):
         downloads = self.calls("curl")
         self.assertEqual(len(downloads), 4)
         for call, artifact in zip(downloads, expected_metadata):
-            relative = f"{GROUP.replace('.', '/')}/{artifact}/{VERSION}/{artifact}-{VERSION}.pom"
+            relative = f"{GROUP.replace('.', '/')}/{artifact}/{version}/{artifact}-{version}.pom"
             self.assertEqual(call["argv"], ["--fail", "--silent", "--show-error", "--location",
                                             f"https://repository.example.invalid/maven/{relative}",
                                             "--output", str(self.work / "repository" / relative)])
@@ -1484,6 +1522,32 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertNotIn("p2p-rpc", (self.work / "consumer/kmpConsumer/build.gradle.kts").read_text())
         self.assertEqual(len(self.calls("xcrun")), 1)
         self.assertFalse(self.calls("executor"))
+
+    def test_latest_published_keeps_historical_upstream_graph_and_original_ten_tasks(self):
+        self.assert_historical_latest_published_contract("0.7.0-rc3")
+
+    def test_latest_published_rc2_keeps_historical_upstream_graph_and_original_ten_tasks(self):
+        self.assert_historical_latest_published_contract("0.7.0-rc2")
+
+    def test_latest_published_current_contract_cannot_fall_back_to_upstream_jmdns(self):
+        self.select_latest_published_fixture("0.8.0-rc2")
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "FAKE_LEGACY_JMDNS": "1"}, arguments=("--latest-published",))
+        self.assert_rejected(result, "slf4j-api scope was")
+        self.assertFalse(self.calls("gradle"))
+        self.assertFalse(self.calls("xcrun"))
+
+    def test_latest_published_unknown_contract_fails_before_remote_or_gradle_boundary(self):
+        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc20", "0.8.0-rc2-extra", "0.8.0", VERSION):
+            with self.subTest(version=version):
+                self.select_latest_published_fixture(version)
+                result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},
+                                       arguments=("--latest-published",))
+                self.assert_rejected(result, "unsupported latest-published consumer contract")
+                self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.calls("curl"))
+        self.assertFalse(self.calls("gradle"))
+        self.assertFalse(self.calls("xcrun"))
 
     def test_current_source_modes_do_not_fall_back_to_the_historical_jmdns_graph(self):
         for repository in ("", "https://repository.example.invalid/maven"):

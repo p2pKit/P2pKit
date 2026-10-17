@@ -176,9 +176,18 @@ if [[ "${1:-}" == "--latest-published" ]]; then
         exit 2
     }
     VERSION="$LATEST_PUBLISHED"
-    # Published RC3 bytes and their original dependency graph are immutable.
-    # Only this explicit historical mode retains the upstream-JmDNS fixture.
-    CURRENT_SOURCE_CONSUMER=0
+    # Select the published contract, not the age of the command-line option.
+    # Historical 0.7 bytes retain upstream JmDNS and no RPC. Published rc2 uses
+    # the same relocated-LAN/complete-RPC fixture as its qualified release gate.
+    # Future versions require an explicit reviewed contract, not a legacy fallback.
+    case "$VERSION" in
+        0.7.0-rc2|0.7.0-rc3) CURRENT_SOURCE_CONSUMER=0 ;;
+        0.8.0-rc2) CURRENT_SOURCE_CONSUMER=1 ;;
+        *)
+            echo "FAIL: unsupported latest-published consumer contract: $VERSION" >&2
+            exit 2
+            ;;
+    esac
 elif [[ $# -ne 0 ]]; then
     echo "FAIL: usage: scripts/check-published-consumers.sh [--latest-published]" >&2
     exit 2

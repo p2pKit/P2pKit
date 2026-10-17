@@ -81,8 +81,10 @@ require_text README.md "\`$GROUP:p2p-core:$LATEST_PUBLISHED\`"
 require_pattern docs/architecture/specification.md \
     '^#[[:space:]]+Current[[:space:]]+high-level[[:space:]]+API[[:space:]]+and[[:space:]]+protocol[[:space:]]+contract([[:space:]]|$)'
 require_pattern CHANGELOG.md "^##[[:space:]]+\`?$PUBLISHED_PATTERN$VERSION_END"
+# This historical security-migration guide must not be relabeled on each release.
+# Current publication identity is checked in README, CHANGELOG and RELEASE_RECORD.
 require_pattern docs/guides/migrating-to-0.7.md \
-    "^#[[:space:]]+Migrating[[:space:]]+from[[:space:]]+0\\.6\\.x[[:space:]]+to[[:space:]]+\`?$PUBLISHED_PATTERN$VERSION_END"
+    "^#[[:space:]]+Migrating[[:space:]]+from[[:space:]]+0\\.6\\.x[[:space:]]+to[[:space:]]+\`?0\\.7\\.0-rc3$VERSION_END"
 require_text docs/guides/migrating-to-0.7.md "\`$GROUP\`"
 require_text "$RELEASE_RECORD" "\`$GROUP:p2p-core:$LATEST_PUBLISHED\`"
 require_text docs/releasing/maven-central.md "\`$GROUP\`"
