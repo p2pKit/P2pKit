@@ -306,9 +306,21 @@ refused:
     if (known != NULL) CoTaskMemFree(known);
     return 0; /* Never guess at rollback of a partially created object. */
 }
+static int directory_file_descriptor(const BY_HANDLE_FILE_INFORMATION *information, FILE_ID_DESCRIPTOR *descriptor) {
+    ZeroMemory(descriptor, sizeof(*descriptor));
+    if ((information->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+        (information->nFileIndexHigh == 0 && information->nFileIndexLow == 0)) return 0;
+    descriptor->dwSize = sizeof(*descriptor);
+    descriptor->Type = FileIdType;
+    descriptor->FileId.HighPart = (LONG)information->nFileIndexHigh;
+    descriptor->FileId.LowPart = information->nFileIndexLow;
+    return 1;
+}
 static int cleanup(void) {
     HANDLE deletion = NULL;
     FILE_DISPOSITION_INFO disposition = {TRUE};
+    BY_HANDLE_FILE_INFORMATION information;
+    FILE_ID_DESCRIPTOR descriptor;
     if (good(writer) || !original(directory_handle, 1, &directory_id, 1) || !original(file_handle, 0, &file_id, 1)) return 0;
     stage = "DELETE_FILE";
     deletion = ReOpenFile(file_handle, DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
@@ -321,8 +333,14 @@ static int cleanup(void) {
     if (!CloseHandle(deletion) || !CloseHandle(file_handle)) return 0;
     file_handle = NULL;
     stage = "DELETE_DIRECTORY";
-    deletion = ReOpenFile(directory_handle, DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    /* ReOpenFile cannot reopen directories. NTFS FileIdType comes from the ORIGINAL held handle,
+     * not a guessed truncation of FILE_ID_128 or a later path lookup. The original handle prevents
+     * identifier reuse; the returned handle must still match the complete original identity/ACL. */
+    if (!GetFileInformationByHandle(directory_handle, &information)) { error_code = GetLastError(); return 0; }
+    if (!directory_file_descriptor(&information, &descriptor)) return 0;
+    deletion = OpenFileById(directory_handle, &descriptor, DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
     if (!good(deletion)) { error_code = GetLastError(); return 0; }
     if (!original(deletion, 1, &directory_id, 1)) return 0;
     if (!SetFileInformationByHandle(deletion, FileDispositionInfo, &disposition, sizeof(disposition))) {
@@ -356,7 +374,26 @@ static int await_cleanup(void) {
 }
 static int self_test(void) {
     SECURITY_DESCRIPTOR descriptor; SECURITY_ATTRIBUTES attributes;
+    BY_HANDLE_FILE_INFORMATION information;
+    FILE_ID_DESCRIPTOR file_descriptor;
     union { void *align; BYTE bytes[512]; } acl;
+    ZeroMemory(&information, sizeof(information));
+    information.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+    if (directory_file_descriptor(&information, &file_descriptor)) return 0;
+    information.nFileIndexHigh = 0x80000001u;
+    information.nFileIndexLow = 0xfedcba98u;
+    if (!directory_file_descriptor(&information, &file_descriptor) || file_descriptor.dwSize != sizeof(file_descriptor) ||
+        file_descriptor.Type != FileIdType || (DWORD)file_descriptor.FileId.HighPart != information.nFileIndexHigh ||
+        file_descriptor.FileId.LowPart != information.nFileIndexLow) return 0;
+    information.nFileIndexHigh = 0;
+    if (!directory_file_descriptor(&information, &file_descriptor) || file_descriptor.FileId.HighPart != 0 ||
+        file_descriptor.FileId.LowPart != information.nFileIndexLow) return 0;
+    information.nFileIndexHigh = 1;
+    information.nFileIndexLow = 0;
+    if (!directory_file_descriptor(&information, &file_descriptor) || file_descriptor.FileId.HighPart != 1 ||
+        file_descriptor.FileId.LowPart != 0) return 0;
+    information.dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+    if (directory_file_descriptor(&information, &file_descriptor)) return 0;
     if (!initial_security(&descriptor, (ACL *)acl.bytes, sizeof(acl.bytes), 1, &attributes) ||
         !IsValidSecurityDescriptor(&descriptor) || !command_matches("CLEANUP 01234567-89ab-cdef-0123-456789abcdef\n", L"01234567-89ab-cdef-0123-456789abcdef") ||
         command_matches("CLEANUP 01234567-89ab-cdef-0123-456789abcdef\n", L"11234567-89ab-cdef-0123-456789abcdef") ||

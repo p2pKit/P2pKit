@@ -992,8 +992,12 @@ compiler pins. No candidate DLL is loaded or used to authorize itself.
 
 After the fixed reader's known successful exit and closed captures, a one-shot
 nonce handshake permits deletion through the helper's original object handles.
-Reopened delete handles must match original IDs/security; only that file and the
-empty original directory can be deleted. Failure, EOF, timeout or uncertain
+The file uses `ReOpenFile`. Directory cleanup uses NTFS `FileIdType` from
+`GetFileInformationByHandle` on the original held directory, then `OpenFileById`
+with that same handle as volume hint: `ReOpenFile` cannot reopen directories.
+There is no pathname lookup or guessed truncation of a 128-bit file ID. Both
+delete handles must match the complete original 128-bit ID, volume and security;
+only that file and the empty original directory can be deleted. Failure, EOF, timeout or uncertain
 completion preserves the fixture, fails the gate and leaves the existing outer
 supervisor responsible for uncertain descendants. No recursive path cleanup or
 retry is performed. The reader's 60-second limit and 128MiB heap are unchanged.
