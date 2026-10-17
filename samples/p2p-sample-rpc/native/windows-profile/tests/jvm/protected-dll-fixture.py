@@ -111,7 +111,8 @@ def failed_cleanup_projection(lines, original, compiler, code):
             all(row[key] == original[key] and type(row[key]) is type(original[key])
                 for key in FIELDS - {"phase", "stage", "error"}), "Unbound terminal LEFT record")
     require((code == 1 and row["stage"] in ("READY", "DELETE_FILE", "DELETE_DIRECTORY", "QUERY_DIRECTORY_ID",
-                                           "OPEN_DIRECTORY_ID", "DISPOSE_DIRECTORY")) or
+                                           "OPEN_DIRECTORY_ID", "DISPOSE_DIRECTORY", "QUERY_DIRECTORY_PATH",
+                                           "OPEN_DIRECTORY_PATH", "VERIFY_DIRECTORY_PATH")) or
             (code == 3 and row["stage"] == "PRESERVED" and row["error"] == 0), "Unexpected terminal outcome")
     return row["stage"], row["error"]
 

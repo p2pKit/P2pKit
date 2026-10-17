@@ -265,6 +265,29 @@ class Controls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     fixture.failed_cleanup_projection(value._lines(), ready(), compiler(), 3)
 
+    def test_directory_path_stages_retain_closed_original_failure(self):
+        for stage in ("QUERY_DIRECTORY_PATH", "OPEN_DIRECTORY_PATH", "VERIFY_DIRECTORY_PATH"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                value = owner()
+                value._output = Path(directory)
+                value._process.wait_code = 1
+                terminal = {**ready(), "phase": "LEFT", "stage": stage, "error": 0}
+                value._lines = lambda: [(json.dumps(row) + "\n").encode("ascii") for row in (ready(), terminal)]
+                with self.assertRaisesRegex(ValueError, "Original cleanup failed") as failed:
+                    value.finish_after_reader_run()
+                self.assertIs(value._failure, failed.exception)
+                diagnostic = value._output / ("protected-fixture-failure-" + stage + "-0.json")
+                self.assertEqual(json.loads(diagnostic.read_text()),
+                                 {"schema": 1, "scope": fixture.FAILURE_SCOPE, "stage": stage, "error": 0})
+                for field, changed in (("stage", stage + "-private"), ("stage", "../" + stage),
+                                       ("directoryId", "4" * 32), ("path", ready()["path"] + "private")):
+                    lines = [(json.dumps(row) + "\n").encode("ascii") for row in
+                             (ready(), {**terminal, field: changed})]
+                    with self.assertRaises(ValueError):
+                        fixture.failed_cleanup_projection(lines, ready(), compiler(), 1)
+                with self.assertRaises(ValueError):
+                    fixture.failed_cleanup_projection(value._lines(), ready(), compiler(), 3)
+
     def test_failed_projection_rejects_private_substitution(self):
         original = ready()
         left = {**original, "phase": "LEFT", "stage": "DELETE_DIRECTORY", "error": 5}
@@ -418,7 +441,7 @@ class Controls(unittest.TestCase):
 if __name__ == "__main__":
     captured = io.StringIO()
     result = unittest.TextTestRunner(stream=captured).run(unittest.defaultTestLoader.loadTestsFromTestCase(Controls))
-    if not result.wasSuccessful() or result.testsRun != 35:
+    if not result.wasSuccessful() or result.testsRun != 36:
         sys.stderr.write(captured.getvalue())
         sys.exit(1)
-    print("WINDOWS_PROTECTED_DLL_FIXTURE_CONTROLS_PASS tests=35 scope=INERT_RECEIPT_AND_HANDSHAKE_NOT_NATIVE_CUSTODY_OR_AUTHORITY")
+    print("WINDOWS_PROTECTED_DLL_FIXTURE_CONTROLS_PASS tests=36 scope=INERT_RECEIPT_AND_HANDSHAKE_NOT_NATIVE_CUSTODY_OR_AUTHORITY")

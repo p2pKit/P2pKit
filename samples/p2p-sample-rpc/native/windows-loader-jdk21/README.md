@@ -1000,18 +1000,27 @@ same-original-HANDLE bytes and the fixed Java17 PE comparison with independent
 compiler pins. No candidate DLL is loaded or used to authorize itself.
 
 After the fixed reader's known successful exit and closed captures, a one-shot
-nonce handshake permits deletion through the helper's original object handles.
-The file uses `ReOpenFile`. Directory cleanup uses NTFS `FileIdType` from
-`GetFileInformationByHandle` on the original held directory, then `OpenFileById`
-with that same handle as volume hint: `ReOpenFile` cannot reopen directories.
-There is no pathname lookup or guessed truncation of a 128-bit file ID. Both
-delete handles must match the complete original 128-bit ID, volume and security;
-only that file and the empty original directory can be deleted. Failure, EOF, timeout or uncertain
+nonce handshake permits deletion through identity-verified original-object handles.
+The file uses `ReOpenFile`. On the observed NTFS test host, directory `ReOpenFile`
+failed with error5; an independently verified `OpenFileById` directory handle then
+failed `FileDispositionInfo` with error87. These are retained runtime failures,
+not a universal API prohibition or the historical credentialed-launch error87.
+
+Directory cleanup now uses one primary `CreateFileW(OPEN_EXISTING)` reopen through
+the original held directory's volume-GUID path, bound to the original held volume
+root and immutable fixture suffix. There is no caller/DOS-alias path, alternate
+lookup or retry. All retained ancestor identities and owner/ACL/reparse policies
+are rechecked before any deletion and again before directory disposition. The
+returned handle must match the complete original 128-bit ID, volume, GUID path
+and exact protected security descriptor; the original directory handle remains
+held and is rechecked too. Only then may the same verified handle mark the empty
+directory for deletion. This changes lookup mechanics, not identity authority:
+no `RemoveDirectory` or other path-based deletion is used. Failure, EOF, timeout or uncertain
 completion preserves the fixture, fails the gate and leaves the existing outer
 supervisor responsible for uncertain descendants. No recursive path cleanup or
 retry is performed. The reader's 60-second limit and 128MiB heap are unchanged.
 
-Thirty-five portable controls cover closed receipts, handshake ownership,
+Thirty-six portable controls cover closed receipts, handshake ownership,
 bounded installed-SDK header selection and privacy-safe terminal diagnostics.
 On cleanup failure, only a fully retired helper with two original-bound receipts
 may export a fixed stage and bounded Win32 code. Otherwise the diagnostic is
@@ -1023,11 +1032,12 @@ protected-profile storage, MSI installation, productive JNI/Host–Client testin
 approved bootstrap authority or W01–W11 qualification. No helper/test input enters
 production resources, the adapter JAR, MSI or publication artifact inventory.
 
-Directory diagnostics distinguish the original ID query, by-ID open and
-disposition call. The older `DELETE_DIRECTORY` stage remains the original
-identity/ACL refusal boundary. A prior coarse error cannot identify which API
-failed; these fixed stage names do not authorize a different cleanup path,
-relaxed flags or a retry.
+Directory diagnostics distinguish GUID-path query, primary open, returned-identity
+verification and disposition. Historical ID-query/open and `DELETE_DIRECTORY`
+stages remain admitted for their original records, not relabeled. Ten additional
+native-helper self-test predicates cover GUID/suffix validation; their inert
+success is not evidence that actual cleanup passed. The corrected live sequence
+still requires a fresh successful reader and complete fixture-cleanup receipt.
 
 ### Original system-module disk observations
 

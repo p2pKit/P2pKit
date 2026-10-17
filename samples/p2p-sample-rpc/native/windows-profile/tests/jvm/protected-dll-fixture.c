@@ -316,12 +316,43 @@ static int directory_file_descriptor(const BY_HANDLE_FILE_INFORMATION *informati
     descriptor->FileId.LowPart = information->nFileIndexLow;
     return 1;
 }
+static int original_parents(void) {
+    unsigned index;
+    if (parent_count < 2 || parent_count > 16) return 0;
+    for (index = 0; index < parent_count; ++index) {
+        if (!original(parents[index], 1, &parent_ids[index], 0) ||
+            !safe_acl(parents[index], index == 0, 0, 1)) return 0;
+    }
+    return 1;
+}
+static int directory_guid_path_matches(const wchar_t *root, const wchar_t *actual, const wchar_t *expected) {
+    size_t index, count = wcslen(expected);
+    if (wcslen(root) != 49 || wcsncmp(root, L"\\\\?\\Volume{", 11) != 0 || root[47] != L'}' || root[48] != L'\\' ||
+        !path_valid(expected) || count <= 3 || wcslen(actual) != 49 + count - 3) return 0;
+    for (index = 11; index < 47; ++index) {
+        wchar_t c = root[index];
+        if (index == 19 || index == 24 || index == 29 || index == 34) {
+            if (c != L'-') return 0;
+        } else if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F'))) return 0;
+    }
+    return _wcsnicmp(actual, root, 49) == 0 && _wcsicmp(actual + 49, expected + 3) == 0;
+}
 static int cleanup(void) {
     HANDLE deletion = NULL;
     FILE_DISPOSITION_INFO disposition = {TRUE};
-    BY_HANDLE_FILE_INFORMATION information;
-    FILE_ID_DESCRIPTOR descriptor;
-    if (good(writer) || !original(directory_handle, 1, &directory_id, 1) || !original(file_handle, 0, &file_id, 1)) return 0;
+    wchar_t root[64] = {0}, directory[512] = {0}, reopened[512] = {0};
+    DWORD length;
+    stage = "VERIFY_DIRECTORY_PATH";
+    if (good(writer) || !original_parents() || !original(directory_handle, 1, &directory_id, 1) ||
+        !original(file_handle, 0, &file_id, 1)) return 0;
+    stage = "QUERY_DIRECTORY_PATH";
+    length = GetFinalPathNameByHandleW(parents[0], root, 64, VOLUME_NAME_GUID);
+    if (length == 0) { error_code = GetLastError(); return 0; }
+    if (length != 49 || root[length] != 0) return 0;
+    length = GetFinalPathNameByHandleW(directory_handle, directory, 512, VOLUME_NAME_GUID);
+    if (length == 0) { error_code = GetLastError(); return 0; }
+    if (length >= 512 || directory[length] != 0 ||
+        !directory_guid_path_matches(root, directory, directory_path)) return 0;
     stage = "DELETE_FILE";
     deletion = ReOpenFile(file_handle, DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_FLAG_OPEN_REPARSE_POINT);
@@ -332,19 +363,23 @@ static int cleanup(void) {
     }
     if (!CloseHandle(deletion) || !CloseHandle(file_handle)) return 0;
     file_handle = NULL;
-    stage = "QUERY_DIRECTORY_ID";
-    /* ReOpenFile cannot reopen directories. NTFS FileIdType comes from the ORIGINAL held handle,
-     * not a guessed truncation of FILE_ID_128 or a later path lookup. The original handle prevents
-     * identifier reuse; the returned handle must still match the complete original identity/ACL. */
-    if (!GetFileInformationByHandle(directory_handle, &information)) { error_code = GetLastError(); return 0; }
-    if (!directory_file_descriptor(&information, &descriptor)) return 0;
-    stage = "OPEN_DIRECTORY_ID";
-    deletion = OpenFileById(directory_handle, &descriptor, DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    stage = "OPEN_DIRECTORY_PATH";
+    /* Primary reopen only: our retained run refused directory ReOpenFile, then rejected disposition
+     * on the otherwise identity-verified OpenFileById handle. The locator is the ORIGINAL held
+     * directory's volume-GUID path under our held protected ancestors, never a caller/DOS alias.
+     * Resolving that locator grants no deletion authority: full original ID, path and ACL checks
+     * below must succeed before the sole handle-based disposition. There is no fallback/retry. */
+    deletion = CreateFileW(directory, DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     if (!good(deletion)) { error_code = GetLastError(); return 0; }
-    stage = "DELETE_DIRECTORY"; /* Original-identity/ACL refusal, not a guessed native error. */
+    stage = "VERIFY_DIRECTORY_PATH";
     if (!original(deletion, 1, &directory_id, 1)) return 0;
+    length = GetFinalPathNameByHandleW(deletion, reopened, 512, VOLUME_NAME_GUID);
+    if (length == 0) { error_code = GetLastError(); return 0; }
+    if (length >= 512 || reopened[length] != 0 || !directory_guid_path_matches(root, reopened, directory_path) ||
+        _wcsicmp(reopened, directory) != 0 || !original_parents() ||
+        !original(directory_handle, 1, &directory_id, 1)) return 0;
     stage = "DISPOSE_DIRECTORY";
     if (!SetFileInformationByHandle(deletion, FileDispositionInfo, &disposition, sizeof(disposition))) {
         error_code = GetLastError(); return 0;
@@ -380,6 +415,20 @@ static int self_test(void) {
     BY_HANDLE_FILE_INFORMATION information;
     FILE_ID_DESCRIPTOR file_descriptor;
     union { void *align; BYTE bytes[512]; } acl;
+    const wchar_t *root = L"\\\\?\\Volume{01234567-89ab-cdef-0123-456789abcdef}\\";
+    const wchar_t *path = L"\\\\?\\Volume{01234567-89ab-cdef-0123-456789abcdef}\\Program Files\\Owned";
+    if (!directory_guid_path_matches(root, path, L"C:\\Program Files\\Owned") ||
+        !directory_guid_path_matches(root, path, L"D:\\program files\\owned") ||
+        directory_guid_path_matches(root, path, L"C:\\Program Files\\Other") ||
+        directory_guid_path_matches(root, path, L"C:\\Program Files\\..\\Owned") ||
+        directory_guid_path_matches(root, path, L"C:\\Program Files\\Owned ") ||
+        directory_guid_path_matches(root, path, L"C:\\Program Files\\Owned:stream") ||
+        directory_guid_path_matches(L"\\\\?\\Volume{11234567-89ab-cdef-0123-456789abcdef}\\", path, L"C:\\Program Files\\Owned") ||
+        directory_guid_path_matches(L"\\\\?\\Volume{01234567_89ab-cdef-0123-456789abcdef}\\", path, L"C:\\Program Files\\Owned") ||
+        directory_guid_path_matches(L"C:\\", path, L"C:\\Program Files\\Owned") ||
+        directory_guid_path_matches(root, L"C:\\Program Files\\Owned", L"C:\\Program Files\\Owned")) return 0;
+    /* Preserve the earlier inert FileIdType descriptor controls as historical regression coverage;
+     * the live cleanup no longer uses a by-ID handle for disposition. */
     ZeroMemory(&information, sizeof(information));
     information.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
     if (directory_file_descriptor(&information, &file_descriptor)) return 0;
