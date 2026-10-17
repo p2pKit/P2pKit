@@ -4,7 +4,10 @@ import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.Condition
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
+import kotlin.concurrent.withLock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
@@ -115,9 +118,7 @@ class WindowsProfileRetirementControllerTest {
                 try { files.close() } catch (caught: Throwable) { waitingFailure.set(caught) }
             }
             assertTrue(waiterStarted.await(5, TimeUnit.SECONDS))
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (waiter.state != Thread.State.WAITING && System.nanoTime() < deadline) Thread.yield()
-            assertEquals(Thread.State.WAITING, waiter.state)
+            awaitCloseWaiter(files)
             assertTrue(model.closeCalls.isEmpty())
         } finally {
             release.countDown()
@@ -159,5 +160,21 @@ class WindowsProfileRetirementControllerTest {
             })
         }
         assertTrue(model.closeCalls.isEmpty())
+    }
+
+    private fun awaitCloseWaiter(files: WindowsProfileFiles) {
+        // The owner is blocked in the external controller latch. Observe the other caller on the
+        // actual close condition, not a transient Thread.State snapshot or lock-acquisition wait.
+        val monitor = files.javaClass.getDeclaredField("monitor").apply { isAccessible = true }
+            .get(files) as ReentrantLock
+        val changed = files.javaClass.getDeclaredField("changed").apply { isAccessible = true }
+            .get(files) as Condition
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        var observed = false
+        while (!observed && System.nanoTime() < deadline) {
+            observed = monitor.withLock { monitor.getWaitQueueLength(changed) == 1 }
+            if (!observed) Thread.yield()
+        }
+        assertTrue(observed, "The close waiter must await the original condition before controller return")
     }
 }

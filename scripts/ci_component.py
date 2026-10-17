@@ -113,7 +113,11 @@ def commands(component):
             tasks.append(':p2p-rpc:jvmTest')
         if (ROOT / 'samples/p2p-sample-rpc').is_dir():
             tasks.append(':p2p-sample-rpc:jvmTest')
-        return ([supervisor] if component == 'jvm-windows' else []) + [('jvm-tests', gradle + tasks)]
+        # Explicit stock-administrator development fixture, never standard-user/installed qualification.
+        # Existing job supervision/budgets remain; a requested fixture refusal fails rather than skips.
+        options = ['-Pp2pkit.rpc.windows.protectedDevelopmentFixture=true'] if component == 'jvm-windows' and \
+            (ROOT / 'samples/p2p-sample-rpc').is_dir() else []
+        return ([supervisor] if component == 'jvm-windows' else []) + [('jvm-tests', gradle + options + tasks)]
     if component == 'android':
         tasks = [':p2p-core:testAndroidHostTest', ':p2p-transport-lan:testAndroidHostTest',
                  ':p2p-network-provisioning-android:testAndroidHostTest', ':p2p-sample-android:testDebugUnitTest',

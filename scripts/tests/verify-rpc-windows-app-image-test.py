@@ -31,6 +31,11 @@ RPC_CLASSES = (
     "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
     "dev/p2pkit/sample/rpc/desktop/DesktopRpcProfile.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileFiles.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Entry.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$CompleteAdapter.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable$Companion.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfilePinnedImage.class",
 )
@@ -39,6 +44,7 @@ RPC_CLASSES = (
 ADAPTER_PREFIX = "dev/p2pkit/rpc/windows/loader/"
 ADAPTER_ENTRIES = (
     "module-info.class", ADAPTER_PREFIX + "Probe.class", ADAPTER_PREFIX + "WindowsLoader.class",
+    ADAPTER_PREFIX + "WindowsLoader$Unavailable.class",
     ADAPTER_PREFIX + "WindowsLoaderRuntime.class", ADAPTER_PREFIX + "WindowsX64Frame.class",
     ADAPTER_PREFIX + "WindowsX64Frame$AcquisitionFailure.class",
     ADAPTER_PREFIX + "WindowsX64Frame$CloseFailure.class", ADAPTER_PREFIX + "WindowsX64Frame$CleanupObservation.class",
@@ -53,6 +59,63 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsJniRegistrationInvocation.class",
     ADAPTER_PREFIX + "WindowsJniRegistrationInvocation$AcquisitionFailure.class",
     ADAPTER_PREFIX + "WindowsJniRegistrationInvocation$RetirementFailure.class",
+    ADAPTER_PREFIX + "WindowsJvmAcquisitionInvocation.class",
+    ADAPTER_PREFIX + "WindowsJvmAcquisitionInvocation$Failure.class",
+    ADAPTER_PREFIX + "WindowsJvmAcquisitionInvocation$Result.class",
+    ADAPTER_PREFIX + "WindowsLibraryLoadInvocation.class",
+    ADAPTER_PREFIX + "WindowsLibraryLoadInvocation$Failure.class",
+    ADAPTER_PREFIX + "WindowsLibraryLoadInvocation$Result.class",
+    ADAPTER_PREFIX + "WindowsLoadedProfileImageVerification.class",
+    ADAPTER_PREFIX + "WindowsLoadedProfileImageVerification$Failure.class",
+    ADAPTER_PREFIX + "WindowsExportLookupInvocation.class",
+    ADAPTER_PREFIX + "WindowsExportLookupInvocation$Failure.class",
+    ADAPTER_PREFIX + "WindowsExportLookupInvocation$Result.class",
+    ADAPTER_PREFIX + "WindowsImageReadInvocation.class",
+    ADAPTER_PREFIX + "WindowsImageReadInvocation$Failure.class",
+    ADAPTER_PREFIX + "WindowsImageReadInvocation$Result.class",
+    ADAPTER_PREFIX + "WindowsImageReadInvocation$Kind.class",
+    ADAPTER_PREFIX + "WindowsSystemBootstrapCandidate.class",
+    ADAPTER_PREFIX + "WindowsSystemBootstrapCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmFileCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileLease.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileLease$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllFileCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllFileCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsProfileDllPath.class",
+    ADAPTER_PREFIX + "WindowsInstallationSecurity.class",
+    ADAPTER_PREFIX + "WindowsInstallationSecurity$Kind.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmSecurityCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileSecurityQuery.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileSecurityQuery$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllSecurityCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllSecurityCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmAncestorsCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileAncestorsLease.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileAncestorsLease$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllAncestorsCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllAncestorsCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalJvmBytesCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileBytesLease.class",
+    ADAPTER_PREFIX + "WindowsOriginalFileBytesLease$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllBytesCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalProfileDllBytesCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalSystemModulesCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalSystemModulesCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsOriginalSystemModuleCandidate.class",
+    ADAPTER_PREFIX + "WindowsOriginalSystemModuleCandidate$Failure.class",
+    ADAPTER_PREFIX + "WindowsSystemImportResolution.class",
+    ADAPTER_PREFIX + "WindowsSystemImportResolution$Failure.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Input.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Target.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Forward.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Span.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Section.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Budget.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Module.class",
+    ADAPTER_PREFIX + "WindowsPackagedVerifier.class",
 )
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
@@ -271,6 +334,24 @@ class ImageInspectionTest(unittest.TestCase):
         self.assertEqual("NOT_PERFORMED", adapter["nativeExecution"])
         self.assertEqual("NOT_PERFORMED", result["runtimeQualification"])
 
+    def test_adapter_inventory_bound_counts_only_exact_files_and_optional_directories(self):
+        self.add_adapter()
+        directories = ("META-INF/", "dev/", "dev/p2pkit/", "dev/p2pkit/rpc/", "dev/p2pkit/rpc/windows/",
+                       ADAPTER_PREFIX)
+        self.adapter_content.update({name: b"" for name in directories})
+        self.write_adapter()
+        self.assertEqual("PASS", self.inspect(True)["result"])
+        with zipfile.ZipFile(self.adapter) as archive:
+            self.assertEqual(len(ADAPTER_ENTRIES) + 2 + len(directories), len(archive.infolist()))
+        self.adapter_content["unexpected/"] = b""
+        self.write_adapter()
+        with self.assertRaisesRegex(ValueError, "oversized adapter inventory"):
+            self.inspect(True)
+        del self.adapter_content[directories[0]]
+        self.write_adapter()
+        with self.assertRaisesRegex(ValueError, "unexpected or test adapter entry"):
+            self.inspect(True)
+
     def test_default_inspection_keeps_original_three_component_contract(self):
         self.assertNotIn("adapter", self.inspect())
 
@@ -310,6 +391,18 @@ class ImageInspectionTest(unittest.TestCase):
         self.add_adapter()
         for extra in (ADAPTER_PREFIX + "WindowsLoaderTest.class", ADAPTER_PREFIX + "RegistrationOwnerTests.class",
                       ADAPTER_PREFIX + "RegistrationInvocationTests.class",
+                      ADAPTER_PREFIX + "VmAcquisitionInvocationTests.class",
+                      ADAPTER_PREFIX + "LibraryLoadInvocationTests.class",
+                      ADAPTER_PREFIX + "ExportLookupInvocationTests.class",
+                      ADAPTER_PREFIX + "ImageReadInvocationTests.class",
+                      ADAPTER_PREFIX + "SystemBootstrapCandidateTests.class",
+                      ADAPTER_PREFIX + "InstallationSecurityTests.class",
+                      ADAPTER_PREFIX + "AncestorRetirementTests.class",
+                      ADAPTER_PREFIX + "ByteReadInvocationTests.class",
+                      ADAPTER_PREFIX + "PackagedVerifierTests.class",
+                      ADAPTER_PREFIX + "LoadedRegistrationTests.class",
+                      ADAPTER_PREFIX + "LoadedRegistrationTests$Fixture.class",
+                      ADAPTER_PREFIX + "LoadedRegistrationTests$SystemImports.class",
                       ADAPTER_PREFIX + "WindowsJniRegistrationOwner$Unexpected.class",
                       "META-INF/versions/21/" + ADAPTER_ENTRIES[1],
                       "META-INF/services/unexpected", "unexpected.dll"):

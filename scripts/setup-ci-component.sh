@@ -14,8 +14,8 @@ fi
 # Only the complete shared-check, consumer and writer CLI lanes use the temporary macOS 14
 # execution baseline. Native/installer/Swift lanes retain their existing images.
 if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
-  [[ "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == ARM64 ]]
-  [[ "$(sw_vers -productVersion)" == 14.* ]]
+  [[ "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == ARM64 ]] || exit 1
+  [[ "$(sw_vers -productVersion)" == 14.* ]] || exit 1
 fi
 if [[ "${RUNNER_OS:-}" == macOS ]]; then
   if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
@@ -25,7 +25,7 @@ if [[ "${RUNNER_OS:-}" == macOS ]]; then
   test -d "$xcode"
   if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
     version="$(DEVELOPER_DIR="$xcode" xcodebuild -version)"
-    [[ "${version%%$'\n'*}" == 'Xcode 16.2' ]]
+    [[ "${version%%$'\n'*}" == 'Xcode 16.2' ]] || exit 1
   fi
   echo "DEVELOPER_DIR=$xcode" >> "$GITHUB_ENV"
   xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"

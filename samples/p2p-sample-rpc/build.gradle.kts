@@ -6,6 +6,8 @@ import groovy.json.JsonOutput
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 
@@ -183,7 +185,7 @@ val compileRpcWindowsLoaderJdk21 = tasks.register<JavaCompile>("compileRpcWindow
     options.encoding = "UTF-8"
     options.compilerArgs.addAll(listOf("--enable-preview", "-proc:none", "-Xlint:all,-preview", "-Werror"))
 }
-tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
+val rpcWindowsLoaderJdk21Jar = tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
     group = "verification"
     description = "Package only the disabled adapter; never publish it as a Maven coordinate."
     from(compileRpcWindowsLoaderJdk21.flatMap { it.destinationDirectory })
@@ -192,6 +194,75 @@ tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
     duplicatesStrategy = DuplicatesStrategy.FAIL
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
+}
+// Keep the existing adapter controls in the ordinary Windows component, not an obsolete hosted dispatch lane.
+// Development-JDK controls include a separate deny-storage test DLL, never the productive profile DLL.
+val windowsControlsJdk17 = extensions.getByType<JavaToolchainService>().launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(17))
+}
+// Only explicit adapter verification/Windows JVM tests compile the connection fixtures.
+// Depend on compilation outputs, never jvmTest itself (which already depends on verification on Windows).
+val windowsVerifierCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test")
+val windowsVerifierClasspath = files(mainCompilation.output.allOutputs, mainCompilation.runtimeDependencyFiles,
+    windowsVerifierCompilation.output.allOutputs, windowsVerifierCompilation.runtimeDependencyFiles)
+// Only the explicitly selected development fixture may create its own protected Program Files objects.
+// Ordinary developer controls remain usable without administrator access; no elevation is requested.
+val protectedWindowsDevelopmentFixture = providers.gradleProperty("p2pkit.rpc.windows.protectedDevelopmentFixture")
+    .map { value ->
+        require(value == "true" || value == "false") { "Protected development fixture expects true or false" }
+        value == "true"
+    }.orElse(false)
+val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJdk21") {
+    group = "verification"
+    description = "Exercise disabled-adapter invocation/refusal controls; not installed Windows qualification."
+    dependsOn(rpcWindowsLoaderJdk21Jar)
+    dependsOn(windowsVerifierClasspath)
+    workingDir(rootProject.layout.projectDirectory)
+    inputs.file(rootProject.file("scripts/tests/check-rpc-windows-loader-jdk21.py"))
+    inputs.dir(layout.projectDirectory.dir("native/windows-loader-jdk21/src/test/java"))
+    // This test-only Windows DLL never enters production resources, packaging or the artifact freeze.
+    inputs.files(listOf("profile_policy.c", "profile_jni.c", "profile_jni_registration.c", "profile_policy.h",
+        "profile_win32.h", "profile_jni_registration.h", "tests/jvm/deny_storage.c", "tests/jvm/build-test-dll.py",
+        "tests/jvm/test-build-test-dll.py", "tests/jvm/protected-dll-fixture.c",
+        "tests/jvm/protected-dll-fixture.py", "tests/jvm/test-protected-dll-fixture.py")
+        .map { layout.projectDirectory.file("native/windows-profile/$it") })
+    inputs.files(windowsVerifierClasspath)
+    inputs.property("protectedDevelopmentFixture", protectedWindowsDevelopmentFixture)
+    outputs.upToDateWhen { false }
+    doFirst {
+        val reports = rootProject.layout.buildDirectory.dir("reports/rpc-windows-loader-jdk21").get().asFile.toPath()
+        Files.createDirectories(reports)
+        // Never erase or overwrite a prior result. The maintained runner creates its fresh controls directory.
+        val attempt = Files.createTempDirectory(reports, "attempt-").resolve("controls")
+        val applicationClasspath = attempt.parent.resolve("application-classpath.json")
+        Files.writeString(applicationClasspath, JsonOutput.toJson(mapOf(
+            "schema" to 1,
+            "mainClassDirectories" to mainCompilation.output.classesDirs.files.filter { it.isDirectory }
+                .map { it.absolutePath },
+            "classpath" to windowsVerifierClasspath.files.filter { it.exists() }.map { it.absolutePath },
+        )) + "\n", StandardOpenOption.CREATE_NEW)
+        commandLine("python3", "-I", "-B", "scripts/tests/check-rpc-windows-loader-jdk21.py",
+            "--java21", windowsLoaderJdk21.get().metadata.installationPath.asFile.absolutePath,
+            "--java17", windowsControlsJdk17.get().metadata.installationPath.asFile.absolutePath,
+            "--jar", rpcWindowsLoaderJdk21Jar.get().archiveFile.get().asFile.absolutePath,
+            "--application-classpath", applicationClasspath.toString(),
+            "--output", attempt.toString())
+        if (protectedWindowsDevelopmentFixture.get()) args("--protected-development-fixture")
+    }
+}
+tasks.named<Test>("jvmTest") {
+    // Other host library tests still require only JDK17. Explicit adapter verification remains available there.
+    // Gradle treats a system-property provider as a known non-task producer: mapping its value to task
+    // providers does not add those tasks to the graph. Resolve only the host selector here, not a toolchain.
+    if (rpcJvmTestHost.get() == "windows") dependsOn(verifyRpcWindowsLoaderJdk21)
+    doFirst {
+        if (rpcJvmTestHost.get() == "windows") {
+            val controls = verifyRpcWindowsLoaderJdk21.get().state
+            check(controls.executed && !controls.skipped && controls.failure == null) {
+                "Windows RPC JVM tests require completed, unskipped adapter controls"
+            }
+        }
+    }
 }
 // Application-owned, opt-in lab integration. It is not part of the sample's main
 // artifact or any library publication, and is never an automatic transport fallback.

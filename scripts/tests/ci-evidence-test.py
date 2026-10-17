@@ -28,7 +28,7 @@ PUBLIC_FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit-evidence-test-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -1098,6 +1098,142 @@ class EvidenceTests(unittest.TestCase):
         fixture.unlink()
         self.assertNotIn('jmdnsFixture', E.junit_failures(self.root, original)[0])
 
+    def jmdns_startup_report(self):
+        import xml.etree.ElementTree as ET
+        paths = (
+            "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt",
+            "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java",
+        )
+        for relative in paths:
+            target = self.root / relative
+            target.parent.mkdir(parents=True)
+            target.write_bytes((SCRIPTS.parent / relative).read_bytes())
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE)
+        git("init", "--quiet")
+        git("add", *paths)
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Original public JmDNS test sources")
+        original = git("rev-parse", "HEAD").decode().strip()
+        report = self.root / "library/p2p-transport-lan/build/test-results/jvmTest/TEST-close.xml"
+        report.parent.mkdir(parents=True)
+        def observe(text, *, message="", method="realResourceCloseRegressionsExitNaturally[jvm]", failed=True):
+            suite = ET.Element("testsuite")
+            case = ET.SubElement(suite, "testcase", classname="dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest",
+                                 name=method)
+            if failed:
+                ET.SubElement(case, "failure", type="java.lang.AssertionError", message=message).text = text
+            else:
+                ET.SubElement(case, "system-out").text = text
+            report.write_bytes(ET.tostring(suite))
+            return E.junit_failures(self.root, original)
+        return observe, paths
+
+    def test_jmdns_startup_markers_preserve_original_finite_observations(self):
+        observe, _paths = self.jmdns_startup_report()
+        markers = [
+            "startup firstSendFailureClass=java.net.NoRouteToHostException firstSendDestinationIpv4Mdns=true",
+            "startup interfaceSnapshot=BEFORE_WAIT selectedKnown=true hostKnown=true socketKnown=false "
+            "selectedHostMatch=true selectedSocketMatch=UNKNOWN hostSocketMatch=UNKNOWN",
+            "startup route observation=POST_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true "
+            "queryCompleted=false exitZero=UNKNOWN",
+            "startup route outputWithinBound=false",
+            "startup route processReaped=true",
+            "startup route queryFailureClass=java.io.IOException",
+            "startup route interfaceParsed=false selectedInterfaceMatch=UNKNOWN flagsParsed=true",
+            *("startup routeFlag=" + flag + " present=" + value for flag, value in (
+                ("UP", "true"), ("REJECT", "true"), ("BLACKHOLE", "false"),
+                ("GATEWAY", "false"), ("IFSCOPE", "true"))),
+            "startup explicitAddress=false linkLocal=true virtualInterface=false pointToPoint=true",
+        ]
+        for method in ("realResourceCloseRegressionsExitNaturally[jvm]",
+                       "failedSendsCannotMultiplyTheSdkCleanupBudget()"):
+            with self.subTest(method=method):
+                text = "host_not_announced\n" + "\r\n".join(markers) + "\r\n"
+                row = observe(text, message=text, method=method)[0]
+                self.assertEqual(row["kinds"], ["ASSERTION"])
+                details = row["jmdnsFixture"]
+                self.assertEqual(details["sourceDefinedCodes"], ["host_not_announced"])
+                self.assertEqual(details["exceptionClasses"],
+                                 ["java.io.IOException", "java.lang.AssertionError", "java.net.NoRouteToHostException"])
+                self.assertEqual(details["startupMarkers"], sorted(markers))  # Not duplicated by XML message.
+                self.assertEqual(set(details), {"sourceDefinedCodes", "exceptionClasses", "startupMarkers"})
+        for marker in (
+                "startup route queryStarted=false reason=FIRST_SEND_DESTINATION_NOT_MATCHED",
+                "startup route queryStarted=false reason=SELECTED_INTERFACE_UNKNOWN"):
+            self.assertEqual(observe(marker)[0]["jmdnsFixture"]["startupMarkers"], [marker])
+        for value in ("true", "false", "UNKNOWN"):
+            marker = "startup firstSendFailureClass=java.net.NoRouteToHostException firstSendDestinationIpv4Mdns=" + value
+            self.assertEqual(observe("", message=marker)[0]["jmdnsFixture"]["startupMarkers"], [marker])
+
+    def test_jmdns_startup_markers_refuse_dynamic_text_without_erasing_old_details(self):
+        observe, _paths = self.jmdns_startup_report()
+        safe = "startup route processReaped=true"
+        private = "PRIVATE_PAYLOAD_192.0.2.19"
+        invalid = [
+            private + safe, safe + private, " " + safe, safe + " ", "\t" + safe,
+            private + "\u0085" + safe, private + "\u2028" + safe,
+            safe + "\u0085" + private, safe + "\u2029" + private,
+            safe + " interface=en999", safe + " address=192.0.2.19", "startup route interface=en999",
+            "startup route processReaped=TRUE", "startup route processReaped=trueish",
+            "startup route processReaped=UNKNOWN", "startup routeFlag=PRIVATE present=true",
+            "startup routeFlag=UP present=true reason=" + private,
+            "startup route queryStarted=false reason=" + private,
+            "startup route observation=BEFORE_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true "
+            "queryCompleted=true exitZero=true",
+            "startup firstSendFailureClass=private.DynamicException firstSendDestinationIpv4Mdns=true",
+            "startup firstSendFailureClass=java.net.NoRouteToHostExceptionPrivate firstSendDestinationIpv4Mdns=true",
+            "startup diagnosticFailureClass=java.io.IOException",
+            "startup route processReaped=" + "t" * 513,
+            "startup primitive=PYTHON_IPV4 stage=SEND result=KERNEL_ACCEPTED",
+        ]
+        for line in invalid:
+            with self.subTest(line=line):
+                details = observe("host_not_announced\n" + line)[0]["jmdnsFixture"]
+                self.assertEqual(details["sourceDefinedCodes"], ["host_not_announced"])
+                self.assertNotIn("startupMarkers", details)
+                self.assertNotIn(private, json.dumps(details))
+                self.assertEqual(observe(line + "\n" + safe)[0]["jmdnsFixture"]["startupMarkers"], [safe])
+
+    def test_jmdns_startup_markers_refuse_oversize_and_conflicting_observations(self):
+        observe, _paths = self.jmdns_startup_report()
+        safe = "startup route processReaped=true"
+        for text in (
+                (safe + "\n") * 33,
+                "x" * (128 * 1024) + "\n" + safe,
+                safe + "\nstartup route processReaped=false",
+                "startup route queryStarted=false reason=SELECTED_INTERFACE_UNKNOWN\n"
+                "startup route observation=POST_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true "
+                "queryCompleted=true exitZero=true",
+                "startup routeFlag=REJECT present=false\nstartup routeFlag=REJECT present=true"):
+            with self.subTest(length=len(text)):
+                details = observe("host_not_announced\n" + text)[0]["jmdnsFixture"]
+                self.assertEqual(details["sourceDefinedCodes"], ["host_not_announced"])
+                self.assertEqual(details["exceptionClasses"], ["java.lang.AssertionError"])
+                self.assertNotIn("startupMarkers", details)
+        self.assertEqual(observe((safe + "\n") * 32)[0]["jmdnsFixture"]["startupMarkers"], [safe])
+        self.assertNotIn("startupMarkers", observe(safe, message="x" * (128 * 1024 + 1))[0]["jmdnsFixture"])
+        self.assertNotIn("startupMarkers", observe(safe, message=safe.replace("true", "false"))[0]["jmdnsFixture"])
+
+    def test_jmdns_startup_markers_require_original_source_and_actual_failed_case(self):
+        observe, paths = self.jmdns_startup_report()
+        marker = "startup route processReaped=true"
+        self.assertEqual(observe(marker, failed=False), [])
+        self.assertEqual(observe(marker, method="privateUntrackedMethod"), [])
+        self.assertEqual(observe("host_not_announced")[0]["jmdnsFixture"],
+                         {"sourceDefinedCodes": ["host_not_announced"], "exceptionClasses": ["java.lang.AssertionError"]})
+        source, fixture = (self.root / relative for relative in paths)
+        original = fixture.read_bytes()
+        fixture.write_bytes(original + b'\n// startup route processReaped=true\n')
+        self.assertNotIn("jmdnsFixture", observe(marker)[0])
+        fixture.write_bytes(original)
+        self.assertEqual(observe(marker)[0]["jmdnsFixture"]["startupMarkers"], [marker])
+        fixture.unlink()
+        self.assertNotIn("jmdnsFixture", observe(marker)[0])
+        fixture.write_bytes(original)
+        source.write_bytes(source.read_bytes() + b'\n// changed original source\n')
+        self.assertEqual(observe(marker), [])
+
     def test_junit_diagnostic_refuses_entities_malformed_and_linked_reports(self):
         directory = self.root / "library/p2p-core/build/test-results/jvmTest"
         directory.mkdir(parents=True)
@@ -1650,7 +1786,7 @@ class EvidenceTests(unittest.TestCase):
         environment = {"GITHUB_REPOSITORY": "example/project", "GITHUB_SHA": identity["commit"],
             "GITHUB_WORKFLOW_REF": "example/project/.github/workflows/ci.yml@refs/heads/main",
             "GITHUB_WORKFLOW_SHA": identity["commit"], "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
-            "GITHUB_JOB": "test", "RUNNER_ENVIRONMENT": "github-hosted",
+            "GITHUB_JOB": "test", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_TEMP": str(self.root),
             "CI_EVIDENCE_RECIPIENT_SHA256": hashlib.sha256(key_raw).hexdigest(),
             "CI_EVIDENCE_RECIPIENT_FINGERPRINT": PUBLIC_FINGERPRINT}
         for exit_code in (0, 9):

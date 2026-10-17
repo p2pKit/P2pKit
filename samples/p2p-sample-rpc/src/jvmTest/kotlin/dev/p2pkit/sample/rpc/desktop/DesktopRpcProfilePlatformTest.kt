@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.rpc.desktop
 
+import dev.p2pkit.sample.rpc.profile.WindowsProfileInstalledProvider
 import java.nio.file.InvalidPathException
 import java.util.Properties
 import kotlin.test.Test
@@ -24,7 +25,7 @@ class DesktopRpcProfilePlatformTest {
                 homeReads++
                 throw AssertionError("Windows must not resolve a POSIX home")
             }) { DesktopRpcProfile.openApplicationAttempt(password) }
-            val failure = assertIs<IllegalStateException>(attempt.result.exceptionOrNull())
+            val failure = assertIs<WindowsProfileInstalledProvider.Unavailable>(attempt.result.exceptionOrNull())
             assertTrue(failure.message.orEmpty().startsWith("Windows protected profile unavailable:"))
             assertNull(attempt.cleanupFailure)
             assertNull(attempt.retainedSession)

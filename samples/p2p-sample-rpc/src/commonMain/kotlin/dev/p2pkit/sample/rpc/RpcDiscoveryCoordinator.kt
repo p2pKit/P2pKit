@@ -86,6 +86,7 @@ internal class RpcDiscoveryCoordinator(
     private val scope: CoroutineScope,
     private val client: RpcDiscoveryClient,
     private val store: RpcTrustStore,
+    private val failures: PhoneOperationFailureState = PhoneOperationFailureState(),
 ) {
     private val lock = Mutex()
     private var worker: Job? = null
@@ -97,6 +98,7 @@ internal class RpcDiscoveryCoordinator(
     val status: StateFlow<RpcDiscoveryConnectionStatus> = mutableStatus.asStateFlow()
 
     suspend fun start() = lock.withLock {
+        failures.requireHealthy()
         check(!closed && !started)
         val selected = readSelection()
         client.discover()
@@ -106,6 +108,7 @@ internal class RpcDiscoveryCoordinator(
 
     /** The UI must show the pin and explain first-use trust BEFORE passing firstUseConfirmed=true. */
     suspend fun select(pin: String, firstUseConfirmed: Boolean) = lock.withLock {
+        failures.requireHealthy()
         check(started && !closed)
         PeerFingerprint.parse(pin)
         check(client.nearby().count { it.fingerprint == pin } == 1) { "Host disappeared or discovery is ambiguous" }
@@ -113,6 +116,8 @@ internal class RpcDiscoveryCoordinator(
         val renewal = mutableStatus.value.requiresApprovalFor(pin)
         check(!renewal || firstUseConfirmed) { "Fresh approval requires explicit fingerprint confirmation" }
         worker?.cancelAndJoin()
+        // Joining proves return, not success: cancellation cleanup may have failed after admission.
+        failures.requireHealthy()
         client.disconnect()
         val needsApproval = renewal || !client.trusted(pin)
         check(!needsApproval || firstUseConfirmed) { "First-use fingerprint confirmation required" }
@@ -123,6 +128,7 @@ internal class RpcDiscoveryCoordinator(
     }
 
     suspend fun forget(pin: String) = lock.withLock {
+        failures.requireHealthy()
         check(started && !closed)
         PeerFingerprint.parse(pin)
         // Once admitted under the lifecycle lock, caller cancellation cannot abandon revocation
@@ -130,6 +136,7 @@ internal class RpcDiscoveryCoordinator(
         withContext(NonCancellable) {
             val selected = mutableStatus.value.selectedFingerprint == pin
             if (selected) worker?.cancelAndJoin()
+            failures.requireHealthy()
             // Deny/cancel RPC before a storage failure can leave stale reconnect authorization.
             try {
                 client.revoke(pin)
@@ -151,6 +158,12 @@ internal class RpcDiscoveryCoordinator(
             closed = true
             worker?.cancelAndJoin()
             worker = null
+            try { failures.requireHealthy() } catch (failure: PhoneOperationTerminalFailure) {
+                // A shared foreground failure may precede this worker's first dispatch (or any selection).
+                mutableStatus.value = RpcDiscoveryConnectionStatus(RpcDiscoveryConnectionState.Failed,
+                    mutableStatus.value.selectedFingerprint, failure = "LocalOrProtocolFailure")
+                throw failure
+            }
             mutableStatus.value = RpcDiscoveryConnectionStatus(RpcDiscoveryConnectionState.Closed,
                 mutableStatus.value.selectedFingerprint)
         }
@@ -163,37 +176,48 @@ internal class RpcDiscoveryCoordinator(
             else RpcDiscoveryConnectionState.Connecting, pin)
         worker = scope.launch {
             try {
-                if (firstUse) {
-                    update(RpcDiscoveryConnectionState.AwaitingApproval, pin)
-                    client.requestApproval(pin) // Exactly one attempt: rejection/timeout NEVER opens another popup.
-                    check(client.trusted(pin))
-                    saveSelection(pin)
+                // The autonomous worker owns real trust writes too. Share the facade's terminal ledger,
+                // including failures while classifying an ordinary protocol failure below.
+                failures.effect {
+                    try {
+                        if (firstUse) {
+                            update(RpcDiscoveryConnectionState.AwaitingApproval, pin)
+                            client.requestApproval(pin) // One attempt; rejection/timeout never opens another popup.
+                            check(client.trusted(pin))
+                            saveSelection(pin)
+                        }
+                        reconnect(pin)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        val renewalDeclined = firstUse && client.trusted(pin) && failure is RpcFailure &&
+                            failure.phase == RpcFailurePhase.Trust &&
+                            failure.kind in setOf(RpcFailureKind.Unauthorized, RpcFailureKind.DeadlineExceeded)
+                        update(if (renewalDeclined) RpcDiscoveryConnectionState.RequiresApproval
+                            else RpcDiscoveryConnectionState.Failed, pin, failure = safeFailure(failure))
+                    }
                 }
-                reconnect(pin)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (failure: Exception) {
-                val renewalDeclined = firstUse && client.trusted(pin) && failure is RpcFailure &&
-                    failure.phase == RpcFailurePhase.Trust &&
-                    failure.kind in setOf(RpcFailureKind.Unauthorized, RpcFailureKind.DeadlineExceeded)
-                update(if (renewalDeclined) RpcDiscoveryConnectionState.RequiresApproval
-                    else RpcDiscoveryConnectionState.Failed, pin, failure = safeFailure(failure))
+            } catch (_: PhoneOperationTerminalFailure) {
+                update(RpcDiscoveryConnectionState.Failed, pin, failure = "LocalOrProtocolFailure")
             }
         }
     }
 
     private suspend fun reconnect(pin: String) {
-        var failures = 0
+        var retryFailures = 0
         while (true) {
             // A same-dispatcher NonCancellable preference write can return after cancellation.
             // Observe retirement before any non-suspending connection work can start another dial.
             currentCoroutineContext().ensureActive()
+            failures.requireHealthy()
             if (!client.trusted(pin)) {
                 update(RpcDiscoveryConnectionState.RequiresApproval, pin)
                 return // Revoke requires a NEW explicit first-use confirmation, never silent re-pairing.
             }
             if (client.ready()) {
-                failures = 0
+                retryFailures = 0
                 update(RpcDiscoveryConnectionState.Ready, pin)
                 delay(500)
                 continue
@@ -205,7 +229,7 @@ internal class RpcDiscoveryCoordinator(
                 delay(1_000)
                 continue
             }
-            update(if (failures == 0) RpcDiscoveryConnectionState.Connecting
+            update(if (retryFailures == 0) RpcDiscoveryConnectionState.Connecting
                 else RpcDiscoveryConnectionState.Reconnecting, pin)
             try {
                 client.connect(pin)
@@ -223,8 +247,8 @@ internal class RpcDiscoveryCoordinator(
                 if (failure is RpcFailure && failure.kind in setOf(RpcFailureKind.TrustStorage,
                         RpcFailureKind.Authentication, RpcFailureKind.Unauthorized, RpcFailureKind.Closed)
                 ) throw failure
-                val wait = BACKOFF[failures.coerceAtMost(BACKOFF.lastIndex)]
-                failures = (failures + 1).coerceAtMost(BACKOFF.size)
+                val wait = BACKOFF[retryFailures.coerceAtMost(BACKOFF.lastIndex)]
+                retryFailures = (retryFailures + 1).coerceAtMost(BACKOFF.size)
                 update(RpcDiscoveryConnectionState.Reconnecting, pin, wait, safeFailure(failure))
                 delay(wait)
             }

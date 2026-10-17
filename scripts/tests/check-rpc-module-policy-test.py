@@ -24,6 +24,7 @@ HOST_SELECTION = '''val rpcJvmTestHost = providers.systemProperty("os.name").map
 HOST_REGISTRATION = '''        named("jvmTest") {
             kotlin.srcDir(rpcJvmTestHost.map { "src/${it}JvmTest/kotlin" })
         }'''
+WINDOWS_ADAPTER_DEPENDENCY = 'if (rpcJvmTestHost.get() == "windows") dependsOn(verifyRpcWindowsLoaderJdk21)'
 PREREQUISITES = [
     "library/p2p-core/build.gradle.kts",
     "library/p2p-transport-lan/build.gradle.kts",
@@ -47,6 +48,10 @@ def project_dependencies(source):
 
 
 def check(files):
+    # Gradle 9.7 resolves a known Provider's producers, not a mapped list of TaskProviders.
+    # Keep the explicit task edge; this tripwire does not replace an executed Windows task graph.
+    require(files[SAMPLE].count(WINDOWS_ADAPTER_DEPENDENCY) == 1,
+            "Windows adapter control task dependency is missing")
     require(project_dependencies(files[RPC]) == {
         ":p2p-core", ":p2p-transport-lan", ":p2p-network-provisioning-android",
         ":p2p-network-provisioning-desktop",
@@ -111,6 +116,13 @@ def main():
     files = {name: (ROOT / name).read_text(encoding="utf-8") for name in paths}
     check(files)
     mutations = [
+        (SAMPLE, WINDOWS_ADAPTER_DEPENDENCY, "", "Windows adapter control task dependency"),
+        (SAMPLE, WINDOWS_ADAPTER_DEPENDENCY,
+         'if (rpcJvmTestHost.get() == "posix") dependsOn(verifyRpcWindowsLoaderJdk21)',
+         "Windows adapter control task dependency"),
+        (SAMPLE, WINDOWS_ADAPTER_DEPENDENCY,
+         'dependsOn(rpcJvmTestHost.map { if (it == "windows") listOf(verifyRpcWindowsLoaderJdk21) else emptyList() })',
+         "Windows adapter control task dependency"),
         (RPC, 'api(project(":p2p-core"))', 'api(project(":p2p-rpc"))', "RPC dependency"),
         (SAMPLE, 'api(project(":p2p-rpc"))', '', "sample dependency"),
         (PREREQUISITES[0], '\n', '\nimplementation(project(":p2p-rpc"))\n', "Prerequisite"),
