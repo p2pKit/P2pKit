@@ -28,7 +28,7 @@ PUBLIC_FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit-evidence-test-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -1786,7 +1786,7 @@ class EvidenceTests(unittest.TestCase):
         environment = {"GITHUB_REPOSITORY": "example/project", "GITHUB_SHA": identity["commit"],
             "GITHUB_WORKFLOW_REF": "example/project/.github/workflows/ci.yml@refs/heads/main",
             "GITHUB_WORKFLOW_SHA": identity["commit"], "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
-            "GITHUB_JOB": "test", "RUNNER_ENVIRONMENT": "github-hosted",
+            "GITHUB_JOB": "test", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_TEMP": str(self.root),
             "CI_EVIDENCE_RECIPIENT_SHA256": hashlib.sha256(key_raw).hexdigest(),
             "CI_EVIDENCE_RECIPIENT_FINGERPRINT": PUBLIC_FINGERPRINT}
         for exit_code in (0, 9):
