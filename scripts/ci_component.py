@@ -101,7 +101,7 @@ def commands(component):
                    'application-release-version-test.py', 'sample-artifact-identity-test.py',
                    'package-sample-apps-test.py', 'publish-sample-release-test.py',
                    'release-application-set-test.py', 'run-platform-tests-test.py',
-                   'verify-rpc-windows-jdk21-test.py'),
+                   'verify-rpc-windows-jdk21-test.py', 'check-rpc-windows-packaging-test.py'),
         ]
     if component == 'dependencies':
         return [('integrity-policy', bash + ['scripts/check-dependency-verification.sh']),

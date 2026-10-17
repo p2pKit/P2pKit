@@ -108,3 +108,30 @@ existing app executable with bounded output/time, pins its launcher/config/runti
 the returned module result against the image metadata, and records ordinary process exit. This is build-image
 module resolution only, **not** installation, standard-user protected-storage tests or Foundation's required
 whole-lifetime installed-app supervision. Those remain separate integration gates.
+
+
+### Exact Windows JDK producer input
+
+Windows Desktop packaging with `-Pp2pkit.rpc.windows.previewAdapter=true` now
+requires the source-pinned Temurin archive in
+`native/windows-loader-jdk21/runtime-supplier.properties` under the RPC sample.
+The maintained CI setup downloads that archive, checks SHA-256, and sets
+`P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE` to its local path. For an equivalent local
+Windows build, download the same official archive and set that environment
+variable; do not change the pin to match an arbitrary installed JDK.
+
+`verifyRpcWindowsJdk21` compares the selected JDK's complete ordinary-file
+inventory against the verified archive before jlink, runtime checks and
+jpackage. Each task consumes the verification result and checks its actual
+selected tool directory. A cache hit or `java -version` alone is not supplier
+verification. This is a build-time byte check, not an immutable directory
+lease, supplier signature verification or installed-runtime qualification.
+
+The supported startup model trusts the original OS, installed launcher/JVM
+and launching user's configuration/environment. The upstream jpackage
+launcher can prefer a per-user configuration; the JVM also accepts ambient
+VM options. Post-start Java checks cannot prove those inputs were ignored.
+Protected installed-root admission, original module continuity and real
+ordinary-user installed tests remain separate requirements. This producer
+check does not activate Windows RPC, relax its refusal checks, replace MainKt
+or create another MSI/release pipeline.
