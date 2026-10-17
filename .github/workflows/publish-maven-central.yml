@@ -230,12 +230,14 @@ jobs:
           overwrite: false
 
       - name: Verify immutable remote bytes and consumers
+        env:
+          # Read-only current job/source timing; never forwarded to consumers.
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
           scripts/check-maven-central-version.sh published \
             "build/central/p2pkit-$VERSION-central-bundle.zip"
-          P2PKIT_CONSUMER_REPOSITORY_URL=https://repo.maven.apache.org/maven2 \
-            scripts/check-published-consumers.sh
+          python3 -I -B -S scripts/run-published-consumers.py
 
       - name: Upload publication evidence
         if: always()

@@ -52,6 +52,11 @@ class ModularPolicyTests < Minitest::Test
   def test_complete_consumers_remain_independently_required
     altered('.github/workflows/ci.yml', ', consumers,', ',')
   end
+
+  def test_publisher_remote_consumers_cannot_revert_to_unqualified_cli_context
+    altered('.github/workflows/publish-maven-central.yml',
+            'python3 -I -B -S scripts/run-published-consumers.py', 'scripts/check-published-consumers.sh')
+  end
   def test_writer_cannot_select_floating_or_native_toolchain_baseline
     altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-15-intel', 'runs-on: macos-latest')
     altered('.github/workflows/dependency-update-candidate.yml', 'setup-ci-component.sh dependency-update',
