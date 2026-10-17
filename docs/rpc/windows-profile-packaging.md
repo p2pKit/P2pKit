@@ -117,14 +117,17 @@ requires the source-pinned Temurin archive in
 `native/windows-loader-jdk21/runtime-supplier.properties` under the RPC sample.
 The maintained CI setup downloads that archive, checks SHA-256, and sets
 `P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE` to its local path. For an equivalent local
-Windows build, download the same official archive and set that environment
-variable; do not change the pin to match an arbitrary installed JDK.
+Windows build, download the same official archive, set that environment variable,
+and set `JAVA_HOME_21_X64` to its extracted JDK root. CI uses setup-java's explicit
+`JAVA_HOME_21_X64` installation, not Gradle's major-only toolchain search. The
+path is only a candidate: do not change the pin to match an arbitrary installed JDK.
 
 `verifyRpcWindowsJdk21` compares the selected JDK's complete ordinary-file
 inventory against the verified archive before jlink, runtime checks and
 jpackage. Each task consumes the verification result and checks its actual
-selected tool directory. A cache hit or `java -version` alone is not supplier
-verification. This is a build-time byte check, not an immutable directory
+selected tool directory. The receipt is retained through the existing encrypted
+`build/reports/rpc-windows-runtime/supplier.json` report collection. A cache hit
+or `java -version` alone is not supplier verification. This is a build-time byte check, not an immutable directory
 lease, supplier signature verification or installed-runtime qualification.
 
 The supported startup model trusts the original OS, installed launcher/JVM

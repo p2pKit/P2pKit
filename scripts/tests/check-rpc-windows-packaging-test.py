@@ -63,14 +63,20 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         verifier = BUILD[BUILD.index('val verifyRpcWindowsJdk21 ='):BUILD.index('val sourceCommit =',
                          BUILD.index('val verifyRpcWindowsJdk21 ='))]
         for value in ('inputs.files(verifier, supplier)', 'inputs.file(runtimeSupplierArchive)',
-                      'inputs.dir(previewRuntime.map { it.metadata.installationPath })',
-                      'outputs.upToDateWhen { false }', '"--jdk-home", previewRuntime.get()',
+                      'inputs.dir(previewRuntimeHome)',
+                      'outputs.upToDateWhen { false }', '"--jdk-home", previewRuntimeHome.get()',
                       '"--archive", runtimeSupplierArchive.get()'):
             self.assertIn(value, verifier)
         self.assertEqual(BUILD.count('dependsOn(verifyRpcWindowsJdk21)'), 3)
         self.assertEqual(BUILD.count('inputs.file(runtimeSupplierReceipt).withPropertyName("rpcWindowsRuntimeSupplier")'), 3)
-        self.assertEqual(BUILD.count('javaHome.get() == previewRuntime.get().metadata.installationPath'), 2)
-        self.assertIn('jdkHome.get() == previewRuntime.get().metadata.installationPath', BUILD)
+        self.assertEqual(BUILD.count('javaHome.get() == previewRuntimeHome.get()'), 2)
+        self.assertIn('jdkHome.get() == previewRuntimeHome.get()', BUILD)
+        candidate = BUILD[BUILD.index('val previewRuntimeHome ='):BUILD.index('val runtimeSupplierArchive =')]
+        self.assertIn('providers.environmentVariable("JAVA_HOME_21_X64")', candidate)
+        self.assertNotIn('launcherFor', candidate)
+        self.assertNotIn('orElse', candidate)
+        self.assertIn('rootProject.layout.buildDirectory.file("reports/rpc-windows-runtime/supplier.json")', BUILD)
+        self.assertIn("--report-glob 'build/reports/**/*'", (ROOT / '.github/workflows/ci-component.yml').read_text())
         workflow = (ROOT / '.github/workflows/ci-component.yml').read_text()
         self.assertIn("inputs.component == 'desktop-windows' && '21.0.12+101.0' || '21'", workflow)
         setup = (ROOT / 'scripts/setup-ci-component.sh').read_text()
@@ -242,8 +248,8 @@ class WindowsPackagingWiringTest(unittest.TestCase):
     def test_preview_runtime_family_applies_to_linker_not_just_installer(self):
         self.assertIn('tasks.withType<AbstractJLinkTask>().configureEach', BUILD)
         self.assertIn('tasks.withType<AbstractCheckNativeDistributionRuntime>().configureEach', BUILD)
-        self.assertIn('jdkHome.set(previewRuntime.map', BUILD)
-        self.assertIn('javaHome.set(previewRuntime.map', BUILD)
+        self.assertIn('jdkHome.set(previewRuntimeHome)', BUILD)
+        self.assertIn('javaHome.set(previewRuntimeHome)', BUILD)
         self.assertIn('jvmToolchain(17)', BUILD)
 
     def test_java21_preview_is_confined_to_unpublished_adapter_compilation(self):

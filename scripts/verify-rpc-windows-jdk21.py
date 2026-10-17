@@ -77,6 +77,10 @@ REFUSAL_CODES = {
 class SupplierRefusal(ValueError):
     """A verifier check failed; its message is not itself public output."""
 
+    def __init__(self, message, *, inventory=None):
+        super().__init__(message)
+        self.inventory = inventory
+
 
 def failure_code(error):
     if type(error) is SupplierRefusal:
@@ -90,13 +94,38 @@ def failure_code(error):
     return "UNCLASSIFIED_FAILURE"
 
 
-def require(condition, message):
+def failure_details(error):
+    # Inventory diagnostics expose only bounded counts and one Boolean, never names.
+    if type(error) is not SupplierRefusal or failure_code(error) != "HOME_INVENTORY_MISMATCH":
+        return ""
+    values = error.inventory
+    if type(values) is not tuple or len(values) != 5 or type(values[4]) is not bool or \
+            any(type(count) is not int or not 0 <= count <= MAX_ENTRIES ** 2 for count in values[:4]):
+        return ""
+    fields = ("missingFiles", "extraFiles", "missingDirectories", "extraDirectories")
+    return "".join(" " + name + "=" + str(count) for name, count in zip(fields, values[:4])) + \
+        " caseFoldEqual=" + ("true" if values[4] else "false")
+
+
+def require(condition, message, *, inventory=None):
     if not condition:
-        raise SupplierRefusal(message)
+        raise SupplierRefusal(message, inventory=inventory)
 
 
 def identity(info):
     return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns
+
+
+def opened_identity_matches(path, pathname, opened):
+    # CPython Windows lstat infers execute bits from these suffixes; fstat uses
+    # handle attributes without that inference. Never normalize same-view snapshots
+    # or Unix permissions, nor accept reverse/partial execute-bit discrepancies.
+    mode = pathname[2]
+    if sys.platform == "win32" and stat.S_ISREG(mode) and path.suffix.lower() in (".exe", ".bat", ".cmd", ".com"):
+        if mode & 0o111 != 0o111:
+            return False
+        pathname = pathname[:2] + (mode & ~0o111,) + pathname[3:]
+    return pathname == opened
 
 
 def ordinary(path, directory=False):
@@ -121,12 +150,13 @@ def file_digest(path, maximum):
     require(before.st_size <= maximum, "File exceeds size bound")
     digest, count = hashlib.sha256(), 0
     with path.open("rb") as stream:
-        require(identity(os.fstat(stream.fileno())) == identity(before), "Opened file identity changed")
+        opened = identity(os.fstat(stream.fileno()))
+        require(opened_identity_matches(path, identity(before), opened), "Opened file identity changed")
         while chunk := stream.read(1024 * 1024):
             count += len(chunk)
             require(count <= maximum, "File grew beyond size bound")
             digest.update(chunk)
-        require(identity(os.fstat(stream.fileno())) == identity(before), "Open file changed")
+        require(identity(os.fstat(stream.fileno())) == opened, "Open file changed")
     require(count == before.st_size and identity(ordinary(path)) == identity(before), "File changed")
     return count, digest.hexdigest(), identity(before)
 
@@ -207,7 +237,8 @@ def verify(archive_path, home, pin):
     snapshots = {home: identity(ordinary(home, True))}
     rows = []
     with archive_path.open("rb") as stream:
-        require(identity(os.fstat(stream.fileno())) == archive_identity, "Archive identity changed")
+        archive_opened = identity(os.fstat(stream.fileno()))
+        require(opened_identity_matches(archive_path, archive_identity, archive_opened), "Archive identity changed")
         with zipfile.ZipFile(stream) as archive:
             files, directories = inventory(archive)
             actual_files, actual_directories = set(), set()
@@ -223,7 +254,11 @@ def verify(archive_path, home, pin):
                     snapshots[path] = identity(ordinary(path))
                     actual_files.add(path.relative_to(home).as_posix())
                 require(len(actual_files) + len(actual_directories) <= MAX_ENTRIES, "JDK home count exceeds bound")
-            require(actual_files == files.keys() and actual_directories == directories, "JDK home inventory mismatch")
+            require(actual_files == files.keys() and actual_directories == directories, "JDK home inventory mismatch",
+                    inventory=(len(files.keys() - actual_files), len(actual_files - files.keys()),
+                               len(directories - actual_directories), len(actual_directories - directories),
+                               {name.casefold() for name in actual_files} == {name.casefold() for name in files} and
+                               {name.casefold() for name in actual_directories} == {name.casefold() for name in directories}))
             for name, entry in sorted(files.items()):
                 hasher, count = hashlib.sha256(), 0
                 with archive.open(entry) as member:
@@ -236,7 +271,7 @@ def verify(archive_path, home, pin):
                 require(observed_identity == snapshots[home / name] and observed_size == count and
                         observed_hash == hasher.hexdigest(), "JDK home differs from supplier archive")
                 rows.append({"path": name, "bytes": count, "sha256": observed_hash})
-        require(identity(os.fstat(stream.fileno())) == archive_identity, "Archive changed")
+        require(identity(os.fstat(stream.fileno())) == archive_opened, "Archive changed")
     require(identity(ordinary(archive_path)) == archive_identity, "Archive path changed")
     for path, before in snapshots.items():
         require(identity(ordinary(path, path == home or path.relative_to(home).as_posix() in directories)) == before,
@@ -268,7 +303,7 @@ def main():
         print("JDK_SUPPLIER_BYTES_PASS")
         return 0
     except (OSError, ValueError, UnicodeError, zipfile.BadZipFile, RuntimeError, EOFError, zlib.error) as error:
-        print("JDK_SUPPLIER_BYTES_REFUSED reason=" + failure_code(error), file=sys.stderr)
+        print("JDK_SUPPLIER_BYTES_REFUSED reason=" + failure_code(error) + failure_details(error), file=sys.stderr)
         return 1
 
 

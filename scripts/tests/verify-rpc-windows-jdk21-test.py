@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import warnings
@@ -290,9 +291,102 @@ class SupplierTests(unittest.TestCase):
                         contextlib.redirect_stderr(io.StringIO()) as stderr:
                     self.assertEqual(V.main(), 1)
                     self.assertEqual(stdout.getvalue(), "")
-                    self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED reason=" + code + "\n")
+                    details = " missingFiles=0 extraFiles=1 missingDirectories=0 extraDirectories=0 caseFoldEqual=false" \
+                        if change == "extra" else ""
+                    self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED reason=" + code + details + "\n")
                     self.assertFalse(output.exists())
                 (self.home / "private-extra-file").unlink(missing_ok=True)
+
+    def test_windows_cross_view_infers_only_known_path_execute_bits(self):
+        for suffix in (".exe", ".EXE", ".bat", ".cmd", ".com"):
+            for access in (0o666, 0o444):
+                with self.subTest(suffix=suffix, access=access), patch.object(V.sys, "platform", "win32"):
+                    pathname = (23, 2 ** 100 + 41, stat.S_IFREG | access | 0o111, 800, 123456789)
+                    opened = pathname[:2] + (stat.S_IFREG | access,) + pathname[3:]
+                    self.assertTrue(V.opened_identity_matches(Path("java" + suffix), pathname, opened))
+        for platform in ("win32", "linux", "darwin"):
+            with self.subTest(platform=platform), patch.object(V.sys, "platform", platform):
+                regular = (23, 41, stat.S_IFREG | 0o666, 800, 123456789)
+                self.assertTrue(V.opened_identity_matches(Path("release"), regular, regular))
+
+    def test_cross_view_refuses_other_identity_permissions_and_platform_differences(self):
+        pathname = (23, 2 ** 100 + 41, stat.S_IFREG | 0o777, 800, 123456789)
+        opened = pathname[:2] + (stat.S_IFREG | 0o666,) + pathname[3:]
+        mutations = [(0, 24), (1, 41), (1, 2 ** 100 + 42), (3, 801), (4, 123456790)]
+        mutations += [(2, mode) for mode in (stat.S_IFDIR | 0o666, stat.S_IFREG | 0o444,
+                                            stat.S_IFREG | 0o664, stat.S_IFREG | 0o4666,
+                                            stat.S_IFREG | 0o777, stat.S_IFREG | 0o766)]
+        with patch.object(V.sys, "platform", "win32"):
+            for index, value in mutations:
+                changed = opened[:index] + (value,) + opened[index + 1:]
+                with self.subTest(index=index, value=value):
+                    self.assertFalse(V.opened_identity_matches(Path("java.exe"), pathname, changed))
+            self.assertFalse(V.opened_identity_matches(Path("java.dll"), pathname, opened))
+            self.assertFalse(V.opened_identity_matches(Path("java.exe"), opened, pathname))
+            partial = pathname[:2] + (stat.S_IFREG | 0o766,) + pathname[3:]
+            self.assertFalse(V.opened_identity_matches(Path("java.exe"), partial, opened))
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), patch.object(V.sys, "platform", platform):
+                self.assertFalse(V.opened_identity_matches(Path("java.exe"), pathname, opened))
+                self.assertTrue(V.opened_identity_matches(Path("java.exe"), pathname, pathname))
+
+    def test_digest_keeps_exact_same_handle_and_path_snapshots_under_windows_model(self):
+        target = self.home / "bin/java.exe"
+        ordinary, fstat = V.ordinary, V.os.fstat
+        for change, expected in ((None, None), ("handle-execute", "Open file changed"),
+                                 ("path-execute", "File changed"), ("handle-inode", "Opened file identity changed")):
+            calls = {"path": 0, "handle": 0}
+            def snapshot(info, mode, inode=None):
+                return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino if inode is None else inode,
+                                       st_mode=mode, st_size=info.st_size, st_mtime_ns=info.st_mtime_ns)
+            def path_stat(path, directory=False):
+                info = ordinary(path, directory)
+                calls["path"] += 1
+                mode = stat.S_IFREG | (0o666 if change == "path-execute" and calls["path"] > 1 else 0o777)
+                return snapshot(info, mode)
+            def handle_stat(fd):
+                info = fstat(fd)
+                calls["handle"] += 1
+                mode = stat.S_IFREG | (0o777 if change == "handle-execute" and calls["handle"] > 1 else 0o666)
+                return snapshot(info, mode, info.st_ino + 1 if change == "handle-inode" else None)
+            with self.subTest(change=change), patch.object(V.sys, "platform", "win32"), \
+                    patch.object(V, "ordinary", side_effect=path_stat), patch.object(V.os, "fstat", side_effect=handle_stat):
+                if expected:
+                    with self.assertRaisesRegex(V.SupplierRefusal, expected):
+                        V.file_digest(target, V.MAX_FILE)
+                else:
+                    size, digest, before = V.file_digest(target, V.MAX_FILE)
+                    self.assertEqual(size, len(self.files["bin/java.exe"]))
+                    self.assertEqual(digest, hashlib.sha256(self.files["bin/java.exe"]).hexdigest())
+                    self.assertEqual(before[2], stat.S_IFREG | 0o777)
+                    self.assertEqual(calls, {"path": 2, "handle": 2})
+
+    def test_inventory_counts_cover_missing_extra_and_case_without_names(self):
+        target = self.home / "bin/java.exe"
+        target.unlink()
+        (self.home / "bin/JAVA.EXE").write_bytes(self.files["bin/java.exe"])
+        with self.assertRaises(V.SupplierRefusal) as refused:
+            V.verify(self.archive, self.home, self.pin)
+        self.assertEqual(V.failure_details(refused.exception),
+                         " missingFiles=1 extraFiles=1 missingDirectories=0 extraDirectories=0 caseFoldEqual=true")
+        (self.home / "bin/JAVA.EXE").unlink()
+        license_file = self.home / "legal/java.base/LICENSE"
+        license_file.unlink()
+        license_file.parent.rmdir()
+        (self.home / "legal/PRIVATE-EXTRA-DIRECTORY").mkdir()
+        with self.assertRaises(V.SupplierRefusal) as refused:
+            V.verify(self.archive, self.home, self.pin)
+        self.assertEqual(V.failure_details(refused.exception),
+                         " missingFiles=2 extraFiles=0 missingDirectories=1 extraDirectories=1 caseFoldEqual=false")
+        private = "PRIVATE_NAME\nforged-output"
+        for inventory in ((private, 0, 0, 0, False), (-1, 0, 0, 0, False), (True, 0, 0, 0, False),
+                          (V.MAX_ENTRIES ** 2 + 1, 0, 0, 0, False), (0, 0, 0, 0, private),
+                          [0, 0, 0, 0, False], (0, 0, 0, 0)):
+            with self.subTest(inventory=inventory):
+                error = V.SupplierRefusal("JDK home inventory mismatch", inventory=inventory)
+                self.assertEqual(V.failure_details(error), "")
+        error = V.SupplierRefusal("Supplier archive digest mismatch", inventory=(1, 2, 3, 4, True))
+        self.assertEqual(V.failure_details(error), "")
 
 
 if __name__ == "__main__":
