@@ -1051,6 +1051,60 @@ class EvidenceTests(unittest.TestCase):
         report.write_text('<testsuite><testcase classname="dev.p2pkit.ExampleTest" name="actualCase"/></testsuite>')
         self.assertEqual(E.junit_failures(self.root), [])
 
+    def test_junit_standard_jvm_test_sources_retain_source_binding_and_privacy(self):
+        relative_sources = (
+            "samples/p2p-sample-desktop/src/test/kotlin/dev/p2pkit/StandardTest.kt",
+            "library/p2p-network-provisioning-desktop/src/test/kotlin/dev/p2pkit/StandardTest.kt",
+        )
+        main_source = "samples/p2p-sample-desktop/src/main/kotlin/dev/p2pkit/StandardTest.kt"
+        content = "package dev.p2pkit\nclass StandardTest { fun actualCase() {} }\n"
+        for relative in (*relative_sources, main_source):
+            source = self.root / relative
+            source.parent.mkdir(parents=True)
+            source.write_text(content)
+        report = self.root / "samples/p2p-sample-desktop/build/test-results/test/TEST-standard.xml"
+        report.parent.mkdir(parents=True)
+        xml = ('<testsuite><testcase classname="dev.p2pkit.StandardTest" name="actualCase">'
+               '<failure type="kotlinx.coroutines.TimeoutCancellationException" message="PRIVATE_MESSAGE">'
+               'PRIVATE_STACK</failure></testcase></testsuite>')
+        report.write_text(xml)
+
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE)
+
+        git("init", "--quiet")
+        self.assertEqual(E.junit_failures(self.root), [])
+        git("add", *relative_sources, main_source)
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Standard JVM source-set fixture")
+        original = git("rev-parse", "HEAD").decode().strip()
+        expected = [{"source": relative, "test": "actualCase", "kinds": ["TIMEOUT"]}
+                    for relative in sorted(relative_sources)]
+        result = E.junit_failures(self.root, original)
+        self.assertEqual(sorted(result, key=lambda row: row["source"]), expected)
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        self.assertNotIn("src/main", json.dumps(result))
+        for before, after in (("actualCase", "private_case"), ("dev.p2pkit.StandardTest", "private.StandardTest"),
+                              ("StandardTest", "PrivateTest")):
+            with self.subTest(invalid=after):
+                report.write_text(xml.replace(before, after))
+                self.assertEqual(E.junit_failures(self.root, original), [])
+        untracked = self.root / relative_sources[0].replace("StandardTest", "UntrackedTest")
+        untracked.write_text(content.replace("StandardTest", "UntrackedTest"))
+        report.write_text(xml.replace("StandardTest", "UntrackedTest"))
+        self.assertEqual(E.junit_failures(self.root, original), [])
+        report.write_text(xml)
+        for relative in relative_sources:
+            (self.root / relative).write_text(content + "// modified source is not authority\n")
+        self.assertEqual(E.junit_failures(self.root, original), [])
+        for relative in relative_sources:
+            (self.root / relative).write_text(content)
+        self.assertEqual(sorted(E.junit_failures(self.root, original), key=lambda row: row["source"]), expected)
+        for relative in relative_sources:
+            (self.root / relative).unlink()
+        # A still-tracked, byte-exact src/main match is not a test-source fallback.
+        self.assertEqual(E.junit_failures(self.root, original), [])
+
     def test_jmdns_junit_details_are_finite_and_bound_to_original_fixture_source(self):
         source = self.root / "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt"
         fixture = self.root / "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java"

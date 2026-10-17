@@ -967,7 +967,10 @@ def junit_failures(root, source_commit="HEAD"):
                 method = match[1]
                 package, cls = classname.rsplit(".", 1)
                 for group in ("library", "samples"):
-                    for source in (root / group).glob("*/src/*Test/**/" + cls + ".kt"):
+                    # KMP uses commonTest/jvmTest; ordinary JVM modules use exact test.
+                    sources = (source for source_set in ("*Test", "test")
+                               for source in (root / group).glob("*/src/" + source_set + "/**/" + cls + ".kt"))
+                    for source in sources:
                         relative = source.relative_to(root).as_posix()
                         if relative not in blobs:
                             continue
