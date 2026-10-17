@@ -10,8 +10,10 @@ must freeze the matching four-platform main application/evidence set. Both
 protected approval and the final pre-upload check revalidate its original
 identity and retention. See the [exact-source release procedure](release-foundation.md)
 for owner challenge comments, post-Maven application delivery and partial-failure
-boundaries. That document also records outstanding activation prerequisites;
-new source controls alone do not establish readiness.
+boundaries. The latest completed publication is
+[`0.8.0-rc2`](../releases/0.8.0-rc2.md); current development source is
+`0.8.0-SNAPSHOT`, which is not publishable. New source controls alone do not
+establish readiness for a subsequent release.
 
 Required secrets and variables remain in the GitHub Environment and must never
 be printed or committed. The workflow checks authenticated namespace-query access,
@@ -63,7 +65,11 @@ bash scripts/tests/check-maven-namespace-access-test.sh
 The existing **Verify Maven Central namespace** workflow also accepts
 `operation=controls` for those same tests on a hosted runner, without an
 environment or secrets. `operation=verify` remains the protected real check.
-Mocked controls are not evidence of real Central access.
+Mocked controls are not evidence of real Central access. The repaired checker
+subsequently passed authenticated preflight in rc2 publication
+[38986454729/1](https://github.com/p2pKit/P2pKit/actions/runs/38986454729), followed
+by separately verified upload, PUBLISHED state and remote consumers. Its access
+report still honestly recorded `namespaceVerificationState: NOT_ASSERTED`.
 
 ### Repairs after a release tag already exists
 
@@ -116,9 +122,17 @@ The builder never uploads and does not replace the complete release gates or
 authorize publication. Keep secret material out of logs and remove it from the
 invocation environment afterward.
 
+For an explicit `--latest-published` consumer check after a later release,
+review its version-to-fixture mapping in `scripts/check-published-consumers.sh`.
+The retained 0.7 RC2/RC3 contracts use upstream JmDNS without RPC; `0.8.0-rc2`
+uses the qualified embedded-LAN/RPC contract. Unknown versions fail rather than
+silently selecting the historical graph. This mapping does not change the
+ordinary exact-source complete consumer gate used during publication.
+
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
-record. See [`../releases/0.7.0-rc3.md`](../releases/0.7.0-rc3.md).
+record. See [`0.8.0-rc2`](../releases/0.8.0-rc2.md) for the latest completed
+publication and [`0.7.0-rc3`](../releases/0.7.0-rc3.md) for immutable history.
 If an irreversible upload succeeds but verification fails, do not rerun the
 publisher. Follow the separately protected [read-only recovery procedure](release-foundation.md#read-only-recovery-after-an-original-published-deployment)
 using the original signed quartet, deployment receipt and frozen applications.

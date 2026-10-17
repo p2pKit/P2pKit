@@ -3,8 +3,9 @@
 ## Status and trust boundary
 
 The owner approved replacement of the custom bootstrap architecture on
-2026-10-15. The replacement still requires genuine hosted qualification before
-it is release-ready. A passing source/model test is not a platform build.
+2026-10-15. The modular replacement completed genuine hosted qualification and
+protected publication for [`0.8.0-rc2`](../releases/0.8.0-rc2.md) on 2026-10-17.
+A passing source/model test alone is still not a platform build.
 
 Dependency Cache Bootstrap, C1/H1/C2/H2, recipient activation windows, recursive
 custody proofs and global runner reservations are **retired release prerequisites**.
@@ -13,10 +14,11 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current source prepares unpublished **`0.8.0-rc2`**; owner authorization covers
-preparation only, not merge, tagging, signing or publication. Combined
-[PR #466](https://github.com/p2pKit/P2pKit/pull/466) and release-admission
-[PR #467](https://github.com/p2pKit/P2pKit/pull/467) have already merged, preserving
+The current development source is **`0.8.0-SNAPSHOT`** after the published
+**`0.8.0-rc2`**. Combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466),
+release-admission [PR #467](https://github.com/p2pKit/P2pKit/pull/467), and the
+rc2 preflight/version repair [PR #468](https://github.com/p2pKit/P2pKit/pull/468)
+merged through their separately authorized protected process, preserving
 both Foundation history (`6014595493b59e57a1a17fc3c67d378ca5accbbe`) and agreed
 RPC history (`68d470189773d56d939c0add0a39ef929739e7bb`) with integration fixes.
 This replaced the earlier separate Foundation-first landing plan; it does not
@@ -27,15 +29,19 @@ Immutable `v0.8.0-rc1` remains at main commit
 `8700583a5ae5aeaf5c77edee2a3ed4f5bd9a2d2c`. Its Maven
 [run38941438027/1](https://github.com/p2pKit/P2pKit/actions/runs/38941438027) failed
 before signing/upload because the internal namespace preflight returned HTTP401.
-The rc2 candidate carries the reviewed supported-API preflight repair described in
-[the Maven release guide](maven-central.md); it does not alter the old tag or
-reclassify its failure. No Maven release or sample publication is claimed.
+The rc2 release used the reviewed supported-API preflight repair described in
+[the Maven release guide](maven-central.md); it did not alter the old tag or
+reclassify its failure. Exact main `bd98deeb6ab44b5f5126d88742aa69b57f290c32`
+passed its own fourteen-component/four-application qualification and dry run.
+Maven [38986454729/1](https://github.com/p2pKit/P2pKit/actions/runs/38986454729)
+and sample [38993901743/1](https://github.com/p2pKit/P2pKit/actions/runs/38993901743)
+then succeeded after separate exact-source/tag, frozen-set and evidence approvals.
+The release record binds the original artifacts and public download hashes.
 
-The new exact source/version and 14-lockfile graph must pass required checks and
-receive final exact-head merge approval, followed by qualification on the actual
-new main commit and its own four application artifacts. Neither earlier branch
-results nor rc1's qualification/frozen artifacts qualify rc2. Separate tag,
-frozen-set signing/Maven and sample-publication approvals remain required.
+Every future release still requires its own exact source/version and 14-lockfile
+graph checks, exact-head merge authorization, actual-main qualification, four
+application artifacts and separate tag/Maven/sample approvals. Neither rc1 nor
+rc2 artifacts qualify the later snapshot or a new release.
 
 ## Independent components
 
@@ -77,10 +83,11 @@ CLI setup, including Java 21 then Java 17, so complete remote consumers do not
 silently return to the failing plain macOS 26 context after irreversible upload.
 The three Maven jobs and original failed-publication recovery contract remain
 unchanged; no extra publication authority or signing credential is introduced.
-Current-source qualification is still required: configuring these hosts alone
-is not publication or recovery execution evidence. This follows the actual successful
-[RPC baseline run](https://github.com/p2pKit/P2pKit/actions/runs/38759538710), not
-qualification of the new combined source. macOS 26 remains the native ARM64, DMG,
+Configuring these hosts alone is not publication or recovery execution evidence.
+The original [RPC baseline run](https://github.com/p2pKit/P2pKit/actions/runs/38759538710)
+was followed by rc2's own completed qualification and protected publication;
+those results do not establish execution of the separate recovery procedure.
+macOS 26 remains the native ARM64, DMG,
 XCFramework and Swift lane, with Intel native execution on macOS 15 Intel.
 
 **Temporary runner limitation:** GitHub has announced macOS 14 retirement on
@@ -256,7 +263,8 @@ Maven. Existing draft/asset idempotency checks remain enforced. See the
 No local model, source-only CI, accepted Windows risk or historical preview is a
 substitute for an actually required gate. Windows RPC's unfinished productive
 loader/profile behavior and owner-accepted post-release testing limits must be
-stated honestly in the combined candidate; no unsafe load or fake runtime pass.
+stated honestly for the published rc2 and later development source; no unsafe
+load or fake runtime pass.
 
 For focused published-POM discovery diagnosis, dispatch CI with `component=consumers-pom-diagnostic`.
 This runs the original source-local POM smoke and cleanup, not the required complete consumer gate or release qualification.

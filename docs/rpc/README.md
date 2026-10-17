@@ -1,15 +1,18 @@
 # Optional organization-LAN RPC
 
-**Feature-branch implementation; JVM/Android compilation and deterministic tests passed.**
-It is not published or fully platform/security-qualified. One source-bound
-**same-host JVM** workload/resource qualification passed; this is not physical-LAN
-or Android/iPhone hosting-capacity qualification. See the
-[executed-check checkpoint](implementation-status.md) and [qualification](qualification.md).
-The [supplemental RPC lab record](vps-lab-runtime-20260929.md) adds source-bound
-Android ART and iPhone simulator results, produced test apps and the unresolved
-two-machine capacity prerequisites; it does not qualify deployed phone hosts.
-The existing Release Foundation remains **NOT_READY**; none of its HOLDs,
-external validation requirements, or release gates are satisfied by this work.
+RPC is published as part of **`0.8.0-rc2`** under
+`io.github.apdelrahman1911:p2p-rpc:0.8.0-rc2`. The
+[release record](../releases/0.8.0-rc2.md) binds the actual combined-source hosted
+checks, Maven publication and existing sample application artifacts.
+This does not establish complete physical-LAN, protected-profile or installed-app
+qualification. **Windows sample Host/Client remains unavailable**; see the
+[Windows prerelease scope](windows-release-scope.md).
+
+Earlier [implementation checks](implementation-status.md),
+[same-host qualification](qualification.md) and the
+[supplemental RPC lab record](vps-lab-runtime-20260929.md) retain their own exact
+source/environment scopes. They are not substituted for current release evidence
+or physical Android/iPhone hosting-capacity tests.
 
 RPC is an optional usage model above P2pKit: an application explicitly chooses
 one local host and connects several clients to it. Clients are dial-only; they
@@ -60,22 +63,21 @@ loading, reflection-based invocation, or business synchronization framework.
 Existing durable **file transfer is not durable RPC**; file-transfer paths are
 disabled in the RPC-owned restricted session.
 
-## Source-workspace integration
+## Dependency and source-workspace integration
 
-The new project is `:p2p-rpc` at `library/p2p-rpc`; the examples are
-`:p2p-sample-rpc` at `samples/p2p-sample-rpc`. Use a project dependency in this
-workspace while qualification is pending:
+Use the matching published core/LAN/RPC version from Maven Central:
 
 ```kotlin
 commonMain.dependencies {
-    implementation(project(":p2p-rpc"))
+    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc2")
 }
 ```
 
-There is no RPC artifact in the historical `0.7.0-rc3` publication. Do not
-invent an RPC Maven version or combine these source changes with old core/LAN
-binaries. Future integration must come from main normally, not unfinished
-Foundation or campaign files.
+Within this repository, `:p2p-rpc` remains at `library/p2p-rpc` and its shared
+sample code is `:p2p-sample-rpc` at `samples/p2p-sample-rpc`; project dependencies
+are appropriate for source development. Do not mix newer source changes with
+older published libraries. The historical `0.7.0-rc3` publication has no RPC
+coordinate; its immutable artifacts are unchanged.
 
 ## Shared procedure contract
 

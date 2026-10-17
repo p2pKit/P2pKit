@@ -1,19 +1,25 @@
 # Validation status
 
-## Completed locally or through publication infrastructure
+## Verified release scope
 
-- Complete committed module/platform gate, ABI baselines, strict Dokka,
-  publication shape, isolated consumers, SBOM, signing, provenance,
-  Swift warnings-as-errors, and XCFramework provenance have passed for the
-  published `0.7.0-rc3` release commit.
-- `BUILD-02` and `ENV-07` remote publication/consumer evidence are recorded in
-  the [`0.7.0-rc3` release record](../releases/0.7.0-rc3.md).
+The [`0.8.0-rc2` release record](../releases/0.8.0-rc2.md) binds the following
+results to source `bd98deeb6ab44b5f5126d88742aa69b57f290c32`, not to later
+`0.8.0-SNAPSHOT` development:
 
-Those are immutable historical RC3 results. Current `main` is a post-RC3
-`0.7.0-SNAPSHOT` development line. Automated results for current `main` do not
-retroactively validate RC3, and RC3 results do not validate later fixes. The
-six campaigns in the [canonical status table](../validation/README.md#current-status)
-must use one separately frozen commit and artifact set.
+- Exact-source modular qualification, including JVM Linux/Windows/macOS,
+  Android host checks and packaging, native ARM64/Intel iOS simulator execution,
+  API/ABI, strict Dokka, dependency/security checks, SBOM, publication shape,
+  isolated consumers and Swift/XCFramework checks.
+- Actual protected Maven publication with signed-original and remote-byte
+  verification and complete remote-consumer checks.
+- The same-source frozen APK/MSI/ARM64-DMG/DEB development prerelease, with full
+  anonymous-download hashes verified for all seven public assets.
+
+The prior [`0.7.0-rc3` record](../releases/0.7.0-rc3.md) remains historical.
+Neither release's results certify subsequent source changes or complete the
+six campaigns in the [canonical status table](../validation/README.md#current-status).
+Windows sample RPC Host/Client is still unavailable; see its
+[explicit implementation and runtime limitations](../rpc/windows-release-scope.md).
 
 ## Informational automated history (not release or campaign evidence)
 
@@ -28,45 +34,41 @@ That historical cross-host task list did not run the library JVM suites on
 Windows/Linux. It is neither a published release nor substitute evidence for
 those library tests or the campaigns below.
 
-## Configured JVM host coverage
+## Maintained hosted coverage and limits
 
-The checked-in `CI` workflow runs `:p2p-core:jvmTest`,
-`:p2p-transport-lan:jvmTest`, and `:p2p-network-provisioning-desktop:test` on
-Ubuntu and Windows; the macOS `complete-gate` runs them through `check`.
-`complete-gate` explicitly fails unless both other hosts succeed, including
-for documentation-only changes. The separate `Desktop cross-host` workflow
-continues to cover sample tests and packaging, not these library suites.
+The modular `ci.yml` workflow uses `ci-component.yml`; the current commands and
+host assignment are maintained in `scripts/ci_component.py`. JVM library and
+sample tests run in distinct Linux/Windows components; macOS shared checks and
+native ARM64/Intel simulator components retain their own source-bound reports.
+`complete-gate` requires their actual successful aggregation, including on
+ordinary documentation PRs. A focused component pass is not complete qualification.
 
-This is configured coverage, not evidence that the new hosted jobs have passed.
-No Windows/Linux library result for this revision is recorded here yet. Retain
-per-host results and the exact tested commit before claiming execution; see
-[the local testing guide](local.md#jvm-host-coverage). Deterministic discovery
-callbacks and real loopback TCP do not establish physical mDNS/network coverage.
+`0.8.0-rc2` has actual same-source results for these components, as recorded above.
+They must not be reused as a pass for changed source. Deterministic callbacks,
+loopback TCP and hosted multicast still do not establish physical-network coverage.
 
 ## Kotlin target execution and structural gaps
 
-The current full macOS gate uses `scripts/run-platform-tests.py full` around
-`check`. It requires fresh, nonzero test events for each host-executable task
-in `gradle/platform-test-policy.json`, and reports every configured Kotlin
-target. Cached XML, a dry-run, disabled tasks, and compilation are not execution.
+`scripts/run-platform-tests.py` checks fresh, nonzero test events against
+`gradle/platform-test-policy.json`. The `macos-shared`, `ios-arm64` and `ios-x64`
+profiles together retain the complete portable task inventory and non-test
+`check` dependencies. Cached XML, dry runs and cross-compilation are not native
+execution. See [platform execution evidence](local.md#platform-execution-evidence).
 
-| Target / suite | Configured coverage and limitation |
+| Target / suite | Verified release scope and remaining limitation |
 | --- | --- |
-| JVM | Full macOS gate; required Ubuntu/Windows library matrix described above. |
-| Android | Host JVM gates use framework stubs and Robolectric shadows; core's `*AndroidHostTest` filter excludes its common suite. The separate ART driver has one focused API37 permission/recreation/TCP instrumentation case, not a general device suite or evidence of unexecuted runtime/catalog cases. |
-| `iosSimulatorArm64` | Expected execution on the default Apple Silicon macOS runner. |
-| `iosX64` | Published simulator slice; task is registered but disabled on arm64. Weekly/manual `Intel iOS simulator tests` uses `macos-15-intel` and requires both library suites to execute. No hosted Intel pass for this revision is recorded here. |
-| `iosArm64` | Device target has no configured device-test execution task. GitHub-hosted simulators cannot establish physical-device coverage; external hardware/runner integration is required. |
-| KMP metadata | Compilation-only; not a runtime test target. |
-| Swift sample | Unit/UI simulator tests run separately through Xcode in CI, outside Gradle `check`. The local release gate builds the sample with warnings-as-errors; that build is not Swift test execution. |
+| JVM | Linux/Windows components and macOS shared gate passed for the recorded rc2 source. |
+| Android | Host JVM tests and APK inspection passed; framework stubs/Robolectric are not ART or physical devices. The authored focused API37 case does not constitute a complete device suite. |
+| `iosSimulatorArm64` | Native simulator profile passed for the recorded rc2 source. |
+| `iosX64` | Separate native Intel simulator profile passed for rc2; ARM64 cross-compilation is not its evidence. |
+| `iosArm64` | Device target still requires external hardware and real device-test execution. |
+| KMP metadata | Compilation/publication checks, not a runtime test target. |
+| Swift sample | Swift warnings-as-errors and XCFramework provenance checks are not a claim of unit/UI or physical-device execution. |
 
-Intel runner configuration is not a claim of execution or a decision to ship
-untested. Retain a same-source Intel result before claiming that slice tested;
-runner availability must be rechecked rather than assuming an end-of-support
-date. Android instrumentation beyond the focused API37 case still requires
-test authoring; an authored case also needs an inspected actual run. These structural gaps differ from an existing physical
-test procedure that has not yet been performed. See
-[platform execution evidence](local.md#platform-execution-evidence).
+The temporary macOS 14 CLI/shared baseline has a recorded retirement date of
+`2026-11-02`; it is not an indefinite support extension. Future qualification must
+retain the actual tested source and runner/toolchain, including native Intel
+availability. These structural and runtime limits are not changed by publication.
 
 ## External campaign status
 

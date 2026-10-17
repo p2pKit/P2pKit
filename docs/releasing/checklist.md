@@ -1,7 +1,9 @@
 # Release checklist
 
-This checklist applies to a future non-snapshot release. It does not authorize
-a tag or Maven Central publication.
+This checklist applies to each future non-snapshot release. It does not authorize
+a tag or Maven Central publication. The latest completed release is
+[`0.8.0-rc2`](../releases/0.8.0-rc2.md); current development source is
+`0.8.0-SNAPSHOT`. Its publication evidence is not qualification of this snapshot.
 
 Before selecting a version, review the unreleased behavior notes. The integrated
 audit's [#229 discovery-admission tightening](https://github.com/p2pKit/P2pKit/issues/229)
@@ -9,10 +11,10 @@ and its related [#356 Apple TXT decoder correction](https://github.com/p2pKit/P2
 and [#332 Apple invalid-resolution withdrawal](https://github.com/p2pKit/P2pKit/issues/332),
 as well as [#145 receive-backlog admission tightening](https://github.com/p2pKit/P2pKit/issues/145)
 and [#158 LAN inbound-queue depth alignment](https://github.com/p2pKit/P2pKit/issues/158),
-are reserved for **0.8.0+**, despite the current snapshot label. Do not include
-them in a 0.7 release without a new explicit owner decision. This checkpoint
-does not change the release version or authorize publication. Consolidating the
-existing audit history into `main` is not release qualification.
+were reserved for **0.8.0+** and were included in the separately qualified rc2
+release. Do not backport them into a 0.7 release without a new explicit owner
+decision. Documentation and consolidation of audit history into `main` do not
+authorize a subsequent release or replace its qualification.
 
 1. Update `VERSION_NAME` to the exact non-snapshot version and update current
    docs/changelog. Keep `LATEST_PUBLISHED_VERSION` at the previous release until
@@ -42,8 +44,11 @@ existing audit history into `main` is not release qualification.
    through the separately protected sample evidence-approval stage and verify
    every complete public download against its recorded hash. Do not rebuild or
    reselect applications after Maven.
-10. Create a release record, set `LATEST_PUBLISHED_VERSION`, open the next
-   snapshot line, and create a GitHub prerelease/release entry.
+10. Record the verified publication, update `LATEST_PUBLISHED_VERSION` and current
+   documentation, and open the agreed next snapshot line through a normal reviewed
+   change. Record the actual GitHub prerelease/release entry; do not create a
+   duplicate sample release or rebuild published bytes for bookkeeping. For rc2,
+   the sample prerelease already exists and the development line is `0.8.0-SNAPSHOT`.
 
 Never move or recreate an existing release tag, weaken a gate, put secrets in
 the repository, or publish a snapshot.
@@ -105,12 +110,13 @@ For future candidate builds, the root `Jar`/`BundleAar` rules copy the repositor
 | Nine Kotlin/Native main `.klib` and three LAN `-cinterop-p2pkit_nw.klib` archives | Explicit **embedded-license-check exemption**: not produced by `Jar`/`BundleAar`, and not rewritten. The gate requires each archive to exist and be readable, plus the sibling POM's Apache-2.0 metadata; the nine main KLIBs also require identity checks. It prints `EXEMPT`, not an embedded-license pass. |
 | Source-built `P2pKitShared.xcframework` | Separate Apple output, not an artifact in this Maven publication set. Its provenance/minimum-OS checks do not certify license embedding. A redistributor must separately include the applicable license/notice material. |
 
-The current source configuration including **unpublished, unqualified RPC**
+The current source configuration, including RPC published in `0.8.0-rc2`,
 requires 75 archives on macOS: 63 license-covered JARs/AARs and 12 explicitly
-exempt KLIBs, across 21 publication coordinates. This is an expected packaging
-shape, not inspected artifact evidence. The immutable historical four-library
-set remains 54 archives (45 covered, nine exempt) across 15 coordinates;
-no RPC coordinate is inferred for a previously published release.
+exempt KLIBs, across 21 publication coordinates. The rc2 release record binds its
+actual inspected publication. This configured shape alone is not inspection
+evidence for a later source or qualification of unfinished RPC runtime behavior.
+The immutable historical four-library set remains 54 archives (45 covered, nine exempt) across 15 coordinates;
+no RPC coordinate is inferred for those historical 0.7 releases.
 Every checked publication produces success, failure or an explicit KLIB
 exception; missing, changed or duplicate license entries in a covered JAR/AAR
 fail the gate. Non-macOS omission of the nine current-source iOS publication rows is a host
