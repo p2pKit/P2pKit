@@ -213,6 +213,12 @@ final class WindowsOriginalProfileDllFileCandidate {
         return failure;
     }
 
+    WindowsOriginalSystemModulesCandidate originalSystemModules(WindowsOriginalProfileDllBytesCandidate candidate) {
+        requireOriginalBytes(candidate);
+        requireOriginalByteInputs();
+        return bootstrap.originalProfileDllSystemModules(this);
+    }
+
     void requireOriginalByteInputs() {
         requireCompleted();
         requireOriginalNativeInputs();

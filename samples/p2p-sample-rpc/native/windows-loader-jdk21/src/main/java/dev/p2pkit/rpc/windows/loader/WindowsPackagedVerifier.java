@@ -38,6 +38,12 @@ final class WindowsPackagedVerifier {
     private String[] imports;
     private byte[] originalSnapshotSha256;
     private boolean attempted;
+    private WindowsOriginalSystemModulesCandidate originalSystemModules;
+    private WindowsOriginalSystemModuleCandidate[] originalImportProviders;
+    private long[] originalImportRvas;
+    private long[] originalImportTargets;
+    private boolean systemImportsAttempted;
+    private boolean systemImportsPrepared;
     // Publish the once-written data together, including for the legacy unowned comparison API.
     private volatile boolean prepared;
 
@@ -161,6 +167,66 @@ final class WindowsPackagedVerifier {
     private void requirePrepared() {
         if (originalBytes != null) originalBytes.requireOriginalPackagedVerifier(this);
         if (!prepared) throw new IllegalStateException("Packaged verifier comparison is incomplete");
+        if (systemImportsAttempted) {
+            try {
+                requireOriginalSystemGraph();
+                if (!systemImportsPrepared) throw new IllegalStateException("Original system import comparison is incomplete");
+            } catch (Throwable caught) { throw originalBytes.failOriginalPackagedVerifier(this, caught); }
+        }
+    }
+
+    private void requireOriginalSystemGraph() {
+        if (originalBytes == null || originalSystemModules == null ||
+            originalBytes.originalSystemModules(this) != originalSystemModules) {
+            throw new IllegalStateException("Packaged verifier lost its original system cohort");
+        }
+        originalSystemModules.requireOriginalExportGraph();
+    }
+
+    /** Bind every original import to copied export DATA. No GPA, native call or loading authority. */
+    void prepareOriginalSystemImports() {
+        requirePrepared();
+        if (originalBytes == null) throw new IllegalStateException("Unowned comparison cannot acquire original system imports");
+        if (systemImportsAttempted) throw new IllegalStateException("Original system imports were already prepared");
+        systemImportsAttempted = true;
+        try {
+            // The original byte/file failure roots precede allocation. Attach the exact cohort before
+            // consulting its completion, so even a refused or failed collection stays retained here.
+            originalSystemModules = originalBytes.originalSystemModules(this);
+            requireOriginalSystemGraph();
+            int count = imports.length / 2; // Already copied/verified fixed-five tuples, <=4096.
+            originalImportProviders = new WindowsOriginalSystemModuleCandidate[count];
+            originalImportRvas = new long[count];
+            originalImportTargets = new long[count];
+            for (int index = 0; index < count; index++) {
+                WindowsSystemExportPlan.Target target = originalSystemModules.resolve(imports[index * 2], imports[index * 2 + 1]);
+                int slot = -1;
+                for (int candidate = 0; candidate < 8; candidate++) {
+                    if (WindowsOriginalSystemModulesCandidate.fixedName(candidate).equals(target.module())) slot = candidate;
+                }
+                require(slot >= 0, "Original import target is outside the fixed system cohort");
+                WindowsOriginalSystemModuleCandidate provider = originalSystemModules.module(slot);
+                // This Target is returned only by the original copied graph. Its parser has already
+                // bounded the terminal RVA by that image's unique raw-backed RX/non-W section and
+                // SizeOfImage, excluding export metadata. Disk file length is NOT an RVA bound.
+                long rva = target.rva();
+                long base = provider.originalModuleBits();
+                require(rva > 0 && rva < MAXIMUM_IMAGE && base > 0 && base % 65_536 == 0 &&
+                    base <= Long.MAX_VALUE - rva, "Original system import address exceeds its numeric image bound");
+                originalImportProviders[index] = provider;
+                originalImportRvas[index] = rva;
+                originalImportTargets[index] = base + rva;
+            }
+            requireOriginalSystemGraph();
+            systemImportsPrepared = true; // No partial array may be observed through a getter/operation.
+        } catch (Throwable caught) { throw originalBytes.failOriginalPackagedVerifier(this, caught); }
+    }
+
+    long[] originalSystemImportTargets() {
+        requirePrepared();
+        if (!systemImportsPrepared) throw new IllegalStateException("Original system imports have not been compared");
+        try { return originalImportTargets.clone(); }
+        catch (Throwable caught) { throw originalBytes.failOriginalPackagedVerifier(this, caught); }
     }
 
     Class<?> declaringClass() { requirePrepared(); return declaringClass; }
@@ -257,6 +323,8 @@ final class WindowsPackagedVerifier {
             "Packaged verifier observations have an invalid cardinality");
         long[] exportSnapshot = exportTargets.clone();
         long[] importSnapshot = importTargets.clone();
+        require(!systemImportsPrepared || Arrays.equals(importSnapshot, originalImportTargets),
+            "Packaged verifier imports differ from the original copied system graph");
         byte[][] references = pages.clone();
         byte[][] snapshots = new byte[references.length][];
         for (int index = 0; index < snapshots.length; index++) {

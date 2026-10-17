@@ -367,6 +367,13 @@ final class WindowsOriginalSystemModulesCandidate {
         if (failed) throw failure;
     }
 
+    void requireOriginalBootstrap(WindowsSystemBootstrapCandidate candidate) {
+        if (candidate == null || candidate != bootstrap) {
+            throw new IllegalStateException("System collection belongs to a different original bootstrap");
+        }
+        // Identity only. The consumer attaches this root before checking a possibly failed graph.
+    }
+
     void requireOriginalNativeInputs() {
         requireOriginalBootstrap();
         if (!attempted || outcome != null || completed || nativeReturnUnconfirmed) {
@@ -426,7 +433,7 @@ final class WindowsOriginalSystemModulesCandidate {
             throw new IllegalStateException("Original system collection has no completed diagnostic");
         }
     }
-    private void requireGraph() {
+    void requireOriginalExportGraph() {
         requireCompleted();
         if (!outcome.equals("COMPLETE") || !pinsComplete || graph == null) {
             throw new IllegalStateException("Original system collection has no completed copied export graph");
@@ -447,12 +454,12 @@ final class WindowsOriginalSystemModulesCandidate {
         return modules[slot];
     }
     WindowsSystemExportPlan.Target resolve(String module, String symbol) {
-        requireGraph();
+        requireOriginalExportGraph();
         try { return graph.resolve(module, symbol); }
         catch (Throwable caught) { throw fail(caught); }
     }
     WindowsSystemExportPlan.Target resolveOrdinal(String module, long ordinal) {
-        requireGraph();
+        requireOriginalExportGraph();
         try { return graph.resolveOrdinal(module, ordinal); }
         catch (Throwable caught) { throw fail(caught); }
     }

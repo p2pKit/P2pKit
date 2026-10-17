@@ -87,6 +87,7 @@ def main():
                         "ProfileDllBytesCandidateTests" in name or
                         "ProtectedProfileDllSnapshotTests" in name or
                         "PackagedVerifierTests" in name or
+                        "OriginalProfileDllSystemImportsTests" in name or
                         "LoadedRegistrationTests" in name or "InstalledProviderTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
@@ -224,6 +225,17 @@ def main():
             [case, str(main_directory), bindings[0]["sha256"], bindings[1]["sha256"]],
             "WINDOWS_ORIGINAL_PROFILE_DLL_PACKAGED_PASS case=" + re.escape(case) +
             r" scope=OWNED_INERT_SNAPSHOT_TO_REAL_JDK17_COMPARISON_NOT_NATIVE_CUSTODY_OR_AUTHORITY\n")
+    original_system_import_cases = [
+        "unowned", "five-libraries", "forwarders", "immutability", "duplicate", "verification",
+        "verification-mismatch", "missing-cohort", "incomplete-cohort", "leaf-refused", "ancestor-refused",
+        "failed-cohort", "missing-symbol", "api-set", "cycle", "overflow", "partial", "foreign-bootstrap",
+        "owner-substitution", "cohort-substitution", "thread", "scope",
+    ]
+    for case in original_system_import_cases:
+        connected_run("original-profile-dll-system-imports-" + case, "OriginalProfileDllSystemImportsTests",
+            [case, str(main_directory), bindings[0]["sha256"], bindings[1]["sha256"]],
+            "WINDOWS_ORIGINAL_PROFILE_DLL_SYSTEM_IMPORTS_PASS case=" + re.escape(case) +
+            r" scope=OWNED_INERT_FIVE_LIBRARY_GRAPH_TO_REAL_JDK17_COMPARISON_NOT_NATIVE_CUSTODY_OR_AUTHORITY\n")
     connected_run("installed-provider-unavailable", "InstalledProviderTests", [str(main_directory),
                   bindings[2]["sha256"], bindings[3]["sha256"], bindings[1]["sha256"], bindings[4]["sha256"]],
         r"WINDOWS_INSTALLED_PROVIDER_REFUSAL_PASS scope=REAL_JDK21_TO_JDK17_TYPED_REFUSAL_NOT_INSTALLED_OR_NATIVE\n")

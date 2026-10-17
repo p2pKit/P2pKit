@@ -1049,3 +1049,24 @@ JNI activation and provider availability remain unchanged and fail closed. The
 four added production owner/failure classes are explicitly included in the static
 75-class adapter inventory; both new test classes stay outside production JARs
 and application resources.
+
+### Original five-library import comparison
+
+The owned packaged verifier can now bind its verified import tuples to the
+complete eight-module cohort already attached to its original byte/file/bootstrap
+owners. It accepts no replacement cohort, module names or expected addresses.
+The copied export graph follows bounded fixed-library forwarders, retaining each
+original terminal provider and RVA. Its predicted addresses remain **data**, not
+callable authority or proof that disk bytes match a loaded section.
+
+Once bound, mapped-page comparison requires the exact ordered original targets;
+caller-supplied pages and targets cannot agree on a substituted import. Original
+owner, thread, scope and graph checks continue on every operation. Failure seals
+the original file/byte roots and retains the cohort and partial comparison data;
+no partial result, retry, GPA fallback or native load follows.
+
+Twenty-two inert-owner controls exercise all five import libraries, forwarders,
+IAT substitution, missing/failed cohorts, partial resolution and owner/lifetime
+changes through the real compiled Java17 PE helper. They do not establish native
+custody, mapped-module identity or installed authority. The unchanged 75-class
+production inventory excludes these tests; productive loading remains unavailable.

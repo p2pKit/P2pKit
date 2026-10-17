@@ -94,6 +94,11 @@ final class WindowsOriginalProfileDllBytesCandidate {
         }
     }
 
+    WindowsOriginalSystemModulesCandidate originalSystemModules(WindowsPackagedVerifier candidate) {
+        requireOriginalPackagedVerifier(candidate);
+        return file.originalSystemModules(this);
+    }
+
     WindowsOriginalProfileDllFileCandidate.Failure failOriginalPackagedVerifier(
         WindowsPackagedVerifier candidate, Throwable caught) {
         requireOriginalPackagedVerifier(candidate);

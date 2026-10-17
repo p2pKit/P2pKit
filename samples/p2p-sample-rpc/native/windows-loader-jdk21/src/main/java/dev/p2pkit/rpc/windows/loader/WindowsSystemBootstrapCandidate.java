@@ -449,6 +449,15 @@ final class WindowsSystemBootstrapCandidate {
         }
     }
 
+    WindowsOriginalSystemModulesCandidate originalProfileDllSystemModules(WindowsOriginalProfileDllFileCandidate candidate) {
+        requireOriginalProfileDll(candidate);
+        candidate.requireOriginalByteInputs();
+        requireOriginalSystemModules(systemModules);
+        systemModules.requireOriginalBootstrap(this);
+        // Only this original attachment is returned. No new observation, lookup or native continuation.
+        return systemModules;
+    }
+
     Linker originalSystemModulesLinker(WindowsOriginalSystemModulesCandidate candidate) {
         requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs(); return linker;
     }
