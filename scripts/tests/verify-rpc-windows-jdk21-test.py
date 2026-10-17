@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline synthetic archive controls; no JDK download, extraction command or execution."""
 
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -216,7 +217,7 @@ class SupplierTests(unittest.TestCase):
             self.assertNotIn(str(self.root), before.decode())
             with contextlib.redirect_stderr(io.StringIO()) as stderr:
                 self.assertEqual(V.main(), 1)
-            self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED\n")
+            self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED reason=RESULT_ALREADY_EXISTS\n")
             self.assertEqual(output.read_bytes(), before)
 
     def test_result_inside_home_and_failed_archive_leave_no_result(self):
@@ -226,8 +227,72 @@ class SupplierTests(unittest.TestCase):
                         "--output", str(output)]
                 with patch.object(V.sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
                     self.assertEqual(V.main(), 1)
-                self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED\n")
+                code = "RESULT_INSIDE_HOME" if output.parent == self.home else "ARCHIVE_DIGEST_MISMATCH"
+                self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED reason=" + code + "\n")
                 self.assertFalse(output.exists())
+
+    def test_every_verifier_check_has_a_unique_finite_public_reason(self):
+        checks = [node for node in ast.walk(ast.parse(SCRIPT.read_text()))
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "require"]
+        self.assertTrue(checks)
+        for node in checks:
+            self.assertIsInstance(node.args[1], ast.Constant)
+            self.assertIsInstance(node.args[1].value, str)
+        self.assertEqual({node.args[1].value for node in checks}, set(V.REFUSAL_CODES))
+        self.assertEqual(len(V.REFUSAL_CODES), len(set(V.REFUSAL_CODES.values())))
+        for message, code in V.REFUSAL_CODES.items():
+            with self.subTest(code=code):
+                self.assertRegex(code, r"\A[A-Z][A-Z0-9_]{0,63}\Z")
+                with self.assertRaises(V.SupplierRefusal) as refused:
+                    V.require(False, message)
+                self.assertEqual(V.failure_code(refused.exception), code)
+
+    def test_public_failure_output_is_exact_finite_and_never_exception_text(self):
+        private = "PRIVATE_C:\\owner\\jdk\\file\nforged-output"
+        cases = [(V.SupplierRefusal(message), code) for message, code in V.REFUSAL_CODES.items()]
+        cases += [(V.SupplierRefusal(private), "UNCLASSIFIED_CHECK"),
+                  (FileNotFoundError(2, private, private), "INPUT_NOT_FOUND"),
+                  (PermissionError(13, private, private), "PERMISSION_DENIED"),
+                  (OSError(5, private, private), "IO_ERROR"),
+                  (zipfile.BadZipFile(private), "ZIP_FORMAT_ERROR"),
+                  (V.zlib.error(private), "ZIP_COMPRESSION_ERROR"),
+                  (UnicodeError(private), "ENCODING_ERROR"),
+                  (ValueError(private), "VALUE_ERROR"),
+                  (ValueError("JDK home inventory mismatch"), "VALUE_ERROR"),
+                  (RuntimeError(private), "RUNTIME_ERROR"), (EOFError(private), "UNEXPECTED_EOF")]
+        output = self.root / "result.json"
+        argv = [str(SCRIPT), "--archive", str(self.archive), "--jdk-home", str(self.home), "--output", str(output)]
+        pin_hash = hashlib.sha256(V.PIN.read_bytes()).hexdigest()
+        for error, code in cases:
+            with self.subTest(code=code), patch.object(V.sys, "argv", argv), \
+                    patch.object(V, "load_pin", return_value=(self.pin, pin_hash)), \
+                    patch.object(V, "verify", side_effect=error), \
+                    contextlib.redirect_stdout(io.StringIO()) as stdout, \
+                    contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(V.main(), 1)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED reason=" + code + "\n")
+                self.assertFalse(output.exists())
+
+    def test_actual_home_inventory_and_bytes_have_distinct_public_reasons(self):
+        output = self.root / "result.json"
+        argv = [str(SCRIPT), "--archive", str(self.archive), "--jdk-home", str(self.home), "--output", str(output)]
+        pin_hash = hashlib.sha256(V.PIN.read_bytes()).hexdigest()
+        for change, code in (("extra", "HOME_INVENTORY_MISMATCH"), ("modified", "HOME_BYTES_MISMATCH")):
+            with self.subTest(change=change):
+                if change == "extra":
+                    (self.home / "private-extra-file").write_bytes(b"extra")
+                else:
+                    (self.home / "bin/java.exe").write_bytes(b"X" * len(self.files["bin/java.exe"]))
+                with patch.object(V.sys, "argv", argv), \
+                        patch.object(V, "load_pin", return_value=(self.pin, pin_hash)), \
+                        contextlib.redirect_stdout(io.StringIO()) as stdout, \
+                        contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual(V.main(), 1)
+                    self.assertEqual(stdout.getvalue(), "")
+                    self.assertEqual(stderr.getvalue(), "JDK_SUPPLIER_BYTES_REFUSED reason=" + code + "\n")
+                    self.assertFalse(output.exists())
+                (self.home / "private-extra-file").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

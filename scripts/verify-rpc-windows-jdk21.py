@@ -25,10 +25,74 @@ MAX_EXPANDED = 2 * 1024 * 1024 * 1024
 REQUIRED = {"bin/java.exe", "bin/javac.exe", "bin/jpackage.exe", "bin/jlink.exe", "bin/jli.dll",
             "bin/server/jvm.dll", "lib/modules", "jmods/java.base.jmod", "release"}
 
+# Only these source-owned check messages may select a specific public reason. Never
+# print an exception's text: filesystem/ZIP exceptions can contain private paths.
+REFUSAL_CODES = {
+    "Linked or reparse input refused": "INPUT_LINK_OR_REPARSE",
+    "Nonordinary input refused": "INPUT_NOT_ORDINARY",
+    "Parent traversal refused": "INPUT_PARENT_TRAVERSAL",
+    "File exceeds size bound": "FILE_SIZE_BOUND",
+    "Opened file identity changed": "FILE_OPEN_IDENTITY_CHANGED",
+    "File grew beyond size bound": "FILE_GROWTH_BOUND",
+    "Open file changed": "FILE_OPEN_CHANGED",
+    "File changed": "FILE_CHANGED",
+    "Invalid supplier descriptor": "DESCRIPTOR_INVALID",
+    "Malformed supplier descriptor": "DESCRIPTOR_MALFORMED",
+    "Unexpected supplier descriptor fields": "DESCRIPTOR_FIELDS",
+    "Unsupported supplier": "SUPPLIER_UNSUPPORTED",
+    "Invalid supplier pin": "SUPPLIER_PIN_INVALID",
+    "Supplier archive exceeds bound": "ARCHIVE_SIZE_BOUND",
+    "Unsafe ZIP path": "ZIP_PATH_UNSAFE",
+    "Unsafe ZIP component": "ZIP_COMPONENT_UNSAFE",
+    "Windows device alias refused": "ZIP_DEVICE_ALIAS",
+    "ZIP entry count exceeds bound": "ZIP_ENTRY_COUNT_BOUND",
+    "Truncated ZIP name refused": "ZIP_NAME_TRUNCATED",
+    "Encrypted or unsupported ZIP entry": "ZIP_ENTRY_UNSUPPORTED",
+    "Linked or special ZIP entry refused": "ZIP_ENTRY_NOT_ORDINARY",
+    "ZIP directory type disagreement": "ZIP_DIRECTORY_TYPE",
+    "Multiple ZIP roots refused": "ZIP_MULTIPLE_ROOTS",
+    "Duplicate or case-colliding ZIP entry": "ZIP_ENTRY_COLLISION",
+    "Expected one JDK directory root": "ZIP_ROOT_NOT_DIRECTORY",
+    "Nonempty ZIP directory": "ZIP_DIRECTORY_NOT_EMPTY",
+    "ZIP file exceeds bound": "ZIP_FILE_SIZE_BOUND",
+    "Expanded ZIP exceeds bound": "ZIP_EXPANSION_BOUND",
+    "ZIP file/directory alias refused": "ZIP_FILE_DIRECTORY_ALIAS",
+    "Required JDK tools missing": "ZIP_REQUIRED_TOOLS_MISSING",
+    "Supplier archive digest mismatch": "ARCHIVE_DIGEST_MISMATCH",
+    "Archive identity changed": "ARCHIVE_OPEN_IDENTITY_CHANGED",
+    "JDK home count exceeds bound": "HOME_ENTRY_COUNT_BOUND",
+    "JDK home inventory mismatch": "HOME_INVENTORY_MISMATCH",
+    "ZIP member exceeds declared size": "ZIP_MEMBER_SIZE_BOUND",
+    "Truncated ZIP member": "ZIP_MEMBER_TRUNCATED",
+    "JDK home differs from supplier archive": "HOME_BYTES_MISMATCH",
+    "Archive changed": "ARCHIVE_OPEN_CHANGED",
+    "Archive path changed": "ARCHIVE_PATH_CHANGED",
+    "JDK home changed during verification": "HOME_CHANGED",
+    "Result already exists": "RESULT_ALREADY_EXISTS",
+    "Result cannot modify JDK home": "RESULT_INSIDE_HOME",
+    "Verifier source changed": "VERIFIER_SOURCE_CHANGED",
+}
+
+
+class SupplierRefusal(ValueError):
+    """A verifier check failed; its message is not itself public output."""
+
+
+def failure_code(error):
+    if type(error) is SupplierRefusal:
+        return REFUSAL_CODES.get(str(error), "UNCLASSIFIED_CHECK")
+    for kind, code in ((FileNotFoundError, "INPUT_NOT_FOUND"), (PermissionError, "PERMISSION_DENIED"),
+                       (OSError, "IO_ERROR"), (zipfile.BadZipFile, "ZIP_FORMAT_ERROR"),
+                       (zlib.error, "ZIP_COMPRESSION_ERROR"), (UnicodeError, "ENCODING_ERROR"),
+                       (ValueError, "VALUE_ERROR"), (RuntimeError, "RUNTIME_ERROR"), (EOFError, "UNEXPECTED_EOF")):
+        if isinstance(error, kind):
+            return code
+    return "UNCLASSIFIED_FAILURE"
+
 
 def require(condition, message):
     if not condition:
-        raise ValueError(message)
+        raise SupplierRefusal(message)
 
 
 def identity(info):
@@ -203,8 +267,8 @@ def main():
             stream.write("\n")
         print("JDK_SUPPLIER_BYTES_PASS")
         return 0
-    except (OSError, ValueError, UnicodeError, zipfile.BadZipFile, RuntimeError, EOFError, zlib.error):
-        print("JDK_SUPPLIER_BYTES_REFUSED", file=sys.stderr)
+    except (OSError, ValueError, UnicodeError, zipfile.BadZipFile, RuntimeError, EOFError, zlib.error) as error:
+        print("JDK_SUPPLIER_BYTES_REFUSED reason=" + failure_code(error), file=sys.stderr)
         return 1
 
 
