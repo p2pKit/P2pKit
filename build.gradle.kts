@@ -415,6 +415,32 @@ tasks.register("check") {
     dependsOn(checkPublicConstantAbiPolicy)
 }
 
+// A current-host build cannot discover the other supported Native archives.
+// Resolve all four only during the maintained full lock/checksum writer, then
+// authenticate them with its independent provenance review. This locked,
+// non-consumable tooling configuration has no project/publication/runtime edge.
+// Root cyclonedxDirectBom is disabled above; published-module SBOM inputs are
+// explicitly allowlisted and never include this archive inventory.
+val kotlinNativeHostArchives = configurations.create("kotlinNativeHostArchives") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+    description = "Supported Kotlin/Native archives for full dependency maintenance."
+}
+dependencies {
+    listOf(
+        "linux-x86_64@tar.gz",
+        "macos-aarch64@tar.gz",
+        "macos-x86_64@tar.gz",
+        "windows-x86_64@zip",
+    ).forEach { hostArchive ->
+        add(
+            kotlinNativeHostArchives.name,
+            "org.jetbrains.kotlin:kotlin-native-prebuilt:${libs.versions.kotlin.get()}:$hostArchive",
+        )
+    }
+}
+
 val resolveAndLockAll = tasks.register("resolveAndLockAll") {
     group = "build setup"
     description = "Resolves every subproject check, library Dokka task, and the aggregate SBOM."
@@ -426,6 +452,9 @@ val resolveAndLockAll = tasks.register("resolveAndLockAll") {
     dependsOn(
         "cyclonedxBom",
     )
+    doLast {
+        kotlinNativeHostArchives.resolve()
+    }
 }
 
 // Authorize lock writes from the resolved graph, not the spelling used on the

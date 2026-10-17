@@ -1467,7 +1467,11 @@ class ConsumerGateTest(unittest.TestCase):
             self.published_boundary_template = (self.root / "gradlew").read_text()
         for path in (self.root / "gradlew", self.tools / "executor with spaces", self.tools / "xcrun",
                      self.tools / "curl", self.tools / "git"):
-            path.write_text(self.published_boundary_template.replace(VERSION, version))
+            boundary = self.published_boundary_template.replace(VERSION, version)
+            if version == "0.8.0-rc2":
+                # Immutable published producer metadata, not the new consumer compiler.
+                boundary = boundary.replace(KOTLIN_VERSION, "2.4.10")
+            path.write_text(boundary)
 
     def test_latest_published_rc2_uses_complete_rpc_and_relocated_lan_contract(self):
         version = "0.8.0-rc2"
@@ -1493,6 +1497,27 @@ class ConsumerGateTest(unittest.TestCase):
                       (self.work / "consumer/kmpConsumer/build.gradle.kts").read_text())
         self.assertEqual(len(self.calls("xcrun")), 1)
         self.assertFalse(self.calls("executor"))
+
+    def test_latest_published_rc2_keeps_producer_metadata_with_updated_consumer_compiler(self):
+        catalog = self.root / "gradle/libs.versions.toml"
+        catalog.write_text(catalog.read_text().replace(KOTLIN_VERSION, "2.4.20"))
+        self.test_latest_published_rc2_uses_complete_rpc_and_relocated_lan_contract()
+        build = (self.work / "consumer/build.gradle.kts").read_text()
+        self.assertIn('kotlin("jvm") version "2.4.20" apply false', build)
+        self.assertIn('kotlin("multiplatform") version "2.4.20" apply false', build)
+        self.assertNotIn('version "2.4.10"', build)
+
+    def test_latest_published_rc2_rejects_relabelled_producer_kotlin_version(self):
+        self.select_latest_published_fixture("0.8.0-rc2")
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "FAKE_LAN_POM_MUTATION": json.dumps({
+                                    "artifact": "p2p-transport-lan-jvm",
+                                    "values": {"groupId": "org.jetbrains.kotlin", "artifactId": "kotlin-stdlib",
+                                               "version": KOTLIN_VERSION, "scope": "compile"},
+                                })}, arguments=("--latest-published",))
+        self.assert_rejected(result, "embedded LAN publication metadata")
+        self.assertFalse(self.calls("gradle"))
+        self.assertFalse(self.calls("xcrun"))
 
     def assert_historical_latest_published_contract(self, version):
         self.select_latest_published_fixture(version)

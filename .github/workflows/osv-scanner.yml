@@ -23,6 +23,7 @@ jobs:
         --config=./osv-scanner.toml
         --sbom=./library/p2p-transport-lan/vendor/jmdns/upstream.cdx.json
         --lockfile=gradle.lockfile:./buildscript-gradle.lockfile
+        --lockfile=./gradle.lockfile
         --lockfile=./library/p2p-core/gradle.lockfile
         --lockfile=./library/p2p-transport-lan/gradle.lockfile
         --lockfile=./library/p2p-rpc/gradle.lockfile

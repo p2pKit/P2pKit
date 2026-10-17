@@ -165,6 +165,7 @@ for required_value in KOTLIN_VERSION AGP_VERSION COROUTINES_VERSION IOS_MIN_VERS
     }
 done
 
+LAN_METADATA_KOTLIN_VERSION="$KOTLIN_VERSION"
 if [[ "${1:-}" == "--latest-published" ]]; then
     [[ $# -eq 1 ]] || { echo "FAIL: --latest-published accepts no additional arguments" >&2; exit 2; }
     [[ -n "$LATEST_PUBLISHED" && "$LATEST_PUBLISHED" != *-SNAPSHOT ]] || {
@@ -182,7 +183,12 @@ if [[ "${1:-}" == "--latest-published" ]]; then
     # Future versions require an explicit reviewed contract, not a legacy fallback.
     case "$VERSION" in
         0.7.0-rc2|0.7.0-rc3) CURRENT_SOURCE_CONSUMER=0 ;;
-        0.8.0-rc2) CURRENT_SOURCE_CONSUMER=1 ;;
+        0.8.0-rc2)
+            CURRENT_SOURCE_CONSUMER=1
+            # This release's producer metadata is immutable. Compile its
+            # isolated consumers with the current catalog toolchain instead.
+            LAN_METADATA_KOTLIN_VERSION="2.4.10"
+            ;;
         *)
             echo "FAIL: unsupported latest-published consumer contract: $VERSION" >&2
             exit 2
@@ -359,7 +365,7 @@ if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
     # A successful project-local build cannot prove that the embedded component
     # ships. Inspect both published metadata formats before isolated resolution;
     # an unknown/file/private edge is a failure, not a dependency to auto-admit.
-    python3 - "$BASE" "$GROUP" "$VERSION" "$KOTLIN_VERSION" "$COROUTINES_VERSION" <<'PY_LAN_METADATA'
+    python3 - "$BASE" "$GROUP" "$VERSION" "$LAN_METADATA_KOTLIN_VERSION" "$COROUTINES_VERSION" <<'PY_LAN_METADATA'
 import json
 from pathlib import Path
 import sys

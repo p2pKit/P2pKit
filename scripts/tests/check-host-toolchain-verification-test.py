@@ -16,11 +16,11 @@ NS = "{https://schema.gradle.org/dependency-verification}"
 # Intentionally independent of the checker. Historical records are permitted;
 # the current seven names must not be inferred from the metadata under test.
 COMPONENTS = (
-    ("org.jetbrains.kotlin", "kotlin-native-prebuilt", "2.4.10", (
-        "kotlin-native-prebuilt-2.4.10-linux-x86_64.tar.gz",
-        "kotlin-native-prebuilt-2.4.10-macos-aarch64.tar.gz",
-        "kotlin-native-prebuilt-2.4.10-macos-x86_64.tar.gz",
-        "kotlin-native-prebuilt-2.4.10-windows-x86_64.zip",
+    ("org.jetbrains.kotlin", "kotlin-native-prebuilt", "2.4.20", (
+        "kotlin-native-prebuilt-2.4.20-linux-x86_64.tar.gz",
+        "kotlin-native-prebuilt-2.4.20-macos-aarch64.tar.gz",
+        "kotlin-native-prebuilt-2.4.20-macos-x86_64.tar.gz",
+        "kotlin-native-prebuilt-2.4.20-windows-x86_64.zip",
     )),
     ("com.android.tools.build", "aapt2", "9.3.1-15703166", (
         "aapt2-9.3.1-15703166-linux.jar",
@@ -37,7 +37,7 @@ class HostToolchainPolicyTest(unittest.TestCase):
         self.root = Path(self.directory.name)
         (self.root / "gradle").mkdir()
         self.catalog = self.root / "gradle/libs.versions.toml"
-        self.catalog.write_text('[versions]\nkotlin = "2.4.10"\nagp = "9.3.1"\n', encoding="utf-8")
+        self.catalog.write_text('[versions]\nkotlin = "2.4.20"\nagp = "9.3.1"\n', encoding="utf-8")
         self.metadata = self.root / "gradle/verification-metadata.xml"
         self.tree = ET.Element(NS + "verification-metadata")
         self.components = ET.SubElement(self.tree, NS + "components")
@@ -73,7 +73,7 @@ class HostToolchainPolicyTest(unittest.TestCase):
             for artifact in list(component):
                 if not any(host in artifact.get("name") for host in ("macos-aarch64", "-osx.jar")):
                     component.remove(artifact)
-        self.invoke(1, "missing host-toolchain artifact kotlin-native-prebuilt-2.4.10-linux-x86_64.tar.gz")
+        self.invoke(1, "missing host-toolchain artifact kotlin-native-prebuilt-2.4.20-linux-x86_64.tar.gz")
 
     def test_every_renamed_classifier_is_rejected(self):
         for component in self.components:
@@ -132,15 +132,43 @@ class HostToolchainPolicyTest(unittest.TestCase):
     def test_catalog_change_or_ambiguous_input_requires_review(self):
         original = self.catalog.read_text(encoding="utf-8")
         for content in (
-            original.replace('"2.4.10"', '"2.4.20"'),
+            original.replace('"2.4.20"', '"2.4.10"'),
             original.replace('"9.3.1"', '"9.4.0"'),
-            original + 'kotlin = "2.4.10"\n',
-            original + '[versions]\nkotlin = "2.4.10"\nagp = "9.3.1"\n',
+            original + 'kotlin = "2.4.20"\n',
+            original + '[versions]\nkotlin = "2.4.20"\nagp = "9.3.1"\n',
             original.replace("[versions]", "[libraries]"),
         ):
             with self.subTest(catalog=content):
                 self.catalog.write_text(content, encoding="utf-8")
                 self.invoke(1, "FATAL:")
+
+    def test_full_writer_keeps_a_locked_maintenance_only_native_archive_inventory(self):
+        # Source-policy tripwire, not a replacement for the hosted Gradle writer.
+        source = (ROOT / "build.gradle.kts").read_text(encoding="utf-8")
+        start = source.index('val kotlinNativeHostArchives = configurations.create("kotlinNativeHostArchives") {')
+        end = source.index('val resolveAndLockAll = tasks.register("resolveAndLockAll") {', start)
+        declaration = source[start:end]
+        for line in ('    isCanBeConsumed = false', '    isCanBeResolved = true',
+                     '    isTransitive = false'):
+            self.assertIn(line + "\n", declaration)
+        self.assertEqual([line.strip() for line in declaration.splitlines() if '@' in line], [
+            '"linux-x86_64@tar.gz",', '"macos-aarch64@tar.gz",',
+            '"macos-x86_64@tar.gz",', '"windows-x86_64@zip",',
+        ])
+        self.assertIn('"org.jetbrains.kotlin:kotlin-native-prebuilt:${libs.versions.kotlin.get()}:$hostArchive",',
+                      declaration)
+        writer = source[end:source.index('// Authorize lock writes', end)]
+        self.assertIn('    doLast {\n        kotlinNativeHostArchives.resolve()\n    }', writer)
+        self.assertEqual(source.count('kotlinNativeHostArchives.resolve()'), 1)
+        self.assertIn('    dependencyLocking {\n        lockAllConfigurations()', source)
+        sbom_policy = source[source.index('    tasks.withType(CyclonedxDirectTask::class.java)'):
+                             source.index("// Kotlin's built-in ABI validation")]
+        self.assertIn('            else -> null', sbom_policy)
+        self.assertIn('        if (releaseConfigurations == null) {\n            enabled = false', sbom_policy)
+        self.assertIn('            includeConfigs.set(releaseConfigurations)', sbom_policy)
+        self.assertNotIn('kotlinNativeHostArchives', sbom_policy)
+        osv = (ROOT / ".github/workflows/osv-scanner.yml").read_text(encoding="utf-8")
+        self.assertEqual(osv.splitlines().count('        --lockfile=./gradle.lockfile'), 1)
 
     def test_outer_toolchain_policy_invokes_checker_and_regressions(self):
         lines = (ROOT / "scripts/tests/check-kotlin-toolchain-policy-test.sh").read_text(encoding="utf-8").splitlines()
