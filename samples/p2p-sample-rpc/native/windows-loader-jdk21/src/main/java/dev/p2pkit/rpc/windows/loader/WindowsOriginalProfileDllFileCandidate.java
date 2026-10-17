@@ -25,6 +25,7 @@ final class WindowsOriginalProfileDllFileCandidate {
     private final Thread thread = Thread.currentThread();
     private final WindowsSystemBootstrapCandidate bootstrap;
     private final String candidatePath;
+    private final WindowsInstalledProfileCandidate installedOwner;
     private final Failure failure = new Failure(this);
     private char[] originalPath;
     private WindowsOriginalFileLease lease;
@@ -41,6 +42,14 @@ final class WindowsOriginalProfileDllFileCandidate {
     WindowsOriginalProfileDllFileCandidate(WindowsSystemBootstrapCandidate bootstrap, String candidatePath) {
         this.bootstrap = bootstrap;
         this.candidatePath = candidatePath;
+        installedOwner = null;
+    }
+
+    WindowsOriginalProfileDllFileCandidate(WindowsSystemBootstrapCandidate bootstrap, WindowsInstalledProfileCandidate owner) {
+        if (owner == null) throw new IllegalArgumentException("Missing concrete installed profile owner");
+        this.bootstrap = bootstrap;
+        installedOwner = owner;
+        candidatePath = owner.fixedProfilePath();
     }
 
     void observe() {
@@ -69,6 +78,7 @@ final class WindowsOriginalProfileDllFileCandidate {
                 "Original profile DLL file requires its original platform thread/bootstrap");
         }
         bootstrap.requireOriginalProfileDll(this);
+        if (installedOwner != null) installedOwner.requireOriginalProfileFile(this);
         if (failed) throw failure;
     }
 
@@ -197,6 +207,14 @@ final class WindowsOriginalProfileDllFileCandidate {
             failed = true;
             throw failure;
         }
+    }
+
+    boolean hasInstalledOwner() { return installedOwner != null; }
+
+    void requireInstalledOwner(WindowsInstalledProfileCandidate candidate) {
+        requireOriginalByteInputs();
+        if (candidate == null || installedOwner != candidate) throw new IllegalStateException("Development file is not installed ownership");
+        candidate.requireOriginalProfileFile(this);
     }
 
     void requireOriginalBytes(WindowsOriginalProfileDllBytesCandidate candidate) {

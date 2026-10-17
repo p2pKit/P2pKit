@@ -12,8 +12,10 @@ import java.lang.invoke.MethodHandle;
  * Fixed already-loaded eight-module observation cohort, never an OS-provider admission allowlist.
  * PIN/path observations do NOT associate the later disk HANDLE with the original mapped image section.
  * The original conditional bootstrap calls, ntdll GPA/query and startup still need independent authority.
- * Only owned copied export DATA emerges; no LoadLibrary fallback, API-set routing, native target, profile
- * loading, JNI registration or productive activation exists. Full OS transitive load closure is not modeled.
+ * The general graph API yields copied export DATA, not callable authority. The fixed original Program
+ * Files child additionally uses the retained shell32 PIN with actual GPA/provider checks under trusted
+ * startup. No LoadLibrary fallback, API-set routing, profile loading, JNI registration or productive
+ * activation exists. Full OS transitive load closure is not modeled.
  */
 final class WindowsOriginalSystemModulesCandidate {
     private static final int COUNT = 8;

@@ -1162,3 +1162,23 @@ integrity, installed-byte or standard-user acceptance. This increment does not
 read installed bytes, load a profile DLL, expose a raw handle/callback, or connect
 the candidate to the productive provider. `WindowsLoader.openInstalledProvider()`
 remains unavailable. Inert owner/frame tests do not establish real Windows custody.
+
+### Closed installed pre-load preparation (not provider activation)
+
+The original installation owner now owns a one-shot, zero-argument preparation
+of the fixed profile path. It requires the OS-resolved x64 Program Files root,
+queried with fixed `SHGetFolderPathW` arguments through actual original
+shell32/export/provider bindings, and joins the original JVM/profile ancestor
+identities to the retained launcher root. The existing file/policy/byte and
+system-import checks remain mandatory. A unique application parent-pin resource
+must originate in the fixed original `app` directory; the sidecar is only bounded
+comparison data. This is not whole-package self-attestation or proof of earlier
+mapped backing/pre-JVM state; trusted startup and independent installed package
+qualification remain explicit premises.
+
+Only the concrete completed input child can enter installed load preparation;
+the caller-path mechanics remain explicitly development-only. Preparation does
+not invoke LoadLibrary, register JNI, publish a provider or change the permanent
+public refusal. Owners stay confined to their original platform thread, with
+failed/uncertain effects retained and no reset or retry. Inert tests and static
+package checks do not qualify actual ordinary-user installation or native use.

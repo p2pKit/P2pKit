@@ -438,6 +438,28 @@ final class WindowsSystemBootstrapCandidate {
         return profileDll;
     }
 
+    WindowsOriginalProfileDllFileCandidate inspectInstalledProfileDll(WindowsInstalledProfileCandidate owner) {
+        requireCompleted();
+        if (installation == null) throw new IllegalStateException("Missing original installation");
+        installation.requireOriginalProfile(owner);
+        owner.requireReadyForProfile();
+        if (profileDllAttempted) throw new IllegalStateException("Original profile DLL file was already attempted");
+        profileDllAttempted = true;
+        profileDll = new WindowsOriginalProfileDllFileCandidate(this, owner);
+        owner.attachOriginalProfile(profileDll); // Attach both roots before observe/native effects.
+        profileDll.observe();
+        return profileDll;
+    }
+
+    MemorySegment originalInstalledResolverEntry(WindowsInstalledProfileCandidate owner, int index) {
+        requireCompleted();
+        if (installation == null) throw new IllegalStateException("Missing original installation");
+        installation.requireOriginalProfile(owner);
+        if (index == 0) return entries[1]; // Original GetModuleHandleExW PIN.
+        if (index == 1) return entries[4]; // Original GetProcAddress, fixed child supplies its constant name.
+        throw new IllegalArgumentException("Unknown fixed installed resolver entry");
+    }
+
     void requireOriginalProfileDll(WindowsOriginalProfileDllFileCandidate candidate) {
         requireCompleted();
         if (candidate == null || profileDll != candidate) {

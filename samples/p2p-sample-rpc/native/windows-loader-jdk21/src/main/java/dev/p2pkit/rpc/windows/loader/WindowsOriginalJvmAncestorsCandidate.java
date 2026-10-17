@@ -28,6 +28,11 @@ final class WindowsOriginalJvmAncestorsCandidate {
     int ancestorCount() { return core.ancestorCount(); }
     boolean descriptorPoliciesAccepted() { return core.descriptorPoliciesAccepted(); }
 
+    void requireInstallationRoot(WindowsInstalledProfileCandidate candidate) {
+        candidate.requireOriginalJvmAncestors(this);
+        candidate.joinRoot(core);
+    }
+
     void requireOriginalCore(WindowsOriginalFileAncestorsLease candidate) {
         if (Thread.currentThread() != thread || candidate == null || candidate != core || security == null) {
             throw new IllegalStateException("Original ancestor observation requires its original platform thread");

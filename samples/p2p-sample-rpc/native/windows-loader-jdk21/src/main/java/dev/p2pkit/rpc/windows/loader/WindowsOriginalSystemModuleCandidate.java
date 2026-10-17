@@ -101,6 +101,11 @@ final class WindowsOriginalSystemModuleCandidate {
     }
 
     long originalModuleBits() { requirePinned(); return rawModule; }
+    MemorySegment originalProgramFilesModule(WindowsOriginalProgramFilesCandidate requester) {
+        requirePinned();
+        requester.requireOriginalShellModule(this);
+        return module; // Actual retained PIN view, not a view reconstructed from comparison data.
+    }
 
     private WindowsOriginalSystemModulesCandidate.Failure fail(Throwable caught) {
         if (!failed) {

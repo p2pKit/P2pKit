@@ -185,7 +185,7 @@ public final class LoadedRegistrationTests {
                 preloadedRefusal(path.toString(), abi);
                 return;
             }
-            load = WindowsLibraryLoadInvocation.prepare(bootstrap, this, originalJvm, file, path.toString());
+            load = WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, this, originalJvm, file, path.toString());
             loaded = load.invoke();
             MemorySegment module = loaded.module();
             requireModulePath(module, path.toString());
@@ -339,7 +339,7 @@ public final class LoadedRegistrationTests {
             requireModulePath(preloadedModule, path);
             check(process.get(null) == null);
             expect(UnsatisfiedLinkError.class, () -> abi.invoke(null));
-            load = WindowsLibraryLoadInvocation.prepare(bootstrap, this, originalJvm, file, path);
+            load = WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, this, originalJvm, file, path);
             WindowsLibraryLoadInvocation.Failure refused = (WindowsLibraryLoadInvocation.Failure)
                 expect(WindowsLibraryLoadInvocation.Failure.class, load::invoke);
             check(refused.retainedInvocation == load && refused.probeFailure instanceof IllegalStateException &&

@@ -10,7 +10,9 @@ import java.lang.invoke.MethodHandle;
 import java.nio.ByteOrder;
 
 /**
- * Dormant fixed LoadLibraryExW mechanics, not bootstrap, installed authority or a productive loader.
+ * Fixed LoadLibraryExW mechanics; the public installed provider remains unavailable.
+ * Installed preparation requires its concrete completed input chain; the separate development route
+ * cannot acquire that relationship. Neither route itself supplies installed/native qualification.
  * Uses only its original bootstrap/JVM fixed entries. A prior fixed-name PIN probe must observe
  * definite absence; this does not establish startup, installed file or mapped-backing authority.
  * There is no fallback lookup/load, environment search, search-path mutation, FreeLibrary or provider publication.
@@ -88,6 +90,7 @@ final class WindowsLibraryLoadInvocation {
     }
 
     private static WindowsLibraryLoadInvocation processOwner;
+    private WindowsInstalledProfileCandidate installedOwner;
     private final Thread thread = Thread.currentThread();
     final Object installationOwner;
     final WindowsOriginalJvmCandidate runtimeOwner;
@@ -146,6 +149,7 @@ final class WindowsLibraryLoadInvocation {
                                                               WindowsPackagedVerifier plan,
                                                               WindowsSystemImportResolution imports) {
         result.module();
+        if (installedOwner != null) installedOwner.requireOriginalPackagedPlan(plan);
         if (imageVerificationAttempted) throw new IllegalStateException("Mapped image verification was already attempted");
         imageVerificationAttempted = true;
         try {
@@ -178,8 +182,25 @@ final class WindowsLibraryLoadInvocation {
         result.module();
     }
 
-    static WindowsLibraryLoadInvocation prepare(WindowsSystemBootstrapCandidate bootstrap, Object installationOwner,
+    static WindowsLibraryLoadInvocation prepareDevelopment(WindowsSystemBootstrapCandidate bootstrap, Object installationOwner,
                                                 WindowsOriginalJvmCandidate runtimeOwner, Object fileOwner, String path) {
+        if (installationOwner instanceof WindowsOriginalInstallationCandidate || installationOwner instanceof WindowsInstalledProfileCandidate ||
+            fileOwner instanceof WindowsOriginalProfileDllFileCandidate file && file.hasInstalledOwner()) {
+            throw new IllegalArgumentException("Installed ownership cannot enter the development load route");
+        }
+        return prepare(bootstrap, installationOwner, runtimeOwner, fileOwner, path, null);
+    }
+
+    static WindowsLibraryLoadInvocation prepareInstalled(WindowsInstalledProfileCandidate owner) {
+        if (owner == null) throw new IllegalArgumentException("Missing concrete installed load owner");
+        owner.requirePreparedInputs();
+        return prepare(owner.originalBootstrap(), owner.originalInstallation(), owner.originalJvm(),
+            owner.originalProfile(), owner.fixedProfilePath(), owner);
+    }
+
+    private static WindowsLibraryLoadInvocation prepare(WindowsSystemBootstrapCandidate bootstrap, Object installationOwner,
+                                                WindowsOriginalJvmCandidate runtimeOwner, Object fileOwner, String path,
+                                                WindowsInstalledProfileCandidate installed) {
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         if (WindowsLibraryLoadInvocation.class.getModule() != WindowsLoaderRuntime.class.getModule() ||
             Thread.currentThread().isVirtual()) {
@@ -209,6 +230,11 @@ final class WindowsLibraryLoadInvocation {
         }
         WindowsLibraryLoadInvocation invocation = new WindowsLibraryLoadInvocation(
             bootstrap, installationOwner, runtimeOwner, fileOwner, entry, pinEntry, originalArena, path);
+        if (installed != null) {
+            invocation.installedOwner = installed;
+            installed.attachOriginalLoad(invocation); // Exact owner/failure precedes private native frame preparation.
+            installed.requireOriginalLoad(invocation);
+        }
         try {
             MemoryLayout state = Linker.Option.captureStateLayout();
             MemoryLayout error = state.select(MemoryLayout.PathElement.groupElement("GetLastError"));
@@ -286,6 +312,11 @@ final class WindowsLibraryLoadInvocation {
     }
 
     private void requireOriginalScope() {
+        if (installedOwner != null) installedOwner.requireOriginalLoad(this);
+        else if (installationOwner instanceof WindowsOriginalInstallationCandidate || installationOwner instanceof WindowsInstalledProfileCandidate ||
+            fileOwner instanceof WindowsOriginalProfileDllFileCandidate file && file.hasInstalledOwner()) {
+            throw new IllegalStateException("Installed ownership cannot continue through the development load route");
+        }
         bootstrap.requireOriginalLibraryLoadInputs(runtimeOwner);
         if (bootstrap.originalLibraryLoadArena(runtimeOwner) != originalArena ||
             bootstrap.originalLibraryLoadEntry(runtimeOwner, 0) != pinEntry ||
