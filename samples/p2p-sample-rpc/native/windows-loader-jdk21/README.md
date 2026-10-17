@@ -998,8 +998,12 @@ completion preserves the fixture, fails the gate and leaves the existing outer
 supervisor responsible for uncertain descendants. No recursive path cleanup or
 retry is performed. The reader's 60-second limit and 128MiB heap are unchanged.
 
-Twenty-six portable controls cover closed receipts, handshake ownership and
-bounded installed-SDK header selection. The positive Windows test is separate:
+Thirty-four portable controls cover closed receipts, handshake ownership,
+bounded installed-SDK header selection and privacy-safe terminal diagnostics.
+On cleanup failure, only a fully retired helper with two original-bound receipts
+may export a fixed stage and bounded Win32 code. Otherwise the diagnostic is
+`UNKNOWN/0`; unfinished captures are never read. The create-only diagnostic
+contains no nonce, object IDs or paths and cannot replace the original failure. The positive Windows test is separate:
 `NOT_REQUESTED` is not a pass, and a requested policy refusal is not a skip.
 This is administrator **development-file/PE coverage**, not standard-user
 protected-profile storage, MSI installation, productive JNI/Host–Client testing,

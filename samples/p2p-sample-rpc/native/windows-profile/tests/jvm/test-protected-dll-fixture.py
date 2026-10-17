@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location("protected_fixture", Path(__file__).with_name("protected-dll-fixture.py"))
@@ -55,6 +56,7 @@ class Process:
     def __init__(self):
         self.stdin = Pipe()
         self.code = None
+        self.wait_code = 0
         self.timeout = False
 
     def poll(self):
@@ -63,7 +65,7 @@ class Process:
     def wait(self, timeout):
         if self.timeout:
             raise subprocess.TimeoutExpired("inert", timeout)
-        self.code = 0
+        self.code = self.wait_code
         return self.code
 
 
@@ -232,6 +234,120 @@ class Controls(unittest.TestCase):
         self.assertEqual(value._process.stdin.data, before)
         self.assertFalse(value._out.closed or value._err.closed)
 
+    def test_failed_projection_closed_stages(self):
+        original = ready()
+        for stage, error, code in (("READY", 0, 1), ("DELETE_FILE", 32, 1),
+                                   ("DELETE_DIRECTORY", 65535, 1), ("PRESERVED", 0, 3)):
+            lines = [(json.dumps(row) + "\n").encode("ascii") for row in
+                     (original, {**original, "phase": "LEFT", "stage": stage, "error": error})]
+            self.assertEqual(fixture.failed_cleanup_projection(lines, original, compiler(), code), (stage, error))
+
+    def test_failed_projection_rejects_private_substitution(self):
+        original = ready()
+        left = {**original, "phase": "LEFT", "stage": "DELETE_DIRECTORY", "error": 5}
+        changed = [{**left, key: "private-path-or-identity"} for key in fixture.FIELDS - {"phase", "stage", "error"}]
+        changed += [{**left, "stage": value} for value in (original["path"], "../escape", "DELETE_FILE-extra", 3, None)]
+        changed += [{**left, "error": value} for value in (-1, 65536, True, 1.0, original["fileId"])]
+        changed += [{**left, "phase": "CLEANED"}, {**left, "extra": original["nonce"]}]
+        for row in changed:
+            lines = [(json.dumps(value) + "\n").encode("ascii") for value in (original, row)]
+            with self.assertRaises(ValueError):
+                fixture.failed_cleanup_projection(lines, original, compiler(), 1)
+
+    def test_failed_projection_requires_original_ready_and_terminal(self):
+        original = ready()
+        left = {**original, "phase": "LEFT", "stage": "DELETE_DIRECTORY", "error": 5}
+        lines = [(json.dumps(row) + "\n").encode("ascii") for row in (original, left)]
+        for code in (None, 0, 3, 4, True):
+            with self.assertRaises(ValueError):
+                fixture.failed_cleanup_projection(lines, original, compiler(), code)
+        altered = {**original, "fileId": "4" * 32}
+        with self.assertRaises(ValueError):
+            fixture.failed_cleanup_projection([(json.dumps(altered) + "\n").encode(), lines[1]], original, compiler(), 1)
+        for invalid in (lines[:1], lines + lines[:1], [lines[0], lines[1].rstrip(b"\n")]):
+            with self.assertRaises(ValueError):
+                fixture.failed_cleanup_projection(invalid, original, compiler(), 1)
+
+    def test_failed_cleanup_emits_only_closed_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = owner()
+            value._output = Path(directory)
+            value._process.wait_code = 1
+            value._lines = lambda: [(json.dumps(row) + "\n").encode("ascii") for row in
+                                   (ready(), {**ready(), "phase": "LEFT", "stage": "DELETE_DIRECTORY", "error": 5})]
+            with self.assertRaisesRegex(ValueError, "Original cleanup failed") as failed:
+                value.finish_after_reader_run()
+            self.assertIs(value._failure, failed.exception)
+            self.assertIsNone(value._diagnostic_failure)
+            diagnostic = value._output / "protected-fixture-failure-DELETE_DIRECTORY-5.json"
+            self.assertEqual(json.loads(diagnostic.read_text()),
+                             {"schema": 1, "scope": fixture.FAILURE_SCOPE, "stage": "DELETE_DIRECTORY", "error": 5})
+            data = diagnostic.read_text()
+            for field in ("path", "nonce", "volume", "fileId", "directoryId", "sha256", "source", "tree"):
+                self.assertNotIn(field, data)
+                self.assertNotIn(ready()[field], data)
+            command = value._process.stdin.data
+            with self.assertRaises(ValueError):
+                value.finish_after_reader_run()
+            self.assertEqual(list(value._output.iterdir()), [diagnostic])
+            self.assertEqual(value._process.stdin.data, command)
+
+    def test_unknown_wait_never_reads_unfinished_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = owner()
+            value._output = Path(directory)
+            original = subprocess.TimeoutExpired("private-ignored-command", 10)
+            def waiting(timeout):
+                raise original
+            value._process.wait = waiting
+            value._lines = lambda: self.fail("Unfinished capture must never be read")
+            with self.assertRaises(subprocess.TimeoutExpired) as failed:
+                value.finish_after_reader_run()
+            self.assertIs(failed.exception, original)
+            self.assertIs(value._failure, original)
+            self.assertFalse(value._out.closed or value._err.closed)
+            diagnostic = value._output / "protected-fixture-failure-UNKNOWN-0.json"
+            self.assertEqual(json.loads(diagnostic.read_text())["stage"], "UNKNOWN")
+            self.assertIsNone(value._diagnostic_failure)
+
+    def test_invalid_protocol_exports_unknown_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = owner()
+            value._output = Path(directory)
+            value._process.wait_code = 1
+            value._lines = lambda: [(json.dumps(row) + "\n").encode("ascii") for row in
+                                   (ready(), {**ready(), "phase": "LEFT", "stage": "../private-path", "error": 5})]
+            with self.assertRaises(ValueError):
+                value.finish_after_reader_run()
+            files = list(value._output.iterdir())
+            self.assertEqual([path.name for path in files], ["protected-fixture-failure-UNKNOWN-0.json"])
+            self.assertNotIn("private", files[0].read_text())
+
+    def test_diagnostic_write_failure_preserves_original(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = owner()
+            value._output = Path(directory)
+            target = value._output / "protected-fixture-failure-UNKNOWN-0.json"
+            target.write_text("original-create-only-evidence")
+            value._process.stdin.short = True
+            with self.assertRaisesRegex(ValueError, "Incomplete cleanup handshake") as failed:
+                value.finish_after_reader_run()
+            self.assertIs(value._failure, failed.exception)
+            self.assertIsInstance(value._diagnostic_failure, FileExistsError)
+            self.assertEqual(target.read_text(), "original-create-only-evidence")
+
+    def test_exited_unretired_helper_does_not_read_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = owner()
+            value._output = Path(directory)
+            value._process.code = 1
+            value._lines = lambda: self.fail("Unretired capture must never be read")
+            with self.assertRaisesRegex(ValueError, "Original helper exited"):
+                value.finish_after_reader_run()
+            self.assertEqual(value._process.stdin.data, b"")
+            self.assertFalse(value._out.closed or value._err.closed)
+            self.assertTrue((value._output / "protected-fixture-failure-UNKNOWN-0.json").is_file())
+
 
     def test_selected_sdk_header_roots(self):
         roots = [Path("ucrt"), Path("shared"), Path("um")]
@@ -279,7 +395,7 @@ class Controls(unittest.TestCase):
 if __name__ == "__main__":
     captured = io.StringIO()
     result = unittest.TextTestRunner(stream=captured).run(unittest.defaultTestLoader.loadTestsFromTestCase(Controls))
-    if not result.wasSuccessful() or result.testsRun != 26:
+    if not result.wasSuccessful() or result.testsRun != 34:
         sys.stderr.write(captured.getvalue())
         sys.exit(1)
-    print("WINDOWS_PROTECTED_DLL_FIXTURE_CONTROLS_PASS tests=26 scope=INERT_RECEIPT_AND_HANDSHAKE_NOT_NATIVE_CUSTODY_OR_AUTHORITY")
+    print("WINDOWS_PROTECTED_DLL_FIXTURE_CONTROLS_PASS tests=34 scope=INERT_RECEIPT_AND_HANDSHAKE_NOT_NATIVE_CUSTODY_OR_AUTHORITY")

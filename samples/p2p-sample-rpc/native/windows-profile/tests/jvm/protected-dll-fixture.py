@@ -32,6 +32,7 @@ NONCE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 FIELDS = {"schema", "scope", "phase", "stage", "error", "nonce", "path", "source", "tree", "sha256",
           "bytes", "created", "owner", "volume", "directoryId", "fileId"}
 _OWNERS = []  # Keep original processes/captures reachable on any unconfirmed return, never auto-delete.
+FAILURE_SCOPE = "CLOSED_FIXTURE_FAILURE_DIAGNOSTIC_NOT_CLEANUP_OR_AUTHORITY"
 
 
 def require(value, message):
@@ -97,6 +98,21 @@ def validate_cleaned(row, original):
             all(row[key] == original[key] and type(row[key]) is type(original[key])
                 for key in FIELDS - {"phase", "stage", "error"}), "Cleanup is not the original fixture receipt")
     return dict(row)
+
+
+def failed_cleanup_projection(lines, original, compiler, code):
+    """Only terminal, fully bound LEFT records may contribute closed stage/error labels."""
+    require(type(code) is int and code in (1, 3), "Expected failed terminal helper")
+    require(len(lines) == 2 and all(line.endswith(b"\n") for line in lines), "Incomplete terminal records")
+    require(validate_ready(parse(lines[0], MAXIMUM_CAPTURE), compiler) == original, "Original READY changed")
+    row = parse(lines[1], MAXIMUM_CAPTURE)
+    require(set(row) == FIELDS and row["phase"] == "LEFT" and
+            type(row["error"]) is int and 0 <= row["error"] <= 65535 and
+            all(row[key] == original[key] and type(row[key]) is type(original[key])
+                for key in FIELDS - {"phase", "stage", "error"}), "Unbound terminal LEFT record")
+    require((code == 1 and row["stage"] in ("READY", "DELETE_FILE", "DELETE_DIRECTORY")) or
+            (code == 3 and row["stage"] == "PRESERVED" and row["error"] == 0), "Unexpected terminal outcome")
+    return row["stage"], row["error"]
 
 
 def toolkit():
@@ -233,6 +249,7 @@ class ProtectedDllFixture:
         self._output, self._compiler = output, compiler
         self._process = self._out = self._err = None
         self._ready = None
+        self._failure = self._diagnostic_failure = None
         _OWNERS.append(self)  # Root before Popen/capture effects, including uncertain Popen failure.
 
     def _guard(self):
@@ -266,25 +283,48 @@ class ProtectedDllFixture:
         self._out.close()
         self._err.close()
 
+    def _record_failure(self):
+        # Report paths are public commitments: use only this finite stage set and bounded Win32 number.
+        # Unknown/native-ongoing captures are NEVER read; UNKNOWN/0 means no trusted error observation.
+        stage, error = "UNKNOWN", 0
+        code = self._process.poll() if self._process is not None else None
+        if code is not None and self._out is not None and self._err is not None and self._out.closed and self._err.closed:
+            try:
+                stage, error = failed_cleanup_projection(self._lines(), self._ready, self._compiler, code)
+            except Exception:
+                pass  # Invalid protocol cannot export arbitrary strings, identities or exception text.
+        name = "protected-fixture-failure-" + stage + "-" + str(error) + ".json"
+        row = {"schema": 1, "scope": FAILURE_SCOPE, "stage": stage, "error": error}
+        with (self._output / name).open("x", encoding="ascii") as target:
+            target.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+
     def finish_after_reader_run(self):
         """Call only after existing run() confirms original Java exit AND closes its original captures."""
         self._guard()
         require(self._state == "READY", "Cleanup is one-shot and cannot follow uncertainty")
         self._state = "CLEANUP_REQUESTED"  # Before any write; no retries after partial/unknown write.
-        require(self._process.poll() is None, "Original helper exited before reader retirement")
-        command = ("CLEANUP " + self._ready["nonce"] + "\n").encode("ascii")
-        require(len(command) == 45, "Invalid original cleanup nonce")
-        require(self._process.stdin.write(command) == len(command), "Incomplete cleanup handshake")
-        self._process.stdin.flush()
-        self._process.stdin.close()
-        code = self._process.wait(timeout=10)
-        self._retire_captures()
-        lines = self._lines()
-        require(code == 0 and len(lines) == 2 and all(line.endswith(b"\n") for line in lines), "Original cleanup failed")
-        require(validate_ready(parse(lines[0], MAXIMUM_CAPTURE), self._compiler) == self._ready, "READY record changed")
-        cleaned = validate_cleaned(parse(lines[1], MAXIMUM_CAPTURE), self._ready)
-        self._state = "COMPLETE"
-        return cleaned
+        try:
+            require(self._process.poll() is None, "Original helper exited before reader retirement")
+            command = ("CLEANUP " + self._ready["nonce"] + "\n").encode("ascii")
+            require(len(command) == 45, "Invalid original cleanup nonce")
+            require(self._process.stdin.write(command) == len(command), "Incomplete cleanup handshake")
+            self._process.stdin.flush()
+            self._process.stdin.close()
+            code = self._process.wait(timeout=10)
+            self._retire_captures()
+            lines = self._lines()
+            require(code == 0 and len(lines) == 2 and all(line.endswith(b"\n") for line in lines), "Original cleanup failed")
+            require(validate_ready(parse(lines[0], MAXIMUM_CAPTURE), self._compiler) == self._ready, "READY record changed")
+            cleaned = validate_cleaned(parse(lines[1], MAXIMUM_CAPTURE), self._ready)
+            self._state = "COMPLETE"
+            return cleaned
+        except BaseException as failure:
+            self._failure = failure  # Retain and rethrow the original; diagnostics cannot replace it.
+            try:
+                self._record_failure()
+            except BaseException as diagnostic_failure:
+                self._diagnostic_failure = diagnostic_failure
+            raise
 
     def abandon(self):
         """Preserve on any reader failure/timeout/unknown return. EOF is never a cleanup request."""
