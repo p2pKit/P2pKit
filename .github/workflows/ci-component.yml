@@ -76,7 +76,7 @@ jobs:
           fi
       - name: Retain genuine component evidence, including failures
         if: ${{ always() && steps.execution.outcome != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-evidence-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-evidence-${{ inputs.component }}/*
@@ -85,7 +85,7 @@ jobs:
           overwrite: false
       - name: Retain exact inspected Android package
         if: ${{ success() && inputs.component == 'android' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sample-app-android-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/p2pkit-sample-apps/android/*
@@ -94,7 +94,7 @@ jobs:
           overwrite: false
       - name: Retain exact inspected desktop package
         if: ${{ success() && startsWith(inputs.component, 'desktop-') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sample-app-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/p2pkit-sample-apps/desktop/*

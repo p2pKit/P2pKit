@@ -41,7 +41,7 @@ jobs:
         run: python3 -I -B -S scripts/release_application_set.py freeze
       - name: Retain the immutable public application-set record
         id: frozen
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-application-set-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/p2pkit-release-application-set/release-application-set.json
@@ -75,7 +75,7 @@ jobs:
           printf '%s\n' "$FROZEN_QUALIFICATION_BINDING" > "$RUNNER_TEMP/qualification-binding.json"
           python3 -B scripts/ci_qualification.py verify --source "$GITHUB_SHA" --selection "$RUNNER_TEMP/qualification-binding.json" --output "$RUNNER_TEMP/qualification.json"
       - name: Upload verified qualification reference
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: maven-central-verification-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/qualification.json
@@ -181,7 +181,7 @@ jobs:
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
 
       - name: Retain reviewed signed bundle before Central upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: maven-central-signed-bundle-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -215,7 +215,7 @@ jobs:
         run: python3 -I -B -S scripts/central_deployment_evidence.py
 
       - name: Retain original PUBLISHED deployment receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: maven-central-deployment-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -241,7 +241,7 @@ jobs:
 
       - name: Upload publication evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: maven-central-publication-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
