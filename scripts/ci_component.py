@@ -240,7 +240,12 @@ def execute(component):
         return exit_code
 
     try:
-        record_tools(component)
+        # The immutable remote consumer requires a new/empty borrowed work
+        # directory. gradlew --version populates its future GRADLE_USER_HOME,
+        # so record the same real tool identities after that consumer has run.
+        deferred_tools = component == 'published-consumers-diagnostic'
+        if not deferred_tools:
+            record_tools(component)
         destination = str(Path(os.environ['RUNNER_TEMP']) / 'p2pkit-sample-apps') if package else None
         if package:
             run_task('prepare-' + kind, [sys.executable, '-B', 'scripts/package-sample-apps.py', 'prepare',
@@ -252,6 +257,8 @@ def execute(component):
             if code:
                 break
             run_task(name, argv)
+        if deferred_tools:
+            record_tools(component)
         if is_gradle:
             run_task('gradle-stop', [str(ROOT / 'gradlew.bat') if os.name == 'nt' else './gradlew', '--stop'], 90)
         if code == 0 and package:

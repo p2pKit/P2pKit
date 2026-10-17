@@ -1341,4 +1341,57 @@ class TerminalReleaseTests(unittest.TestCase):
         self.assertIn("timeout=90, cancelled=cancelled.is_set, **({'create_gradle_home': False} if releasing else {}))", source)
 
 
+
+class RemoteConsumerToolOrderTests(unittest.TestCase):
+    def exercise(self, component, *, consumer_exit=0, tools_fail=False):
+        from contextlib import ExitStack
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root = Path(tmp)
+            work = root / 'consumer'
+            events = []
+            def tools(selected):
+                self.assertEqual(selected, component)
+                events.append('tools')
+                (work / 'gradle-home').mkdir(parents=True, exist_ok=True)
+                if tools_fail:
+                    raise RuntimeError('synthetic tool refusal')
+            def command(argv, **kwargs):
+                if argv == ['fixed-consumer']:
+                    events.append('consumer')
+                    if component == 'published-consumers-diagnostic':
+                        # Exact invariant of the unchanged script: borrowed work
+                        # is absent or empty before the script creates its home.
+                        self.assertTrue(not work.exists() or not any(work.iterdir()))
+                    (work / 'gradle-home').mkdir(parents=True, exist_ok=True)
+                    return Mock(returncode=consumer_exit)
+                self.assertEqual(argv, ['./gradlew', '--stop'])
+                events.append('stop')
+                return Mock(returncode=0)
+            stack.enter_context(patch.object(C, 'ROOT', root))
+            stack.enter_context(patch.object(C, 'record_tools', side_effect=tools))
+            stack.enter_context(patch.object(C, 'commands', return_value=[('fixed-consumer', ['fixed-consumer'])]))
+            stack.enter_context(patch.object(C.subprocess, 'run', side_effect=command))
+            if tools_fail:
+                with self.assertRaisesRegex(RuntimeError, '^synthetic tool refusal$'):
+                    C.execute(component)
+            else:
+                self.assertEqual(C.execute(component), consumer_exit)
+            result = json.loads((root / 'build/reports/ci-component' / (component + '.json')).read_text())
+            self.assertEqual(result['exitCode'], consumer_exit or (125 if tools_fail else 0))
+            self.assertEqual([task['task'] for task in result['tasks']],
+                             ['fixed-consumer', *(['component-setup'] if tools_fail else []), 'gradle-stop'])
+            return events
+
+    def test_remote_empty_work_survives_real_tool_probe_order(self):
+        self.assertEqual(self.exercise('published-consumers-diagnostic'), ['consumer', 'tools', 'stop'])
+
+    def test_failed_consumer_retains_exit_and_records_tools_and_stop(self):
+        self.assertEqual(self.exercise('published-consumers-diagnostic', consumer_exit=7), ['consumer', 'tools', 'stop'])
+
+    def test_tool_failure_still_fails_and_stops_gradle(self):
+        self.assertEqual(self.exercise('published-consumers-diagnostic', tools_fail=True), ['consumer', 'tools', 'stop'])
+
+    def test_ordinary_source_consumers_keep_tool_preflight(self):
+        self.assertEqual(self.exercise('consumers'), ['tools', 'consumer', 'stop'])
+
 if __name__ == '__main__': unittest.main()
