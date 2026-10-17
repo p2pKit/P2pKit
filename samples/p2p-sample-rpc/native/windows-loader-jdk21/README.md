@@ -258,16 +258,21 @@ address observations are copied once; the Java input view is read-only. These ch
 not Windows system-library/bootstrap trust or correspondence of a pointer to an admitted VM.
 
 Only the exact process owner's reserved invocation can enter. There is one attempt, on its original platform
-thread, one immutable report read after normal return, and no frame retirement during native use. Cleanup
-independently clears each buffer and closes only the invocation arena, retaining separate preallocated failure
+thread, one immutable report read after normal return, and no frame retirement during native use. The primitive
+result is retained before report readback. An unconfirmed native return quarantines the complete input/report
+frame unchanged under its failed permanent owner, without report acceptance, retry or replacement. Java unwinding
+does not establish native retirement. For confirmed-unused frames, cleanup independently clears each buffer
+and closes only the invocation arena, retaining separate preallocated failure
 slots and never retrying an uncertain retirement. It never closes the entry/VM scopes or unloads a module.
 
-The diagnostic command exercises **13 fresh-process FFM invocation controls** using a JDK-generated upcall stub
+The diagnostic command exercises **15 fresh-process FFM invocation controls** using a JDK-generated upcall stub
 and an inert allocation in place of a VM pointer. The real downcall/upcall checks argument order, exact counts,
 bounded pointer layouts, source-array isolation, initial zero output, report readback, owner/thread/one-shot
 constraints and frame retirement. The callback never invokes JNI or storage and never lets a Java exception
 escape its native boundary. A test-only reflective read-only-buffer fault verifies retained retirement failure;
-no production fault-injection hook is added. These are host-ABI FFM mechanics, **not Windows ABI/JNI registration,
+no production fault-injection hook is added. Pre-call and post-native-return throws verify retained unchanged
+frames and the original failed owner; they do not prove actual asynchronous native work. These are host-ABI
+FFM mechanics, **not Windows ABI/JNI registration,
 DLL loading, protected NTFS, installed application or production authority qualification**.
 
 ## Original JVM acquisition and constrained-load call mechanics

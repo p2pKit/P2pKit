@@ -344,7 +344,7 @@ def main():
             r" scope=PORTABLE_LIFETIME_NOT_NATIVE_REGISTRATION_OR_AUTHORITY\n", "")
     invocation_cases = ["success", "snapshot", "arguments", "virtual", "thread", "reentrant", "refusal",
                         "zero-report", "mismatched-result", "report-clear-failure", "closed-entry", "closed-vm",
-                        "other-invocation"]
+                        "other-invocation", "invocation-failure", "return-failure"]
     for case in invocation_cases:
         run("registration-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
             "--module", MODULE + "/" + PACKAGE + ".RegistrationInvocationTests", case], 0,
