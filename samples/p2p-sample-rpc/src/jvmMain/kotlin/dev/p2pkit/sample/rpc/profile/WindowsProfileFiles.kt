@@ -5,7 +5,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * Managed contract implementation only. No production selector or native loader exists.
+ * Managed contract implementation. The fixed production entry still refuses at the unavailable loader.
  * One active operation, no queue; close seals admission and joins the actual native return before retiring handles.
  * Native OS hangs still require the separately reviewed terminal watchdog, not an invented coroutine deadline.
  */
@@ -413,11 +413,23 @@ internal class WindowsProfileFiles private constructor(
         private val profileMembers = setOf("profile.lock", "profile.header", "identity")
         private val recordName = Regex("[0-9a-f]{64}\\.aesgcm")
 
+        /**
+         * Fixed production entry only; no caller-provided backend or observation can authorize it.
+         * The original boot-module loader must finish before any protected storage admission begins.
+         */
+        fun openInstalled(): WindowsProfileFiles = open(WindowsProfileInstalledProvider.acquireNative(), null, null)
+
         /** Test/qualification seam only. No property, UI or platform path can instantiate a production backend. */
         fun openForValidation(
             native: WindowsProfileNativeApi,
             handleAcquisitionObservation: HandleAcquisitionObservation? = null,
             beforeHandleRetirement: (() -> Unit)? = null,
+        ): WindowsProfileFiles = open(native, handleAcquisitionObservation, beforeHandleRetirement)
+
+        private fun open(
+            native: WindowsProfileNativeApi,
+            handleAcquisitionObservation: HandleAcquisitionObservation?,
+            beforeHandleRetirement: (() -> Unit)?,
         ): WindowsProfileFiles {
             val session = WindowsProfileFiles(native, handleAcquisitionObservation, beforeHandleRetirement)
             // Allocate the owner carrier before native effects, not while reporting a possible native/JNI OOM.

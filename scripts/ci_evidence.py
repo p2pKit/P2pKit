@@ -889,8 +889,57 @@ def junit_failures(root, source_commit="HEAD"):
                        "org.opentest4j.AssertionFailedError", "java.net.NoRouteToHostException",
                        "java.net.SocketException", "java.net.BindException", "java.io.IOException",
                        "java.lang.InterruptedException", "java.util.concurrent.TimeoutException"}
-            return {"sourceDefinedCodes": sorted(codes), "exceptionClasses": sorted(cls for cls in classes
-                    if re.search(r"(?<![A-Za-z0-9_.$])" + re.escape(cls) + r"(?![A-Za-z0-9_.$])", text))}
+            result = {"sourceDefinedCodes": sorted(codes), "exceptionClasses": sorted(cls for cls in classes
+                      if re.search(r"(?<![A-Za-z0-9_.$])" + re.escape(cls) + r"(?![A-Za-z0-9_.$])", text))}
+            # Only the source-bound original child's already emitted, finite
+            # interface/route observations. No old runner import, native query,
+            # route text, interface identity, permission or readiness inference.
+            boolean, known = r"(?:true|false)", r"(?:true|false|UNKNOWN)"
+            failure_class = "(?:" + "|".join(re.escape(cls) for cls in sorted(classes)) + ")"
+            patterns = [
+                "startup firstSendFailureClass=" + failure_class + " firstSendDestinationIpv4Mdns=" + known,
+                "startup interfaceSnapshot=BEFORE_WAIT selectedKnown=" + boolean + " hostKnown=" + boolean
+                + " socketKnown=" + boolean + " selectedHostMatch=" + known + " selectedSocketMatch=" + known
+                + " hostSocketMatch=" + known,
+                "startup route (?:queryStarted=false reason=(?:FIRST_SEND_DESTINATION_NOT_MATCHED|SELECTED_INTERFACE_UNKNOWN)"
+                + "|observation=POST_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true queryCompleted=" + boolean
+                + " exitZero=" + known + ")",
+                "startup route outputWithinBound=" + boolean,
+                "startup route processReaped=" + boolean,
+                "startup route queryFailureClass=" + failure_class,
+                "startup route interfaceParsed=" + boolean + " selectedInterfaceMatch=" + known
+                + " flagsParsed=" + boolean,
+                *("startup routeFlag=" + flag + " present=" + boolean
+                  for flag in ("UP", "REJECT", "BLACKHOLE", "GATEWAY", "IFSCOPE")),
+                "startup explicitAddress=" + boolean + " linkLocal=" + boolean
+                + " virtualInterface=" + boolean + " pointToPoint=" + boolean,
+            ]
+            patterns = [re.compile(pattern) for pattern in patterns]
+            markers, observations = {}, 0
+            for failure in failures:
+                # XML may repeat the transcript in body and message. Preserve
+                # literal line boundaries; stripping arbitrary prefixes or using
+                # Unicode splitlines could manufacture an apparently safe line.
+                for value in (failure.text or "", failure.get("message", "")):
+                    if len(value) > 128 * 1024:
+                        return result
+                    for line in value.split("\n"):
+                        if line.endswith("\r"):
+                            line = line[:-1]
+                        if len(line) > 512:
+                            continue
+                        for index, pattern in enumerate(patterns):
+                            if pattern.fullmatch(line):
+                                observations += 1
+                                # Conflicting values and excessive repetitions
+                                # cannot select a favorable route observation.
+                                if observations > 32 or (index in markers and markers[index] != line):
+                                    return result
+                                markers[index] = line
+                                break
+            if markers:
+                result["startupMarkers"] = sorted(markers.values())
+            return result
         except (OSError, ValueError, UnicodeError, EvidenceError):
             return None
 

@@ -19,6 +19,8 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -126,14 +128,22 @@ class HandshakeIdentityTest {
                 },
                 verifyDiagnostics = { recorder -> assertLegacyPeerMismatchDiagnostics(recorder, alice.localPeerId) }
             ) { impostor ->
-                impostor.start()
-                val err = assertFailsWith<P2pError.HandshakeRejected> {
-                    withTimeout(5_000) { alice.connect(peer("bob-id")) }
+                withTimeout(5_000) {
+                    // Subscribe before start; the rejected responder may commit and retire before
+                    // a later StateFlow observer could see its transient session.
+                    val incoming = async(start = CoroutineStart.UNDISPATCHED) { impostor.incomingSessions.first() }
+                    impostor.start()
+                    val err = assertFailsWith<P2pError.HandshakeRejected> {
+                        alice.connect(peer("bob-id"))
+                    }
+                    assertTrue(
+                        err.reason.contains("peerId mismatch"),
+                        "expected a peerId-mismatch rejection, got: ${err.reason}"
+                    )
+                    // Preserve the independent responder commit before fixture teardown, without
+                    // accepting additional diagnostics or extending the original five-second bound.
+                    assertEquals(alice.localPeerId, incoming.await().peer.id)
                 }
-                assertTrue(
-                    err.reason.contains("peerId mismatch"),
-                    "expected a peerId-mismatch rejection, got: ${err.reason}"
-                )
             }
         }
     }

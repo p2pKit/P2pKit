@@ -14,8 +14,8 @@ fi
 # Shared-check, consumer/writer and focused JmDNS CLI routes select one explicit
 # macOS 15 Intel baseline. Native/installer/Swift lanes retain their images.
 if [[ "$component" == macos-shared || "$component" == consumers || "$component" == published-consumers-diagnostic || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then
-  [[ "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == X64 ]]
-  [[ "$(sw_vers -productVersion)" == 15.* ]]
+  [[ "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == X64 ]] || exit 1
+  [[ "$(sw_vers -productVersion)" == 15.* ]] || exit 1
 fi
 if [[ "${RUNNER_OS:-}" == macOS ]]; then
   if [[ "$component" == macos-shared || "$component" == consumers || "$component" == published-consumers-diagnostic || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then
@@ -25,7 +25,7 @@ if [[ "${RUNNER_OS:-}" == macOS ]]; then
   test -d "$xcode"
   if [[ "$component" == macos-shared || "$component" == consumers || "$component" == published-consumers-diagnostic || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then
     version="$(DEVELOPER_DIR="$xcode" xcodebuild -version)"
-    [[ "${version%%$'\n'*}" == 'Xcode 26.3' ]]
+    [[ "${version%%$'\n'*}" == 'Xcode 26.3' ]] || exit 1
   fi
   echo "DEVELOPER_DIR=$xcode" >> "$GITHUB_ENV"
   xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"

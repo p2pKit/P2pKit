@@ -15,7 +15,12 @@ internal fun assertLegacyPeerMismatchDiagnostics(recorder: RecordingLogger, init
     val diagnostics = recorder.entries.filter {
         it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
     }
-    assertTrue(diagnostics.size <= 1, "only one controlled HELLO mismatch was sent")
+    assertTrue(
+        diagnostics.size <= 1,
+        "only one controlled HELLO mismatch was sent; observed: " + diagnostics.joinToString("\n") {
+            "${it.level}: ${it.message}" + it.throwable?.stackTraceToString().orEmpty()
+        }
+    )
     // This responder's first incoming session uses the initiator's actual id and sequence 1.
     // Only the production clock component varies; no expected id/count is obtained from the logs.
     val message = Regex(

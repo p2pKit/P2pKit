@@ -4,7 +4,10 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.Condition
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
+import kotlin.concurrent.withLock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
@@ -40,7 +43,7 @@ class WindowsProfileErrorCloseInterleavingTest {
                 owner = Outcome(interrupted = true) { files.close() }
                 awaitRetiring(files)
                 waiter = Outcome(interrupted = true) { files.close() }
-                awaitWaiting(waiter.worker)
+                awaitCloseWaiters(files)
                 assertTrue(owner.worker.isAlive)
                 assertTrue(model.closeCalls.isEmpty())
                 assertEquals(1, files.retainedHandleCount)
@@ -103,7 +106,7 @@ class WindowsProfileErrorCloseInterleavingTest {
                 owner = Outcome(interrupted = true) { files.close() }
                 awaitRetiring(files)
                 waiter = Outcome(interrupted = true) { files.close() }
-                awaitWaiting(waiter.worker)
+                awaitCloseWaiters(files)
                 assertTrue(owner.worker.isAlive)
                 assertEquals(listOf(leaseHandle), closeAttempts)
                 assertTrue(model.closeCalls.isEmpty())
@@ -157,15 +160,20 @@ class WindowsProfileErrorCloseInterleavingTest {
         assertTrue(files.retirementStarted)
     }
 
-    private fun awaitWaiting(worker: Thread) {
+    private fun awaitCloseWaiters(files: WindowsProfileFiles) {
+        // Thread.State.WAITING can be transient lock acquisition, not the original close condition;
+        // a second state read can already be RUNNABLE. Observe both callers under that actual lock.
+        // Reflection stays test-only: no production admission hook or new observability API is needed.
+        val monitor = files.javaClass.getDeclaredField("monitor").apply { isAccessible = true }
+            .get(files) as ReentrantLock
+        val changed = files.javaClass.getDeclaredField("changed").apply { isAccessible = true }
+            .get(files) as Condition
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        // Thread.getState is a snapshot: an observed waiter may transiently run
-        // again before a second read. Assert the same observation we awaited.
-        var observed = worker.state
-        while (observed != Thread.State.WAITING && worker.isAlive && System.nanoTime() < end) {
-            Thread.yield()
-            observed = worker.state
+        var observed = false
+        while (!observed && System.nanoTime() < end) {
+            observed = monitor.withLock { monitor.getWaitQueueLength(changed) == 2 }
+            if (!observed) Thread.yield()
         }
-        assertEquals(Thread.State.WAITING, observed)
+        assertTrue(observed, "Both close callers must await the original condition before native return")
     }
 }
