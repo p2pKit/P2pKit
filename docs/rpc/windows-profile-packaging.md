@@ -60,6 +60,16 @@ Its canonical ASCII record binds source, tree, DLL digest and component-manifest
 runtime explicitly includes `jdk.unsupported` for `com.sun.nio.file.ExtendedOpenOption`; there is no dependency on an
 ambient full JDK at installation time.
 
+## Installer default
+
+The existing MSI explicitly uses machine-wide installation with no directory
+chooser. Its default is the platform's Program Files location; the application
+name, MainKt entry, canonical version and MSI pipeline are unchanged. This
+installer setting does not prove actual owner/ACL or ancestor safety, prevent an
+administrator's command-line destination override, or admit the productive
+provider. The actual installed root and ordinary-user behavior still require
+runtime validation.
+
 ## Failure and security boundaries
 
 - Staging accepts an empty destination or an exact complete prior two-file byte stage. Partial, unknown, modified,
@@ -85,10 +95,17 @@ component/parent pins. It checks the bundled runtime's module declaration, not c
 Compose can mangle the packaged JAR filename using its content-based naming rule; inspection verifies that rule
 without treating its MD5-derived suffix as a security digest. Whole-JAR SHA-256 and the canonical embedded pin
 remain the byte bindings.
-`verify-rpc-windows-msi-payload.py` compares the exact DLL, manifest and whole parent-pin JAR after a bounded,
+`verify-rpc-windows-msi-payload.py` compares the exact DLL, manifest, whole parent-pin JAR and, when selected,
+the preview-adapter JAR after a bounded,
 source-bound static WiX `dark` extraction of that same MSI. It checks concrete installed target paths and the
-extracted bytes; it does not install the MSI or execute custom actions. The guarded hosted test retains the
-three compared component copies and tool/byte receipts, not the complete extracted application/runtime.
+extracted bytes; it does not install the MSI or execute custom actions.
+
+The modular `desktop-windows` component invokes `scripts/inspect-rpc-windows-package.py` after its existing
+Gradle installer task. This wrapper runs the two maintained inspectors and the installed WiX tool through
+the shared `ci_evidence.run_command` supervisor. The four-component comparison is mandatory when the
+preview adapter is packaged. Source/run identity, bounded decompiled MSI metadata and tool/comparison
+receipts are retained under `build/reports/rpc-windows-package/` through the normal encrypted CI evidence
+collection. The complete extracted payload stays outside reports in ephemeral `RUNNER_TEMP`.
 
 These checks preserve explicit `NOT_PERFORMED` installation, native execution, runtime qualification and signing
 states. Static equality is useful packaging evidence but not Windows RPC provider or full-application acceptance.
@@ -108,6 +125,18 @@ existing app executable with bounded output/time, pins its launcher/config/runti
 the returned module result against the image metadata, and records ordinary process exit. This is build-image
 module resolution only, **not** installation, standard-user protected-storage tests or Foundation's required
 whole-lifetime installed-app supervision. Those remain separate integration gates.
+
+In modular CI, `scripts/check-rpc-windows-image-runtime.py` follows the static package check. It runs both
+existing `--rpc-windows-runtime-readback` and `--rpc-windows-loader-readback` routes, verifies their exact
+responses against the source-bound image receipt, and checks the bound image files before and after
+execution. The shared supervisor must report normal exit, closed captures and known cleanup. Receipts
+and bounded private captures are collected from `build/reports/rpc-windows-runtime-readback/`; this does
+not run the productive provider or change the installed-Windows acceptance requirements.
+
+Both steps are required component tasks, not optional diagnostics. A focused `desktop-windows` dispatch
+of `ci.yml` or `desktop-cross-host.yml` executes them without rerunning other platforms. Final aggregation
+still requires every mandatory component on the exact same source; a focused pass alone is not release
+qualification. The old branch-specific PowerShell hosted wrappers are not the active modular entry points.
 
 
 ### Exact Windows JDK producer input

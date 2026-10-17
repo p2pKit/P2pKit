@@ -475,6 +475,12 @@ compose.desktop {
                 appRelease = "1"
             }
             macOS { packageBuildVersion = applicationReleaseVersion.nativeVersion }
+            windows {
+                // Productive installed-root admission requires a protected machine installation.
+                // This fixes the default/UI; runtime checks must still reject unsafe overrides.
+                perUserInstall = false
+                dirChooser = false
+            }
             // AUDIT-2026-06 (BUILD-G10-12): derive from the project version
             // (gradle.properties VERSION_NAME) instead of a stale literal.
             description = "P2pKit ${project.version} desktop sample (room broadcast + file transfer)"

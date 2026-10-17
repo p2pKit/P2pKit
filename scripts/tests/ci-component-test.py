@@ -70,13 +70,30 @@ class ComponentTests(unittest.TestCase):
 
     def test_signed_original_and_recovery_regressions_are_run_offline_in_source(self):
         actual = dict(C.commands('source'))
-        for name in ('central-bundle-evidence-test.py', 'maven-recovery-test.py', 'verify-rpc-windows-jdk21-test.py', 'check-rpc-windows-packaging-test.py'):
+        for name in ('central-bundle-evidence-test.py', 'maven-recovery-test.py', 'verify-rpc-windows-jdk21-test.py', 'check-rpc-windows-packaging-test.py',
+                     'inspect-rpc-windows-package-test.py', 'verify-rpc-windows-app-image-test.py',
+                     'verify-rpc-windows-msi-payload-test.py', 'check-rpc-windows-image-runtime-test.py'):
             self.assertEqual(actual[name], [C.sys.executable, '-B', 'scripts/tests/' + name, '-v'])
         evidence_spec = importlib.util.spec_from_file_location('ci_evidence_routes', ROOT / 'scripts/ci_evidence.py')
         evidence = importlib.util.module_from_spec(evidence_spec)
         with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
             evidence_spec.loader.exec_module(evidence)
         self.assertTrue(set(actual) <= evidence.TASK_NAMES)
+
+    def test_windows_packaging_runs_real_static_rpc_inspection_after_installer(self):
+        commands = C.commands('desktop-windows')
+        self.assertEqual(commands[-2], ('rpc-windows-package-inspection',
+                         [C.sys.executable, '-B', 'scripts/inspect-rpc-windows-package.py']))
+        self.assertEqual(commands[-3][0], 'desktop-tests-and-installer')
+        self.assertEqual(commands[-1], ('rpc-windows-runtime-readback',
+                         [C.sys.executable, '-B', 'scripts/check-rpc-windows-image-runtime.py']))
+        for component in ('desktop-macos', 'desktop-linux', 'jvm-windows'):
+            self.assertNotIn('rpc-windows-package-inspection', dict(C.commands(component)))
+            self.assertNotIn('rpc-windows-runtime-readback', dict(C.commands(component)))
+        with tempfile.TemporaryDirectory(prefix='ci-no-rpc-packaging-') as temporary, \
+                patch.object(C, 'ROOT', Path(temporary)):
+            self.assertNotIn('rpc-windows-package-inspection', dict(C.commands('desktop-windows')))
+            self.assertNotIn('rpc-windows-runtime-readback', dict(C.commands('desktop-windows')))
 
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])

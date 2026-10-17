@@ -87,6 +87,17 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         self.assertIn('P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE=', block)
         self.assertLess(block.index('sha256sum --check'), block.index('P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE='))
 
+    def test_msi_defaults_to_machine_scope_without_directory_chooser(self):
+        distribution = BUILD[BUILD.rindex('compose.desktop {'):]
+        windows = distribution[distribution.index('            windows {'):]
+        windows = windows[:windows.index('            }')]
+        self.assertIn('perUserInstall = false', windows)
+        self.assertIn('dirChooser = false', windows)
+        self.assertNotIn('installationPath', windows)
+        self.assertIn('packageName = "P2pKit Sample"', distribution)
+        self.assertIn('mainClass = "dev.p2pkit.sample.desktop.ui.MainKt"', distribution)
+        self.assertIn('packageVersion = applicationReleaseVersion.nativeVersion', distribution)
+
     def test_windows_tasks_are_inside_actual_host_guard(self):
         start = BUILD.index('if (detectedDesktopLockTarget == "windows-x64") {')
         end = BUILD.index('\ncompose.desktop {', start)
