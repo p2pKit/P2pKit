@@ -301,7 +301,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_bundle_diagnostic_records_actual_selected_xcode_identity(self):
         with tempfile.TemporaryDirectory(prefix='bundle-tools-model-') as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for name in ('java', 'gpg', 'gradlew', 'xcodebuild'):
                 (root / name).write_bytes(b'public synthetic executable')
             versions = [Mock(stdout=b'openjdk version "17.0.20.1"'), Mock(stdout=b'gpg (GnuPG) 2.5.22'),
