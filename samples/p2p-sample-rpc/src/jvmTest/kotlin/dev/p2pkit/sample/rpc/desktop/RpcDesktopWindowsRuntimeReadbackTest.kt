@@ -13,6 +13,18 @@ class RpcDesktopWindowsRuntimeReadbackTest {
         listOf("NOSHARE_READ", "NOSHARE_WRITE", "NOSHARE_DELETE"),
     )
 
+    @Test fun installedAdmissionResultIsExactBoundedFormattingNotCallerAuthority() {
+        val result = "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
+            "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
+            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}"
+        assertEquals("{\"source\":\"$source\",\"admission\":$result}", checkedInstalledAdmissionReadback(source, result))
+        for (invalid in listOf(null, 1, "", result + "\n", result + "extra", result.replace("DISABLED", "ENABLED"),
+            result.replace("REUSED", "NEW"), result.replace("NOT_ENTERED", "ENTERED"))) {
+            assertFailsWith<IllegalStateException> { checkedInstalledAdmissionReadback(source, invalid) }
+        }
+        assertFailsWith<IllegalStateException> { checkedInstalledAdmissionReadback("not-source", result) }
+    }
+
     @Test fun actualTestJvmResolvesTheRequiredBootModuleAndAllThreeOptions() {
         // Actual class/module resolution in the test JVM, not an installed/bundled Windows-runtime claim.
         val actual = RpcDesktopWindowsRuntimeReadback.observeRuntime()

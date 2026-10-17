@@ -178,3 +178,15 @@ Protected installed-root admission, original module continuity and real
 ordinary-user installed tests remain separate requirements. This producer
 check does not activate Windows RPC, relax its refusal checks, replace MainKt
 or create another MSI/release pipeline.
+
+## Explicit installed-admission diagnostic
+
+The exact installed Desktop argument `--rpc-windows-installed-admission` invokes
+only the original boot-module admission chain and same-owner reuse, then exits
+without UI, profile-storage or network entry. Unlike the two build-image
+readbacks, this explicitly performs DLL load/image verification/JNI registration;
+operator selection of this native diagnostic does not enable the public provider.
+Its bounded result and retained failures are described in the
+[adapter contract](../../samples/p2p-sample-rpc/native/windows-loader-jdk21/README.md#explicit-installed-admission-diagnostic-not-provider-availability).
+Actual standard-user installed execution of the independently checked exact
+package/runtime remains required; source/model controls are not that evidence.

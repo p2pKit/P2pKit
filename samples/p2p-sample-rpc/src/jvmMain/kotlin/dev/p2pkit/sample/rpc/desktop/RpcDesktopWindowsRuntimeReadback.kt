@@ -2,9 +2,11 @@ package dev.p2pkit.sample.rpc.desktop
 
 import com.sun.nio.file.ExtendedOpenOption
 import dev.p2pkit.sample.rpc.RpcPhoneBuildStamp
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Modifier
 import java.nio.file.OpenOption
 
-/** Fixed runtime linkage diagnostic; no UI, files, network, profile, or P2pKit native library is opened. */
+/** Fixed runtime diagnostics plus a separately explicit installed native-admission diagnostic. */
 public object RpcDesktopWindowsRuntimeReadback {
     /** Existing launcher diagnostic only. Never discover a classpath/ambient adapter or authorize a DLL. */
     public fun runPreviewAdapter(): String {
@@ -23,6 +25,32 @@ public object RpcDesktopWindowsRuntimeReadback {
             "Unexpected adapter diagnostic"
         }
         return "{\"source\":\"${RpcPhoneBuildStamp.SOURCE_COMMIT}\",\"adapter\":$result}"
+    }
+
+    /** Explicit native diagnostic only; ordinary readback and public provider availability are unchanged. */
+    public fun runInstalledAdmission(): String {
+        run() // Existing clean-source and actual runtime/module checks, before any installed acquisition.
+        val boot = ModuleLayer.boot()
+        val module = boot.findModule("dev.p2pkit.rpc.windows.loader").orElseThrow {
+            IllegalStateException("The isolated JDK21 adapter was not resolved")
+        }
+        val system = ClassLoader.getSystemClassLoader()
+        check(system != null && module.isNamed && module.layer === boot && !module.descriptor.isAutomatic &&
+            module.classLoader === system) { "Unexpected installed diagnostic module owner" }
+        val probe = checkNotNull(Class.forName(module, "dev.p2pkit.rpc.windows.loader.Probe"))
+        check(probe.module === module && probe.classLoader === system && Modifier.isPublic(probe.modifiers) &&
+            Modifier.isFinal(probe.modifiers) && !probe.isInterface) { "Unexpected installed diagnostic class" }
+        val method = probe.getDeclaredMethod("installedAdmissionReadback")
+        check(method.declaringClass === probe && method.returnType === String::class.java &&
+            Modifier.isPublic(method.modifiers) && Modifier.isStatic(method.modifiers) &&
+            !method.isBridge && !method.isSynthetic) { "Unexpected installed diagnostic entry" }
+        val result = try {
+            method.invoke(null)
+        } catch (failure: InvocationTargetException) {
+            // Preserve the actual original carrier; never classify admitted failure as Unavailable.
+            throw failure.targetException
+        }
+        return checkedInstalledAdmissionReadback(RpcPhoneBuildStamp.SOURCE_COMMIT, result)
     }
 
     public fun run(): String = checkedWindowsRuntimeReadback(
@@ -102,4 +130,14 @@ internal fun checkedWindowsRuntimeReadback(
         "\"javaVersion\":\"${actual.javaVersion}\",\"module\":\"jdk.unsupported\"," +
         "\"options\":[\"NOSHARE_READ\",\"NOSHARE_WRITE\",\"NOSHARE_DELETE\"]," +
         "\"nativeLoad\":\"NOT_PERFORMED\",\"profileAccess\":\"NOT_PERFORMED\"}"
+}
+
+/** Bounded result formatting only: supplied text is never installation or native-call authority. */
+internal fun checkedInstalledAdmissionReadback(source: String, result: Any?): String {
+    check(source.matches(Regex("[a-f0-9]{40}"))) { "Clean source identity is required" }
+    val expected = "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
+        "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
+        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}"
+    check(result is String && result == expected) { "Unexpected installed admission diagnostic result" }
+    return "{\"source\":\"$source\",\"admission\":$result}"
 }

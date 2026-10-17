@@ -1,6 +1,6 @@
 package dev.p2pkit.rpc.windows.loader;
 
-/** Existing-app diagnostic entry point. It never selects an OS DLL or opens an installed/profile path. */
+/** Existing-app diagnostics. Ordinary readback is inert; installed admission is separately explicit. */
 public final class Probe {
     private Probe() {}
 
@@ -11,6 +11,19 @@ public final class Probe {
             throw new IllegalStateException("Named native access was not explicitly enabled");
         }
         return WindowsLoaderRuntime.readback();
+    }
+
+    /**
+     * Explicit installed-app diagnostic: original native load/image verification/JNI registration,
+     * then same-owner reuse. No profile storage/network/provider entry. Failure propagates unchanged
+     * with its process-lifetime owners; neither success nor failure enables the public provider.
+     */
+    public static String installedAdmissionReadback() {
+        WindowsLoader.completeOriginalInstalledProvider();
+        WindowsLoader.completeOriginalInstalledProvider();
+        return "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
+            "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
+            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}";
     }
 
     public static void main(String[] arguments) {

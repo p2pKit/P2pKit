@@ -129,6 +129,8 @@ def main():
     resources = ["dev/p2pkit/sample/rpc/profile/" + name + ".class" for name in
                  ("WindowsProfilePackagedVerifier", "WindowsProfileCustodyJni", "WindowsProfileInstalledProvider",
                   "WindowsProfileFiles", "WindowsProfileInstalledProvider$Unavailable")]
+    resources += ["dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
+                  "dev/p2pkit/sample/rpc/RpcPhoneBuildStamp.class"]
     candidates = [path for path in main_directories if all((path / resource).is_file() for resource in resources)]
     require(len(candidates) == 1, "Original compiled helper/JNI class output is ambiguous or absent")
     main_directory = candidates[0]
@@ -243,6 +245,14 @@ def main():
     connected_run("installed-provider-unavailable", "InstalledProviderTests", [str(main_directory),
                   bindings[2]["sha256"], bindings[3]["sha256"], bindings[1]["sha256"], bindings[4]["sha256"]],
         r"WINDOWS_INSTALLED_PROVIDER_REFUSAL_PASS scope=REAL_JDK21_TO_JDK17_TYPED_REFUSAL_NOT_INSTALLED_OR_NATIVE\n")
+    diagnostic_connection_cases = (["diagnostic-connected-reuse", "diagnostic-connected-failure",
+                                    "diagnostic-connected-in-progress"] if os.name == "nt" else
+                                   ["diagnostic-connected-source-or-host-refusal"])
+    for case in diagnostic_connection_cases:
+        connected_run("installed-" + case, "InstalledProviderTests", [case, str(main_directory),
+                      bindings[5]["sha256"], bindings[6]["sha256"]],
+            "WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + re.escape(case) +
+            r" scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION\n")
     loaded_image_cases = ["unattached", "once", "thread", "unprepared", "owned-required", "order",
                           "wrong-order", "substituted-view", "missing-name", "duplicate-name", "closed-scope",
                           "declaration", "registration-before-verification", "registration-after-failure",
@@ -297,7 +307,8 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".InstalledProfilePreparationTests", case], 0,
             "WINDOWS_INSTALLED_PRELOAD_PASS case=" + re.escape(case) +
             r" scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION\n", "")
-    controller_cases = ["contract", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
+    controller_cases = ["diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress",
+                        "contract", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
                         "missing-registration", "unfinished-registration", "wrong-thread", "wrong-owner"]
     for case in controller_cases:
         run("installed-process-controller-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),

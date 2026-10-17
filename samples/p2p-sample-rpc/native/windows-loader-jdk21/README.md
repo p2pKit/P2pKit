@@ -1,11 +1,11 @@
 # Isolated JDK21 preview Windows loader boundary
 
-**PRODUCTION DISABLED.** This named module contains actual JDK21 preview FFM
-memory preparation and runtime-policy checks. It does not contain a trusted OS
-bootstrap, installed-directory admission, productive DLL load/JNI
-registration, protected profile provider or Windows runtime qualification. Dormant
-post-admission registration ownership, FFM call mechanics and a conditional system-only
-bootstrap investigation are described below. The latter does not supply initial authority.
+**PUBLIC PROVIDER DISABLED.** This named module contains JDK21 preview FFM
+mechanics and the closed original installed-admission chain. Only the separately
+explicit installed-admission diagnostic may invoke that native load/JNI chain;
+ordinary readback and the public provider entry do not. Implementation and model
+results are not installed Windows/provider qualification. The documented trusted
+OS/JVM/application/startup premise is still required before its first OS call.
 
 It does not replace the existing Desktop application, installer, version encoding,
 Foundation custody or publication pipeline. The ordinary Java17 compilation and
@@ -19,6 +19,10 @@ Module: `dev.p2pkit.rpc.windows.loader`.
   object on success. Runtime-policy refusal exits 2 with a fixed stderr code.
 - `Probe.readback()`: the same diagnostic, callable by the existing application's
   explicitly configured modular-preview diagnostic route. Throws on refusal.
+- `Probe.installedAdmissionReadback()`: explicit zero-argument native admission
+  diagnostic for the installed application, followed by same-owner reuse. It does
+  not enter profile storage/network or enable the public provider; failure keeps
+  the exact original retained carrier. See the installed diagnostic scope below.
 - `WindowsLoaderRuntime.requireDiagnosticRuntime()`: checks the real JDK feature,
   module/layer and preview native-access arrangement. It does not authorize loading.
 - `WindowsLoader.openInstalledProvider()`: **always refuses** with
@@ -201,8 +205,8 @@ invoked by preparing the plan or inspecting the declaring class.
 The native [post-admission registration core](../windows-profile/jni-contract.md#post-admission-registration-core)
 now exports the single-invocation operation, but remains unreachable
 from production. The managed lifetime and fixed FFM invocation components below are implemented separately;
-they have no productive caller and loading remains unimplemented. The design direction is
-explicit `RegisterNatives` against original verified function addresses, after
+the public provider still has no productive caller. The explicit installed admission diagnostic
+uses `RegisterNatives` against original verified function addresses, after
 independent loading authority. Preload plus `System.load` does not pin each Java
 method to that module. JNI references and pending exceptions need the reviewed
 single-native-invocation bridge; its exported interface still requires exact current-source
@@ -220,7 +224,8 @@ strongly retaining the original installation/runtime/module owners, declaring cl
 immutable registration plan and invocation frame. These references are **not** installed
 authority or OS handle pins. A future reviewed loader must first establish real authority
 and transfer exclusive originals, not borrowed objects with independent close paths.
-There is no productive caller. The fixed dormant invocation implementation below is not wired to a DLL.
+There is no productive public provider caller. The explicit installed diagnostic alone can
+reach the fixed original DLL verification/registration composition below.
 
 Every admitted attempt consumes the slot, even a phase-0 refusal, thrown invocation,
 partial registration or malformed report. Success requires coherent result-0/phase-2
@@ -1203,3 +1208,24 @@ without exposing or revisiting those owners. In-progress calls refuse, admitted
 failure remains sealed, and no attempt resets. The public entry still always
 returns its original `Unavailable` failure; inert controller models do not execute
 this first native composition or qualify an installed provider.
+
+### Explicit installed admission diagnostic (not provider availability)
+
+The single exact Desktop argument `--rpc-windows-installed-admission` selects
+`MainKt` → fixed original boot-module `Probe.installedAdmissionReadback()` → the
+closed original controller twice. It performs installation/runtime/profile-DLL
+inspection, DLL load/image verification and JNI registration, then same-owner
+reuse; it does not open profile storage, enter network/UI logic or enable the
+public provider. No path, manifest, trust Boolean or module override is accepted.
+Run it only as an explicitly selected native diagnostic of the independently
+checked installed application under the documented trusted-startup model.
+
+Success emits only clean source metadata and the fixed bounded admission/reuse
+result. Failure emits one fixed nonqualified stderr code and exits nonzero;
+original partial owners/failure remain process-rooted until exit. No relaunch,
+unload, unregister or retry is attempted. Local seeded-state/connection controls
+are not an installed positive: genuine standard-user installed execution and
+later public-provider qualification/connection remain pending. Supervise that
+future installed executable with the existing bounded Windows Job Object runner;
+this diagnostic does not widen the GHA build-image readback wrapper or replace
+its two no-native-load probes.

@@ -16,6 +16,11 @@ import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.value;
 
 /** Fresh JVM per case. No first native completion is invoked, even on Windows. */
 public final class InstalledProcessControllerTests {
+    static final String INSTALLED_DIAGNOSTIC_RESULT =
+        "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
+        "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
+        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}";
+
     private InstalledProcessControllerTests() {}
 
     public static void main(String[] arguments) throws Throwable {
@@ -24,6 +29,8 @@ public final class InstalledProcessControllerTests {
         check(root() == null);
         publicRefusal();
         switch (arguments[0]) {
+            case "diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress" ->
+                diagnostic(arguments[0]);
             case "contract" -> contract();
             case "claim" -> firstClaim();
             case "in-progress" -> inProgress();
@@ -75,7 +82,7 @@ public final class InstalledProcessControllerTests {
         check(root() == null);
     }
 
-    private static Object firstClaim() throws Throwable {
+    static Object firstClaim() throws Throwable {
         Object attempt = claim();
         check(attempt != null && root() == attempt && value(attempt, "ownerThread") == Thread.currentThread());
         check(value(attempt, "state").toString().equals("Reserved"));
@@ -156,6 +163,46 @@ public final class InstalledProcessControllerTests {
         check(value(attempt, "bootstrap") == null && value(attempt, "installation") == null && value(attempt, "profile") == null);
         expect(IllegalStateException.class, () -> invoke(attempt, "complete"));
         check(value(attempt, "state").toString().equals("Registered") && value(value(attempt, "failure"), "operationFailure") == null);
+    }
+
+    /** Test-only inert terminal-state fixture; it never enters the original installed load chain. */
+    static Object seedRegistered() throws Throwable {
+        Object attempt = firstClaim();
+        WindowsJniRegistrationOwner owner = WindowsJniRegistrationOwner.registerOnce(inertRetention(), new InertRegistration());
+        field(attempt, "registration").set(attempt, owner);
+        invoke(attempt, "publishRegistered");
+        return attempt;
+    }
+
+    private static void diagnostic(String mode) throws Throwable {
+        Method entry = Probe.class.getDeclaredMethod("installedAdmissionReadback");
+        check(entry.getParameterCount() == 0 && entry.getReturnType() == String.class &&
+            Modifier.isPublic(entry.getModifiers()) && Modifier.isStatic(entry.getModifiers()));
+        if (mode.equals("diagnostic-contract")) return; // Never invoke a fresh native first entry in models.
+        if (mode.equals("diagnostic-reuse")) {
+            Object attempt = seedRegistered();
+            check(Probe.installedAdmissionReadback().equals(INSTALLED_DIAGNOSTIC_RESULT));
+            onThread(false, () -> check(Probe.installedAdmissionReadback().equals(INSTALLED_DIAGNOSTIC_RESULT)));
+            onThread(true, () -> check(Probe.installedAdmissionReadback().equals(INSTALLED_DIAGNOSTIC_RESULT)));
+            check(root() == attempt && value(attempt, "state").toString().equals("Registered"));
+            Object call = value(value(attempt, "registration"), "invocation");
+            check((int) value(call, "calls") == 1 && (int) value(call, "reads") == 1 &&
+                (int) value(call, "retirements") == 1);
+            check(value(attempt, "bootstrap") == null && value(attempt, "installation") == null && value(attempt, "profile") == null);
+        } else {
+            Object attempt = firstClaim();
+            if (mode.equals("diagnostic-failure")) {
+                Error original = new LinkageError("inert installed diagnostic failure");
+                Object carrier = invoke(attempt, "seal", new Class<?>[] {Throwable.class}, original);
+                check(expect(RuntimeException.class, Probe::installedAdmissionReadback) == carrier);
+                check(value(carrier, "operationFailure") == original && !(carrier instanceof WindowsLoader.Unavailable));
+            } else {
+                expect(IllegalStateException.class, Probe::installedAdmissionReadback);
+                check(value(attempt, "state").toString().equals("Reserved"));
+                check(value(value(attempt, "failure"), "operationFailure") == null);
+            }
+            emptyChildren(attempt);
+        }
     }
 
     private static void incomplete(boolean unfinished) throws Throwable {

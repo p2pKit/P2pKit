@@ -140,7 +140,10 @@ public final class PackagedVerifierTests {
     }
 
     static Class<?> actualClass(String simple, Path main, String expectedHash) throws Exception {
-        String name = PROFILE + simple;
+        return actualApplicationClass(PROFILE + simple, main, expectedHash);
+    }
+
+    static Class<?> actualApplicationClass(String name, Path main, String expectedHash) throws Exception {
         String resource = name.replace('.', '/') + ".class";
         Class<?> actual = Class.forName(name, false, ClassLoader.getSystemClassLoader());
         check(actual.getClassLoader() == ClassLoader.getSystemClassLoader() && !actual.getModule().isNamed());

@@ -2,7 +2,8 @@ package dev.p2pkit.rpc.windows.loader;
 
 /**
  * Public fail-closed implementation boundary. The internal original installed composition below
- * remains unreachable from the public API and is not installed Windows/provider qualification.
+ * remains unreachable from the public provider entry. The separately explicit installed diagnostic
+ * may exercise it; implementation alone is not installed Windows/provider qualification.
  */
 public final class WindowsLoader {
     public static final String REFUSAL = "WINDOWS_LOADER_DISABLED_TRUSTED_BOOTSTRAP_NOT_IMPLEMENTED";
@@ -111,7 +112,7 @@ public final class WindowsLoader {
         return installedAttempt;
     }
 
-    /** Closed source composition only; the public entry deliberately does not call this method. */
+    /** Closed original composition; only the explicit diagnostic, not the public provider, calls it. */
     static void completeOriginalInstalledProvider() {
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         InstalledAttempt attempt = claimOriginalInstalledProvider();
