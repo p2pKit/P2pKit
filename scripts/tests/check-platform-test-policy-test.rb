@@ -36,10 +36,12 @@ end
 
 def check_platform_policy(v)
   matrix = v[:matrix].fetch('include').to_h { |row| [row.fetch('component'), row] }
-  {'apple-arm64' => ['macos-26', 150, 'full'], 'apple-x64' => ['macos-15-intel', 120, 'ios-x64']}.each do |name, (os, minutes, profile)|
+  {'apple-arm64' => ['macos-26', 150, 'ios-arm64', 'native-platform-tests'],
+   'apple-x64' => ['macos-15-intel', 120, 'ios-x64', 'native-platform-tests'],
+   'macos-shared' => ['macos-14', 120, 'macos-shared', 'shared-platform-tests']}.each do |name, (os, minutes, profile, task)|
     need(matrix.fetch(name).values_at('os', 'minutes', 'job_minutes') == [os, minutes, minutes + 10], 'Wrong native platform or operational budget')
     commands = v.fetch(name.to_sym)
-    need(commands.size == 1 && commands[0][0] == 'native-platform-tests' &&
+    need(commands.size == 1 && commands[0][0] == task &&
          File.basename(commands[0][1][0]).start_with?('python') &&
          commands[0][1].drop(1) == ['-B', 'scripts/run-platform-tests.py', profile],
          'Native coverage driver/profile bypassed')
@@ -176,6 +178,7 @@ end
 inputs.merge!(matrix: command_json('--matrix', 'all'),
               'apple-arm64': command_json('apple-arm64', '--list-commands'),
               'apple-x64': command_json('apple-x64', '--list-commands'),
+              'macos-shared': command_json('macos-shared', '--list-commands'),
               source: command_json('source', '--list-commands'),
               setup: File.read(File.join(ROOT, 'scripts/setup-ci-component.sh')),
               driver: File.read(File.join(ROOT, 'scripts/run-platform-tests.py')),
@@ -187,6 +190,10 @@ mutations = {
   'missing Intel shared restoration controls' => ->(v) { v[:source].reject! { |name, _| name == 'rpc-apple-bonjour-environment-test.py' } },
   'ignored Intel transaction tests' => ->(v) { v[:source].find { |name, _| name == 'intel-bonjour-advertising-test.py' }[1].unshift('echo') },
   'raw FULL bypass' => ->(v) { v[:'apple-arm64'][0][1] = ['./gradlew', 'check'] },
+  'wrong ARM profile' => ->(v) { v[:'apple-arm64'][0][1][-1] = 'full' },
+  'missing shared partition' => ->(v) { v[:matrix]['include'].reject! { |x| x['component'] == 'macos-shared' } },
+  'wrong shared profile' => ->(v) { v[:'macos-shared'][0][1][-1] = 'ios-arm64' },
+  'wrong shared host' => ->(v) { v[:matrix]['include'].find { |x| x['component'] == 'macos-shared' }['os'] = 'macos-26' },
   'wrong Intel profile' => ->(v) { v[:'apple-x64'][0][1][-1] = 'full' },
   'echo not execution' => ->(v) { v[:'apple-arm64'][0][1].unshift('echo') },
   'wrong Intel host' => ->(v) { v[:matrix]['include'].find { |x| x['component'] == 'apple-x64' }['os'] = 'macos-26' },

@@ -26,6 +26,17 @@ AUDIT_CONSUMER_METADATA="${P2PKIT_CONSUMER_AUDIT_METADATA:-0}"
 GRADLE_EXECUTOR="${P2PKIT_GRADLE_EXECUTOR:-}"
 REMOTE_REPOSITORY_URL="${P2PKIT_CONSUMER_REPOSITORY_URL:-}"
 CONSUMER_PROFILE="${P2PKIT_CONSUMER_PROFILE:-complete}"
+POM_DIAGNOSTIC=0
+if [[ "${1:-}" == --pom-diagnostic ]]; then
+    [[ $# -eq 1 && "$CONSUMER_PROFILE" == complete && "$AUDIT_CONSUMER_METADATA" == 0 &&
+       -z "$REMOTE_REPOSITORY_URL" && -z "$GRADLE_EXECUTOR" ]] || {
+        echo "FAIL: --pom-diagnostic requires ordinary source-local execution without other arguments or profiles" >&2
+        exit 2
+    }
+    POM_DIAGNOSTIC=1
+    CONSUMER_PROFILE=lan-jvm-android
+    shift
+fi
 CURRENT_SOURCE_CONSUMER=1
 RPC_CONSUMER=0
 AUDIT_WORK_STATE=""
@@ -916,6 +927,8 @@ import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.core.security.JvmSecureIdentityStore
 import dev.p2pkit.transport.lan.JvmLanDiag
 import dev.p2pkit.transport.lan.internal.jmdns.JmDNS
+import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
+import dev.p2pkit.transport.lan.internal.jmdns.impl.constants.DNSRecordType
 import dev.p2pkit.transport.lan.internal.jmdns.impl.DNSTaskStarter
 import dev.p2pkit.transport.lan.internal.jmdns.impl.JmDNSImpl
 import dev.p2pkit.transport.lan.lan
@@ -989,6 +1002,45 @@ private fun captureOwners(factory: Any): List<NativeOwner> = installedStarters(f
     val stateTimer = timerThread(starter, "_stateTimer")
     check(timer.isAlive && stateTimer.isAlive && !stateTimer.isDaemon)
     NativeOwner(dns, checkNotNull(dns.socket), timer, stateTimer, field(dns, "_executor") as ExecutorService)
+}
+
+// Failure-only passive snapshots of ORIGINAL listener/cache/peer state. These
+// are observations, not callback counts or proof of packet delivery. Synthetic
+// identities are used only for matching in memory and are never printed.
+@Suppress("UNCHECKED_CAST")
+private fun reportDiscoveryState(factory: Any, kits: List<P2pKit>) {
+    try {
+        check(kits.size == 2)
+        val handles = installedStarters(factory).keys.map { it as JmDNSImpl }
+        check(handles.size == 2)
+        kits.forEachIndexed { index, kit ->
+            val other = kits.single { it !== kit }
+            val dns = handles.single { owner -> owner.services.values.any { it.name == kit.localPeerId.value } }
+            val listeners = field(dns, "_serviceListeners") as Map<String, MutableList<Any>>
+            val statuses = listeners.values.flatMap { list -> synchronized(list) { list.toList() } }
+            check(statuses.size <= 32)
+            val infos = statuses.flatMap { status ->
+                (field(status, "_addedServices") as Map<String, ServiceInfo>).values.toList()
+            }
+            val peerInfos = infos.filter { it.name == other.localPeerId.value }
+            val cache = dns.cache.allValues()
+            val remote = cache.filter { it.name == other.localPeerId.value + "." + "_p2pkit2._tcp.local." }
+            val peers = kit.peers.value
+            check(infos.size <= 4096 && cache.size <= 4096 && peers.size <= 4096)
+            fun bit(value: Boolean) = if (value) 1 else 0
+            println(
+                "CONSUMER_DISCOVERY_SNAPSHOT INDEX $index LISTENERS ${statuses.size} " +
+                    "ADDED ${infos.size} RESOLVED ${infos.count { it.hasData() }} " +
+                    "OTHER_ADDED ${peerInfos.size} OTHER_RESOLVED ${peerInfos.count { it.hasData() }} " +
+                    "REMOTE_SRV ${bit(remote.any { it.recordType == DNSRecordType.TYPE_SRV })} " +
+                    "REMOTE_TXT ${bit(remote.any { it.recordType == DNSRecordType.TYPE_TXT })} " +
+                    "PEERS ${peers.size} SEES_OTHER ${bit(peers.any { it.id == other.localPeerId })}"
+            )
+        }
+    } catch (_: Throwable) {
+        // Never replace the ORIGINAL failure with an optional diagnostic error.
+        println("CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE")
+    }
 }
 
 // Passive failure diagnostics only. Never print local addresses, interface or
@@ -1110,6 +1162,7 @@ fun main(arguments: Array<String>) = runBlocking {
     } catch (error: Throwable) {
         recordFailure(error)
         println("consumer-lan failedPhase=$phase errorType=${error.javaClass.simpleName}")
+        reportDiscoveryState(factory, kits)
         try {
             reportNativeState(factory)
         } catch (diagnosticFailure: Throwable) {
@@ -1751,6 +1804,11 @@ fi
 if [[ "$RPC_CONSUMER" == 1 ]]; then
     consumer_tasks+=( :rpcJvm:compileKotlin :rpcJvm:runPublishedRpcApiSmoke )
 fi
+if [[ "$POM_DIAGNOSTIC" == 1 ]]; then
+    # Explicit diagnostics only: original published POM resolution and actual
+    # native peer/disposal assertions, without unrelated Android/native tasks.
+    consumer_tasks=( :lanJvm:runEmbeddedJmdnsPomSmoke )
+fi
 run_consumer_gradle() {
     if [[ -n "$REMOTE_REPOSITORY_URL" ]]; then
         GRADLE_USER_HOME="$WORK_DIR/gradle-home" "$@"
@@ -1769,6 +1827,11 @@ else
         -PconsumerRepo="$CONSUMER_REPOSITORY" \
         ${REMOTE_REPOSITORY_URL:+--refresh-dependencies} \
         "${consumer_tasks[@]}")
+fi
+
+if [[ "$POM_DIAGNOSTIC" == 1 ]]; then
+    echo "RESULT: PASS — focused published POM discovery diagnostic only; NOT complete consumer or release qualification"
+    exit 0
 fi
 
 if [[ "$CONSUMER_PROFILE" == complete ]]; then

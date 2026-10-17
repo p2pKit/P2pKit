@@ -2,12 +2,39 @@ name: Verify Maven Central namespace
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Protected token check, or secret-free mocked regression controls
+        type: choice
+        options: [verify, controls]
+        default: verify
+        required: true
 
 permissions:
   contents: read
 
 jobs:
+  namespace-controls:
+    if: ${{ inputs.operation == 'controls' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact control source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify clean source identity
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)"
+      - name: Run mocked namespace regression controls without credentials
+        run: bash scripts/tests/check-maven-namespace-access-test.sh
+
   verify-namespace:
+    if: ${{ inputs.operation == 'verify' }}
     runs-on: macos-15
     timeout-minutes: 5
     environment:
@@ -17,9 +44,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Verify exact namespace and token access
+      - name: Verify clean source identity
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)"
+
+      - name: Verify authentication and exact namespace query access
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
@@ -33,3 +68,5 @@ jobs:
           name: maven-central-namespace-access
           path: build/reports/maven-central/namespace-access.json
           if-no-files-found: warn
+          retention-days: 14
+          overwrite: false

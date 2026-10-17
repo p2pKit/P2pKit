@@ -40,7 +40,8 @@ def check_writer(source):
         return "\n".join(line.strip() for line in value.splitlines()
                          if line.strip() and not line.lstrip().startswith("//"))
 
-    graph = section(source, "gradle.taskGraph.whenReady {\n", "\n// Keep coverage in sync")
+    graph = "    val lockRefreshInGraph =" + section(
+        source, "gradle.taskGraph.whenReady {\n    val lockRefreshInGraph =", "\n// Keep coverage in sync")
     expected = '''
     val lockRefreshInGraph = hasTask(resolveAndLockAll.get())
     check(lockRefreshInGraph == gradle.startParameter.isWriteDependencyLocks) {
@@ -51,34 +52,30 @@ def check_writer(source):
         }
     }
     if (lockRefreshInGraph) {
-        val dokkaLockConfigurations = subprojects
-            .filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
-            .flatMap { subproject ->
+        subprojects.filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
+            .forEach { subproject ->
+                // Realization only: never put the disabled V1 tasks into the graph.
                 subproject.tasks.named("dokkaJavadoc").get()
                 subproject.tasks.named("dokkaHtml").get()
                 listOf(
                     subproject.configurations.getByName("dokkaJavadocPlugin"),
                     subproject.configurations.getByName("dokkaHtmlRuntime"),
-                ).onEach { configuration ->
+                ).forEach { configuration ->
                     check(configuration.isCanBeResolved && !configuration.isCanBeConsumed) {
                         "Dokka migration lock refresh requires a resolvable, non-consumable configuration"
                     }
                 }
             }
-        resolveAndLockAll.get().doLast {
-            dokkaLockConfigurations.forEach { configuration ->
-                configuration.resolve()
-            }
-        }
     }
 }
+
 '''
     if lines(graph) != lines(expected):
         raise ValueError("only the admitted writer may realize and resolve the exact migration configuration pair")
-    for selector in ('tasks.named("dokkaJavadoc")', 'tasks.named("dokkaHtml")',
-                     'configurations.getByName("dokkaJavadocPlugin")',
-                     'configurations.getByName("dokkaHtmlRuntime")', "configuration.resolve()"):
-        if source.count(selector) != 1:
+    for selector, count in (('tasks.named("dokkaJavadoc")', 1), ('tasks.named("dokkaHtml")', 1),
+                            ('configurations.getByName("dokkaJavadocPlugin")', 2),
+                            ('configurations.getByName("dokkaHtmlRuntime")', 2), ("configuration.resolve()", 1)):
+        if source.count(selector) != count:
             raise ValueError("migration configuration access must remain exclusive to the writer graph")
     consumers = section(source, "gradle.projectsEvaluated {\n", "\nval aggregateSbomGroup =")
     if lines(consumers) != lines('''
@@ -88,10 +85,33 @@ def check_writer(source):
             subproject.tasks.findByName("dokkaGeneratePublicationHtml"),
         )
     }
+    val dokkaLockTasks = subprojects.filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
+        .map { subproject ->
+            val migrationTask = subproject.tasks.register("resolveDokkaMigrationLocks") {
+                // Resolution runs with this configuration owner's project lock.
+                // Preserve every previous prerequisite, including on --continue.
+                dependsOn(dependencyConsumerTasks, rootProject.tasks.named("cyclonedxBom"))
+                doLast {
+                    listOf(
+                        subproject.configurations.getByName("dokkaJavadocPlugin"),
+                        subproject.configurations.getByName("dokkaHtmlRuntime"),
+                    ).forEach { configuration ->
+                        configuration.resolve()
+                    }
+                }
+            }
+            gradle.taskGraph.whenReady {
+                check(!hasTask(migrationTask.get()) || hasTask(resolveAndLockAll.get())) {
+                    "Dokka migration lock refresh requires resolveAndLockAll"
+                }
+            }
+            migrationTask
+        }
     resolveAndLockAll.configure {
-        dependsOn(dependencyConsumerTasks)
+        dependsOn(dependencyConsumerTasks, dokkaLockTasks)
     }
 }
+
 '''):
         raise ValueError("writer check and HTML dependencies must remain unchanged")
     writer = section(source, 'val resolveAndLockAll = tasks.register("resolveAndLockAll") {\n',
@@ -145,8 +165,8 @@ class FreeMarkerFloorControls(unittest.TestCase):
         for old, new in (
                 ("check(lockRefreshInGraph == gradle.startParameter.isWriteDependencyLocks)", "check(true)"),
                 ("val lockRefreshInGraph = hasTask(resolveAndLockAll.get())", "val lockRefreshInGraph = true"),
-                ("if (lockRefreshInGraph) {\n        val dokkaLockConfigurations",
-                 "if (gradle.startParameter.isWriteDependencyLocks) {\n        val dokkaLockConfigurations"),
+                ("if (lockRefreshInGraph) {\n        subprojects",
+                 "if (gradle.startParameter.isWriteDependencyLocks) {\n        subprojects"),
                 ("gradle.taskGraph.whenReady {\n",
                  'subprojects.forEach { it.tasks.named("dokkaJavadoc").get() }\ngradle.taskGraph.whenReady {\n'),
                 ("gradle.taskGraph.whenReady {\n",
@@ -179,7 +199,7 @@ class FreeMarkerFloorControls(unittest.TestCase):
                 ("configuration.isCanBeResolved && !configuration.isCanBeConsumed", "true"),
                 ("configuration.isCanBeResolved && !configuration.isCanBeConsumed", "configuration.isCanBeResolved"),
                 ("configuration.isCanBeResolved && !configuration.isCanBeConsumed", "!configuration.isCanBeConsumed"),
-                (").onEach { configuration ->",
+                (").forEach { configuration ->",
                  ").also { configurations ->\n                    val configuration = configurations.first()"),
                 ("check(configuration.isCanBeResolved",
                  "configuration.isCanBeConsumed = false\n                    check(configuration.isCanBeResolved"),
@@ -189,14 +209,33 @@ class FreeMarkerFloorControls(unittest.TestCase):
             with self.subTest(old=old), self.assertRaises(ValueError):
                 check_writer(changed)
 
+    def test_writer_rejects_wrong_owner_missing_prerequisites_and_partial_helper_admission(self):
+        for old, new in (
+                ('subproject.tasks.register("resolveDokkaMigrationLocks")',
+                 'rootProject.tasks.register("resolveDokkaMigrationLocks")'),
+                ('dependsOn(dependencyConsumerTasks, rootProject.tasks.named("cyclonedxBom"))',
+                 'mustRunAfter(dependencyConsumerTasks, rootProject.tasks.named("cyclonedxBom"))'),
+                ('dependsOn(dependencyConsumerTasks, rootProject.tasks.named("cyclonedxBom"))',
+                 'dependsOn(dependencyConsumerTasks)'),
+                ('dependsOn(dependencyConsumerTasks, dokkaLockTasks)', 'dependsOn(dependencyConsumerTasks)'),
+                ('check(!hasTask(migrationTask.get()) || hasTask(resolveAndLockAll.get()))', 'check(true)'),
+                ('check(!hasTask(migrationTask.get()) || hasTask(resolveAndLockAll.get()))',
+                 'check(!hasTask(migrationTask.get()) || gradle.startParameter.isWriteDependencyLocks)'),
+                ('check(!hasTask(migrationTask.get()) || hasTask(resolveAndLockAll.get()))',
+                 'check(!hasTask(migrationTask.get()) || allTasks.any { it.name == "resolveAndLockAll" })')):
+            changed = self.source.replace(old, new)
+            self.assertNotEqual(changed, self.source)
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                check_writer(changed)
+
     def test_writer_rejects_early_or_missing_resolution_helper_execution_and_omitted_gates(self):
         for old, new in (
-                ("resolveAndLockAll.get().doLast {", "resolveAndLockAll.get().doFirst {"),
+                ("                doLast {", "                doFirst {"),
                 ("configuration.resolve()", "// configuration.resolve()"),
                 ('configurations.getByName("dokkaHtmlRuntime")',
                  'configurations.getByName("dokkaHtmlRuntime").also { it.resolve() }'),
-                ('dokkaLockConfigurations.forEach { configuration ->',
-                 'dokkaLockConfigurations.filter { it.name == "dokkaJavadocPlugin" }.forEach { configuration ->'),
+                (').forEach { configuration ->',
+                 ').filter { it.name == "dokkaJavadocPlugin" }.forEach { configuration ->'),
                 ('subproject.tasks.named("dokkaJavadoc").get()',
                  'resolveAndLockAll.get().dependsOn(subproject.tasks.named("dokkaJavadoc"))'),
                 ('subproject.tasks.named("dokkaJavadoc").get()',

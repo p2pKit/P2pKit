@@ -3,13 +3,34 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc1 (unpublished candidate)
+## 0.8.0-rc2 (unpublished candidate)
 
-This combined Foundation/RPC candidate targets **0.8.0-rc1**. It is not yet
-merged into `main`, tagged, signed, or published. All changes below remain
-subject to same-source modular CI, artifact freezing, and final owner approval.
-The six real-world, independent-interoperability, and professional-audit areas
-remain pending; no stable-release readiness claim is implied.
+The owner authorized preparing this new candidate, not merging, tagging, signing
+or publishing it. `LATEST_PUBLISHED_VERSION` remains `0.7.0-rc3`.
+
+- Replace the undocumented internal Central namespace preflight with one bounded,
+  authenticated request to the documented, exact-namespace deployments API.
+  The sanitized report establishes token authentication and accepted namespace
+  query access, **not** namespace `VERIFIED` state or permission to publish.
+- Inherit the combined Foundation/RPC functionality and limitations recorded for
+  rc1 below, including unavailable Windows sample RPC Host/Client and unperformed
+  protected-profile/JNI/installed-application qualification. No product, runtime,
+  platform-support, security-control or test-deferral changes are made here.
+- Require fresh exact-source modular qualification and four application artifacts
+  before separate final approvals. rc1's successful checks and frozen artifacts
+  are historical evidence, not rc2 qualification. Real-world, independent
+  interoperability and professional-audit work remains pending.
+
+## 0.8.0-rc1 (tagged, not published)
+
+The combined Foundation/RPC changes and subsequent release-admission repairs were
+merged into `main`. Immutable `v0.8.0-rc1` points to
+`8700583a5ae5aeaf5c77edee2a3ed4f5bd9a2d2c`. Maven
+[run38941438027/1](https://github.com/p2pKit/P2pKit/actions/runs/38941438027)
+failed the internal namespace API preflight with HTTP401 before signing or upload.
+The existing tag, failed run and accepted source-bound qualification are preserved;
+rc1 is not described as a published Maven release. The behavior notes below remain
+applicable to its rc2 successor, without implying new qualification or approval.
 
 ### RPC prerelease target — 0.8.0-rc1
 

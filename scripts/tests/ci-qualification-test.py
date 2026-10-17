@@ -44,7 +44,8 @@ class Fixture:
     def __init__(self, api=None):
         self.api = api or Api()
         a = self.api
-        self.run = {"id": 300, "run_attempt": 1, "path": Q.WORKFLOW, "head_sha": SOURCE,
+        self.run = {"id": 300, "run_attempt": 1, "run_started_at": "2026-09-15T10:00:00Z",
+                    "path": Q.WORKFLOW, "head_sha": SOURCE,
                     "event": "push", "head_branch": "main", "workflow_id": 77,
                     "repository": {"full_name": Q.REPOSITORY}, "head_repository": {"full_name": Q.REPOSITORY},
                     "status": "completed", "conclusion": "failure"}
@@ -55,7 +56,11 @@ class Fixture:
         a.collections["/actions/workflows/ci.yml/runs?branch=main&head_sha=" + SOURCE] = [self.run]
         self.jobs = [{"id": 10000 + i, "name": component + " / Execute component", "run_id": 300,
                       "run_attempt": 1, "head_sha": SOURCE, "status": "completed", "conclusion": "success",
-                      "runner_id": 50 + i, "labels": [Q.RUNNERS[component]],
+                      "runner_id": 50 + i, "runner_name": "GitHub Actions " + str(50 + i),
+                      "runner_group_id": 0, "runner_group_name": "GitHub Actions", "labels": [Q.RUNNERS[component]],
+                      "created_at": "2026-09-15T10:00:01Z",
+                      "steps": [{"name": "Execute genuine tests", "number": 1, "status": "completed", "conclusion": "success",
+                                 "started_at": "2026-09-15T10:02:00Z", "completed_at": "2026-09-15T10:14:00Z"}],
                       "started_at": "2026-09-15T10:01:00Z", "completed_at": "2026-09-15T10:20:00Z"}
                      for i, component in enumerate(Q.COMPONENTS)]
         self.jobs.append({**self.jobs[0], "id": 10100, "name": Q.QUALIFY_JOB,
@@ -80,7 +85,7 @@ class Fixture:
             if platform == "Darwin":
                 manifest["outcome"].update(ownershipBoundary="GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1",
                                            outsideDomainObservations=0)
-            if component == "consumers":
+            if component in ("consumers", "macos-shared"):
                 manifest["tools"]["xcode"] = {"version": "16.2", "executableSha256": "e" * 64}
             self.manifests[component] = manifest
             self.artifact(5000 + i, f"ci-evidence-{component}-300-1",
@@ -116,32 +121,33 @@ class QualificationTests(unittest.TestCase):
         result = self.f.qualify()
         actual, binding = Q.load_qualification(self.api, SOURCE)
         self.assertEqual(result, actual)
-        self.assertEqual(13, len(actual["components"]))
+        self.assertEqual(14, len(actual["components"]))
         self.assertEqual(4, len(actual["applications"]))
         self.assertEqual(8001, binding["artifactId"])
         self.assertEqual("failure", self.f.run["conclusion"])
 
-    def test_consumers_missing_wrong_runner_arch_or_xcode_cannot_qualify(self):
-        self.assertEqual(Q.COMPONENTS['consumers'], ('Darwin', 'arm64'))
-        self.assertEqual(Q.RUNNERS['consumers'], 'macos-14')
-        selection = self.f.selection()
-        missing = {**selection, 'components': [row for row in selection['components'] if row['component'] != 'consumers']}
-        with self.assertRaisesRegex(Q.AdmissionError, 'Missing/duplicate required components'):
-            Q.aggregate(self.api, missing)
-        job = next(row for row in self.f.jobs if row['name'] == 'consumers / Execute component')
-        for labels in (['macos-26'], ['macos-latest'], ['macos-14', 'self-hosted']):
-            with mock.patch.dict(job, {'labels': labels}), self.assertRaisesRegex(Q.AdmissionError, 'runner labels'):
-                Q.aggregate(self.api, selection)
-        for group, change in (('host', {'arch': 'x86_64'}), ('tools', {}),
-                              ('tools', {'xcode': {'version': '26.5', 'executableSha256': 'e' * 64}}),
-                              ('tools', {'xcode': {'version': '16.2', 'executableSha256': 'invalid'}})):
-            manifests = copy.deepcopy(self.f.manifests)
-            if group == 'host':
-                manifests['consumers'][group].update(change)
-            else:
-                manifests['consumers'][group] = change
-            with self.subTest(group=group, change=change), self.assertRaises(Q.AdmissionError):
-                Q.aggregate(self.api, selection, manifests=manifests)
+    def test_supported_cli_components_missing_wrong_runner_arch_or_xcode_cannot_qualify(self):
+        for component in ("consumers", "macos-shared"):
+            self.assertEqual(Q.COMPONENTS[component], ('Darwin', 'arm64'))
+            self.assertEqual(Q.RUNNERS[component], 'macos-14')
+            selection = self.f.selection()
+            missing = {**selection, 'components': [row for row in selection['components'] if row['component'] != component]}
+            with self.assertRaisesRegex(Q.AdmissionError, 'Missing/duplicate required components'):
+                Q.aggregate(self.api, missing)
+            job = next(row for row in self.f.jobs if row['name'] == component + ' / Execute component')
+            for labels in (['macos-26'], ['macos-latest'], ['macos-14', 'self-hosted']):
+                with mock.patch.dict(job, {'labels': labels}), self.assertRaisesRegex(Q.AdmissionError, 'runner labels'):
+                    Q.aggregate(self.api, selection)
+            for group, change in (('host', {'arch': 'x86_64'}), ('tools', {}),
+                                  ('tools', {'xcode': {'version': '26.5', 'executableSha256': 'e' * 64}}),
+                                  ('tools', {'xcode': {'version': '16.2', 'executableSha256': 'invalid'}})):
+                manifests = copy.deepcopy(self.f.manifests)
+                if group == 'host':
+                    manifests[component][group].update(change)
+                else:
+                    manifests[component][group] = change
+                with self.subTest(group=group, change=change), self.assertRaises(Q.AdmissionError):
+                    Q.aggregate(self.api, selection, manifests=manifests)
 
     def test_missing_duplicate_and_unknown_components_refuse(self):
         original = self.f.selection()
@@ -151,8 +157,8 @@ class QualificationTests(unittest.TestCase):
                 Q.aggregate(self.api, {**original, "components": rows})
 
     def test_optional_diagnostics_cannot_replace_or_extend_qualification(self):
-        self.assertEqual(len(Q.COMPONENTS), 13)
-        for name in ('bundle-diagnostic', 'jmdns-diagnostic'):
+        self.assertEqual(len(Q.COMPONENTS), 14)
+        for name in ('bundle-diagnostic', 'jmdns-diagnostic', 'consumers-pom-diagnostic'):
             self.assertNotIn(name, Q.COMPONENTS)
             original = self.f.selection()
             diagnostic = {**original['components'][-1], 'component': name}
@@ -210,7 +216,7 @@ class QualificationTests(unittest.TestCase):
         selection = self.f.selection()
         manifests = copy.deepcopy(self.f.manifests)
         manifests["desktop-macos"]["outcome"]["outsideDomainObservations"] = 52
-        self.assertEqual(len(Q.aggregate(self.api, selection, manifests=manifests)["components"]), 13)
+        self.assertEqual(len(Q.aggregate(self.api, selection, manifests=manifests)["components"]), 14)
         for field, value in (("ownershipBoundary", None), ("ownershipBoundary", "STRICT_OLD_SCOPE"),
                              ("outsideDomainObservations", None), ("outsideDomainObservations", True),
                              ("outsideDomainObservations", -1), ("outsideDomainObservations", 1_000_001),
@@ -323,26 +329,129 @@ class QualificationTests(unittest.TestCase):
             Q.integer(True)
 
     def retry(self, component=None):
-        """A synthetic partial rerun retains original job/artifact attempt IDs."""
-        run = {**self.f.run, "run_attempt": 2, "status": "in_progress", "conclusion": None}
+        """Model a real new execution; copy_rows adds GitHub carried-forward rows."""
+        run = {**self.f.run, "run_attempt": 2, "run_started_at": "2026-09-15T10:30:00Z",
+               "status": "in_progress", "conclusion": None}
         self.api.data["/actions/runs/300"] = run
         self.api.data["/actions/runs/300/attempts/2"] = run
         name = Q.QUALIFY_JOB if component is None else component + " / Execute component"
         original = next(job for job in self.f.jobs if job["name"] == name)
-        job = {**original, "id": original["id"] + 1000, "run_attempt": 2}
+        job = {**copy.deepcopy(original), "id": original["id"] + 1000, "run_attempt": 2,
+               "created_at": "2026-09-15T10:30:01Z", "started_at": "2026-09-15T10:31:00Z",
+               "completed_at": "2026-09-15T10:50:00Z"}
+        job["steps"][0].update(started_at="2026-09-15T10:32:00Z", completed_at="2026-09-15T10:44:00Z")
         self.api.collections["/actions/runs/300/attempts/2/jobs"] = [job]
         self.api.collections["/actions/runs/300/jobs?filter=all"].append(job)
         if component is not None:
             manifest = copy.deepcopy(self.f.manifests[component])
             manifest["github"]["runAttempt"] = "2"
+            manifest["timing"].update(startedAt="2026-09-15T10:32:00Z", completedAt="2026-09-15T10:44:00Z")
             cipher = b"SYNTHETIC RETRY CIPHERTEXT NOT PRIVATE EVIDENCE"
             manifest["ciphertext"].update(bytes=len(cipher), sha256=hashlib.sha256(cipher).hexdigest())
             self.f.artifact(9000, f"ci-evidence-{component}-300-2",
-                            zip_bytes({"manifest.json": Q.encoded(manifest), "evidence.tar.gz.gpg": cipher}))
+                            zip_bytes({"manifest.json": Q.encoded(manifest), "evidence.tar.gz.gpg": cipher}),
+                            "2026-09-15T10:45:00Z")
             for _, (owner, _, prefix) in Q.APPLICATIONS.items():
                 if owner == component:
-                    self.f.artifact(9001, prefix + "-300-2", b"synthetic retried application bundle")
+                    self.f.artifact(9001, prefix + "-300-2", b"synthetic retried application bundle",
+                                    "2026-09-15T10:45:00Z")
         return job
+
+    def copy_rows(self, attempt=2, *, except_component=None):
+        """Observed GitHub shape: new IDs/attempt/creation, unchanged execution."""
+        run = {**self.api.data["/actions/runs/300"], "run_attempt": attempt,
+               "run_started_at": "2026-09-15T10:30:00Z" if attempt == 2 else "2026-09-15T11:00:00Z"}
+        self.api.data["/actions/runs/300"] = run
+        self.api.data[f"/actions/runs/300/attempts/{attempt}"] = run
+        all_jobs = self.api.collections["/actions/runs/300/jobs?filter=all"]
+        current = self.api.collections.setdefault(f"/actions/runs/300/attempts/{attempt}/jobs", [])
+        copies = {}
+        for component in Q.COMPONENTS:
+            if component == except_component:
+                continue
+            old = max((job for job in all_jobs if job['name'] == component + ' / Execute component'),
+                      key=lambda job: job['run_attempt'])
+            copied = {**copy.deepcopy(old), "id": old["id"] + 10000, "run_attempt": attempt,
+                      "runner_group_id": None,
+                      "created_at": "2026-09-15T10:30:05Z" if attempt == 2 else "2026-09-15T11:00:05Z"}
+            current.append(copied); all_jobs.append(copied)
+            copies[component] = copied
+        return copies
+
+    def test_real_shaped_qualifier_only_copies_keep_all_original_ids_and_attempts(self):
+        original = self.f.selection()
+        self.retry()
+        copies = self.copy_rows()
+        self.assertEqual(len(copies), 14)
+        self.assertTrue(all(job['runner_group_id'] is None for job in copies.values()))
+        selected = Q.collect(self.api, SOURCE, 300, 2)
+        self.assertEqual(selected, original)
+        document = Q.aggregate(self.api, selected)
+        self.assertEqual(len(document['components']), 14)
+        self.assertEqual(len(document['applications']), 4)
+        self.assertTrue(all(row['job']['id'] < 20000 for row in document['components']))
+
+    def test_real_shaped_partial_retry_uses_new_application_with_copied_siblings(self):
+        self.retry('desktop-windows')
+        self.copy_rows(except_component='desktop-windows')
+        selected = Q.collect(self.api, SOURCE, 300, 2)
+        self.assertEqual({row['component']: row['runAttempt'] for row in selected['components']},
+                         {name: 2 if name == 'desktop-windows' else 1 for name in Q.COMPONENTS})
+        document = Q.aggregate(self.api, selected)
+        windows = next(row for row in document['applications'] if row['platform'] == 'windows')
+        self.assertEqual((windows['id'], windows['producer']['attempt']), (9001, 2))
+        self.f.artifacts[:] = [row for row in self.f.artifacts if row['id'] != 9000]
+        with self.assertRaisesRegex(Q.AdmissionError, 'Missing/ambiguous exact-attempt artifact'):
+            Q.collect(self.api, SOURCE, 300, 2)
+
+    def test_consecutive_copies_follow_each_immediate_original_attempt(self):
+        original = self.f.selection()
+        self.retry(); self.copy_rows(); self.copy_rows(3)
+        self.assertEqual(Q.collect(self.api, SOURCE, 300, 3), original)
+
+    def test_copies_cannot_skip_intervening_failed_or_different_execution(self):
+        for change in ({'conclusion': 'failure'}, {'runner_id': 9876}, {'steps': []}):
+            self.f = Fixture(); self.api = self.f.api
+            self.retry(); second = self.copy_rows(); self.copy_rows(3)
+            second['source'].update(change)
+            with self.subTest(change=change), self.assertRaises(Q.AdmissionError):
+                Q.collect(self.api, SOURCE, 300, 3)
+
+    def test_copy_requires_exact_nonempty_execution_identity_and_attempt_chronology(self):
+        for change in ({'steps': []}, {'steps': None}, {'runner_id': 12345}, {'runner_name': 'different'},
+                       {'runner_group_name': 'different'}, {'labels': ['ubuntu-24.04', 'different']},
+                       {'head_sha': 'f' * 40}, {'started_at': '2026-09-15T10:02:00Z'},
+                       {'completed_at': '2026-09-15T10:19:00Z'}, {'created_at': '2026-09-15T10:10:00Z'},
+                       {'created_at': '2026-09-15T10:29:59Z'}, {'created_at': None}):
+            self.f = Fixture(); self.api = self.f.api
+            self.retry(); copies = self.copy_rows(); copies['source'].update(change)
+            with self.subTest(change=change), self.assertRaises(Q.AdmissionError):
+                Q.collect(self.api, SOURCE, 300, 2)
+        self.f = Fixture(); self.api = self.f.api
+        self.retry(); copies = self.copy_rows()
+        copies['source']['steps'][0]['name'] = 'different execution'
+        with self.assertRaisesRegex(Q.AdmissionError, 'immediate predecessor'):
+            Q.collect(self.api, SOURCE, 300, 2)
+        self.api.data['/actions/runs/300/attempts/2']['run_started_at'] = 'invalid'
+        with self.assertRaisesRegex(Q.AdmissionError, 'Invalid UTC timestamp'):
+            Q.collect(self.api, SOURCE, 300, 2)
+
+    def test_copy_cannot_use_orphan_ambiguous_or_changed_original_metadata(self):
+        self.retry(); copies = self.copy_rows()
+        history = self.api.collections['/actions/runs/300/jobs?filter=all']
+        original = history.pop(0)
+        with self.assertRaisesRegex(Q.AdmissionError, 'lacks original execution'):
+            Q.collect(self.api, SOURCE, 300, 2)
+        history.insert(0, original)
+        history.append({**original, 'id': original['id'] + 1})
+        with self.assertRaisesRegex(Q.AdmissionError, 'Ambiguous carried-forward predecessor'):
+            Q.collect(self.api, SOURCE, 300, 2)
+        history.pop()
+        actual = self.api.collections['/actions/runs/300/attempts/2/jobs']
+        index = actual.index(copies['source'])
+        actual[index] = {**copy.deepcopy(copies['source']), 'runner_name': 'changed original'}
+        with self.assertRaisesRegex(Q.AdmissionError, 'history differs from its original job'):
+            Q.collect(self.api, SOURCE, 300, 2)
 
     def test_failed_job_retry_reuses_untouched_originals_and_pairs_rebuilt_application(self):
         self.retry("desktop-windows")
@@ -352,7 +461,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual({row["platform"]: row["runAttempt"] for row in selection["applications"]},
                          {"android": 1, "linux": 1, "windows": 2, "macos": 1})
         document = Q.aggregate(self.api, selection)
-        self.assertEqual(13, len(document["components"]))
+        self.assertEqual(14, len(document["components"]))
         self.assertEqual(4, len(document["applications"]))
         windows = next(row for row in document["applications"] if row["platform"] == "windows")
         self.assertEqual(9001, windows["id"])
@@ -363,7 +472,7 @@ class QualificationTests(unittest.TestCase):
         self.retry()
         selected = Q.collect(self.api, SOURCE, 300, 2)
         self.assertEqual(original, selected)
-        self.assertEqual(13, len(Q.aggregate(self.api, selected)["components"]))
+        self.assertEqual(14, len(Q.aggregate(self.api, selected)["components"]))
 
     def test_latest_failed_skipped_cancelled_or_incomplete_execution_never_falls_back(self):
         job = self.retry("desktop-windows")

@@ -30,9 +30,11 @@ COMPONENTS = {
     'compatibility': ('macos-26', 180),
     # Temporary supported CLI baseline; macos-14 retires 2026-11-02.
     'consumers': ('macos-14', 120),
+    'macos-shared': ('macos-14', 120),
 }
 # Explicit focused diagnostics are not release components or aggregate inputs.
-DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30)}
+DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30),
+               'consumers-pom-diagnostic': ('macos-14', 60)}
 
 FLAGS = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
          '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
@@ -74,6 +76,7 @@ def commands(component):
             ('layout', bash + ['scripts/tests/check-repository-layout.sh']),
             ('links', bash + ['scripts/tests/check-markdown-links.sh']),
             ('release-metadata', bash + ['scripts/check-release-metadata.sh']),
+            ('ios-launcher-controls', bash + ['scripts/tests/run-ios-app-test.sh']),
             *[(name, bash + ['scripts/tests/' + script + '-test.sh']) for name, script in (
                 ('release-tag-controls', 'check-release-tag'),
                 ('release-identity-controls', 'check-release-identity'),
@@ -137,12 +140,16 @@ def commands(component):
             ':p2p-sample-desktop-ui:createDistributable', ':p2p-sample-desktop-ui:' + packaging])]
     if component.startswith('apple-'):
         return [('native-platform-tests', py + ['scripts/run-platform-tests.py',
-                 'full' if component == 'apple-arm64' else 'ios-x64'])]
+                 'ios-arm64' if component == 'apple-arm64' else 'ios-x64'])]
+    if component == 'macos-shared':
+        return [('shared-platform-tests', py + ['scripts/run-platform-tests.py', 'macos-shared'])]
     if component == 'jmdns-diagnostic':
         return [('jmdns-close-tests', gradle + [':p2p-transport-lan:jvmTest', '--tests',
                  'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])]
     if component == 'bundle-diagnostic':
         return [('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh'])]
+    if component == 'consumers-pom-diagnostic':
+        return [('published-pom-diagnostic', bash + ['scripts/check-published-consumers.sh', '--pom-diagnostic'])]
     if component == 'consumers':
         return [('isolated-consumers', bash + ['scripts/check-published-consumers.sh'])]
     if component == 'compatibility':
@@ -157,7 +164,8 @@ def commands(component):
                 ('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh']),
                 ('xcframework', gradle + [':p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance']),
                 ('minimum-apple-os', bash + ['scripts/check-xcframework-minimum-os.sh']),
-                ('swift-ui', bash + ['scripts/run-ios-ui-tests.sh'])]
+                ('swift-ui', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
+                              *bash, 'scripts/run-ios-ui-tests.sh'])]
     if component == 'security':
         # The existing pinned scanner wrapper preserves findings, errors and SARIF.
         return [('osv-lock-coverage', bash + ['scripts/tests/check-osv-lockfile-coverage.sh']),
@@ -177,7 +185,7 @@ def record_tools(component):
     if component not in ('source', 'security'):
         probes.append(('gradle', str(ROOT / ('gradlew.bat' if os.name == 'nt' else 'gradlew')),
                        [*FLAGS, '--version'], r'(?m)^Gradle ([0-9A-Za-z.+-]+)$'))
-    if component in ('apple-arm64', 'apple-x64', 'desktop-macos', 'compatibility', 'consumers', *DIAGNOSTICS):
+    if component in ('apple-arm64', 'apple-x64', 'desktop-macos', 'compatibility', 'consumers', 'macos-shared', *DIAGNOSTICS):
         probes.append(('xcode', shutil.which('xcodebuild'), ['-version'], r'(?m)^Xcode ([0-9.]+)$'))
     for name, executable, args, pattern in probes:
         if executable is None:
@@ -191,7 +199,7 @@ def record_tools(component):
         match = re.search(pattern, version_output)
         if match is None or not re.fullmatch(r'[A-Za-z0-9 ._+()/-]{1,120}', match[1]):
             raise RuntimeError('Cannot identify required tool: ' + name)
-        if component == 'consumers' and name == 'xcode' and match[1] != '16.2':
+        if component in ('consumers', 'consumers-pom-diagnostic', 'macos-shared') and name == 'xcode' and match[1] != '16.2':
             raise RuntimeError('Consumer baseline requires Xcode 16.2')
         with tool.open('rb') as stream:
             digest = hashlib.sha256()

@@ -23,7 +23,7 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', bundle-diagnostic,', ',')
   end
   def test_jmdns_diagnostic_requires_choice_and_excludes_qualification
-    altered('.github/workflows/ci.yml', ', jmdns-diagnostic]', ']')
+    altered('.github/workflows/ci.yml', ', jmdns-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'jmdns-diagnostic' && inputs.component", 'inputs.component')
     altered('.github/workflows/ci.yml', "inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name",
             "inputs.component != 'bundle-diagnostic' && (github.event_name")
@@ -35,6 +35,13 @@ class ModularPolicyTests < Minitest::Test
   def test_bundle_diagnostic_cannot_complete_gate
     altered('.github/workflows/ci.yml', "inputs.component != 'bundle-diagnostic' && (github.event_name",
             '(github.event_name')
+  end
+  def test_shared_checks_remain_independently_required
+    altered('.github/workflows/ci.yml', ', macos-shared,', ',')
+  end
+  def test_pom_diagnostic_remains_explicit_and_cannot_qualify
+    altered('.github/workflows/ci.yml', ', consumers-pom-diagnostic]', ']')
+    altered('.github/workflows/ci.yml', "inputs.component != 'consumers-pom-diagnostic' && inputs.component", 'inputs.component')
   end
   def test_complete_consumers_remain_independently_required
     altered('.github/workflows/ci.yml', ', consumers,', ',')

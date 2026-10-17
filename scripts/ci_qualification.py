@@ -29,13 +29,13 @@ COMPONENTS = {
     "apple-x64": ("Darwin", "x86_64"), "desktop-linux": ("Linux", "x86_64"),
     "desktop-windows": ("Windows", "AMD64"), "desktop-macos": ("Darwin", "arm64"),
     "security": ("Linux", "x86_64"), "compatibility": ("Darwin", "arm64"),
-    "consumers": ("Darwin", "arm64"),
+    "consumers": ("Darwin", "arm64"), "macos-shared": ("Darwin", "arm64"),
 }
 RUNNERS = {component: ("windows-2025" if host[0] == "Windows" else
                       "macos-15-intel" if host == ("Darwin", "x86_64") else
                       "macos-26" if host[0] == "Darwin" else "ubuntu-24.04")
            for component, host in COMPONENTS.items()}
-RUNNERS["consumers"] = "macos-14"
+RUNNERS["consumers"] = RUNNERS["macos-shared"] = "macos-14"
 APPLICATIONS = {
     "android": ("android", "apk-abis-not-inspected", "sample-app-android"),
     "linux": ("desktop-linux", "x64", "sample-app-desktop-linux"),
@@ -206,7 +206,7 @@ def manifest_identity(manifest, source, component, run, job, artifact):
          timestamp(timing.get("completedAt")) <= timestamp(artifact["created_at"]), "Evidence timing differs")
     need(type(manifest.get("tools")) is dict and manifest["tools"] and
          HASH.fullmatch(manifest.get("command", {}).get("sha256", "")), "Missing actual tools/command identity")
-    if component == "consumers":
+    if component in ("consumers", "macos-shared"):
         xcode = manifest["tools"].get("xcode")
         need(type(xcode) is dict and xcode.get("version") == "16.2" and
              type(xcode.get("executableSha256")) is str and HASH.fullmatch(xcode["executableSha256"]),
@@ -335,6 +335,52 @@ def load_qualification(api, source, binding=None):
     return document, binding
 
 
+def original_execution_attempt(api, source, run_id, name, candidates):
+    """Follow only authenticated GitHub carry-forward rows, never older passes.
+
+    Partial reruns create new successful job IDs whose execution timestamps and
+    steps still describe the earlier worker. A genuine new execution is not a
+    copy, even if its artifacts are missing. Runner-group ID may become null in
+    GitHub copies; it is not used as authority (runner identity/labels still are).
+    """
+    stable = ("run_id", "head_sha", "name", "status", "conclusion", "runner_id",
+              "runner_name", "runner_group_name", "labels", "started_at", "completed_at", "steps")
+    history = list(candidates)
+    while history:
+        attempt = max(job["run_attempt"] for job in history)
+        latest = [job for job in history if job["run_attempt"] == attempt]
+        need(len(latest) == 1, "Ambiguous latest component execution")
+        job = latest[0]
+        need(job.get("status") == "completed" and job.get("conclusion") == "success",
+             "Latest component execution failed, skipped or is incomplete")
+        run, checked = selected_job(api, source, run_id, attempt, name)
+        original = next(row for row in api.pages(f"/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
+                        if row.get("name") == name)
+        need(all(job.get(key) == value for key, value in checked.items()) and
+             all(job.get(key) == original.get(key) for key in (*stable, "created_at", "run_attempt")),
+             "Latest component history differs from its original job")
+        created, started, completed = (timestamp(job.get(key)) for key in
+                                       ("created_at", "started_at", "completed_at"))
+        if created <= started:
+            return attempt
+        need(completed < timestamp(run.get("run_started_at")) <= created,
+             "Carried-forward job has inconsistent attempt chronology")
+        history = [row for row in history if row["run_attempt"] < attempt]
+        need(history, "Carried-forward job lacks original execution")
+        previous_attempt = max(row["run_attempt"] for row in history)
+        previous = [row for row in history if row["run_attempt"] == previous_attempt]
+        need(len(previous) == 1, "Ambiguous carried-forward predecessor")
+        previous = previous[0]
+        need(type(job.get("steps")) is list and job["steps"] and
+             type(job.get("runner_name")) is str and job["runner_name"] and
+             type(job.get("runner_group_name")) is str and job["runner_group_name"] and
+             integer(job.get("id")) != integer(previous.get("id")) and
+             timestamp(previous.get("created_at")) <= created and
+             all(key in job and key in previous and job[key] == previous[key] for key in stable),
+             "Carried-forward job differs from its immediate predecessor")
+    raise AdmissionError("Missing original component execution")
+
+
 def collect(api, source, run_id, attempt):
     """Freeze each component's latest original execution in this current run.
 
@@ -357,15 +403,7 @@ def collect(api, source, run_id, attempt):
         need(all(job.get("run_id") == run_id and type(job.get("run_attempt")) is int and
                  1 <= job["run_attempt"] <= attempt for job in candidates),
              "Component history has another run or future/invalid attempt")
-        original_attempt = max(job["run_attempt"] for job in candidates)
-        latest = [job for job in candidates if job["run_attempt"] == original_attempt]
-        need(len(latest) == 1, "Ambiguous latest component execution")
-        need(latest[0].get("status") == "completed" and latest[0].get("conclusion") == "success",
-             "Latest component execution failed, skipped or is incomplete")
-        _, original = selected_job(api, source, run_id, original_attempt, name)
-        need(all(latest[0].get(key) == value for key, value in original.items()),
-             "Latest component history differs from its original job")
-        attempts[component] = original_attempt
+        attempts[component] = original_execution_attempt(api, source, run_id, name, candidates)
     artifacts = api.pages(f"/actions/runs/{run_id}/artifacts", "artifacts")
     def item(name, original_attempt):
         found = [row for row in artifacts if row.get("name") == name]
@@ -403,7 +441,7 @@ def main():
         else:
             need(args.source == os.environ.get("GITHUB_SHA"), "Aggregator hosted source differs")
         api = policy.Api(os.environ.get("GH_TOKEN", ""))
-        # Thirteen independently encrypted results plus four public application bundles.
+        # Fourteen independently encrypted results plus four public application bundles.
         policy.TRANSFER_LIMIT = (len(COMPONENTS) + 4) * ARTIFACT_LIMIT
         if args.operation == "verify":
             binding = None if args.selection is None else parsed(args.selection.read_bytes())

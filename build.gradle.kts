@@ -441,26 +441,20 @@ gradle.taskGraph.whenReady {
         }
     }
     if (lockRefreshInGraph) {
-        val dokkaLockConfigurations = subprojects
-            .filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
-            .flatMap { subproject ->
+        subprojects.filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
+            .forEach { subproject ->
                 // Realization only: never put the disabled V1 tasks into the graph.
                 subproject.tasks.named("dokkaJavadoc").get()
                 subproject.tasks.named("dokkaHtml").get()
                 listOf(
                     subproject.configurations.getByName("dokkaJavadocPlugin"),
                     subproject.configurations.getByName("dokkaHtmlRuntime"),
-                ).onEach { configuration ->
+                ).forEach { configuration ->
                     check(configuration.isCanBeResolved && !configuration.isCanBeConsumed) {
                         "Dokka migration lock refresh requires a resolvable, non-consumable configuration"
                     }
                 }
             }
-        resolveAndLockAll.get().doLast {
-            dokkaLockConfigurations.forEach { configuration ->
-                configuration.resolve()
-            }
-        }
     }
 }
 
@@ -475,8 +469,30 @@ gradle.projectsEvaluated {
             subproject.tasks.findByName("dokkaGeneratePublicationHtml"),
         )
     }
+    val dokkaLockTasks = subprojects.filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
+        .map { subproject ->
+            val migrationTask = subproject.tasks.register("resolveDokkaMigrationLocks") {
+                // Resolution runs with this configuration owner's project lock.
+                // Preserve every previous prerequisite, including on --continue.
+                dependsOn(dependencyConsumerTasks, rootProject.tasks.named("cyclonedxBom"))
+                doLast {
+                    listOf(
+                        subproject.configurations.getByName("dokkaJavadocPlugin"),
+                        subproject.configurations.getByName("dokkaHtmlRuntime"),
+                    ).forEach { configuration ->
+                        configuration.resolve()
+                    }
+                }
+            }
+            gradle.taskGraph.whenReady {
+                check(!hasTask(migrationTask.get()) || hasTask(resolveAndLockAll.get())) {
+                    "Dokka migration lock refresh requires resolveAndLockAll"
+                }
+            }
+            migrationTask
+        }
     resolveAndLockAll.configure {
-        dependsOn(dependencyConsumerTasks)
+        dependsOn(dependencyConsumerTasks, dokkaLockTasks)
     }
 }
 

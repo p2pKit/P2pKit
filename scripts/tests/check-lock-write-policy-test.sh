@@ -198,6 +198,14 @@ expect_policy_failure ordinary-write \
     '--write-locks may only be used with resolveAndLockAll' \
     help --write-locks --dry-run
 
+# Owner tasks cannot become an alternate partial writer, even without writing.
+expect_policy_failure dokka-owner-without-writer \
+    'Dokka migration lock refresh requires resolveAndLockAll' \
+    :p2p-core:resolveDokkaMigrationLocks --dry-run
+expect_policy_failure dokka-owner-partial-write \
+    '--write-locks may only be used with resolveAndLockAll' \
+    :p2p-core:resolveDokkaMigrationLocks --write-locks --dry-run
+
 # Configuration on demand can omit unevaluated subproject tasks from a
 # dynamically derived refresh graph. Fail before graph execution instead of
 # accepting a partial lock rewrite.
@@ -250,6 +258,8 @@ for project in p2p-core p2p-transport-lan p2p-rpc \
     p2p-network-provisioning-android p2p-network-provisioning-desktop; do
     grep -Fq ":$project:dokkaGeneratePublicationHtml SKIPPED" "$WORK/authorized.log" ||
         fail "lock refresh omitted :$project:dokkaGeneratePublicationHtml"
+    grep -Fq ":$project:resolveDokkaMigrationLocks SKIPPED" "$WORK/authorized.log" ||
+        fail "lock refresh omitted :$project:resolveDokkaMigrationLocks"
     for helper in dokkaHtml dokkaJavadoc; do
         if grep -Fq ":$project:$helper SKIPPED" "$WORK/authorized.log"; then
             fail "lock refresh selected disabled compatibility task :$project:$helper"

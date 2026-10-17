@@ -20,7 +20,9 @@ existing audit history into `main` is not release qualification.
 2. Confirm a clean worktree and exact ancestry from `origin/main`.
 3. Pass the modular `ci.yml` components and exact-source aggregation, plus
    `git diff --check`. Retain genuine `build/reports/platform-tests/` evidence
-   from FULL and a same-source native Intel `ios-x64` component result. The arm64 gate cannot verify the published `iosX64` slice;
+   from the same-source `macos-shared`, native ARM64 `ios-arm64` and native Intel
+   `ios-x64` profiles: all 24 portable test tasks plus non-test `check` dependencies
+   remain required across the three components. The arm64 gate cannot verify the published `iosX64` slice;
    no Intel execution may be inferred from cross-compilation. See the
    [platform coverage guide](../testing/local.md#platform-execution-evidence).
 4. Require the component results for OSV, ABI, strict Dokka, SBOM, publication shape,

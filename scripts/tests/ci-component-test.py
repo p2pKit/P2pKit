@@ -41,7 +41,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_all_is_complete_and_unique(self):
         rows = C.matrix('all')['include']
-        self.assertEqual(len(rows), 13)
+        self.assertEqual(len(rows), 14)
         self.assertEqual({x['component'] for x in rows}, set(C.COMPONENTS))
     def test_work_budget_has_explicit_job_upload_headroom(self):
         for row in C.matrix('all')['include']:
@@ -162,7 +162,10 @@ class ComponentTests(unittest.TestCase):
                         self.assertNotIn('--tests', argv)
 
     def test_native_platform_acceptance_preserved(self):
-        self.assertIn('full', C.commands('apple-arm64')[0][1])
+        self.assertIn('ios-arm64', C.commands('apple-arm64')[0][1])
+        self.assertEqual(C.COMPONENTS['macos-shared'], ('macos-14', 120))
+        self.assertEqual(C.commands('macos-shared'), [('shared-platform-tests',
+                         [C.sys.executable, '-B', 'scripts/run-platform-tests.py', 'macos-shared'])])
         self.assertIn('ios-x64', C.commands('apple-x64')[0][1])
         self.assertEqual(C.COMPONENTS['apple-x64'][0], 'macos-15-intel')
     def test_all_installers_have_real_producer(self):
@@ -171,6 +174,16 @@ class ComponentTests(unittest.TestCase):
                                 ('desktop-windows', ':p2p-sample-desktop-ui:packageMsi'),
                                 ('desktop-macos', ':p2p-sample-desktop-ui:packageDmg')]:
             self.assertTrue(any(task in argv for _, argv in C.commands(component)))
+    def test_swift_ui_uses_exact_reviewed_runtime_and_retains_launcher_controls(self):
+        command = dict(C.commands('compatibility'))['swift-ui']
+        self.assertEqual(command, ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
+                                   'bash', 'scripts/run-ios-ui-tests.sh'])
+        spec = importlib.util.spec_from_file_location('swift_simulator_policy', ROOT / 'scripts/hosted_full_simulator.py')
+        policy = importlib.util.module_from_spec(spec); spec.loader.exec_module(policy)
+        self.assertEqual(command[1], 'SIM_RUNTIME=' + policy.HOSTS['macos-arm64']['runtime'])
+        self.assertEqual(dict(C.commands('source'))['ios-launcher-controls'],
+                         ['bash', 'scripts/tests/run-ios-app-test.sh'])
+
     def test_compatibility_has_actual_checks(self):
         names = {x[0] for x in C.commands('compatibility')}
         self.assertTrue({'abi-graph', 'api-abi', 'documentation', 'sbom', 'publication-shape',
@@ -201,22 +214,23 @@ class ComponentTests(unittest.TestCase):
             root = Path(temporary)
             for name in ('java', 'gpg', 'gradlew', 'xcodebuild'):
                 (root / name).write_bytes(b'synthetic public tool')
-            for version in ('16.2', '26.5', '16.20'):
-                versions = [Mock(stdout=b'openjdk version "17"'), Mock(stdout=b'gpg (GnuPG) 2.5.22'),
-                            Mock(stdout=b'Gradle 9.7.0\n'), Mock(stdout=('Xcode ' + version + '\nBuild version synthetic\n').encode())]
-                target = root / 'tools.json'
-                target.unlink(missing_ok=True)
-                with patch.object(C, 'ROOT', root), \
-                        patch.object(C.shutil, 'which', side_effect=lambda name: str(root / name)), \
-                        patch.object(C.subprocess, 'run', side_effect=versions), \
-                        patch.dict(C.os.environ, {'CI_EVIDENCE_TOOLS_FILE': str(target)}):
-                    if version == '16.2':
-                        C.record_tools('consumers')
-                        self.assertEqual(json.loads(target.read_text())['xcode']['version'], version)
-                    else:
-                        with self.assertRaisesRegex(RuntimeError, 'requires Xcode 16.2'):
-                            C.record_tools('consumers')
-                        self.assertFalse(target.exists())
+            for component in ("consumers", "macos-shared"):
+                for version in ('16.2', '26.5', '16.20'):
+                    versions = [Mock(stdout=b'openjdk version "17"'), Mock(stdout=b'gpg (GnuPG) 2.5.22'),
+                                Mock(stdout=b'Gradle 9.7.0\n'), Mock(stdout=('Xcode ' + version + '\nBuild version synthetic\n').encode())]
+                    target = root / 'tools.json'
+                    target.unlink(missing_ok=True)
+                    with patch.object(C, 'ROOT', root), \
+                            patch.object(C.shutil, 'which', side_effect=lambda name: str(root / name)), \
+                            patch.object(C.subprocess, 'run', side_effect=versions), \
+                            patch.dict(C.os.environ, {'CI_EVIDENCE_TOOLS_FILE': str(target)}):
+                        if version == '16.2':
+                            C.record_tools(component)
+                            self.assertEqual(json.loads(target.read_text())['xcode']['version'], version)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, 'requires Xcode 16.2'):
+                                C.record_tools(component)
+                            self.assertFalse(target.exists())
 
     def assert_no_publish_or_bootstrap_commands(self, commands):
         text = str(commands)
@@ -260,8 +274,9 @@ class ComponentTests(unittest.TestCase):
                 return code, report, invoked.call_args_list, error
 
     def test_bundle_diagnostic_explicit_only_and_never_in_required_all(self):
-        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30)})
-        self.assertEqual(len(C.COMPONENTS), 13)
+        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30),
+                                       'consumers-pom-diagnostic': ('macos-14', 60)})
+        self.assertEqual(len(C.COMPONENTS), 14)
         self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
         self.assertEqual({row['component'] for row in C.matrix('all')['include']}, set(C.COMPONENTS))
         self.assertEqual(C.matrix('bundle-diagnostic'), {'include': [{'component': 'bundle-diagnostic',
@@ -271,11 +286,34 @@ class ComponentTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 C.matrix(invalid)
 
+    def test_pom_diagnostic_is_explicit_only_and_preserves_original_failure_and_cleanup(self):
+        self.assertEqual(C.matrix('consumers-pom-diagnostic'), {'include': [{'component': 'consumers-pom-diagnostic',
+                         'os': 'macos-14', 'minutes': 60, 'job_minutes': 70}]})
+        self.assertNotIn('consumers-pom-diagnostic', C.COMPONENTS)
+        self.assertEqual(len(C.matrix('all')['include']), 14)
+        self.assertEqual(C.commands('consumers-pom-diagnostic'), [('published-pom-diagnostic',
+                         ['bash', 'scripts/check-published-consumers.sh', '--pom-diagnostic'])])
+        self.assertEqual(C.commands('consumers'), [('isolated-consumers',
+                         ['bash', 'scripts/check-published-consumers.sh'])])
+        for invalid in ('consumers-pom-diagnostic,source', 'all,consumers-pom-diagnostic'):
+            with self.assertRaises(ValueError):
+                C.matrix(invalid)
+        for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
+                                                           component='consumers-pom-diagnostic')
+            self.assertIsNone(error)
+            self.assertEqual(code, status or stopped)
+            self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
+                                               {'task': 'gradle-stop', 'exitCode': stopped}])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+            self.assertEqual(calls[-1].kwargs['timeout'], 90)
+            self.assertEqual(len(calls), 2)
+
     def test_jmdns_diagnostic_is_focused_independent_and_preserves_failure_cleanup(self):
         self.assertEqual(C.matrix('jmdns-diagnostic'), {'include': [{'component': 'jmdns-diagnostic',
                          'os': 'macos-26', 'minutes': 30, 'job_minutes': 40}]})
         self.assertNotIn('jmdns-diagnostic', C.COMPONENTS)
-        self.assertEqual(len(C.matrix('all')['include']), 13)
+        self.assertEqual(len(C.matrix('all')['include']), 14)
         for invalid in ('jmdns-diagnostic,source', 'bundle-diagnostic,jmdns-diagnostic',
                         'jmdns-diagnostic,jmdns-diagnostic', 'all,jmdns-diagnostic'):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
@@ -450,7 +488,7 @@ class ComponentTests(unittest.TestCase):
 class SetupBaselineTests(unittest.TestCase):
     def selected(self, component, *, os_name='macOS', arch='ARM64', release='14.8.1', xcode='16.2', present=True):
         source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
-        begin = source.index('if [[ "$component" == consumers || "$component" == dependency-update ]]; then')
+        begin = source.index('if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then')
         end = source.index('  xcodegen_bin_dir=', begin)
         # Actual selection/admission shell block, with synthetic readbacks only.
         # No SDK installation, GPG, Gradle, network or native evidence.
@@ -468,7 +506,7 @@ class SetupBaselineTests(unittest.TestCase):
             return result.returncode, output.read_text() if output.exists() else ''
 
     def test_actual_selection_requires_exact_temporary_host_and_tool(self):
-        for component in ('consumers', 'dependency-update'):
+        for component in ('consumers', 'consumers-pom-diagnostic', 'dependency-update', 'macos-shared'):
             self.assertEqual(self.selected(component),
                              (0, 'DEVELOPER_DIR=/Applications/Xcode_16.2.app/Contents/Developer\n'))
             for changed in ({'os_name': 'Linux'}, {'arch': 'X64'}, {'release': '26.0'},

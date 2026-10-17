@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import warnings
 import zipfile
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFIX = "dev/p2pkit/transport/lan/internal/jmdns/"
@@ -21,11 +22,11 @@ def pack(entries, duplicate=None):
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as archive:
         for name, data in entries.items():
-            archive.writestr(name, data)
+            archive.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), data)
         if duplicate:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                archive.writestr(duplicate, entries[duplicate])
+                archive.writestr(zipfile.ZipInfo(duplicate, (1980, 1, 1, 0, 0, 0)), entries[duplicate])
     return out.getvalue()
 
 
@@ -99,6 +100,11 @@ public class AarTestDriver {
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, b"")
         return output.read_bytes()
+
+    def test_fixture_archive_bytes_do_not_depend_on_wall_clock(self):
+        expected = pack(self.producer)
+        with mock.patch("zipfile.time.localtime", side_effect=AssertionError("Fixture must not read the clock")):
+            self.assertEqual(expected, pack(self.producer))
 
     def test_exact_producer_and_unrelated_payloads_preserved_deterministically(self):
         result = self.run_fixture()
