@@ -360,6 +360,12 @@ int main(int argc, const char **argv) {
         BOOL ciMode = [executionMode isEqualToString:@"ci"];
         if (ciMode) childBound = @0; /* Only the immutable envelope supplies bounds. */
 #endif
+#ifdef P2PKIT_MODULAR_CI
+        /* Separate fixed diagnostic adapter, not the historical CI envelope.
+         * Product/collector retains its original 1800-second command bound. */
+        if (![executionMode isEqualToString:@"modular-jmdns"]) return 125;
+        childBound = @2040;
+#endif
         if (!childBound) return 125;
         NSURL *directory = [NSURL fileURLWithPath:@(argv[1]) isDirectory:YES];
         struct stat parent, console;
@@ -427,6 +433,19 @@ int main(int argc, const char **argv) {
             configuration.addsToRecentItems = NO;
             configuration.promptsUserIfNeeded = NO;
             configuration.environment = @{@"PATH":@"/usr/bin:/bin:/usr/sbin:/sbin"};
+#ifdef P2PKIT_MODULAR_CI
+            /* Preserve the original runner's cancellation custody across
+             * LaunchServices. No credentials or ownership-marker chains pass. */
+            const char *trackingValue = getenv("RUNNER_TRACKING_ID");
+            NSString *tracking = trackingValue ? [NSString stringWithUTF8String:trackingValue] : nil;
+            NSCharacterSet *trackingCharacters = [NSCharacterSet characterSetWithCharactersInString:
+                @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"];
+            result[@"failureCheck"] = @"RUNNER_TRACKING";
+            if (!tracking.length || tracking.length > 200 ||
+                [tracking rangeOfCharacterFromSet:trackingCharacters.invertedSet].location != NSNotFound ||
+                ![config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking]) break;
+            configuration.environment = @{@"PATH":@"/usr/bin:/bin:/usr/sbin:/sbin", @"RUNNER_TRACKING_ID":tracking};
+#endif
 #ifdef P2PKIT_APPLE_CI_CANDIDATE
             uint64_t ciOpenEnd = 0;
             if (ciMode) {

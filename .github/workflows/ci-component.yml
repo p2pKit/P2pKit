@@ -67,7 +67,12 @@ jobs:
           COMPONENT: ${{ inputs.component }}
           MINUTES: ${{ inputs.minutes }}
         run: |
-          python3 -B scripts/ci_evidence.py --component "$COMPONENT" --timeout-seconds "$((MINUTES * 60))" --output-dir "$RUNNER_TEMP/ci-evidence-$COMPONENT" --report-glob '**/build/test-results/**/*.xml' --report-glob 'build/reports/**/*' -- python3 -B scripts/ci_component.py "$COMPONENT"
+          if [[ "$COMPONENT" == jmdns-diagnostic ]]; then
+            [[ "$MINUTES" == 30 ]]
+            python3 -B scripts/run-ci-terminal-component.py
+          else
+            python3 -B scripts/ci_evidence.py --component "$COMPONENT" --timeout-seconds "$((MINUTES * 60))" --output-dir "$RUNNER_TEMP/ci-evidence-$COMPONENT" --report-glob '**/build/test-results/**/*.xml' --report-glob 'build/reports/**/*' -- python3 -B scripts/ci_component.py "$COMPONENT"
+          fi
       - name: Retain genuine component evidence, including failures
         if: ${{ always() && steps.execution.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

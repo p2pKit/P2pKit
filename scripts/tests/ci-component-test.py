@@ -2,6 +2,10 @@
 """Component routing and real task coverage, independent of remote execution."""
 import importlib.util
 import json
+import os
+import signal
+import threading
+from contextlib import ExitStack
 from pathlib import Path
 import subprocess
 import tempfile
@@ -546,6 +550,265 @@ class SecurityInputTests(unittest.TestCase):
                 '--lockfile=gradle.lockfile:./buildscript-gradle.lockfile',
                 '--lockfile=./library/gradle.lockfile',
                 '--lockfile=gradle.lockfile:./settings-gradle.lockfile'])
+
+
+class TerminalDiagnosticTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('modular_terminal_test', ROOT / 'scripts/run-ci-terminal-component.py')
+        cls.T = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.T)
+
+    def environment(self):
+        return dict(PATH='/usr/bin:/bin', GITHUB_WORKSPACE=str(ROOT), GITHUB_SHA='a' * 40,
+            GITHUB_WORKFLOW_SHA='a' * 40, GITHUB_WORKFLOW_REF='p2pKit/P2pKit/.github/workflows/ci.yml@refs/heads/test',
+            GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='p2pKit/P2pKit', GITHUB_ACTIONS='true',
+            RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='macOS', RUNNER_ARCH='X64',
+            RUNNER_TRACKING_ID='github_123-test', RUNNER_TEMP='/tmp')
+
+    def test_terminal_route_is_only_explicit_diagnostic_and_preserves_exact_command(self):
+        T = self.T
+        env = self.environment()
+        argv = T.command(env)
+        python = str(Path(T.sys.executable).resolve())
+        self.assertEqual(argv, [python, '-B', str(ROOT / 'scripts/ci_evidence.py'), '--component', 'jmdns-diagnostic',
+            '--timeout-seconds', '1800', '--source-root', str(ROOT), '--output-dir', '/tmp/ci-evidence-jmdns-diagnostic',
+            '--report-glob', '**/build/test-results/**/*.xml', '--report-glob', 'build/reports/**/*', '--',
+            python, '-B', str(ROOT / 'scripts/ci_component.py'), 'jmdns-diagnostic'])
+        workflow = (ROOT / '.github/workflows/ci-component.yml').read_text()
+        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic ]]; then\n            [[ "$MINUTES" == 30 ]]', workflow)
+        self.assertEqual(workflow.count('python3 -B scripts/run-ci-terminal-component.py'), 1)
+        self.assertIn('else\n            python3 -B scripts/ci_evidence.py', workflow)
+        self.assertNotIn('jmdns-diagnostic', C.COMPONENTS)
+        self.assertEqual(C.matrix('jmdns-diagnostic')['include'][0]['job_minutes'], 40)
+        self.assertEqual(len(C.matrix('all')['include']), 14)
+        self.assertEqual(C.commands('jmdns-diagnostic')[0][1][-3:],
+            [':p2p-transport-lan:jvmTest', '--tests', 'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])
+        self.assertEqual(C.commands('apple-arm64')[0][1][-1], 'ios-arm64')
+        self.assertEqual(C.commands('apple-x64')[0][1][-1], 'ios-x64')
+
+    def test_terminal_environment_admission_and_nonsecret_allowlist(self):
+        T = self.T
+        with patch.object(T.platform, 'system', return_value='Darwin'), patch.object(T.platform, 'machine', return_value='x86_64'):
+            T.environment_admit(self.environment())
+            for key, value in [('RUNNER_TRACKING_ID', ''), ('RUNNER_TRACKING_ID', 'bad tracking'),
+                ('GITHUB_EVENT_NAME', 'pull_request'), ('GITHUB_SHA', 'b' * 40), ('RUNNER_ARCH', 'ARM64'),
+                ('GITHUB_WORKFLOW_REF', 'p2pKit/P2pKit/.github/workflows/publish-maven-central.yml@refs/tags/v1'),
+                ('P2PKIT_AUDIT_OWNERSHIP_CHAIN', 'existing-domain')]:
+                with self.subTest(key=key, value=value), self.assertRaises(T.ContextFailure):
+                    T.environment_admit({**self.environment(), key: value})
+        self.assertTrue({'RUNNER_TRACKING_ID', 'JAVA_HOME', 'JAVA_HOME_21_X64', 'GRADLE_USER_HOME',
+                         'CI_EVIDENCE_RECIPIENT_FINGERPRINT'} <= T.ENVIRONMENT)
+        self.assertTrue({'GITHUB_TOKEN', 'GH_TOKEN', 'CENTRAL_TOKEN_PASSWORD', 'SIGNING_KEY',
+                         'JAVA_TOOL_OPTIONS', 'P2PKIT_AUDIT_OWNERSHIP_CHAIN'}.isdisjoint(T.ENVIRONMENT))
+
+    def test_terminal_config_rejects_credentials_source_and_environment_mutation(self):
+        T = self.T
+        with tempfile.TemporaryDirectory(prefix='terminal-config-') as tmp:
+            temp = Path(tmp).resolve()
+            directory = temp / 'ci-terminal-case'
+            directory.mkdir(mode=0o700)
+            env = {**self.environment(), 'RUNNER_TEMP': str(temp)}
+            config = dict(uid=501, gid=20, groups=[20, 80], source={'commit': 'a' * 40, 'tree': 'b' * 40}, environment=env)
+            with patch.object(T, 'environment_admit'), patch.object(T.private, 'private_parent'), \
+                 patch.object(T.os, 'getuid', return_value=501), patch.object(T.os, 'geteuid', return_value=501), \
+                 patch.object(T.os, 'getgid', return_value=20), patch.object(T.os, 'getegid', return_value=20), \
+                 patch.object(T.os, 'getgroups', return_value=[80, 20]), \
+                 patch.dict(T.os.environ, {'RUNNER_TRACKING_ID': env['RUNNER_TRACKING_ID']}):
+                T.validate_config(config, directory)
+                for key, value in [('uid', 0), ('groups', [20]), ('source', {'commit': 'c' * 40, 'tree': 'b' * 40}),
+                    ('environment', {**env, 'GITHUB_TOKEN': 'PRIVATE'}),
+                    ('environment', {**env, 'RUNNER_TRACKING_ID': 'different'})]:
+                    with self.subTest(key=key), self.assertRaises(T.ContextFailure):
+                        T.validate_config({**config, key: value}, directory)
+                with self.assertRaises(T.ContextFailure):
+                    T.validate_config(config, temp / 'wrong-directory')
+
+    def test_terminal_original_evidence_exit_and_cancel_are_not_conflated(self):
+        T = self.T
+        with tempfile.TemporaryDirectory(prefix='terminal-wait-') as tmp, patch.object(T.time, 'sleep'):
+            directory = Path(tmp)
+            for code in (0, 1):
+                process = Mock()
+                process.poll.return_value = code
+                self.assertEqual(T.wait_evidence(process, directory, threading.Event(), T.time.monotonic() + 30), code)
+                process.send_signal.assert_not_called()
+            process = Mock()
+            process.poll.side_effect = [None, 0]
+            cancelled = threading.Event()
+            cancelled.set()
+            with self.assertRaisesRegex(T.ContextFailure, '^CANCELLED$'):
+                T.wait_evidence(process, directory, cancelled, T.time.monotonic() + 30)
+            process.send_signal.assert_called_once_with(signal.SIGTERM)
+            process.kill.assert_not_called()
+            process = Mock()
+            process.poll.return_value = None
+            with patch.object(T.time, 'monotonic', side_effect=[10, 71]), \
+                 self.assertRaisesRegex(T.ContextFailure, '^CHILD_RETIREMENT_UNKNOWN$'):
+                T.wait_evidence(process, directory, threading.Event(), 5)
+            process.send_signal.assert_called_once_with(signal.SIGTERM)
+            process.kill.assert_not_called()
+
+    def test_terminal_controller_cancellation_keeps_native_finalizer_authority(self):
+        T = self.T
+        with tempfile.TemporaryDirectory(prefix='terminal-controller-') as tmp, patch.object(T.time, 'sleep'):
+            directory = Path(tmp)
+            process = Mock(returncode=125)
+            process.poll.side_effect = [None, 125]
+            cancelled = threading.Event()
+            cancelled.set()
+            self.assertEqual(T.wait_controller(process, directory, cancelled, T.time.monotonic() + 30), 125)
+            self.assertEqual((directory / 'cancel').read_bytes(), b'cancel\n')
+            process.send_signal.assert_not_called()
+            process.kill.assert_not_called()
+            process = Mock(returncode=0)
+            process.poll.return_value = 0
+            with patch.object(T.time, 'monotonic', return_value=20), \
+                 self.assertRaisesRegex(T.ContextFailure, '^CONTROLLER_RETIREMENT_UNKNOWN$'):
+                T.wait_controller(process, directory, threading.Event(), 10)
+
+    def test_terminal_native_lease_and_complete_result_cannot_be_replaced_by_inner_pass(self):
+        T = self.T
+        source = {'commit': 'a' * 40, 'tree': 'b' * 40}
+        app = dict(schema=3, executionMode=T.MODE, stage='FINALIZED', exitCode=0, failureCheck='NONE',
+            openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(T.terminal.APPLICATION_FLAGS, True))
+        admission = dict(source=source, ancestry=dict(method=T.terminal.ANCESTRY_METHOD, depth=3,
+            systemLoginAncestors=1, restrictedCombinedDenials=1))
+        T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0)
+        for key in T.terminal.APPLICATION_FLAGS:
+            with self.subTest(flag=key), self.assertRaises(T.ContextFailure):
+                T.validate_result({**app, key: False}, admission, dict(source=source, exitCode=0), source, 0)
+        for key, value in [('exitCode', False), ('stage', 'QUIT'), ('failureCheck', 'SHELL_RETIREMENT'),
+                           ('executionMode', 'qualification')]:
+            with self.subTest(key=key), self.assertRaises(T.ContextFailure):
+                T.validate_result({**app, key: value}, admission, dict(source=source, exitCode=0), source, 0)
+        with self.assertRaises(T.ContextFailure):
+            T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
+        native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
+        self.assertIn('if (![executionMode isEqualToString:@"modular-jmdns"]) return 125;', native)
+        self.assertIn('childBound = @2040;', native)
+        self.assertIn('config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking', native)
+        self.assertIn('@"RUNNER_TRACKING_ID":tracking', native)
+        self.assertIn('outcome = finalizeApplication(', native)
+        self.assertNotIn('forceTerminate', native)
+        self.assertNotIn('kill(', native)
+        raw = (ROOT / 'scripts/run-ci-terminal-component.py').read_text()
+        self.assertNotIn('with-darwin-audit-session.py', raw)
+        self.assertNotIn('run-rpc-qualification.py', raw)
+        self.assertIn('private.source_snapshot() == source', raw)
+
+    def test_terminal_child_source_change_and_early_cancel_remain_failure(self):
+        T = self.T
+        source = {'commit': 'a' * 40, 'tree': 'b' * 40}
+        for cancelled, changed in ((True, False), (False, True), (False, False)):
+            with self.subTest(cancelled=cancelled, changed=changed), \
+                 tempfile.TemporaryDirectory(prefix='terminal-child-') as tmp, ExitStack() as stack:
+                directory = Path(tmp)
+                if cancelled:
+                    (directory / 'cancel').write_bytes(b'cancel\n')
+                config = dict(source=source, environment=self.environment())
+                stack.enter_context(patch.object(T.private, 'read_json', return_value=config))
+                stack.enter_context(patch.object(T, 'validate_config'))
+                stack.enter_context(patch.object(T.private, 'source_snapshot', side_effect=[source,
+                    {'commit': 'c' * 40, 'tree': 'b' * 40} if changed else source]))
+                stack.enter_context(patch.object(T.terminal, 'terminal_ancestor', return_value={}))
+                stack.enter_context(patch.object(T.pwd, 'getpwuid', return_value=Mock(pw_dir='/nonsecret', pw_name='synthetic')))
+                writes = stack.enter_context(patch.object(T.private, 'write_json'))
+                popen = stack.enter_context(patch.object(T.subprocess, 'Popen'))
+                popen.return_value.poll.return_value = 0
+                stack.enter_context(patch.object(T, 'wait_evidence', return_value=0))
+                if cancelled or changed:
+                    with self.assertRaisesRegex(T.ContextFailure, '^' + ('CANCELLED' if cancelled else 'SOURCE_CHANGED') + '$'):
+                        T.child(directory / 'config.json')
+                    writes.assert_called_with(directory / 'child-result.json', dict(source=source, exitCode=125))
+                else:
+                    self.assertEqual(T.child(directory / 'config.json'), 0)
+                    writes.assert_called_with(directory / 'child-result.json', dict(source=source, exitCode=0))
+                if cancelled:
+                    popen.assert_not_called()
+
+    def test_terminal_outer_source_or_cancel_failure_cannot_be_inner_success(self):
+        T = self.T
+        source = {'commit': 'a' * 40, 'tree': 'b' * 40}
+        for failure in ('source', 'cancel-after-child', 'cancel-before-spawn'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(prefix='terminal-parent-') as tmp, ExitStack() as stack:
+                env = {**self.environment(), 'RUNNER_TEMP': str(Path(tmp).resolve())}
+                stack.enter_context(patch.dict(T.os.environ, env, clear=True))
+                stack.enter_context(patch.object(T, 'environment_admit'))
+                stack.enter_context(patch.object(T, 'validate_config'))
+                stack.enter_context(patch.object(T.private, 'source_snapshot', side_effect=[source,
+                    {'commit': 'c' * 40, 'tree': 'b' * 40} if failure == 'source' else source]))
+                stack.enter_context(patch.object(T.private, 'read_json', return_value={}))
+                stack.enter_context(patch.object(T, 'validate_result'))
+                popen = stack.enter_context(patch.object(T.subprocess, 'Popen'))
+                popen.return_value.poll.return_value = 0
+                def compile_result(*args, **kwargs):
+                    self.assertEqual(kwargs['timeout'], 90)
+                    if failure == 'cancel-before-spawn':
+                        kwargs['cancelled'].__self__.set()
+                    return dict(code='PASS', cleanupKnown=True, capturesClosed=True)
+                stack.enter_context(patch.object(T.evidence, 'run_command', side_effect=compile_result))
+                def wait(process, directory, cancelled, deadline):
+                    if failure == 'cancel-after-child':
+                        cancelled.set()
+                    return 0
+                stack.enter_context(patch.object(T, 'wait_controller', side_effect=wait))
+                with self.assertRaisesRegex(T.ContextFailure, '^' + ('SOURCE_CHANGED' if failure == 'source' else 'CANCELLED') + '$'):
+                    T.run()
+                if failure == 'cancel-before-spawn':
+                    popen.assert_not_called()
+                else:
+                    popen.assert_called_once()
+
+    def test_terminal_source_snapshot_ignores_generated_reports_not_tracked_edits(self):
+        T = self.T
+        with tempfile.TemporaryDirectory(prefix='terminal-source-') as tmp:
+            root = Path(tmp).resolve()
+            environment = {'PATH': os.environ['PATH'], 'HOME': str(root), 'GIT_CONFIG_NOSYSTEM': '1',
+                           'GIT_AUTHOR_NAME': 'Synthetic', 'GIT_AUTHOR_EMAIL': 'synthetic@example.invalid',
+                           'GIT_COMMITTER_NAME': 'Synthetic', 'GIT_COMMITTER_EMAIL': 'synthetic@example.invalid'}
+            def git(*args):
+                subprocess.run(['/usr/bin/git', *args], cwd=root, env=environment, check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            git('init', '-q')
+            (root / '.gitignore').write_text('build/\n')
+            (root / 'source.txt').write_text('original\n')
+            git('add', '.gitignore', 'source.txt')
+            git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'synthetic')
+            with patch.object(T.private, 'ROOT', root), patch.object(T.private.os, 'getuid', return_value=501), \
+                 patch.object(T.private.os, 'geteuid', return_value=501):
+                source = T.private.source_snapshot()
+                (root / 'build/reports').mkdir(parents=True)
+                (root / 'build/reports/synthetic.xml').write_text('<synthetic/>')
+                self.assertEqual(T.private.source_snapshot(), source)
+                (root / 'source.txt').write_text('changed\n')
+                with self.assertRaisesRegex(T.private.ContextFailure, 'Immutable clean source required'):
+                    T.private.source_snapshot()
+
+    def test_terminal_deadlines_and_native_tracking_failure_are_fail_closed(self):
+        T = self.T
+        self.assertEqual((T.CHILD_SECONDS, T.CONTROLLER_SECONDS, T.WRAPPER_SECONDS), (1980, 2100, 2250))
+        self.assertLess(1800, T.CHILD_SECONDS)
+        self.assertLess(T.CHILD_SECONDS, 2040)
+        self.assertLess(2040 + 30, T.CONTROLLER_SECONDS)
+        self.assertLess(T.CONTROLLER_SECONDS, T.WRAPPER_SECONDS)
+        self.assertLess(T.WRAPPER_SECONDS, C.matrix('jmdns-diagnostic')['include'][0]['job_minutes'] * 60)
+        source = {'commit': 'a' * 40, 'tree': 'b' * 40}
+        app = dict(schema=3, executionMode=T.MODE, stage='OPEN', exitCode=125, failureCheck='RUNNER_TRACKING',
+            openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(T.terminal.APPLICATION_FLAGS, False))
+        with self.assertRaisesRegex(T.ContextFailure, '^APPLICATION_FINALIZATION$'):
+            T.validate_result(app, {}, dict(source=source, exitCode=0), source, 0)
+
+    def test_terminal_shell_waits_original_child_and_has_no_environment_or_command_override(self):
+        T = self.T
+        raw = T.command_bytes(Path('/private/synthetic folder')).decode()
+        self.assertIn('run-ci-terminal-component.py', raw)
+        self.assertIn('--child', raw)
+        self.assertIn('status=$?', raw)
+        self.assertIn('printf \'%s\\n\' "$status"', raw)
+        self.assertIn('exit "$status"', raw)
+        self.assertNotIn('exec ', raw)
+        self.assertNotIn(' &', raw)
 
 
 if __name__ == '__main__': unittest.main()
