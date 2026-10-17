@@ -559,7 +559,9 @@ class SecurityInputTests(unittest.TestCase):
         actual = self.arguments(ROOT)
         self.assertEqual(sorted(actual), sorted(expected))
         self.assertEqual(len(actual), len(set(actual)))
-        self.assertNotIn('--lockfile=./gradle.lockfile', actual)
+        self.assertIn('--lockfile=./gradle.lockfile', actual)
+        self.assertIn('org.jetbrains.kotlin:kotlin-native-prebuilt:2.4.20=kotlinNativeHostArchives',
+                      (ROOT / 'gradle.lockfile').read_text().splitlines())
         self.assertNotIn('--lockfile=./settings-gradle.lockfile', actual)
 
     def test_empty_roots_excluded_and_nonstandard_gradle_names_typed(self):

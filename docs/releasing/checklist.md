@@ -88,7 +88,7 @@ OSV scans every populated Gradle lock plus the explicitly admitted
 is bound to the verified vendor manifest and retains real upstream Maven
 advisory identity; it is not the modified component's runtime SBOM. The pinned
 scanner supports the explicit `--sbom` input (deprecated upstream in favor of
-`-L`). Existing advisory exceptions and their expiry remain unchanged; a local
+`-L`). Repository advisory filters are disabled; a local
 lifecycle patch does not establish remediation of upstream advisories.
 
 Remote byte comparison and isolated consumers run **after** publication; they

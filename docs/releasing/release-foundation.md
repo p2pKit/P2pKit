@@ -57,7 +57,7 @@ rc2 artifacts qualify the later snapshot or a new release.
 | macos-shared | Original aggregate `check`, delegating only eight native test tasks to the two mandatory Apple lanes / macOS 15 Intel, Xcode 26.3 |
 | apple-x64 | Actual `iosX64` execution, not cross-compilation / macOS Intel |
 | desktop-linux, desktop-windows, desktop-macos | Desktop tests and DEB/MSI/ARM64-DMG packaging |
-| security | Pinned OSV scan, unchanged expiring exceptions / Ubuntu |
+| security | Pinned unfiltered OSV scan / Ubuntu |
 | compatibility | API/ABI, strict Dokka, SBOM, publication, XCFramework and Swift / macOS 26 ARM64 |
 | consumers | Complete isolated published-coordinate JVM/Android/KMP/iOS consumers / macOS 15 Intel, Xcode 26.3 |
 
