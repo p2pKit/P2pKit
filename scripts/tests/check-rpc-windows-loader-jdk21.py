@@ -73,6 +73,7 @@ def main():
                         "BootstrapReturnTests" in name or
                         "SystemImportResolutionTests" in name or
                         "SystemExportPlanTests" in name or
+                        "OriginalSystemModulesTests" in name or
                         "OriginalFileLeaseTests" in name or
                         "ProfileDllFileCandidateTests" in name or
                         "OriginalFileSecurityQueryTests" in name or
@@ -293,6 +294,17 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".SystemExportPlanTests", case], 0,
             "WINDOWS_SYSTEM_EXPORT_PLAN_PASS case=" + re.escape(case) +
             r" scope=INERT_COPIED_PE_GRAPH_NOT_SYSTEM_IDENTITY_OR_LOADING_AUTHORITY\n", "")
+    system_module_cases = ["owner-refusal", "names", "bootstrap-substitution", "slot-substitution", "thread",
+                           "paths", "path-embedded-nul", "pin-success", "module-absent", "pin-false",
+                           "pin-contradictory", "pin-duplicate", "path-mismatch", "system-path-unknown",
+                           "pin-unknown", "module-path-unknown", "role-links", "role-size", "leaf-refusal",
+                           "ancestor-refusal", "core-substitution", "query-provider", "snapshot-input",
+                           "snapshot-short", "snapshot-unknown", "snapshot-metadata", "failure-latch"]
+    for case in system_module_cases:
+        run("original-system-modules-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".OriginalSystemModulesTests", case], 0,
+            "WINDOWS_ORIGINAL_SYSTEM_MODULES_PASS case=" + re.escape(case) +
+            r" scope=INERT_OWNERS_AND_NATIVE_SHAPED_HANDLES_NOT_SYSTEM_CUSTODY_OR_AUTHORITY\n", "")
     byte_cases = ["owner-refusal", "substitution", "bounds", "thread", "stream-512", "stream-chunk",
                   "stream-multi", "stream-maximum", "short-first", "short-later", "eof-first", "extra-eof",
                   "false", "pending", "overcount", "unsigned-count", "throw-after-return", "metadata-before",
@@ -430,6 +442,21 @@ def main():
             r" descriptorPolicy=(ACCEPTED|REFUSED) descriptorPolicies=(ACCEPTED|REFUSED)\n", "")
         original_pipeline_policy = pipeline.strip().split()[-2].split("=", 1)[1]
         original_pipeline_ancestor_policies = pipeline.strip().split()[-1].split("=", 1)[1]
+        system_modules, _ = run("native-original-system-modules", base + access +
+            ["--patch-module", MODULE + "=" + str(classes), "--module",
+             MODULE + "/" + PACKAGE + ".NativeOriginalSystemModulesTests", "actual"], 0,
+            r"WINDOWS_NATIVE_ORIGINAL_SYSTEM_MODULES_PASS case=actual "
+            r"scope=DEVELOPMENT_SYSTEM_MODULE_DISK_GRAPH_NOT_MAPPED_IDENTITY_OR_OS_AUTHORITY "
+            r"outcome=(MODULE_ABSENT|LEAF_POLICY_REFUSED|ANCESTOR_POLICY_REFUSED|COMPLETE) "
+            r"stoppedSlot=(-1|[0-7]) pinned=[0-8] files=[0-8] bytes=[0-8] graphQueries=(0|5)\n", "")
+        values = dict(value.split("=", 1) for value in system_modules.strip().split()[1:])
+        if values["outcome"] == "COMPLETE":
+            require(all(values[key] == expected for key, expected in
+                        (("stoppedSlot", "-1"), ("pinned", "8"), ("files", "8"), ("bytes", "8"),
+                         ("graphQueries", "5"))), "Complete system graph lacks its original full cohort")
+        else:
+            require(values["stoppedSlot"] != "-1" and values["bytes"] == "0" and values["graphQueries"] == "0",
+                    "Refused system cohort cannot report copied bytes or a partial graph")
     run("test-dll-compiler-budget", [sys.executable, "-I", "-B",
         ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm/test-build-test-dll.py"], 0,
         r"WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=30 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION\n", "")

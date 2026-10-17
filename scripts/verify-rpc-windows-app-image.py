@@ -152,6 +152,8 @@ ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".cl
     "WindowsOriginalJvmBytesCandidate",
     "WindowsOriginalFileBytesLease", "WindowsOriginalFileBytesLease$Failure",
     "WindowsOriginalProfileDllBytesCandidate", "WindowsOriginalProfileDllBytesCandidate$Failure",
+    "WindowsOriginalSystemModulesCandidate", "WindowsOriginalSystemModulesCandidate$Failure",
+    "WindowsOriginalSystemModuleCandidate", "WindowsOriginalSystemModuleCandidate$Failure",
     "WindowsSystemImportResolution", "WindowsSystemImportResolution$Failure",
     "WindowsSystemExportPlan", "WindowsSystemExportPlan$Input", "WindowsSystemExportPlan$Target",
     "WindowsSystemExportPlan$Forward", "WindowsSystemExportPlan$Span", "WindowsSystemExportPlan$Section",

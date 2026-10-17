@@ -9,7 +9,7 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
 /**
- * Actual permanently retained file acquisition/metadata mechanics for two concrete original facades.
+ * Actual permanently retained file acquisition/metadata mechanics for three concrete original owner roles.
  * JVM and profile-DLL ownership are independent: neither can substitute for the other. No authority
  * token, native-entry callback or raw pathname factory exists. Owner identity precedes native effects.
  * NOT installation/runtime authority: final-component no-reparse and handle metadata do not establish
@@ -50,6 +50,7 @@ final class WindowsOriginalFileLease {
     private final Thread thread = Thread.currentThread();
     private final WindowsOriginalJvmFileCandidate originalOwner;
     private final WindowsOriginalProfileDllFileCandidate originalProfileDllOwner;
+    private final WindowsOriginalSystemModuleCandidate originalSystemOwner;
     private final Linker linker;
     private final Arena bootstrapArena;
     private final MemorySegment createEntry;
@@ -84,19 +85,33 @@ final class WindowsOriginalFileLease {
     private boolean succeeded;
 
     // Retain the original JVM constructor/signature, including null-owner refusal before native effects.
-    WindowsOriginalFileLease(WindowsOriginalJvmFileCandidate owner) { this(owner, null); }
+    WindowsOriginalFileLease(WindowsOriginalJvmFileCandidate owner) { this(owner, null, null); }
 
     static WindowsOriginalFileLease forProfileDll(WindowsOriginalProfileDllFileCandidate owner) {
         if (owner == null) throw new IllegalArgumentException("Missing original profile DLL file owner");
-        return new WindowsOriginalFileLease(null, owner);
+        return new WindowsOriginalFileLease(null, owner, null);
+    }
+
+    static WindowsOriginalFileLease forSystemModule(WindowsOriginalSystemModuleCandidate owner) {
+        if (owner == null) throw new IllegalArgumentException("Missing original system module file owner");
+        return new WindowsOriginalFileLease(null, null, owner);
     }
 
     private WindowsOriginalFileLease(WindowsOriginalJvmFileCandidate jvm,
-        WindowsOriginalProfileDllFileCandidate dll) {
+        WindowsOriginalProfileDllFileCandidate dll, WindowsOriginalSystemModuleCandidate system) {
         originalOwner = jvm;
         originalProfileDllOwner = dll;
-        // Only these two fixed constructors select a role. No caller chooses limits, permissions or entries.
-        if (dll != null) {
+        originalSystemOwner = system;
+        // Only these three fixed constructors select a role. No caller chooses limits, permissions or entries.
+        if (system != null) {
+            linker = system.originalLinker();
+            bootstrapArena = system.originalBootstrapArena();
+            createEntry = system.originalFileEntry(0);
+            informationEntry = system.originalFileEntry(1);
+            finalPathEntry = system.originalFileEntry(2);
+            sourcePath = system.originalPathSnapshot();
+            sourceLength = sourcePath.length - 1;
+        } else if (dll != null) {
             linker = dll.originalLinker();
             bootstrapArena = dll.originalBootstrapArena();
             createEntry = dll.originalFileEntry(0);
@@ -265,7 +280,7 @@ final class WindowsOriginalFileLease {
         observed[5] = Integer.toUnsignedLong(buffers[4].get(ValueLayout.JAVA_INT, 16));
         // Padding is not identity. Both BOOLEAN fields are checked individually, not as a padded integer.
         if (observed[0] == 0 || (observed[1] == 0 && observed[2] == 0) || observed[3] < 0 ||
-            refusedFileSize(observed[4]) || observed[5] != 1 ||
+            refusedFileSize(observed[4]) || refusedLinkCount(observed[5]) ||
             (observed[6] & (0x10 | 0x400 | 0x1000)) != 0 || observed[7] != 0 ||
             buffers[4].get(ValueLayout.JAVA_BYTE, 20) != 0 || buffers[4].get(ValueLayout.JAVA_BYTE, 21) != 0) {
             throw new IllegalStateException("Original JVM file has refused identity, type or metadata");
@@ -273,8 +288,13 @@ final class WindowsOriginalFileLease {
     }
 
     private boolean refusedFileSize(long bytes) {
-        if (originalProfileDllOwner != null) return bytes < 512 || bytes > 32L * 1024 * 1024;
+        if (originalProfileDllOwner != null || originalSystemOwner != null) return bytes < 512 || bytes > 32L * 1024 * 1024;
         return bytes <= 0 || bytes > MAXIMUM_FILE_BYTES;
+    }
+
+    private boolean refusedLinkCount(long links) {
+        // System servicing links are observed metadata ONLY. JVM/profile policy remains exactly one.
+        return originalSystemOwner == null ? links != 1 : links <= 0 || links > 0xffff_ffffL;
     }
 
     private void validateFinalPath() {
@@ -292,10 +312,12 @@ final class WindowsOriginalFileLease {
     }
 
     private void requireOriginalOwner() {
-        if (Thread.currentThread() != thread || (originalOwner == null && originalProfileDllOwner == null)) {
+        if (Thread.currentThread() != thread || ((originalOwner == null ? 0 : 1) + (originalProfileDllOwner == null ? 0 : 1) +
+            (originalSystemOwner == null ? 0 : 1) != 1)) {
             throw new IllegalStateException("Original JVM file requires its original platform thread");
         }
-        if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalLease(this);
+        if (originalSystemOwner != null) originalSystemOwner.requireOriginalFileLease(this);
+        else if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalLease(this);
         else originalOwner.requireOriginalLease(this);
         if (bootstrapArena == null || !bootstrapArena.scope().isAlive()) {
             throw new IllegalStateException("Original JVM file bootstrap scope is unavailable");
@@ -359,6 +381,50 @@ final class WindowsOriginalFileLease {
             throw new IllegalStateException("Original file lease belongs to another JVM facade");
         }
         requireCompleted();
+    }
+
+    private void requireSystemRequester(WindowsOriginalSystemModuleCandidate requester) {
+        if (requester == null || requester != originalSystemOwner) {
+            throw new IllegalStateException("Original file lease belongs to another system module");
+        }
+        requireCompleted();
+    }
+
+    long systemByteCount(WindowsOriginalSystemModuleCandidate requester) {
+        requireSystemRequester(requester);
+        return first[4];
+    }
+
+    long systemLinkCount(WindowsOriginalSystemModuleCandidate requester) {
+        requireSystemRequester(requester);
+        return first[5];
+    }
+
+    WindowsOriginalFileSecurityQuery newSystemModuleSecurity(WindowsOriginalSystemModuleCandidate requester) {
+        requireSystemRequester(requester);
+        requester.requireOriginalNativeInputs();
+        return WindowsOriginalFileSecurityQuery.forSystemModule(requester, linker, bootstrapArena, handleArena, handle,
+            requester.originalSecurityEntry(this, 0), requester.originalSecurityEntry(this, 1),
+            requester.originalSecurityEntry(this, 2), requester.originalSecurityEntry(this, 3));
+    }
+
+    WindowsOriginalFileAncestorsLease newSystemModuleAncestors(WindowsOriginalSystemModuleCandidate requester,
+        WindowsOriginalFileSecurityQuery security, Arena moduleArena, MemorySegment module,
+        MemorySegment queryEntry, MemorySegment pinEntry, MemorySegment resolveEntry) {
+        requireSystemRequester(requester);
+        requester.requireOriginalQuery(security);
+        requester.requireOriginalAncestorInputs();
+        return WindowsOriginalFileAncestorsLease.forSystemModule(requester, linker, bootstrapArena, moduleArena,
+            module, queryEntry, pinEntry, resolveEntry, createEntry, informationEntry, finalPathEntry,
+            requester.originalAncestorsEntry(this, 0), requester.originalAncestorsEntry(this, 1),
+            handleArena, handle, sourcePath, sourceLength, first);
+    }
+
+    WindowsOriginalFileBytesLease newSystemModuleBytes(WindowsOriginalSystemModuleCandidate requester) {
+        requireSystemRequester(requester);
+        requester.requireOriginalByteInputs();
+        return WindowsOriginalFileBytesLease.forSystemModule(requester, linker, bootstrapArena, handleArena, handle,
+            requester.originalReadEntry(this), informationEntry, first);
     }
 
     WindowsOriginalJvmBytesCandidate newJvmBytes(WindowsOriginalJvmFileCandidate requester) {

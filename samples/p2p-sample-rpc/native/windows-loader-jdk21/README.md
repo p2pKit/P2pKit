@@ -1009,3 +1009,39 @@ This is administrator **development-file/PE coverage**, not standard-user
 protected-profile storage, MSI installation, productive JNI/Host–Client testing,
 approved bootstrap authority or W01–W11 qualification. No helper/test input enters
 production resources, the adapter JAR, MSI or publication artifact inventory.
+
+### Original system-module disk observations
+
+The dormant bootstrap can attach one fixed eight-slot observation cohort:
+`kernel32.dll`, `advapi32.dll`, `ntdll.dll`, `shell32.dll`, `ole32.dll`,
+`kernelbase.dll`, `sechost.dll` and `combase.dll`. Each module must already be
+loaded; the collector only pins it. There is no load fallback, caller-supplied
+module list, path, symbol provider, API-set routing or authority token. All eight
+original module/failure owners exist before the first native effect. Unknown
+PIN/path return retains the complete original argument frame and seals the attempt.
+
+The same concrete file, security, ancestor and byte engines now have a third
+closed owner role. System files admit a positive unsigned-32-bit link count as
+observed metadata, compared at each original metadata revalidation boundary; they
+do not enumerate hard links or claim count-based custody. Existing JVM/profile
+files still require exactly one link. Each fixed system file must pass original
+HANDLE security and ancestor policy before bounded original-HANDLE snapshots
+reach the existing copied export parser. The original pinned ntdll query provider
+must match its fixed cohort slot. No graph is published from a partial cohort.
+
+The read-only Windows observation reports `MODULE_ABSENT`, `LEAF_POLICY_REFUSED`,
+`ANCESTOR_POLICY_REFUSED` or `COMPLETE`, with bounded stage counts. A refusal is
+an honest diagnostic, not successful graph resolution or loading qualification.
+Only `COMPLETE` can resolve the fixed export queries. The parser's existing
+128MiB aggregate-input cap is not a 128MiB heap guarantee: original snapshots
+and defensive input copies coexist. Allocation failure retains owners and fails;
+the test heap and deadlines are unchanged.
+
+These disk observations still do **not** establish the original mapped
+section/file-ID association, full transitive OS load closure, independent
+first-OS/bootstrap authority or installed-runtime provenance. The resulting
+export targets are copied data, never callable capabilities. Production loading,
+JNI activation and provider availability remain unchanged and fail closed. The
+four added production owner/failure classes are explicitly included in the static
+75-class adapter inventory; both new test classes stay outside production JARs
+and application resources.

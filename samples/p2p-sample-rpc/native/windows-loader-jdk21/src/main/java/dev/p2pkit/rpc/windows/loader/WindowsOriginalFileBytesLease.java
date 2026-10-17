@@ -15,7 +15,7 @@ import java.security.Provider;
  * No reopen, pathname input, seek, expected digest, DLL load or production authority is introduced.
  * A digest and unchanged metadata do not prove a mapped image, independent runtime provenance or
  * absence of pre-existing writable mappings/security handles. Startup/export authority is still required.
- * Only the concrete DLL owner retains a <=32MiB copy; the JVM owner remains <=512MiB hash-only.
+ * Concrete DLL/system owners retain a <=32MiB copy; the JVM owner remains <=512MiB hash-only.
  * A failed or partially copied snapshot remains private, and completion is published only after the
  * exact EOF, unchanged original metadata and successful retirement of the original private frame.
  */
@@ -48,6 +48,7 @@ final class WindowsOriginalFileBytesLease {
     private final Thread thread = Thread.currentThread();
     private final WindowsOriginalJvmBytesCandidate originalJvmOwner;
     private final WindowsOriginalProfileDllBytesCandidate originalProfileDllOwner;
+    private final WindowsOriginalSystemModuleCandidate originalSystemOwner;
     private final Linker linker;
     private final Arena bootstrapArena;
     private final Arena fileArena;
@@ -80,7 +81,7 @@ final class WindowsOriginalFileBytesLease {
     WindowsOriginalFileBytesLease(WindowsOriginalJvmBytesCandidate owner, Linker linker,
         Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment readEntry,
         MemorySegment informationEntry, long[] originalMetadata) {
-        this(owner, null, linker, bootstrapArena, fileArena, fileHandle, readEntry, informationEntry, originalMetadata);
+        this(owner, null, null, linker, bootstrapArena, fileArena, fileHandle, readEntry, informationEntry, originalMetadata);
     }
 
     static WindowsOriginalFileBytesLease forProfileDll(WindowsOriginalProfileDllBytesCandidate owner,
@@ -88,15 +89,25 @@ final class WindowsOriginalFileBytesLease {
         Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment readEntry,
         MemorySegment informationEntry, long[] originalMetadata) {
         if (owner == null) throw new IllegalStateException("Original DLL byte observation requires its concrete owner");
-        return new WindowsOriginalFileBytesLease(null, owner, linker, bootstrapArena, fileArena, fileHandle, readEntry, informationEntry, originalMetadata);
+        return new WindowsOriginalFileBytesLease(null, owner, null, linker, bootstrapArena, fileArena, fileHandle, readEntry, informationEntry, originalMetadata);
+    }
+
+    static WindowsOriginalFileBytesLease forSystemModule(WindowsOriginalSystemModuleCandidate owner,
+        Linker linker, Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment readEntry,
+        MemorySegment informationEntry, long[] originalMetadata) {
+        if (owner == null) throw new IllegalStateException("Original system bytes require their concrete owner");
+        return new WindowsOriginalFileBytesLease(null, null, owner, linker, bootstrapArena, fileArena, fileHandle,
+            readEntry, informationEntry, originalMetadata);
     }
 
     private WindowsOriginalFileBytesLease(WindowsOriginalJvmBytesCandidate jvmOwner,
-        WindowsOriginalProfileDllBytesCandidate profileDllOwner, Linker linker,
+        WindowsOriginalProfileDllBytesCandidate profileDllOwner, WindowsOriginalSystemModuleCandidate systemOwner,
+        Linker linker,
         Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment readEntry,
         MemorySegment informationEntry, long[] originalMetadata) {
         originalJvmOwner = jvmOwner;
         originalProfileDllOwner = profileDllOwner;
+        originalSystemOwner = systemOwner;
         this.linker = linker;
         this.bootstrapArena = bootstrapArena;
         this.fileArena = fileArena;
@@ -142,7 +153,7 @@ final class WindowsOriginalFileBytesLease {
                 if (returnedBytes != wanted) {
                     throw new IllegalStateException("Original JVM file ended before its retained length");
                 }
-                if (originalProfileDllOwner != null) {
+                if (originalProfileDllOwner != null || originalSystemOwner != null) {
                     MemorySegment.copy(buffers[1], ValueLayout.JAVA_BYTE, 0, originalSnapshot, (int) total, wanted);
                     // Hash exactly the copied range, not a second read of the mutable native chunk.
                     digest.update(originalSnapshot, (int) total, wanted);
@@ -173,15 +184,15 @@ final class WindowsOriginalFileBytesLease {
     }
 
     private long maximumBytes() {
-        return originalProfileDllOwner == null ? MAXIMUM_JVM_BYTES : MAXIMUM_DLL_BYTES;
+        return originalProfileDllOwner == null && originalSystemOwner == null ? MAXIMUM_JVM_BYTES : MAXIMUM_DLL_BYTES;
     }
 
     private void prepareData() throws Exception {
-        long minimum = originalProfileDllOwner == null ? 1 : 512;
+        long minimum = originalProfileDllOwner == null && originalSystemOwner == null ? 1 : 512;
         if (originalMetadata.length != 8 || originalMetadata[4] < minimum || originalMetadata[4] > maximumBytes()) {
             throw new IllegalStateException("Original JVM byte observation lacks a bounded file size");
         }
-        if (originalProfileDllOwner != null) originalSnapshot = new byte[(int) originalMetadata[4]];
+        if (originalProfileDllOwner != null || originalSystemOwner != null) originalSnapshot = new byte[(int) originalMetadata[4]];
         digest = MessageDigest.getInstance("SHA-256", "SUN");
         Provider provider = digest.getProvider();
         if (provider.getClass().getModule() != Object.class.getModule() ||
@@ -284,11 +295,13 @@ final class WindowsOriginalFileBytesLease {
     }
 
     private void requireOriginalFile() {
-        if (Thread.currentThread() != thread || (originalJvmOwner == null) == (originalProfileDllOwner == null)) {
+        if (Thread.currentThread() != thread || (originalJvmOwner == null ? 0 : 1) + (originalProfileDllOwner == null ? 0 : 1) +
+            (originalSystemOwner == null ? 0 : 1) != 1) {
             throw new IllegalStateException("Original JVM bytes require their original platform thread/file");
         }
         if (originalJvmOwner != null) originalJvmOwner.requireOriginalCore(this);
-        else originalProfileDllOwner.requireOriginalCore(this);
+        else if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalCore(this);
+        else originalSystemOwner.requireOriginalBytes(this);
         if (bootstrapArena == null || !bootstrapArena.scope().isAlive() || fileArena == null ||
             !fileArena.scope().isAlive() || fileHandle == null || !fileHandle.isNative() ||
             fileHandle.byteSize() != 0 || fileHandle.address() <= 0 ||
@@ -310,6 +323,7 @@ final class WindowsOriginalFileBytesLease {
             throw new IllegalStateException("Original file byte operation still lacks confirmed completion");
         }
         if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalNativeInputs();
+        if (originalSystemOwner != null) originalSystemOwner.requireOriginalByteInputs();
     }
 
     private void retireFrame() {
@@ -339,13 +353,23 @@ final class WindowsOriginalFileBytesLease {
         requireOriginalFile();
         if (!succeeded || !frameRetired || nativeReturnUnconfirmed || readCompletionUnconfirmed ||
             total != originalMetadata[4] || observedDigest == null || observedDigest.length != 32 ||
-            originalProfileDllOwner != null && (originalSnapshot == null || originalSnapshot.length != total)) {
+            (originalProfileDllOwner != null || originalSystemOwner != null) && (originalSnapshot == null || originalSnapshot.length != total)) {
             throw new IllegalStateException("Original JVM bytes have no completed observation");
         }
     }
     boolean completed() { requireCompleted(); return true; }
     long byteCount() { requireCompleted(); return total; }
     byte[] sha256() { requireCompleted(); return observedDigest.clone(); }
+
+    WindowsSystemExportPlan.Input newSystemExportInput(WindowsOriginalSystemModuleCandidate requester) {
+        if (requester == null || requester != originalSystemOwner) {
+            throw new IllegalStateException("Original system snapshot belongs to another concrete owner");
+        }
+        requireCompleted();
+        requester.requireOriginalByteInputs();
+        // Input makes its own immutable copy of these exact successfully read/hashed bytes. DATA only.
+        return new WindowsSystemExportPlan.Input(requester.name(), originalSnapshot);
+    }
 
     byte[] snapshot(WindowsOriginalProfileDllBytesCandidate requester) {
         if (requester == null || requester != originalProfileDllOwner) {

@@ -9,7 +9,7 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
 /**
- * Shared read-only handle-relative observation of an original JVM or profile-DLL ancestor chain.
+ * Shared read-only handle-relative observation of an original JVM, profile-DLL or observed system-file chain.
  * This remains conditional on the original startup/system-export boundary: resolving NtCreateFile
  * may have implicit forwarding effects before its same-ntdll-provider check. No caller supplies a
  * path, root classification, expected identity or authority. Accepted binary ACL policy is not an
@@ -63,6 +63,7 @@ final class WindowsOriginalFileAncestorsLease {
     private final Thread thread = Thread.currentThread();
     private final WindowsOriginalJvmAncestorsCandidate originalJvmOwner;
     private final WindowsOriginalProfileDllAncestorsCandidate originalProfileDllOwner;
+    private final WindowsOriginalSystemModuleCandidate originalSystemOwner;
     private final Linker linker;
     private final Arena bootstrapArena;
     private final Arena moduleArena;
@@ -125,7 +126,7 @@ final class WindowsOriginalFileAncestorsLease {
         MemorySegment informationEntry, MemorySegment finalPathEntry, MemorySegment volumeEntry,
         MemorySegment driveEntry, Arena originalFileArena, MemorySegment originalFileHandle,
         char[] originalPath, int pathLength, long[] originalFile) {
-        this(owner, null, linker, bootstrapArena, moduleArena, module, queryEntry, pinEntry, resolveEntry,
+        this(owner, null, null, linker, bootstrapArena, moduleArena, module, queryEntry, pinEntry, resolveEntry,
             createEntry, informationEntry, finalPathEntry, volumeEntry, driveEntry, originalFileArena,
             originalFileHandle, originalPath, pathLength, originalFile);
     }
@@ -138,14 +139,27 @@ final class WindowsOriginalFileAncestorsLease {
         MemorySegment driveEntry, Arena originalFileArena, MemorySegment originalFileHandle,
         char[] originalPath, int pathLength, long[] originalFile) {
         if (owner == null) throw new IllegalStateException("Original profile DLL ancestors require their concrete owner");
-        return new WindowsOriginalFileAncestorsLease(null, owner, linker, bootstrapArena, moduleArena, module,
+        return new WindowsOriginalFileAncestorsLease(null, owner, null, linker, bootstrapArena, moduleArena, module,
             queryEntry, pinEntry, resolveEntry,
             createEntry, informationEntry, finalPathEntry, volumeEntry, driveEntry, originalFileArena,
             originalFileHandle, originalPath, pathLength, originalFile);
     }
 
+    static WindowsOriginalFileAncestorsLease forSystemModule(WindowsOriginalSystemModuleCandidate owner,
+        Linker linker, Arena bootstrapArena, Arena moduleArena, MemorySegment module, MemorySegment queryEntry,
+        MemorySegment pinEntry, MemorySegment resolveEntry, MemorySegment createEntry,
+        MemorySegment informationEntry, MemorySegment finalPathEntry, MemorySegment volumeEntry,
+        MemorySegment driveEntry, Arena originalFileArena, MemorySegment originalFileHandle,
+        char[] originalPath, int pathLength, long[] originalFile) {
+        if (owner == null) throw new IllegalStateException("Original system ancestors require their concrete owner");
+        return new WindowsOriginalFileAncestorsLease(null, null, owner, linker, bootstrapArena, moduleArena, module,
+            queryEntry, pinEntry, resolveEntry, createEntry, informationEntry, finalPathEntry, volumeEntry, driveEntry,
+            originalFileArena, originalFileHandle, originalPath, pathLength, originalFile);
+    }
+
     private WindowsOriginalFileAncestorsLease(WindowsOriginalJvmAncestorsCandidate jvmOwner,
-        WindowsOriginalProfileDllAncestorsCandidate profileDllOwner, Linker linker,
+        WindowsOriginalProfileDllAncestorsCandidate profileDllOwner, WindowsOriginalSystemModuleCandidate systemOwner,
+        Linker linker,
         Arena bootstrapArena, Arena moduleArena, MemorySegment module, MemorySegment queryEntry,
         MemorySegment pinEntry, MemorySegment resolveEntry, MemorySegment createEntry,
         MemorySegment informationEntry, MemorySegment finalPathEntry, MemorySegment volumeEntry,
@@ -153,6 +167,7 @@ final class WindowsOriginalFileAncestorsLease {
         char[] originalPath, int pathLength, long[] originalFile) {
         originalJvmOwner = jvmOwner;
         originalProfileDllOwner = profileDllOwner;
+        originalSystemOwner = systemOwner;
         this.linker = linker;
         this.bootstrapArena = bootstrapArena;
         this.moduleArena = moduleArena;
@@ -529,11 +544,13 @@ final class WindowsOriginalFileAncestorsLease {
     }
 
     private void requireOriginalSecurity() {
-        if (Thread.currentThread() != thread || (originalJvmOwner == null) == (originalProfileDllOwner == null)) {
+        if (Thread.currentThread() != thread || (originalJvmOwner == null ? 0 : 1) + (originalProfileDllOwner == null ? 0 : 1) +
+            (originalSystemOwner == null ? 0 : 1) != 1) {
             throw new IllegalStateException("Original ancestor observation requires its original platform thread");
         }
         if (originalJvmOwner != null) originalJvmOwner.requireOriginalCore(this);
-        else originalProfileDllOwner.requireOriginalCore(this);
+        else if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalCore(this);
+        else originalSystemOwner.requireOriginalAncestors(this);
         if (bootstrapArena == null || !bootstrapArena.scope().isAlive() || moduleArena == null ||
             !moduleArena.scope().isAlive() || module == null || queryEntry == null ||
             !module.scope().equals(moduleArena.scope()) || !queryEntry.scope().equals(moduleArena.scope()) ||
@@ -558,6 +575,7 @@ final class WindowsOriginalFileAncestorsLease {
             throw new IllegalStateException("Original ancestor native completion remains unconfirmed");
         }
         if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalNativeInputs();
+        if (originalSystemOwner != null) originalSystemOwner.requireOriginalAncestorInputs();
     }
 
     private void observeError() {

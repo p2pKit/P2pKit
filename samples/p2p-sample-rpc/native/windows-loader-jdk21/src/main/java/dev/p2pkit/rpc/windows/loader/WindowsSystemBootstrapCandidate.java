@@ -93,6 +93,9 @@ final class WindowsSystemBootstrapCandidate {
     private WindowsOriginalJvmCandidate originalJvm;
     private boolean profileDllAttempted;
     private WindowsOriginalProfileDllFileCandidate profileDll;
+    private final Failure systemModulesAttachmentFailure = new Failure(this);
+    private boolean systemModulesAttempted;
+    private WindowsOriginalSystemModulesCandidate systemModules;
     private boolean importsAttempted;
     private WindowsSystemImportResolution imports;
 
@@ -423,6 +426,57 @@ final class WindowsSystemBootstrapCandidate {
         requireOriginalProfileDll(candidate);
         candidate.requireOriginalByteInputs();
         return entries[13]; // Exact original ReadFile; no supplied export selector or alternate channel.
+    }
+
+    WindowsOriginalSystemModulesCandidate inspectOriginalSystemModules() {
+        requireCompleted();
+        if (systemModulesAttempted) throw new IllegalStateException("Original system modules were already attempted");
+        systemModulesAttempted = true;
+        try {
+            systemModules = new WindowsOriginalSystemModulesCandidate(this);
+        } catch (Throwable caught) {
+            systemModulesAttachmentFailure.operationFailure = caught;
+            throw systemModulesAttachmentFailure;
+        }
+        systemModules.observe();
+        return systemModules;
+    }
+
+    void requireOriginalSystemModules(WindowsOriginalSystemModulesCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || candidate != systemModules) {
+            throw new IllegalStateException("System modules are not this bootstrap's original retained attachment");
+        }
+    }
+
+    Linker originalSystemModulesLinker(WindowsOriginalSystemModulesCandidate candidate) {
+        requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs(); return linker;
+    }
+    Arena originalSystemModulesArena(WindowsOriginalSystemModulesCandidate candidate) {
+        requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs(); return originalArena;
+    }
+    MemorySegment originalSystemModulesObservationEntry(WindowsOriginalSystemModulesCandidate candidate, int index) {
+        requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 2) throw new IllegalArgumentException("Unknown fixed system module observation entry");
+        return entries[1 + index]; // GetModuleHandleExW/PIN, GetModuleFileNameW, GetSystemDirectoryW only.
+    }
+    MemorySegment originalSystemModuleFileEntry(WindowsOriginalSystemModulesCandidate candidate, int index) {
+        requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 2) throw new IllegalArgumentException("Unknown fixed system module file entry");
+        return entries[8 + index];
+    }
+    MemorySegment originalSystemModuleSecurityEntry(WindowsOriginalSystemModulesCandidate candidate, int index) {
+        requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 3) throw new IllegalArgumentException("Unknown fixed system module security entry");
+        return entries[1 + index];
+    }
+    MemorySegment originalSystemModuleAncestorsEntry(WindowsOriginalSystemModulesCandidate candidate, int index) {
+        requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 1) throw new IllegalArgumentException("Unknown fixed system module ancestor entry");
+        return entries[11 + index];
+    }
+    MemorySegment originalSystemModuleReadEntry(WindowsOriginalSystemModulesCandidate candidate) {
+        requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs(); return entries[13];
     }
 
     WindowsSystemImportResolution resolveSystemImports(WindowsPackagedVerifier plan) {
