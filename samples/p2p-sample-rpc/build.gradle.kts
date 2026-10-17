@@ -205,6 +205,13 @@ val windowsControlsJdk17 = extensions.getByType<JavaToolchainService>().launcher
 val windowsVerifierCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test")
 val windowsVerifierClasspath = files(mainCompilation.output.allOutputs, mainCompilation.runtimeDependencyFiles,
     windowsVerifierCompilation.output.allOutputs, windowsVerifierCompilation.runtimeDependencyFiles)
+// Only the explicitly selected development fixture may create its own protected Program Files objects.
+// Ordinary developer controls remain usable without administrator access; no elevation is requested.
+val protectedWindowsDevelopmentFixture = providers.gradleProperty("p2pkit.rpc.windows.protectedDevelopmentFixture")
+    .map { value ->
+        require(value == "true" || value == "false") { "Protected development fixture expects true or false" }
+        value == "true"
+    }.orElse(false)
 val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJdk21") {
     group = "verification"
     description = "Exercise disabled-adapter invocation/refusal controls; not installed Windows qualification."
@@ -216,9 +223,11 @@ val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJd
     // This test-only Windows DLL never enters production resources, packaging or the artifact freeze.
     inputs.files(listOf("profile_policy.c", "profile_jni.c", "profile_jni_registration.c", "profile_policy.h",
         "profile_win32.h", "profile_jni_registration.h", "tests/jvm/deny_storage.c", "tests/jvm/build-test-dll.py",
-        "tests/jvm/test-build-test-dll.py")
+        "tests/jvm/test-build-test-dll.py", "tests/jvm/protected-dll-fixture.c",
+        "tests/jvm/protected-dll-fixture.py", "tests/jvm/test-protected-dll-fixture.py")
         .map { layout.projectDirectory.file("native/windows-profile/$it") })
     inputs.files(windowsVerifierClasspath)
+    inputs.property("protectedDevelopmentFixture", protectedWindowsDevelopmentFixture)
     outputs.upToDateWhen { false }
     doFirst {
         val reports = rootProject.layout.buildDirectory.dir("reports/rpc-windows-loader-jdk21").get().asFile.toPath()
@@ -238,6 +247,7 @@ val verifyRpcWindowsLoaderJdk21 = tasks.register<Exec>("verifyRpcWindowsLoaderJd
             "--jar", rpcWindowsLoaderJdk21Jar.get().archiveFile.get().asFile.absolutePath,
             "--application-classpath", applicationClasspath.toString(),
             "--output", attempt.toString())
+        if (protectedWindowsDevelopmentFixture.get()) args("--protected-development-fixture")
     }
 }
 tasks.named<Test>("jvmTest") {

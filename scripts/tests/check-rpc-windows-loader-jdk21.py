@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -49,7 +50,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("java21", "java17", "jar", "output", "application-classpath"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--protected-development-fixture", action="store_true",
+                        help="Require actual protected-file coverage using current administrator rights; not installation")
     args = parser.parse_args()
+    require(not args.protected_development_fixture or os.name == "nt",
+            "Protected development fixture requires actual Windows; no platform fallback")
     require(not any(os.environ.get(name) for name in (
         "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
     )), "Ambient Java overrides are not admitted")
@@ -79,6 +84,7 @@ def main():
                         "ByteReadInvocationTests" in name or
                         "OriginalFileBytesLeaseTests" in name or
                         "ProfileDllBytesCandidateTests" in name or
+                        "ProtectedProfileDllSnapshotTests" in name or
                         "PackagedVerifierTests" in name or
                         "LoadedRegistrationTests" in name or "InstalledProviderTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
@@ -427,6 +433,12 @@ def main():
     run("test-dll-compiler-budget", [sys.executable, "-I", "-B",
         ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm/test-build-test-dll.py"], 0,
         r"WINDOWS_TEST_DLL_BUDGET_CONTROLS_PASS tests=30 scope=INERT_CLOCK_NO_COMPILER_OR_NATIVE_EXECUTION\n", "")
+    fixture_sources = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm"
+    run("protected-dll-fixture-controls", [sys.executable, "-I", "-B",
+        fixture_sources / "test-protected-dll-fixture.py"], 0,
+        r"WINDOWS_PROTECTED_DLL_FIXTURE_CONTROLS_PASS tests=26 "
+        r"scope=INERT_RECEIPT_AND_HANDSHAKE_NOT_NATIVE_CUSTODY_OR_AUTHORITY\n", "")
+    protected_fixture_scope = "NOT_REQUESTED"
     loaded_registration_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_dll_file_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_dll_security_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
@@ -522,6 +534,44 @@ def main():
                  str(main_directory), bindings[0]["sha256"], bindings[1]["sha256"]],
                 "WINDOWS_LOADED_REGISTRATION_PASS case=" + case + " scope=" + loaded_registration_scope + r"\n",
                 flags=("-Xcheck:jni", "--add-modules=jdk.unsupported"))
+        if args.protected_development_fixture:
+            # A separate, explicit administrator development fixture. No default test requires elevation.
+            # The existing helper creates only its own initial protected objects; the Java reader retains
+            # every production policy and reads the original HANDLE without loading the candidate DLL.
+            require_clean_source()
+            helper_output = output / "protected-fixture"
+            helper_script = fixture_sources / "protected-dll-fixture.py"
+            run("compile-protected-dll-helper", [sys.executable, "-I", "-B", helper_script, "compile",
+                "--compiler-receipt", receipt_path, "--output", helper_output], 0,
+                r"WINDOWS_PROTECTED_DLL_HELPER_COMPILE_PASS "
+                r"scope=DEVELOPMENT_PROTECTED_READER_HELPER_NOT_INSTALLED_AUTHORITY\n", "", timeout=180)
+            run("protected-dll-helper-self-test", [helper_output / "protected-dll-fixture.exe", "--self-test"], 0,
+                r"WINDOWS_PROTECTED_DLL_FIXTURE_SELF_TEST_PASS "
+                r"scope=INERT_DESCRIPTOR_AND_PROTOCOL_NOT_FILESYSTEM_OR_AUTHORITY\n", "")
+            spec = importlib.util.spec_from_file_location("protected_dll_fixture", helper_script)
+            fixture_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fixture_module)
+            fixture = fixture_module.begin(receipt_path, helper_output)
+            try:
+                connected_run("protected-profile-dll-snapshot", "ProtectedProfileDllSnapshotTests",
+                    [fixture.path, receipt["source"], receipt["tree"], str(bound["bytes"]), bound["sha256"],
+                     str(main_directory), bindings[0]["sha256"], bindings[1]["sha256"]],
+                    r"WINDOWS_PROTECTED_DLL_SNAPSHOT_PASS "
+                    r"scope=DEVELOPMENT_PROTECTED_FILE_AND_PE_NOT_STANDARD_USER_INSTALLATION_OR_DLL_LOAD\n")
+                # Only the original fixed reader's known successful exit and closed captures reach here.
+                # EOF, timeout, test failure or unknown completion never requests fixture deletion.
+                cleaned = fixture.finish_after_reader_run()
+                with (helper_output / "fixture-result.json").open("x", encoding="ascii") as target:
+                    target.write(json.dumps({"ready": fixture.receipt, "cleaned": cleaned}, indent=2) + "\n")
+            except BaseException:
+                try:
+                    fixture.abandon()
+                except BaseException:
+                    # Keep the original failure primary. The helper owner/captures stay rooted;
+                    # abandonment uncertainty never becomes cleanup, success or a second attempt.
+                    pass
+                raise
+            protected_fixture_scope = "DEVELOPMENT_PROTECTED_FILE_AND_PE_NOT_STANDARD_USER_INSTALLATION_OR_DLL_LOAD"
         require_clean_source()
         with dll.open("rb") as source:
             require(source.read(4 * 1024 * 1024 + 1) == compiled, "Compiler DLL changed during fixture execution")
@@ -549,6 +599,8 @@ def main():
               "originalProfileDllAncestorPolicy": original_dll_ancestors_policy,
               "originalProfileDllBytesScope": original_dll_bytes_scope,
               "originalProfileDllByteObservation": original_dll_bytes_observation,
+              "protectedDevelopmentFixtureRequested": args.protected_development_fixture,
+              "protectedDevelopmentFixtureScope": protected_fixture_scope,
               "loadedRegistrationScope": loaded_registration_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))

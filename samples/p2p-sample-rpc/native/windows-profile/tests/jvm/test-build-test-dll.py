@@ -150,7 +150,7 @@ class BudgetTests(unittest.TestCase):
             for name in ("CL", "_CL_", "LINK", "_LINK_", "LIBPATH", "ComSpec", "VSCMD_SKIP_SENDTELEMETRY"):
                 self.assertNotIn(name, environment)
 
-    def test_only_compiler_wrapper_has_a_distinct_total_budget(self):
+    def test_only_two_fixed_compiler_wrappers_have_distinct_total_budgets(self):
         root = SCRIPT.resolve().parents[6]
         checker = ast.parse((root / "scripts/tests/check-rpc-windows-loader-jdk21.py").read_text())
         run = next(node for node in ast.walk(checker) if isinstance(node, ast.FunctionDef) and node.name == "run")
@@ -159,9 +159,10 @@ class BudgetTests(unittest.TestCase):
         overrides = [(node, key) for node in ast.walk(checker) if isinstance(node, ast.Call) and
                      isinstance(node.func, ast.Name) and node.func.id == "run"
                      for key in node.keywords if key.arg == "timeout"]
-        self.assertEqual(len(overrides), 1)
-        self.assertEqual(ast.literal_eval(overrides[0][0].args[0]), "compile-deny-storage-dll")
-        self.assertEqual(ast.literal_eval(overrides[0][1].value), 180)
+        self.assertEqual(len(overrides), 2)
+        self.assertEqual({ast.literal_eval(node.args[0]): ast.literal_eval(key.value)
+                          for node, key in overrides},
+                         {"compile-deny-storage-dll": 180, "compile-protected-dll-helper": 180})
 
 
 class SelectionTests(unittest.TestCase):

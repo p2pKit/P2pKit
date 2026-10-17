@@ -105,6 +105,26 @@ class ComponentTests(unittest.TestCase):
                 self.assertEqual(tasks.count(':p2p-sample-rpc:testAndroidHostTest'), 1)
                 self.assertNotIn('--tests', tasks)
 
+    def test_protected_development_fixture_is_explicit_windows_only_and_preserves_tasks(self):
+        flag = '-Pp2pkit.rpc.windows.protectedDevelopmentFixture=true'
+        with tempfile.TemporaryDirectory(prefix='ci-rpc-protected-') as temporary:
+            root = Path(temporary)
+            with patch.object(C, 'ROOT', root):
+                for present in (False, True):
+                    if present:
+                        (root / 'samples/p2p-sample-rpc').mkdir(parents=True)
+                    for component in C.COMPONENTS:
+                        commands = C.commands(component)
+                        self.assertEqual(sum(argv.count(flag) for _, argv in commands),
+                                         int(present and component == 'jvm-windows'))
+                    commands = dict(C.commands('jvm-windows'))
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-core:jvmTest'), 1)
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-transport-lan:jvmTest'), 1)
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-network-provisioning-desktop:test'), 1)
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-sample-rpc:jvmTest'), int(present))
+                    self.assertNotIn('--tests', commands['jvm-tests'])
+                    self.assertIn('supervisor-controls', commands)
+
     def test_additional_host_supervisor_route_has_exact_seven_genuine_cases(self):
         import ast
         evidence = ast.parse((ROOT / 'scripts/tests/ci-evidence-test.py').read_text())

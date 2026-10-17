@@ -969,3 +969,39 @@ Failures before native entry still retire normally. Its 22 inert controls use an
 independent pointer-returning upcall descriptor, including post-return readback
 failure and an unknown Java return. This neither admits the caller's bootstrap
 nor turns an unverified system export into productive loading authority.
+
+### Explicit protected development read fixture
+
+`verifyRpcWindowsLoaderJdk21` accepts the default-false property
+`-Pp2pkit.rpc.windows.protectedDevelopmentFixture=true`. Only the canonical
+Windows JVM component selects it automatically; ordinary developer controls
+do not require administrator rights. Unsupported hosts or insufficient existing
+rights fail the requested test, without elevation, account creation, privilege
+changes, ancestor ACL repairs or fallback storage. The existing temporary-DLL
+refusal cases and separate deny-storage DLL/JNI controls remain unchanged.
+
+The test-only helper resolves Program Files through the OS, checks and retains
+its original fixed-NTFS, no-reparse, case-insensitive, policy-accepted ancestors,
+then exclusively creates one nonce-named directory and compiler-pinned DLL copy.
+Initial protected security grants mutation only to SYSTEM/Administrators and
+ordinary Users read/execute. Existing objects and application profiles are never
+modified. Original metadata-only handles remain held; the writer is closed before
+the Java child. The actual reader must complete accepted file/ancestor policies,
+same-original-HANDLE bytes and the fixed Java17 PE comparison with independent
+compiler pins. No candidate DLL is loaded or used to authorize itself.
+
+After the fixed reader's known successful exit and closed captures, a one-shot
+nonce handshake permits deletion through the helper's original object handles.
+Reopened delete handles must match original IDs/security; only that file and the
+empty original directory can be deleted. Failure, EOF, timeout or uncertain
+completion preserves the fixture, fails the gate and leaves the existing outer
+supervisor responsible for uncertain descendants. No recursive path cleanup or
+retry is performed. The reader's 60-second limit and 128MiB heap are unchanged.
+
+Twenty-six portable controls cover closed receipts, handshake ownership and
+bounded installed-SDK header selection. The positive Windows test is separate:
+`NOT_REQUESTED` is not a pass, and a requested policy refusal is not a skip.
+This is administrator **development-file/PE coverage**, not standard-user
+protected-profile storage, MSI installation, productive JNI/Host–Client testing,
+approved bootstrap authority or W01–W11 qualification. No helper/test input enters
+production resources, the adapter JAR, MSI or publication artifact inventory.
