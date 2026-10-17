@@ -66,6 +66,7 @@ def main():
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
                         "SystemImportResolutionTests" in name or
+                        "SystemExportPlanTests" in name or
                         "OriginalFileLeaseTests" in name or
                         "ProfileDllFileCandidateTests" in name or
                         "OriginalFileSecurityQueryTests" in name or
@@ -267,6 +268,14 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".ProfileDllAncestorsCandidateTests", case], 0,
             "WINDOWS_PROFILE_DLL_ANCESTORS_PASS case=" + re.escape(case) +
             r" scope=INERT_TYPED_OWNER_AND_REFUSAL_NOT_NATIVE_ANCESTORS_OR_AUTHORITY\n", "")
+    export_cases = ["direct", "ordinal", "aliases", "forward-name", "forward-extension", "forward-ordinal",
+                    "snapshot", "holes", "unavailable", "cycle", "depth", "headers", "sections", "tables",
+                    "strings", "targets", "bounds", "work", "inventory", "aggregate"]
+    for case in export_cases:
+        run("system-export-plan-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".SystemExportPlanTests", case], 0,
+            "WINDOWS_SYSTEM_EXPORT_PLAN_PASS case=" + re.escape(case) +
+            r" scope=INERT_COPIED_PE_GRAPH_NOT_SYSTEM_IDENTITY_OR_LOADING_AUTHORITY\n", "")
     # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
     owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
                    "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]

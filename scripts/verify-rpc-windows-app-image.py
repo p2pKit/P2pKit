@@ -151,6 +151,9 @@ ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".cl
     "WindowsOriginalProfileDllAncestorsCandidate", "WindowsOriginalProfileDllAncestorsCandidate$Failure",
     "WindowsOriginalJvmBytesCandidate", "WindowsOriginalJvmBytesCandidate$Failure",
     "WindowsSystemImportResolution", "WindowsSystemImportResolution$Failure",
+    "WindowsSystemExportPlan", "WindowsSystemExportPlan$Input", "WindowsSystemExportPlan$Target",
+    "WindowsSystemExportPlan$Forward", "WindowsSystemExportPlan$Span", "WindowsSystemExportPlan$Section",
+    "WindowsSystemExportPlan$Budget", "WindowsSystemExportPlan$Module",
     "WindowsPackagedVerifier",
 ))))
 ADAPTER_OPTIONS = (
@@ -281,9 +284,13 @@ def inspect_adapter(image, release):
         require(identity(os.fstat(stream.fileno())) == identity(before), "JAR changed before inspection")
         entries = archive.infolist()
         names = [entry.filename for entry in entries]
-        require(len(entries) <= 64 and len(set(names)) == len(names), "Duplicate or oversized adapter inventory")
         allowed_dirs = {"META-INF/", "dev/", "dev/p2pkit/", "dev/p2pkit/rpc/", "dev/p2pkit/rpc/windows/",
                         ADAPTER_PREFIX}
+        # Bound by the exact reviewed files plus optional named directory entries, not a stale
+        # independent class-count ceiling. Unknown files and duplicate names remain forbidden.
+        maximum_entries = len(ADAPTER_CLASSES) + 2 + len(allowed_dirs)
+        require(len(entries) <= maximum_entries and len(set(names)) == len(names),
+                "Duplicate or oversized adapter inventory")
         require(set(names) - allowed_dirs == ADAPTER_CLASSES | {"META-INF/MANIFEST.MF", "META-INF/LICENSE"},
                 "Missing, unexpected or test adapter entry")
         for entry in entries:

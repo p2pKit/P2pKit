@@ -98,6 +98,14 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsOriginalJvmBytesCandidate$Failure.class",
     ADAPTER_PREFIX + "WindowsSystemImportResolution.class",
     ADAPTER_PREFIX + "WindowsSystemImportResolution$Failure.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Input.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Target.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Forward.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Span.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Section.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Budget.class",
+    ADAPTER_PREFIX + "WindowsSystemExportPlan$Module.class",
     ADAPTER_PREFIX + "WindowsPackagedVerifier.class",
 )
 ADAPTER_OPTIONS = (
@@ -316,6 +324,24 @@ class ImageInspectionTest(unittest.TestCase):
         self.assertEqual("NOT_ESTABLISHED", adapter["installedAuthority"])
         self.assertEqual("NOT_PERFORMED", adapter["nativeExecution"])
         self.assertEqual("NOT_PERFORMED", result["runtimeQualification"])
+
+    def test_adapter_inventory_bound_counts_only_exact_files_and_optional_directories(self):
+        self.add_adapter()
+        directories = ("META-INF/", "dev/", "dev/p2pkit/", "dev/p2pkit/rpc/", "dev/p2pkit/rpc/windows/",
+                       ADAPTER_PREFIX)
+        self.adapter_content.update({name: b"" for name in directories})
+        self.write_adapter()
+        self.assertEqual("PASS", self.inspect(True)["result"])
+        with zipfile.ZipFile(self.adapter) as archive:
+            self.assertEqual(len(ADAPTER_ENTRIES) + 2 + len(directories), len(archive.infolist()))
+        self.adapter_content["unexpected/"] = b""
+        self.write_adapter()
+        with self.assertRaisesRegex(ValueError, "oversized adapter inventory"):
+            self.inspect(True)
+        del self.adapter_content[directories[0]]
+        self.write_adapter()
+        with self.assertRaisesRegex(ValueError, "unexpected or test adapter entry"):
+            self.inspect(True)
 
     def test_default_inspection_keeps_original_three_component_contract(self):
         self.assertNotIn("adapter", self.inspect())

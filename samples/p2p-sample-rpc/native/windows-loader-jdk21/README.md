@@ -871,3 +871,29 @@ An accepted leaf permits the real bounded walk and reports its actual policy
 result. No ACL, privilege or classification is changed to manufacture acceptance.
 The unchanged real JVM walk exercises the shared mechanics separately; neither
 scope is productive installation, complete byte custody or first-load authority.
+
+### Copied system-export data and bounded forwarders
+
+`WindowsSystemExportPlan` parses immutable copied AMD64 PE export data without
+performing any native call, lookup or library load. It is intentionally separate
+from the profile PE parser: the latter still requires its exact native exports
+and refuses forwarders. This new data component handles unequal name/function
+counts, ordinal bases, aliases, holes and named/ordinal forwarders. It resolves
+only an explicitly supplied finite module inventory to a terminal module/RVA;
+it does not use candidate IAT addresses or infer API-set mappings.
+
+Inputs are bounded to sixteen files, 32 MiB each and 128 MiB in aggregate. Parsing
+has an 8-million-unit work budget; resolution permits at most sixteen visited
+export nodes, including the terminal node. Names and strings are bounded and
+copied; rounded virtual/raw section overlaps and ambiguous metadata are refused.
+A terminal target must occupy original raw-backed readable executable,
+non-writable bytes outside inspected export metadata. Cycles, absent providers,
+unknown API-set contracts and incomplete/malformed graphs refuse.
+
+These are **data checks, not system-library identity or load authority**. The
+productive resolver still needs the actual supported-system forwarder closure,
+independently trusted original module/file leases, verified byte-to-mapping
+correspondence and bootstrap authority before consuming any resulting RVA.
+Merely expanding the existing kernel32-only `GetProcAddress` allowlist would not
+solve its potential implicit forwarding effects. The new reader does not enable
+that path, change productive loading or claim real-system graph qualification.
