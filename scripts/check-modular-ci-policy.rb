@@ -38,7 +38,7 @@ module ModularCI
              ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'consumers-pom-diagnostic'].sort,
              'Missing or extra independently selectable required component')
     writer = load(File.join(root, '.github/workflows/dependency-update-candidate.yml')).fetch('jobs').fetch('generate')
-    require!(writer['runs-on'] == 'macos-14' && writer.fetch('steps').any? { |s|
+    require!(writer['runs-on'] == 'macos-15-intel' && writer.fetch('steps').any? { |s|
                s['run'] == 'bash scripts/setup-ci-component.sh dependency-update' },
              'Dependency writer must use the explicit reviewed CLI baseline')
     publisher = load(File.join(root, '.github/workflows/publish-maven-central.yml')).fetch('jobs')
@@ -47,7 +47,7 @@ module ModularCI
              'Maven success/recovery must retain the existing three-job contract')
     {publisher.fetch('publish-release') => 'maven-central',
      recovery.fetch('verify-recovery') => 'maven-central-recovery'}.each do |job, environment|
-      require!(job['runs-on'] == 'macos-14' &&
+      require!(job['runs-on'] == 'macos-15-intel' &&
                (job['environment'].is_a?(Hash) ? job['environment']['name'] : job['environment']) == environment,
                'Publication/recovery must retain protected supported CLI execution')
       steps = job.fetch('steps')

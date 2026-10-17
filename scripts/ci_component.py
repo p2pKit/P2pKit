@@ -28,13 +28,13 @@ COMPONENTS = {
     'desktop-macos': ('macos-26', 75),
     'security': ('ubuntu-24.04', 30),
     'compatibility': ('macos-26', 180),
-    # Temporary supported CLI baseline; macos-14 retires 2026-11-02.
-    'consumers': ('macos-14', 120),
-    'macos-shared': ('macos-14', 120),
+    # Explicit supported CLI candidate; hosted tests must qualify this context.
+    'consumers': ('macos-15-intel', 120),
+    'macos-shared': ('macos-15-intel', 120),
 }
 # Explicit focused diagnostics are not release components or aggregate inputs.
-DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30),
-               'consumers-pom-diagnostic': ('macos-14', 60)}
+DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
+               'consumers-pom-diagnostic': ('macos-15-intel', 60)}
 
 FLAGS = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
          '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
@@ -195,8 +195,9 @@ def record_tools(component):
         match = re.search(pattern, version_output)
         if match is None or not re.fullmatch(r'[A-Za-z0-9 ._+()/-]{1,120}', match[1]):
             raise RuntimeError('Cannot identify required tool: ' + name)
-        if component in ('consumers', 'consumers-pom-diagnostic', 'macos-shared') and name == 'xcode' and match[1] != '16.2':
-            raise RuntimeError('Consumer baseline requires Xcode 16.2')
+        if component in ('consumers', 'consumers-pom-diagnostic', 'jmdns-diagnostic', 'macos-shared') and \
+                name == 'xcode' and match[1] != '26.3':
+            raise RuntimeError('Consumer baseline requires Xcode 26.3')
         with tool.open('rb') as stream:
             digest = hashlib.sha256()
             for block in iter(lambda: stream.read(1024 * 1024), b''):

@@ -222,8 +222,10 @@ class CoveragePolicyTest(unittest.TestCase):
                          ":sample-kmp-shared:testAndroidHostTest"} <= shared)
         self.assertEqual(9, sum(task.endswith((":test", ":jvmTest")) for task in shared))
         self.assertEqual(7, len(shared) - 9)
-        with self.assertRaisesRegex(ValueError, "Apple Silicon"):
-            GATE.required_tasks(POLICY, "macos-shared", "x64")
+        intel_shared = self.assess(example_report("macos-shared", "x64"), "macos-shared", "x64")
+        self.assertEqual(shared, intel_shared)
+        with self.assertRaisesRegex(ValueError, "native ARM64 or Intel"):
+            GATE.required_tasks(POLICY, "macos-shared", "unknown")
         mutated = copy.deepcopy(POLICY)
         mutated["model"][":p2p-core"]["tests"].remove(":p2p-core:iosSimulatorArm64Test")
         with self.assertRaisesRegex(ValueError, "Delegated native tasks"):
@@ -232,7 +234,7 @@ class CoveragePolicyTest(unittest.TestCase):
     def test_every_expected_task_must_execute_fresh_successful_cases(self):
         for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64"),
                               ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64"),
-                              ("macos-shared", "arm64")):
+                              ("macos-shared", "arm64"), ("macos-shared", "x64")):
             baseline = example_report(profile, arch)
             for name in GATE.required_tasks(POLICY, profile, arch):
                 changes = [("outcome", outcome) for outcome in (
@@ -312,7 +314,7 @@ class CoveragePolicyTest(unittest.TestCase):
     def test_auxiliary_execution_failure_disabled_state_and_counts_cannot_pass(self):
         for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64"),
                               ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64"),
-                              ("macos-shared", "arm64")):
+                              ("macos-shared", "arm64"), ("macos-shared", "x64")):
             for task in GATE.SEPARATE_QUALIFICATION_TASKS:
                 changes = [("outcome", value) for value in
                            ("EXECUTED", "FAILED", "SKIPPED", "UP-TO-DATE", "FROM-CACHE", "NO_SOURCE",

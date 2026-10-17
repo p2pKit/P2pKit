@@ -78,8 +78,8 @@ jobs:
 
   verify-recovery:
     needs: prepare-recovery
-    # Match the reviewed CLI consumer baseline; macos-14 retires 2026-11-02.
-    runs-on: macos-14
+    # Match the explicit macOS 15 Intel / Xcode 26.3 CLI consumer baseline.
+    runs-on: macos-15-intel
     timeout-minutes: 90
     # A separate owner-only, main-only environment, with administrator bypass
     # disabled. No signing or Central credentials are configured or referenced.

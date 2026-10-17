@@ -11,21 +11,21 @@ if [[ "$component" == source ]]; then
   tar -xzf "$dir/actionlint.tar.gz" -C "$dir" actionlint
   echo "$dir" >> "$GITHUB_PATH"
 fi
-# Only the complete shared-check, consumer and writer CLI lanes use the temporary macOS 14
-# execution baseline. Native/installer/Swift lanes retain their existing images.
-if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
-  [[ "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == ARM64 ]]
-  [[ "$(sw_vers -productVersion)" == 14.* ]]
+# Shared-check, consumer/writer and focused JmDNS CLI routes select one explicit
+# macOS 15 Intel baseline. Native/installer/Swift lanes retain their images.
+if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then
+  [[ "${RUNNER_OS:-}" == macOS && "${RUNNER_ARCH:-}" == X64 ]]
+  [[ "$(sw_vers -productVersion)" == 15.* ]]
 fi
 if [[ "${RUNNER_OS:-}" == macOS ]]; then
-  if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
-    xcode=/Applications/Xcode_16.2.app/Contents/Developer
+  if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then
+    xcode=/Applications/Xcode_26.3.app/Contents/Developer
   elif [[ "${RUNNER_ARCH:-}" == ARM64 ]]; then xcode=/Applications/Xcode_26.5.app/Contents/Developer
   else xcode=/Applications/Xcode_26.3.app/Contents/Developer; fi
   test -d "$xcode"
-  if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then
+  if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then
     version="$(DEVELOPER_DIR="$xcode" xcodebuild -version)"
-    [[ "${version%%$'\n'*}" == 'Xcode 16.2' ]]
+    [[ "${version%%$'\n'*}" == 'Xcode 26.3' ]]
   fi
   echo "DEVELOPER_DIR=$xcode" >> "$GITHUB_ENV"
   xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"

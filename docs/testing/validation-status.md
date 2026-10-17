@@ -65,10 +65,12 @@ execution. See [platform execution evidence](local.md#platform-execution-evidenc
 | KMP metadata | Compilation/publication checks, not a runtime test target. |
 | Swift sample | Swift warnings-as-errors and XCFramework provenance checks are not a claim of unit/UI or physical-device execution. |
 
-The temporary macOS 14 CLI/shared baseline has a recorded retirement date of
-`2026-11-02`; it is not an indefinite support extension. Future qualification must
-retain the actual tested source and runner/toolchain, including native Intel
-availability. These structural and runtime limits are not changed by publication.
+The published rc2 used the temporary macOS 14 CLI/shared baseline, which retires
+on `2026-11-02`. Current source selects a macOS 15 Intel/Xcode 26.3 replacement;
+its configured routes are not yet a passing hosted qualification. Retain actual
+same-source JmDNS/shared/consumer execution before claiming the replacement
+accepted. Native ARM64/Intel and Desktop/Swift lanes remain unchanged. These
+structural and runtime limits are not changed by publication.
 
 ## External campaign status
 

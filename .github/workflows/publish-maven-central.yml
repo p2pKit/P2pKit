@@ -85,8 +85,8 @@ jobs:
 
   publish-release:
     needs: [freeze-applications, verify-release]
-    # Same temporary CLI baseline as complete consumers; retires 2026-11-02.
-    runs-on: macos-14
+    # Match the explicit macOS 15 Intel / Xcode 26.3 CLI consumer baseline.
+    runs-on: macos-15-intel
     timeout-minutes: 150
     environment:
       name: maven-central
@@ -120,7 +120,7 @@ jobs:
             caches/*/groovy-dsl
 
       - name: Install reviewed publication CLI platform tools
-        # Assert macOS 14 ARM64/Xcode 16.2; prepare both maintained Android SDKs.
+        # Assert macOS 15 Intel/Xcode 26.3; prepare both maintained Android SDKs.
         run: bash scripts/setup-ci-component.sh consumers
 
       - name: Revalidate frozen applications and exact owner approval
