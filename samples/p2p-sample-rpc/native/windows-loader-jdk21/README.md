@@ -1145,3 +1145,20 @@ IAT substitution, missing/failed cohorts, partial resolution and owner/lifetime
 changes through the real compiled Java17 PE helper. They do not establish native
 custody, mapped-module identity or installed authority. The unchanged 75-class
 production inventory excludes these tests; productive loading remains unavailable.
+
+### Original launcher/ancestor custody candidate
+
+`WindowsSystemBootstrapCandidate.inspectOriginalInstallation()` is a dormant,
+read-only attachment under the documented trusted OS/JVM startup assumption. Its
+own bounded `GetModuleFileNameW(NULL)` frame observes the original process launcher
+before profile-file effects; the concrete installation owner then retains the
+existing file, leaf-security and handle-relative ancestor leases. It neither
+borrows a JVM/system owner nor relaxes the non-system single-link or ACL policy.
+Negative policy results remain diagnostics and cannot permit later native input.
+
+The recognized `P2pKit Sample.exe` layout and retained directory chain are **not**
+Program Files, independently qualified MSI, mapped backing identity, pre-JVM
+integrity, installed-byte or standard-user acceptance. This increment does not
+read installed bytes, load a profile DLL, expose a raw handle/callback, or connect
+the candidate to the productive provider. `WindowsLoader.openInstalledProvider()`
+remains unavailable. Inert owner/frame tests do not establish real Windows custody.

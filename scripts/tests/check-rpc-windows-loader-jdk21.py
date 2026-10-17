@@ -70,6 +70,7 @@ def main():
                         "ExportLookupInvocationTests" in name or
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
+                        "OriginalInstallationCandidateTests" in name or
                         "BootstrapReturnTests" in name or
                         "SystemImportResolutionTests" in name or
                         "SystemExportPlanTests" in name or
@@ -278,6 +279,14 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".OriginalFileLeaseTests", case], 0,
             "WINDOWS_ORIGINAL_FILE_LEASE_PASS case=" + re.escape(case) +
             r" scope=INERT_ORIGINAL_OWNER_AND_FRAME_NOT_FILE_CUSTODY_OR_AUTHORITY\n", "")
+    installation_cases = ["paths", "owner-refusal", "bootstrap-order", "thread", "fixed-call", "unknown-return",
+                          "retirement", "retirement-failure", "roles", "core-substitution",
+                          "leaf-refusal", "ancestor-refusal", "accepted-model", "failure-latch"]
+    for case in installation_cases:
+        run("original-installation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".OriginalInstallationCandidateTests", case], 0,
+            "WINDOWS_ORIGINAL_INSTALLATION_PASS case=" + re.escape(case) +
+            r" scope=INERT_OWNERS_AND_FRAMES_NOT_INSTALLED_CUSTODY_OR_AUTHORITY\n", "")
     dll_file_cases = ["path-valid", "path-refusal", "owner-refusal", "substitution", "failure-latch"]
     for case in dll_file_cases:
         run("profile-dll-file-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),

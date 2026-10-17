@@ -10,7 +10,7 @@ import java.lang.invoke.MethodHandle;
 import java.util.Arrays;
 
 /**
- * Shared bounded OWNER|DACL query for three concrete original file/security chains, not installation authority.
+ * Shared bounded OWNER|DACL query for four concrete original file/security chains, not installation authority.
  * Uses only fixed already-loaded ntdll.dll and NtQuerySecurityObject. No explicit DLL-loading API is
  * called; GetProcAddress forwarding may have implicit loader effects before the same-provider check.
  * Original startup/system-runtime/export authority must therefore precede productive use. A successful
@@ -51,6 +51,7 @@ final class WindowsOriginalFileSecurityQuery {
     private final WindowsOriginalJvmSecurityCandidate originalJvmOwner;
     private final WindowsOriginalProfileDllSecurityCandidate originalProfileDllOwner;
     private final WindowsOriginalSystemModuleCandidate originalSystemOwner;
+    private final WindowsOriginalInstallationCandidate originalInstallationOwner;
     private final Linker linker;
     private final Arena bootstrapArena;
     private final Arena fileArena;
@@ -101,14 +102,14 @@ final class WindowsOriginalFileSecurityQuery {
     WindowsOriginalFileSecurityQuery(WindowsOriginalJvmSecurityCandidate owner, Linker linker,
         Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment pinEntry,
         MemorySegment pathEntry, MemorySegment systemPathEntry, MemorySegment resolveEntry) {
-        this(owner, null, null, linker, bootstrapArena, fileArena, fileHandle, pinEntry, pathEntry, systemPathEntry, resolveEntry);
+        this(owner, null, null, null, linker, bootstrapArena, fileArena, fileHandle, pinEntry, pathEntry, systemPathEntry, resolveEntry);
     }
 
     static WindowsOriginalFileSecurityQuery forProfileDll(WindowsOriginalProfileDllSecurityCandidate owner,
         Linker linker, Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment pinEntry,
         MemorySegment pathEntry, MemorySegment systemPathEntry, MemorySegment resolveEntry) {
         if (owner == null) throw new IllegalArgumentException("Missing original profile DLL security owner");
-        return new WindowsOriginalFileSecurityQuery(null, owner, null, linker, bootstrapArena, fileArena, fileHandle,
+        return new WindowsOriginalFileSecurityQuery(null, owner, null, null, linker, bootstrapArena, fileArena, fileHandle,
             pinEntry, pathEntry, systemPathEntry, resolveEntry);
     }
 
@@ -116,19 +117,29 @@ final class WindowsOriginalFileSecurityQuery {
         Linker linker, Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment pinEntry,
         MemorySegment pathEntry, MemorySegment systemPathEntry, MemorySegment resolveEntry) {
         if (owner == null) throw new IllegalArgumentException("Missing original system module security owner");
-        return new WindowsOriginalFileSecurityQuery(null, null, owner, linker, bootstrapArena, fileArena, fileHandle,
+        return new WindowsOriginalFileSecurityQuery(null, null, owner, null, linker, bootstrapArena, fileArena, fileHandle,
             pinEntry, pathEntry, systemPathEntry, resolveEntry);
+    }
+
+    static WindowsOriginalFileSecurityQuery forInstallation(WindowsOriginalInstallationCandidate owner,
+        Linker linker, Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment pinEntry,
+        MemorySegment pathEntry, MemorySegment systemPathEntry, MemorySegment resolveEntry) {
+        if (owner == null) throw new IllegalArgumentException("Missing original installation security owner");
+        return new WindowsOriginalFileSecurityQuery(null, null, null, owner, linker, bootstrapArena, fileArena,
+            fileHandle, pinEntry, pathEntry, systemPathEntry, resolveEntry);
     }
 
     private WindowsOriginalFileSecurityQuery(WindowsOriginalJvmSecurityCandidate jvm,
         WindowsOriginalProfileDllSecurityCandidate dll, WindowsOriginalSystemModuleCandidate system,
+        WindowsOriginalInstallationCandidate installation,
         Linker linker, Arena bootstrapArena, Arena fileArena,
         MemorySegment fileHandle, MemorySegment pinEntry, MemorySegment pathEntry, MemorySegment systemPathEntry,
         MemorySegment resolveEntry) {
         originalJvmOwner = jvm;
         originalProfileDllOwner = dll;
         originalSystemOwner = system;
-        // Inputs come only from the original lease's three concrete, guarded child factories.
+        originalInstallationOwner = installation;
+        // Inputs come only from the original lease's four concrete, guarded child factories.
         // No caller-facing raw HANDLE, export, permission or descriptor-kind selection exists.
         this.linker = linker;
         this.bootstrapArena = bootstrapArena;
@@ -303,12 +314,13 @@ final class WindowsOriginalFileSecurityQuery {
 
     private void requireOriginalFile() {
         if (Thread.currentThread() != thread || ((originalJvmOwner == null ? 0 : 1) + (originalProfileDllOwner == null ? 0 : 1) +
-            (originalSystemOwner == null ? 0 : 1) != 1)) {
+            (originalSystemOwner == null ? 0 : 1) + (originalInstallationOwner == null ? 0 : 1) != 1)) {
             throw new IllegalStateException("Original JVM security requires its original platform thread");
         }
         if (originalJvmOwner != null) originalJvmOwner.requireOriginalQuery(this);
         else if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalQuery(this);
-        else originalSystemOwner.requireOriginalQuery(this);
+        else if (originalSystemOwner != null) originalSystemOwner.requireOriginalQuery(this);
+        else originalInstallationOwner.requireOriginalQuery(this);
         if (bootstrapArena == null || !bootstrapArena.scope().isAlive() || fileArena == null ||
             !fileArena.scope().isAlive() || fileHandle == null || !fileHandle.isNative() ||
             fileHandle.byteSize() != 0 || fileHandle.address() <= 0 ||
@@ -432,6 +444,14 @@ final class WindowsOriginalFileSecurityQuery {
 
     boolean completed() { requireCompleted(); return true; }
     boolean descriptorPolicyAccepted() { requireCompleted(); return policyAccepted; }
+
+    WindowsOriginalFileAncestorsLease newInstallationAncestors(WindowsOriginalInstallationCandidate requester) {
+        if (requester == null || requester != originalInstallationOwner) {
+            throw new IllegalStateException("Original security query belongs to another installation owner");
+        }
+        requireCompleted();
+        return requester.newOriginalAncestors(this, moduleArena, module, entry, pinEntry, resolveEntry);
+    }
 
     WindowsOriginalFileAncestorsLease newSystemModuleAncestors(WindowsOriginalSystemModuleCandidate requester) {
         if (requester == null || requester != originalSystemOwner) {
