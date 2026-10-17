@@ -970,6 +970,15 @@ independent pointer-returning upcall descriptor, including post-return readback
 failure and an unknown Java return. This neither admits the caller's bootstrap
 nor turns an unverified system export into productive loading authority.
 
+Original-image queries and reads likewise retain their private frames when a
+`VirtualQuery` or `ReadProcessMemory` downcall has no confirmed Java return.
+Each primitive result is recorded before captured-error/metadata readback. Known
+return followed by a readback failure permits ordinary frame retirement; unknown
+return never permits clearing, closing, retry or result publication. Six focused
+inert controls distinguish those paths, alongside the existing image/protection
+controls. These are lifetime-policy regressions, not evidence of asynchronous
+Win32 behavior or of original mapped-file identity.
+
 ### Explicit protected development read fixture
 
 `verifyRpcWindowsLoaderJdk21` accepts the default-false property

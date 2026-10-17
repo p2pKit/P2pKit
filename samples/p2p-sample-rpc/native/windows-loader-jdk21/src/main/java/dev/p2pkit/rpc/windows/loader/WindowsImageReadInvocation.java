@@ -38,7 +38,9 @@ final class WindowsImageReadInvocation {
         /** A bounded defensive copy; neither private buffers nor a mapped pointer escape. */
         byte[] bytes() {
             retainedInvocation.requireThread();
-            if (!retainedInvocation.succeeded) throw new IllegalStateException("Original image read is not successful");
+            if (!retainedInvocation.succeeded || !retainedInvocation.retired || retainedInvocation.nativeReturnUnconfirmed) {
+                throw new IllegalStateException("Original image read is not successful");
+            }
             retainedInvocation.requireOriginalScopes();
             return retainedInvocation.snapshot.clone();
         }
@@ -98,6 +100,7 @@ final class WindowsImageReadInvocation {
     private int phase;
     private boolean attempted;
     private boolean active;
+    private boolean nativeReturnUnconfirmed;
     private boolean retired;
     private boolean succeeded;
 
@@ -229,9 +232,13 @@ final class WindowsImageReadInvocation {
         requireOriginalScopes();
         long returned;
         active = true;
-        try { returned = (long) query.invokeExact(buffers[4], source, buffers[index], 48L); }
+        try {
+            nativeReturnUnconfirmed = true;
+            returned = (long) query.invokeExact(buffers[4], source, buffers[index], 48L);
+            if (index == 0) firstQuerySize = returned; else lastQuerySize = returned;
+            nativeReturnUnconfirmed = false;
+        }
         finally { active = false; }
-        if (index == 0) firstQuerySize = returned; else lastQuerySize = returned;
         observeError(index == 0 ? 0 : 2);
         requireOriginalScopes();
         if (returned != 48) throw new IllegalStateException("Original image query was incomplete");
@@ -280,8 +287,10 @@ final class WindowsImageReadInvocation {
                 requireOriginalScopes();
                 active = true;
                 try {
+                    nativeReturnUnconfirmed = true;
                     readStatus = (int) read.invokeExact(buffers[4], CURRENT_PROCESS, source, buffers[3],
                         (long) length, buffers[2]);
+                    nativeReturnUnconfirmed = false;
                 } finally { active = false; }
                 observeError(1);
                 bytesRead = buffers[2].get(ValueLayout.JAVA_LONG, 0);
@@ -301,7 +310,7 @@ final class WindowsImageReadInvocation {
         } finally {
             try { retireFrame(); }
             finally {
-                succeeded = accepted && !failure.retirementFailed();
+                succeeded = accepted && retired && !nativeReturnUnconfirmed && !failure.retirementFailed();
                 if (!succeeded) Arrays.fill(snapshot, (byte) 0);
             }
         }
@@ -312,6 +321,9 @@ final class WindowsImageReadInvocation {
     void retireFrame() {
         requireThread();
         if (active) throw new IllegalStateException("Original image observation is still active");
+        // An exception from invokeExact does not establish a known returned call. Conservatively
+        // retain the original private frame; this is not a claim of pending/asynchronous Win32 work.
+        if (nativeReturnUnconfirmed) return;
         if (retired) {
             if (failure.retirementFailed()) throw failure;
             return;

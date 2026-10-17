@@ -82,6 +82,17 @@ public final class ImageReadInvocationTests {
                     "closeAfterQueryReturn", MethodType.methodType(long.class, long.class));
                 setField("query", MethodHandles.filterReturnValue((MethodHandle) field("query"), afterReturn));
             }
+            if (mode.equals("query-return-unknown") || mode.equals("last-query-return-unknown") ||
+                mode.equals("query-error-readback-failure") || mode.equals("last-query-error-readback-failure")) {
+                MethodHandle afterReturn = MethodHandles.lookup().findStatic(ImageReadInvocationTests.class,
+                    "afterQueryReturn", MethodType.methodType(long.class, long.class));
+                setField("query", MethodHandles.filterReturnValue((MethodHandle) field("query"), afterReturn));
+            }
+            if (mode.equals("read-return-unknown") || mode.equals("read-error-readback-failure")) {
+                MethodHandle afterReturn = MethodHandles.lookup().findStatic(ImageReadInvocationTests.class,
+                    "afterReadReturn", MethodType.methodType(int.class, int.class));
+                setField("read", MethodHandles.filterReturnValue((MethodHandle) field("read"), afterReturn));
+            }
             boolean success = switch (mode) {
                 case "success", "data", "data-copy", "readonly", "maximum", "arguments", "virtual", "thread", "reentrant",
                      "padding-change", "close-after-result", "source-frame-alias", "count-frame-alias" -> true;
@@ -119,31 +130,54 @@ public final class ImageReadInvocationTests {
                     check(expect(WindowsImageReadInvocation.Failure.class, invocation::retireFrame) == failure);
                 } else {
                     check(failure.operationFailure != null && !failure.retirementFailed());
-                    if (mode.equals("invocation-error")) check(failure.operationFailure == INVOCATION_ERROR);
+                    if (mode.equals("invocation-error") || mode.endsWith("return-unknown")) check(failure.operationFailure == INVOCATION_ERROR);
+                    if (mode.endsWith("error-readback-failure")) check(failure.operationFailure instanceof IndexOutOfBoundsException);
                 }
                 for (byte value : (byte[]) field("snapshot")) check(value == 0);
                 expect(IllegalStateException.class, reserved::bytes);
                 int expectedQueries = switch (mode) {
                     case "closed-bootstrap", "closed-module", "invocation-error" -> 0;
                     case "late-query-failed", "mapping-change", "clear-failure", "late-module-close" -> 2;
+                    case "last-query-return-unknown", "last-query-error-readback-failure" -> 2;
                     default -> 1;
                 };
                 int expectedReads = switch (mode) {
                     case "read-failed", "partial-read", "excess-read", "late-query-failed", "mapping-change",
                          "clear-failure", "late-module-close", "readback-failure" -> 1;
+                    case "read-return-unknown", "last-query-return-unknown", "read-error-readback-failure",
+                         "last-query-error-readback-failure" -> 1;
                     default -> 0;
                 };
                 check(queryCalls == expectedQueries && readCalls == expectedReads);
-                if (expectedReads == 1 && !mode.equals("readback-failure")) {
+                if (expectedReads == 1 && !mode.equals("readback-failure") &&
+                    !mode.equals("read-return-unknown") && !mode.equals("read-error-readback-failure")) {
                     check((long) field("bytesRead") == (mode.equals("partial-read") ? length - 1L :
                         mode.equals("excess-read") ? (1L << 32) + length : length));
                 }
             }
             if (callbackFailure != null) throw new AssertionError("Inert image observation callback failed", callbackFailure);
-            for (MemorySegment buffer : originalBuffers) check(!buffer.scope().isAlive());
+            boolean unknown = mode.equals("invocation-error") || mode.endsWith("return-unknown");
+            // This assertion is intentionally BEFORE new-field reflection: running the new test against
+            // the prior adapter proves its actual premature retirement, not merely a missing new field.
+            for (MemorySegment buffer : originalBuffers) check(buffer.scope().isAlive() == unknown);
+            check((boolean) field("nativeReturnUnconfirmed") == unknown && (boolean) field("retired") == !unknown);
+            check(!(boolean) field("active"));
+            if (unknown) retainedUnknown(originalBuffers);
+            if (mode.endsWith("error-readback-failure")) {
+                check((long) field("firstQuerySize") == 48);
+                if (mode.startsWith("read-")) check((int) field("readStatus") == -1 && (long) field("bytesRead") == 0);
+                if (mode.startsWith("last-")) check((long) field("lastQuerySize") == 48 && (long) field("bytesRead") == length);
+                check(!(boolean) field("succeeded"));
+            }
             check(invocation.bootstrapOwner == BOOTSTRAP && invocation.moduleOwner == MODULE && invocation.originalImagePlan == PLAN);
             expect(IllegalStateException.class, invocation::invoke);
         } finally {
+            // Only these inert tests own the simulated unknown frame. Their Java return filters run
+            // after the real upcall returns; no unknown native request exists when test cleanup runs.
+            if (invocation != null) {
+                Arena frame = (Arena) field("frameArena");
+                if (frame != null && frame.scope().isAlive()) frame.close();
+            }
             if (bootstrapArena.scope().isAlive()) bootstrapArena.close();
             if (moduleArena.scope().isAlive()) moduleArena.close();
         }
@@ -246,6 +280,38 @@ public final class ImageReadInvocationTests {
     private static long closeAfterQueryReturn(long result) {
         if (queryCalls == 2) moduleArena.close();
         return result;
+    }
+
+    private static long afterQueryReturn(long result) throws ReflectiveOperationException {
+        if (mode.startsWith("last-") && queryCalls != 2) return result;
+        if (mode.endsWith("return-unknown")) throw INVOCATION_ERROR;
+        buffers()[4] = buffers()[4].asSlice(0, 1); // Known return; captured-error readback then refuses.
+        return result;
+    }
+
+    private static int afterReadReturn(int result) throws ReflectiveOperationException {
+        if (mode.equals("read-return-unknown")) throw INVOCATION_ERROR;
+        buffers()[4] = buffers()[4].asSlice(0, 1);
+        return result;
+    }
+
+    private static void retainedUnknown(MemorySegment[] originals) throws ReflectiveOperationException {
+        byte[][] before = new byte[originals.length][];
+        for (int index = 0; index < originals.length; index++) before[index] = originals[index].toArray(ValueLayout.JAVA_BYTE);
+        invocation.retireFrame(); invocation.retireFrame();
+        for (int index = 0; index < originals.length; index++) {
+            check(originals[index] == buffers()[index] && originals[index].scope().isAlive());
+            check(java.util.Arrays.equals(before[index], originals[index].toArray(ValueLayout.JAVA_BYTE)));
+        }
+        check(!((WindowsImageReadInvocation.Failure) field("failure")).retirementFailed());
+        if (mode.equals("query-return-unknown")) check((long) field("firstQuerySize") == 0 && readCalls == 0);
+        if (mode.equals("read-return-unknown")) {
+            check((long) field("firstQuerySize") == 48 && (int) field("readStatus") == 0 && (long) field("bytesRead") == 0);
+            check(originals[2].get(ValueLayout.JAVA_LONG, 0) == length && originals[3].get(ValueLayout.JAVA_BYTE, 0) == pattern(0));
+        }
+        if (mode.equals("last-query-return-unknown")) {
+            check((long) field("firstQuerySize") == 48 && (long) field("lastQuerySize") == 0 && (long) field("bytesRead") == length);
+        }
     }
 
     private static void invalidArguments(MemorySegment query, MemorySegment read) {

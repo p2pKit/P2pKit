@@ -392,7 +392,9 @@ def main():
                    "closed-bootstrap", "closed-module", "invocation-error", "query-failed", "query-short",
                    "allocation-mismatch", "not-committed", "not-image", "code-writable", "data-executable", "guard",
                    "region-gap", "region-short", "region-overflow", "read-failed", "partial-read", "excess-read",
-                   "late-query-failed", "mapping-change", "clear-failure", "late-module-close", "readback-failure"]
+                   "late-query-failed", "mapping-change", "clear-failure", "late-module-close", "readback-failure",
+                   "query-return-unknown", "read-return-unknown", "last-query-return-unknown",
+                   "query-error-readback-failure", "read-error-readback-failure", "last-query-error-readback-failure"]
     for case in image_cases:
         run("image-read-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
             "--module", MODULE + "/" + PACKAGE + ".ImageReadInvocationTests", case], 0,
