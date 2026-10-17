@@ -91,6 +91,9 @@ final class WindowsSystemBootstrapCandidate {
     private boolean succeeded;
     private boolean originalJvmAttempted;
     private WindowsOriginalJvmCandidate originalJvm;
+    private boolean installationAttempted;
+    private WindowsOriginalInstallationCandidate installation;
+    private final Failure installationAttachmentFailure = new Failure(this);
     private boolean profileDllAttempted;
     private WindowsOriginalProfileDllFileCandidate profileDll;
     private final Failure systemModulesAttachmentFailure = new Failure(this);
@@ -369,6 +372,59 @@ final class WindowsSystemBootstrapCandidate {
         originalJvm = new WindowsOriginalJvmCandidate(this, linker, originalArena, entries[1], entries[2], entries[4]);
         originalJvm.observe();
         return originalJvm;
+    }
+
+    WindowsOriginalInstallationCandidate inspectOriginalInstallation() {
+        requireCompleted();
+        if (installationAttempted) throw new IllegalStateException("Original installation was already attempted");
+        if (profileDllAttempted) throw new IllegalStateException("Installation observation must precede profile file effects");
+        installationAttempted = true;
+        try {
+            installation = new WindowsOriginalInstallationCandidate(this);
+        } catch (Throwable caught) {
+            installationAttachmentFailure.operationFailure = caught;
+            throw installationAttachmentFailure;
+        }
+        // Root the exact owner and its failure before even the first process-path observation.
+        installation.observe();
+        return installation;
+    }
+
+    void requireOriginalInstallation(WindowsOriginalInstallationCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || installation != candidate) {
+            throw new IllegalStateException("Installation is not this bootstrap's original retained attachment");
+        }
+    }
+
+    Linker originalInstallationLinker(WindowsOriginalInstallationCandidate candidate) {
+        requireOriginalInstallation(candidate); candidate.requireOriginalNativeInputs(); return linker;
+    }
+
+    Arena originalInstallationArena(WindowsOriginalInstallationCandidate candidate) {
+        requireOriginalInstallation(candidate); candidate.requireOriginalNativeInputs(); return originalArena;
+    }
+
+    MemorySegment originalInstallationPathEntry(WindowsOriginalInstallationCandidate candidate) {
+        requireOriginalInstallation(candidate); candidate.requireOriginalNativeInputs(); return entries[2];
+    }
+
+    MemorySegment originalInstallationFileEntry(WindowsOriginalInstallationCandidate candidate, int index) {
+        requireOriginalInstallation(candidate); candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 2) throw new IllegalArgumentException("Unknown fixed installation file entry");
+        return entries[8 + index];
+    }
+
+    MemorySegment originalInstallationSecurityEntry(WindowsOriginalInstallationCandidate candidate, int index) {
+        requireOriginalInstallation(candidate); candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 3) throw new IllegalArgumentException("Unknown fixed installation security entry");
+        return entries[1 + index];
+    }
+
+    MemorySegment originalInstallationAncestorsEntry(WindowsOriginalInstallationCandidate candidate, int index) {
+        requireOriginalInstallation(candidate); candidate.requireOriginalAncestorInputs();
+        if (index < 0 || index > 1) throw new IllegalArgumentException("Unknown fixed installation ancestor entry");
+        return entries[11 + index];
     }
 
     WindowsOriginalProfileDllFileCandidate inspectOriginalProfileDll(String candidatePath) {

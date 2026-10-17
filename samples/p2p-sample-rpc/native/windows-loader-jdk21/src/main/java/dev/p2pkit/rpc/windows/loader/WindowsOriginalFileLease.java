@@ -9,7 +9,7 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
 /**
- * Actual permanently retained file acquisition/metadata mechanics for three concrete original owner roles.
+ * Actual permanently retained file acquisition/metadata mechanics for four concrete original owner roles.
  * JVM and profile-DLL ownership are independent: neither can substitute for the other. No authority
  * token, native-entry callback or raw pathname factory exists. Owner identity precedes native effects.
  * NOT installation/runtime authority: final-component no-reparse and handle metadata do not establish
@@ -51,6 +51,7 @@ final class WindowsOriginalFileLease {
     private final WindowsOriginalJvmFileCandidate originalOwner;
     private final WindowsOriginalProfileDllFileCandidate originalProfileDllOwner;
     private final WindowsOriginalSystemModuleCandidate originalSystemOwner;
+    private final WindowsOriginalInstallationCandidate originalInstallationOwner;
     private final Linker linker;
     private final Arena bootstrapArena;
     private final MemorySegment createEntry;
@@ -85,25 +86,40 @@ final class WindowsOriginalFileLease {
     private boolean succeeded;
 
     // Retain the original JVM constructor/signature, including null-owner refusal before native effects.
-    WindowsOriginalFileLease(WindowsOriginalJvmFileCandidate owner) { this(owner, null, null); }
+    WindowsOriginalFileLease(WindowsOriginalJvmFileCandidate owner) { this(owner, null, null, null); }
 
     static WindowsOriginalFileLease forProfileDll(WindowsOriginalProfileDllFileCandidate owner) {
         if (owner == null) throw new IllegalArgumentException("Missing original profile DLL file owner");
-        return new WindowsOriginalFileLease(null, owner, null);
+        return new WindowsOriginalFileLease(null, owner, null, null);
     }
 
     static WindowsOriginalFileLease forSystemModule(WindowsOriginalSystemModuleCandidate owner) {
         if (owner == null) throw new IllegalArgumentException("Missing original system module file owner");
-        return new WindowsOriginalFileLease(null, null, owner);
+        return new WindowsOriginalFileLease(null, null, owner, null);
+    }
+
+    static WindowsOriginalFileLease forInstallation(WindowsOriginalInstallationCandidate owner) {
+        if (owner == null) throw new IllegalArgumentException("Missing original installation file owner");
+        return new WindowsOriginalFileLease(null, null, null, owner);
     }
 
     private WindowsOriginalFileLease(WindowsOriginalJvmFileCandidate jvm,
-        WindowsOriginalProfileDllFileCandidate dll, WindowsOriginalSystemModuleCandidate system) {
+        WindowsOriginalProfileDllFileCandidate dll, WindowsOriginalSystemModuleCandidate system,
+        WindowsOriginalInstallationCandidate installation) {
         originalOwner = jvm;
         originalProfileDllOwner = dll;
         originalSystemOwner = system;
-        // Only these three fixed constructors select a role. No caller chooses limits, permissions or entries.
-        if (system != null) {
+        originalInstallationOwner = installation;
+        // Only these four fixed constructors select a role. No caller chooses limits, permissions or entries.
+        if (installation != null) {
+            linker = installation.originalLinker();
+            bootstrapArena = installation.originalBootstrapArena();
+            createEntry = installation.originalFileEntry(0);
+            informationEntry = installation.originalFileEntry(1);
+            finalPathEntry = installation.originalFileEntry(2);
+            sourcePath = installation.originalPathSnapshot();
+            sourceLength = sourcePath.length - 1;
+        } else if (system != null) {
             linker = system.originalLinker();
             bootstrapArena = system.originalBootstrapArena();
             createEntry = system.originalFileEntry(0);
@@ -293,7 +309,7 @@ final class WindowsOriginalFileLease {
     }
 
     private boolean refusedLinkCount(long links) {
-        // System servicing links are observed metadata ONLY. JVM/profile policy remains exactly one.
+        // System servicing links are observed metadata ONLY. JVM/profile/installation policy remains exactly one.
         return originalSystemOwner == null ? links != 1 : links <= 0 || links > 0xffff_ffffL;
     }
 
@@ -313,10 +329,11 @@ final class WindowsOriginalFileLease {
 
     private void requireOriginalOwner() {
         if (Thread.currentThread() != thread || ((originalOwner == null ? 0 : 1) + (originalProfileDllOwner == null ? 0 : 1) +
-            (originalSystemOwner == null ? 0 : 1) != 1)) {
+            (originalSystemOwner == null ? 0 : 1) + (originalInstallationOwner == null ? 0 : 1) != 1)) {
             throw new IllegalStateException("Original JVM file requires its original platform thread");
         }
-        if (originalSystemOwner != null) originalSystemOwner.requireOriginalFileLease(this);
+        if (originalInstallationOwner != null) originalInstallationOwner.requireOriginalFileLease(this);
+        else if (originalSystemOwner != null) originalSystemOwner.requireOriginalFileLease(this);
         else if (originalProfileDllOwner != null) originalProfileDllOwner.requireOriginalLease(this);
         else originalOwner.requireOriginalLease(this);
         if (bootstrapArena == null || !bootstrapArena.scope().isAlive()) {
@@ -388,6 +405,33 @@ final class WindowsOriginalFileLease {
             throw new IllegalStateException("Original file lease belongs to another system module");
         }
         requireCompleted();
+    }
+
+    private void requireInstallationRequester(WindowsOriginalInstallationCandidate requester) {
+        if (requester == null || requester != originalInstallationOwner) {
+            throw new IllegalStateException("Original file lease belongs to another installation owner");
+        }
+        requireCompleted();
+    }
+
+    WindowsOriginalFileSecurityQuery newInstallationSecurity(WindowsOriginalInstallationCandidate requester) {
+        requireInstallationRequester(requester);
+        requester.requireOriginalNativeInputs();
+        return WindowsOriginalFileSecurityQuery.forInstallation(requester, linker, bootstrapArena, handleArena, handle,
+            requester.originalSecurityEntry(this, 0), requester.originalSecurityEntry(this, 1),
+            requester.originalSecurityEntry(this, 2), requester.originalSecurityEntry(this, 3));
+    }
+
+    WindowsOriginalFileAncestorsLease newInstallationAncestors(WindowsOriginalInstallationCandidate requester,
+        WindowsOriginalFileSecurityQuery security, Arena moduleArena, MemorySegment module,
+        MemorySegment queryEntry, MemorySegment pinEntry, MemorySegment resolveEntry) {
+        requireInstallationRequester(requester);
+        requester.requireOriginalQuery(security);
+        requester.requireOriginalAncestorInputs();
+        return WindowsOriginalFileAncestorsLease.forInstallation(requester, linker, bootstrapArena, moduleArena,
+            module, queryEntry, pinEntry, resolveEntry, createEntry, informationEntry, finalPathEntry,
+            requester.originalAncestorsEntry(this, 0), requester.originalAncestorsEntry(this, 1),
+            handleArena, handle, sourcePath, sourceLength, first);
     }
 
     long systemByteCount(WindowsOriginalSystemModuleCandidate requester) {

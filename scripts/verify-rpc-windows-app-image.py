@@ -139,6 +139,7 @@ ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".cl
     "WindowsImageReadInvocation", "WindowsImageReadInvocation$Failure",
     "WindowsImageReadInvocation$Result", "WindowsImageReadInvocation$Kind",
     "WindowsSystemBootstrapCandidate", "WindowsSystemBootstrapCandidate$Failure",
+    "WindowsOriginalInstallationCandidate", "WindowsOriginalInstallationCandidate$Failure",
     "WindowsOriginalJvmCandidate", "WindowsOriginalJvmCandidate$Failure",
     "WindowsOriginalJvmFileCandidate", "WindowsOriginalFileLease", "WindowsOriginalFileLease$Failure",
     "WindowsOriginalProfileDllFileCandidate", "WindowsOriginalProfileDllFileCandidate$Failure",
