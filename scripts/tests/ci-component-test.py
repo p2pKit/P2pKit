@@ -522,6 +522,57 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 class SetupBaselineTests(unittest.TestCase):
+    def test_windows_supplier_download_exports_only_after_checksum_success(self):
+        source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
+        begin = source.index('if [[ "$component" == desktop-windows ]]; then')
+        end = source.index('# Hosted images differ;', begin)
+        block = source[begin:end]
+        pin = dict(line.split('=', 1) for line in (ROOT / 'samples/p2p-sample-rpc/native/'
+                   'windows-loader-jdk21/runtime-supplier.properties').read_text().splitlines())
+        fake = r'''
+curl() {
+    printf 'curl\n' >> "$CALLS"
+    [[ $# == 12 && "$1" == --fail && "$2" == --location && "$3" == --proto && "$4" == '=https' &&
+       "$5" == --tlsv1.2 && "$6" == --connect-timeout && "$7" == 15 && "$8" == --max-time &&
+       "$9" == 600 && "${10}" == --output && "${11}" == "$RUNNER_TEMP/p2pkit-windows-runtime-supplier.zip" &&
+       "${12}" == "$EXPECTED_URL" ]] || return 91
+    [[ "$CASE" != curl-fails ]] || return 22
+    printf 'synthetic archive bytes\n' > "${11}"
+}
+sha256sum() {
+    printf 'checksum\n' >> "$CALLS"
+    local line
+    IFS= read -r line
+    [[ $# == 1 && "$1" == --check && "$line" == "$EXPECTED_SHA  $RUNNER_TEMP/p2pkit-windows-runtime-supplier.zip" ]] || return 92
+    [[ "$CASE" != checksum-fails ]]
+}
+cygpath() {
+    printf 'cygpath\n' >> "$CALLS"
+    [[ $# == 2 && "$1" == -w && "$2" == "$RUNNER_TEMP/p2pkit-windows-runtime-supplier.zip" ]] || return 93
+    printf '%s\n' 'C:\synthetic\p2pkit-windows-runtime-supplier.zip'
+}
+'''
+        for case, expected_calls in (('curl-fails', ['curl']), ('checksum-fails', ['curl', 'checksum']),
+                                     ('success', ['curl', 'checksum', 'cygpath']), ('existing', [])):
+            with self.subTest(case=case), tempfile.TemporaryDirectory(prefix='jdk supplier model-') as temporary:
+                root = Path(temporary).resolve()
+                output, calls = root / 'github-env', root / 'calls'
+                if case == 'existing':
+                    (root / 'p2pkit-windows-runtime-supplier.zip').write_bytes(b'original retained archive')
+                environment = {'PATH': C.os.environ['PATH'], 'component': 'desktop-windows',
+                               'RUNNER_TEMP': str(root), 'GITHUB_ENV': str(output), 'CALLS': str(calls),
+                               'CASE': case, 'EXPECTED_SHA': pin['sha256'], 'EXPECTED_URL': pin['url']}
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', fake + block], cwd=ROOT,
+                                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                self.assertEqual(result.returncode == 0, case == 'success')
+                self.assertEqual(calls.read_text().splitlines() if calls.exists() else [], expected_calls)
+                self.assertEqual(output.read_text() if output.exists() else '',
+                                 'P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE=C:\\synthetic\\p2pkit-windows-runtime-supplier.zip\n'
+                                 if case == 'success' else '')
+                if case == 'existing':
+                    self.assertEqual((root / 'p2pkit-windows-runtime-supplier.zip').read_bytes(),
+                                     b'original retained archive')
+
     def selected(self, component, *, os_name='macOS', arch='X64', release='15.7', xcode='26.3', present=True):
         source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
         begin = source.index('if [[ "$component" == macos-shared || "$component" == consumers || "$component" == published-consumers-diagnostic || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then')
