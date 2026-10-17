@@ -1,6 +1,7 @@
 package dev.p2pkit.rpc.windows.loader;
 
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -21,6 +22,10 @@ public final class ExportLookupInvocationTests {
     private static final Object MODULE = new Object();
     private static final Object PLAN = new Object();
     private static final Error INVOCATION_ERROR = new LinkageError("synthetic private invocation failure");
+    private static final Error RETURN_ERROR = new LinkageError("synthetic private post-return failure");
+    // Independent pointer-returning native stub; do not repeat the production raw-integer descriptor.
+    private static final FunctionDescriptor POINTER_RETURN = FunctionDescriptor.of(ValueLayout.ADDRESS,
+        ValueLayout.ADDRESS, ValueLayout.ADDRESS.withTargetLayout(WindowsExportLookupInvocation.NAME));
     private static final long IMAGE_BYTES = 65_536;
     private static final long EXPORT_RVA = 4096;
     private static final long EXPORT_BYTES = 512;
@@ -53,11 +58,12 @@ public final class ExportLookupInvocationTests {
             MemorySegment systemEntry = Linker.nativeLinker().upcallStub(
                 MethodHandles.lookup().findStatic(ExportLookupInvocationTests.class, "callback",
                     MethodType.methodType(MemorySegment.class, MemorySegment.class, MemorySegment.class)),
-                WindowsExportLookupInvocation.DESCRIPTOR, bootstrapArena);
+                POINTER_RETURN, bootstrapArena);
             if (mode.equals("arguments")) invalidArguments(systemEntry);
             if (mode.equals("forwarder")) forwarderRefusal(systemEntry);
             if (mode.equals("virtual")) virtualRefusal(systemEntry);
             invocation = prepareInert(systemEntry);
+            check(WindowsExportLookupInvocation.DESCRIPTOR.returnLayout().orElseThrow().equals(ValueLayout.JAVA_LONG));
             WindowsExportLookupInvocation.Result reserved =
                 (WindowsExportLookupInvocation.Result) field("result");
             expect(IllegalStateException.class, reserved::entry);
@@ -70,13 +76,13 @@ public final class ExportLookupInvocationTests {
             if (mode.equals("closed-module")) moduleArena.close();
             if (mode.equals("retired-frame")) invocation.retireFrame();
             if (mode.equals("invocation-failure")) {
-                MethodHandle throwing = MethodHandles.throwException(MemorySegment.class, Error.class)
+                MethodHandle throwing = MethodHandles.throwException(long.class, Error.class)
                     .bindTo(INVOCATION_ERROR);
                 setField("call", MethodHandles.dropArguments(throwing, 0, MemorySegment.class, MemorySegment.class));
             }
-            if (mode.equals("late-module-close")) {
+            if (mode.equals("late-module-close") || mode.equals("return-failure")) {
                 MethodHandle afterReturn = MethodHandles.lookup().findStatic(ExportLookupInvocationTests.class,
-                    "closeModuleAfterReturn", MethodType.methodType(MemorySegment.class, MemorySegment.class));
+                    "afterNativeReturn", MethodType.methodType(long.class, long.class));
                 setField("call", MethodHandles.filterReturnValue((MethodHandle) field("call"), afterReturn));
             }
             switch (mode) {
@@ -84,6 +90,8 @@ public final class ExportLookupInvocationTests {
                      "close-after-result", "partial-frame-alias", "ordinal-buffer" -> {
                     WindowsExportLookupInvocation.Result result = invocation.invoke();
                     check(result == reserved && result.retainedInvocation == invocation);
+                    check((boolean) field("nativeReturned") && !(boolean) field("nativeReturnUnconfirmed") &&
+                        (long) field("rawResolved") == expectedEntry.address());
                     check(result.entry().address() == expectedEntry.address() && result.entry().byteSize() == 0 &&
                         result.entry().scope().equals(moduleArena.scope()));
                     check(!originalName.scope().isAlive() && bootstrapArena.scope().isAlive() && moduleArena.scope().isAlive());
@@ -97,22 +105,38 @@ public final class ExportLookupInvocationTests {
                 }
                 case "retired-frame" -> expect(IllegalStateException.class, invocation::invoke);
                 case "wrong-address", "null-address", "high-address", "private-alias", "closed-bootstrap",
-                     "closed-module", "clear-failure", "invocation-failure", "late-module-close" -> {
+                     "closed-module", "clear-failure", "invocation-failure", "late-module-close",
+                     "readback-failure", "return-failure" -> {
                     WindowsExportLookupInvocation.Failure failure = (WindowsExportLookupInvocation.Failure)
                         expect(WindowsExportLookupInvocation.Failure.class, invocation::invoke);
                     check(failure.retainedInvocation == invocation && failure.getCause() == null &&
                         failure.getSuppressed().length == 0 && !failure.getMessage().contains("synthetic"));
-                    if (mode.equals("closed-bootstrap") || mode.equals("closed-module") || mode.equals("invocation-failure")) {
+                    if (mode.equals("closed-bootstrap") || mode.equals("closed-module") ||
+                        mode.equals("invocation-failure") || mode.equals("return-failure")) {
                         check(failure.invocationFailure != null && failure.readbackFailure == null && !failure.retirementFailed());
                         if (mode.equals("invocation-failure")) check(failure.invocationFailure == INVOCATION_ERROR);
+                        if (mode.equals("return-failure")) check(failure.invocationFailure == RETURN_ERROR);
+                        // Native stub completion alone is not a completed MethodHandle return. Preserve
+                        // original owners, but do not invent a FARPROC observation or permit a retry.
+                        check(!(boolean) field("nativeReturned") && (long) field("rawResolved") == 0 && field("resolved") == null);
+                        check((boolean) field("nativeReturnUnconfirmed") ==
+                            (mode.equals("invocation-failure") || mode.equals("return-failure")));
                     } else if (mode.equals("clear-failure")) {
                         check(failure.invocationFailure == null && failure.readbackFailure == null &&
                             failure.nameClearFailure instanceof UnsupportedOperationException && failure.arenaCloseFailure == null);
                         check(expect(WindowsExportLookupInvocation.Failure.class, invocation::retireFrame) == failure);
-                        check(((MemorySegment) field("resolved")).address() == expectedEntry.address());
+                        check(((MemorySegment) field("resolved")).address() == expectedEntry.address() &&
+                            (boolean) field("nativeReturned") && (long) field("rawResolved") == expectedEntry.address());
                     } else {
                         check(failure.invocationFailure == null && failure.readbackFailure != null && !failure.retirementFailed());
-                        check(field("resolved") != null); // Preserve the original return even on rejected readback.
+                        long expectedRaw = mode.equals("null-address") ? 0 : mode.equals("wrong-address") ?
+                            expectedEntry.address() + 1 : mode.equals("high-address") ? -1L :
+                            mode.equals("private-alias") ? originalName.address() + 1 : expectedEntry.address();
+                        check((boolean) field("nativeReturned") && !(boolean) field("nativeReturnUnconfirmed") &&
+                            (long) field("rawResolved") == expectedRaw);
+                        check(field("resolved") == null); // No wrapper precedes validated, retained primitive return.
+                        if (mode.equals("readback-failure")) check(failure.readbackFailure instanceof NullPointerException);
+                        if (mode.equals("late-module-close")) check(failure.readbackFailure instanceof IllegalStateException);
                     }
                     expect(IllegalStateException.class, reserved::entry);
                 }
@@ -125,10 +149,32 @@ public final class ExportLookupInvocationTests {
                 case "closed-bootstrap", "closed-module", "retired-frame", "invocation-failure" -> 0;
                 default -> 1;
             };
-            check(callbacks == expectedCalls && !originalName.scope().isAlive());
+            check(callbacks == expectedCalls);
+            if (mode.equals("invocation-failure") || mode.equals("return-failure")) {
+                check(!(boolean) field("retired") && originalName.scope().isAlive());
+                invocation.retireFrame();
+                invocation.retireFrame();
+                check(!(boolean) field("retired") && originalName.scope().isAlive());
+                for (int index = 0; index < 256; index++) {
+                    check(Byte.toUnsignedInt(originalName.get(ValueLayout.JAVA_BYTE, index)) ==
+                        (index < name.length() ? name.charAt(index) : 0));
+                }
+                check(bootstrapArena.scope().isAlive() && moduleArena.scope().isAlive());
+            } else check(!originalName.scope().isAlive());
             expect(IllegalStateException.class, invocation::invoke);
             check(callbacks == expectedCalls);
         } finally {
+            // The two quarantined cases are test-owned: one never enters native code, and one throws
+            // after its actual inert upcall has returned. Only this fixture may retire that known frame;
+            // the production owner deliberately cannot infer either fact from an unobserved return.
+            if (invocation != null) {
+                Arena frame = (Arena) field("frameArena");
+                if (frame != null && frame.scope().isAlive()) {
+                    MemorySegment buffer = (MemorySegment) field("nameBuffer");
+                    if (buffer != null) buffer.fill((byte) 0);
+                    frame.close();
+                }
+            }
             // Only test-owned arenas retire, after every native callback has returned. No DLL was loaded/unloaded.
             if (bootstrapArena.scope().isAlive()) bootstrapArena.close();
             if (moduleArena.scope().isAlive()) moduleArena.close();
@@ -176,6 +222,7 @@ public final class ExportLookupInvocationTests {
                 expect(IllegalStateException.class, ((WindowsExportLookupInvocation.Result) field("result"))::entry);
             }
             if (mode.equals("clear-failure")) setField("nameBuffer", ((MemorySegment) field("nameBuffer")).asReadOnly());
+            if (mode.equals("readback-failure")) setField("nameBuffer", null); // Inert post-return Java readback fault only.
             if (mode.equals("late-module-close")) {
                 expect(IllegalStateException.class, moduleArena::close);
                 check(moduleArena.scope().isAlive());
@@ -194,8 +241,9 @@ public final class ExportLookupInvocationTests {
     }
 
     /** Test-only return filter: close only after the real downcall has released its argument-scope acquisition. */
-    private static MemorySegment closeModuleAfterReturn(MemorySegment returned) {
-        check(callbacks == 1);
+    private static long afterNativeReturn(long returned) {
+        check(callbacks == 1 && returned == expectedEntry.address());
+        if (mode.equals("return-failure")) throw RETURN_ERROR;
         moduleArena.close();
         return returned;
     }

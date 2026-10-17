@@ -960,3 +960,12 @@ paths; two wrong-thread regressions also fail against the prior implementation.
 These are conservative failure/lifetime controls, not a demonstrated asynchronous
 Windows exploit or approval of the first-OS bootstrap. Actual Windows calling
 conventions remain covered by the separate original-JVM runtime checks.
+
+The fixed named-export invocation likewise captures the Windows-x64 `FARPROC`
+return bits before allocating a Java segment view. Exact original nonforwarded
+RVA comparison still precedes publication. An unobserved downcall return retains
+the complete private ASCII frame; repeated retirement cannot clear or close it.
+Failures before native entry still retire normally. Its 22 inert controls use an
+independent pointer-returning upcall descriptor, including post-return readback
+failure and an unknown Java return. This neither admits the caller's bootstrap
+nor turns an unverified system export into productive loading authority.

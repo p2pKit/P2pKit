@@ -348,7 +348,8 @@ def main():
     export_cases = ["success", "long-name", "arguments", "forwarder", "wrong-address", "null-address",
                     "high-address", "private-alias", "partial-frame-alias", "ordinal-buffer", "thread",
                     "virtual", "closed-bootstrap", "closed-module", "close-after-result", "reentrant",
-                    "retired-frame", "clear-failure", "invocation-failure", "late-module-close"]
+                    "retired-frame", "clear-failure", "invocation-failure", "late-module-close",
+                    "readback-failure", "return-failure"]
     export_host = "WINDOWS_X64_LINKER" if os.name == "nt" else "INERT_FRAME_ONLY"
     for case in export_cases:
         run("export-lookup-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),

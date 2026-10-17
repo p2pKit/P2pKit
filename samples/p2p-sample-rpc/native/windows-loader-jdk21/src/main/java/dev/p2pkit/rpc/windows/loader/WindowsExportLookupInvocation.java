@@ -18,7 +18,9 @@ import java.nio.ByteOrder;
 final class WindowsExportLookupInvocation {
     static final int MAXIMUM_NAME_BYTES = 256;
     static final MemoryLayout NAME = MemoryLayout.sequenceLayout(MAXIMUM_NAME_BYTES, ValueLayout.JAVA_BYTE);
-    static final FunctionDescriptor DESCRIPTOR = FunctionDescriptor.of(ValueLayout.ADDRESS,
+    // On the guarded Windows-x64 ABI a FARPROC pointer and this 64-bit integer both return in RAX.
+    // Retain those bits before allocating any Java segment representation.
+    static final FunctionDescriptor DESCRIPTOR = FunctionDescriptor.of(ValueLayout.JAVA_LONG,
         ValueLayout.ADDRESS, ValueLayout.ADDRESS.withTargetLayout(NAME));
 
     static final class Result {
@@ -69,6 +71,9 @@ final class WindowsExportLookupInvocation {
     private MemorySegment nameView;
     private MethodHandle call;
     private MemorySegment resolved;
+    private long rawResolved;
+    private boolean nativeReturned;
+    private boolean nativeReturnUnconfirmed;
     private boolean attempted;
     private boolean active;
     private boolean retired;
@@ -182,7 +187,12 @@ final class WindowsExportLookupInvocation {
                 requireOriginalScopes();
                 validateNameBuffer();
                 active = true;
-                try { resolved = (MemorySegment) call.invokeExact(module, nameView); }
+                try {
+                    nativeReturnUnconfirmed = true;
+                    rawResolved = (long) call.invokeExact(module, nameView);
+                    nativeReturned = true;
+                    nativeReturnUnconfirmed = false;
+                }
                 finally { active = false; }
             } catch (Throwable caught) {
                 failure.invocationFailure = caught;
@@ -190,13 +200,14 @@ final class WindowsExportLookupInvocation {
             }
             try {
                 requireOriginalScopes();
-                // Keep the original raw return before validation/view creation. In-image alone is insufficient.
-                if (resolved.address() != module.address() + functionRva ||
-                    (resolved.address() >= nameBuffer.address() &&
-                        resolved.address() < nameBuffer.address() + MAXIMUM_NAME_BYTES)) {
+                // The raw FARPROC is retained even if this readback or subsequent view allocation fails.
+                // In-image alone is insufficient: require the exact original, nonforwarded function RVA.
+                if (rawResolved != module.address() + functionRva ||
+                    (rawResolved >= nameBuffer.address() &&
+                        rawResolved < nameBuffer.address() + MAXIMUM_NAME_BYTES)) {
                     throw new IllegalStateException("Resolved named export differs from its exact original RVA");
                 }
-                resolved = resolved.reinterpret(moduleArena, null);
+                resolved = MemorySegment.ofAddress(rawResolved).reinterpret(moduleArena, null);
                 accepted = true;
             } catch (Throwable caught) {
                 failure.readbackFailure = caught;
@@ -209,10 +220,14 @@ final class WindowsExportLookupInvocation {
         return result;
     }
 
-    /** Retire only private ASCII storage; neither original scope nor loaded module is closed or unloaded. */
+    /**
+     * Retire only confirmed-unused private ASCII storage; original scopes/modules never close or unload.
+     * An unobserved downcall return quarantines the complete frame even after Java unwinds.
+     */
     void retireFrame() {
         requireThread();
         if (active) throw new IllegalStateException("Named export lookup is still active");
+        if (nativeReturnUnconfirmed) return; // Never infer native argument retirement from a thrown handle.
         if (retired) {
             if (failure.retirementFailed()) throw failure;
             return;
