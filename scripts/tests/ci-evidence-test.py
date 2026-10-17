@@ -16,6 +16,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+import uuid
 from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -1744,14 +1745,46 @@ subprocess.run([sys.executable, '-I', '-B', '-c',
     env=env, check=True)
 print('DEFERRED_HOME_DOMAIN_PASS')
 """
+        # Validate the inherited owner before changing this fixture's home.
+        # Rebinding only GRADLE_USER_HOME corrupts an actual CI parent domain.
+        inherited = dict(os.environ)
+        fixture = E.audit_processes.ownership_environment(inherited, uuid.uuid4().hex, uuid.uuid4().hex,
+            str(self.root / 'remote-fixture-state'), str(home), allow_new_context=True)
+        inherited_domains = E.audit_processes.ownership_domains(
+            inherited.get(E.audit_processes.CHAIN_ENV, ''), inherited.get(E.audit_processes.DOMAINS_ENV, ''))
+        fixture_domains = E.audit_processes.ownership_domains(
+            fixture[E.audit_processes.CHAIN_ENV], fixture[E.audit_processes.DOMAINS_ENV])
+        self.assertEqual(fixture_domains[:-1], inherited_domains)
+        self.assertEqual(fixture[E.audit_processes.CHAIN_ENV].split(':')[:-1],
+                         inherited.get(E.audit_processes.CHAIN_ENV, '').split(':') if inherited_domains else [])
+        fixture['P2PKIT_CONSUMER_WORK_DIR'] = str(work)
         outcome = E.run_command([sys.executable, '-I', '-B', '-c', program], cwd=self.root,
-            environment={**os.environ, 'P2PKIT_CONSUMER_WORK_DIR': str(work), 'GRADLE_USER_HOME': str(home)},
-            private=self.root / 'deferred-capture', timeout=15, create_gradle_home=False)
+            environment=fixture, private=self.root / 'deferred-capture', timeout=15, create_gradle_home=False)
         self.assertEqual(outcome['code'], 'PASS')
         self.assertEqual(outcome['exitCode'], 0)
         self.assertTrue(outcome['cleanupKnown'])
         self.assertTrue(outcome['capturesClosed'])
+        self.assertFalse(outcome['timedOut'])
+        self.assertEqual(outcome['cleanupReasons'], [])
         self.assertEqual((self.root / 'deferred-capture/stdout.log').read_text(), 'DEFERRED_HOME_DOMAIN_PASS\n')
+
+    def test_deferred_home_fixture_preserves_actual_enclosing_command_ownership(self):
+        # CI runs this suite inside E's real ownership domain; exercise that
+        # nesting locally too rather than passing only with an empty parent.
+        outcome = E.run_command([sys.executable, '-I', '-B', '-S', '-W', 'error::ResourceWarning',
+            str(Path(__file__).resolve()),
+            'EvidenceTests.test_deferred_gradle_home_keeps_actual_remote_subprocess_domain_coherent', '-v'],
+            cwd=self.root, environment=dict(os.environ), private=self.root / 'nested-deferred', timeout=30)
+        self.assertEqual(outcome['code'], 'PASS')
+        self.assertEqual(outcome['exitCode'], 0)
+        self.assertFalse(outcome['timedOut'])
+        self.assertTrue(outcome['cleanupKnown'])
+        self.assertTrue(outcome['capturesClosed'])
+        self.assertEqual(outcome['cleanupReasons'], [])
+        report = (self.root / 'nested-deferred/stderr.log').read_text()
+        self.assertIn('Ran 1 test in ', report)
+        self.assertIn('test_deferred_gradle_home_keeps_actual_remote_subprocess_domain_coherent', report)
+        self.assertTrue(report.rstrip().endswith('OK'))
 
     def test_deferred_home_option_is_typed_and_default_still_creates_home(self):
         for value in (None, 0, 1, 'false'):
