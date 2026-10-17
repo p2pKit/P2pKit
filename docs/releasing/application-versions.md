@@ -26,9 +26,12 @@ Android codes range from 1 through 400,000,000. The largest native version is
 `100.99.39999`, within MSI limits. The major offset satisfies jpackage's
 positive-major restriction even while the library is on a 0.x line. For example,
 `0.8.0-rc1` maps to Android code 320202, native `1.8.201`, DEB `1.8.201-1`.
-The current `0.8.0-rc2` candidate uses the same encoding with rank 202:
+The published [`0.8.0-rc2`](../releases/0.8.0-rc2.md) uses rank 202:
 Android code **320203**, native **`1.8.202`**, DEB **`1.8.202-1`**.
-No rc1 tag or artifact identity is replaced by this new candidate.
+Current development `0.8.0-SNAPSHOT` uses rank 0: Android code **320001**,
+native **`1.8.0`**, DEB **`1.8.0-1`**. Its lower development package versions
+are not an in-place upgrade claim over rc2. No published tag or artifact
+identity is replaced, and the snapshot is not eligible for publication.
 
 The encoding is injective and order-preserving across admitted **version
 strings**, not commits: two builds with the same SNAPSHOT value have the same
