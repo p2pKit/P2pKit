@@ -361,10 +361,11 @@ int main(int argc, const char **argv) {
         if (ciMode) childBound = @0; /* Only the immutable envelope supplies bounds. */
 #endif
 #ifdef P2PKIT_MODULAR_CI
-        /* Separate fixed diagnostic adapter, not the historical CI envelope.
-         * Product/collector retains its original 1800-second command bound. */
-        if (![executionMode isEqualToString:@"modular-jmdns"]) return 125;
-        childBound = @2040;
+        /* Fixed modular commands, not the historical CI envelope. Each
+         * collector retains its unchanged component command deadline. */
+        NSNumber *modularCommand = @{@"modular-jmdns":@1800, @"modular-shared":@7200}[executionMode];
+        if (!modularCommand) return 125;
+        childBound = @(modularCommand.doubleValue + 240);
 #endif
         if (!childBound) return 125;
         NSURL *directory = [NSURL fileURLWithPath:@(argv[1]) isDirectory:YES];
@@ -441,7 +442,10 @@ int main(int argc, const char **argv) {
             NSCharacterSet *trackingCharacters = [NSCharacterSet characterSetWithCharactersInString:
                 @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"];
             result[@"failureCheck"] = @"RUNNER_TRACKING";
-            if (!tracking.length || tracking.length > 200 ||
+            id component = config[@"component"];
+            NSString *expectedMode = [component isKindOfClass:NSString.class] ?
+                @{@"jmdns-diagnostic":@"modular-jmdns", @"macos-shared":@"modular-shared"}[component] : nil;
+            if (![expectedMode isEqualToString:executionMode] || !tracking.length || tracking.length > 200 ||
                 [tracking rangeOfCharacterFromSet:trackingCharacters.invertedSet].location != NSNotFound ||
                 ![config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking]) break;
             configuration.environment = @{@"PATH":@"/usr/bin:/bin:/usr/sbin:/sbin", @"RUNNER_TRACKING_ID":tracking};

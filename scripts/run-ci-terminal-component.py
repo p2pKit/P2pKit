@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ONLY the existing JmDNS diagnostic in an ordinary Terminal descendant.
+"""Run selected unchanged modular CI commands in an ordinary Terminal descendant.
 
 TN3179 permits this CLI context; it does not diagnose the earlier NoRoute cause.
 The native helper retains its original application/shell lease. No privacy
@@ -31,13 +31,18 @@ spec = importlib.util.spec_from_file_location('ci_terminal_helpers', ROOT / 'scr
 terminal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal)
 private = terminal.private
-MODE = 'modular-jmdns'
 COMPONENT = 'jmdns-diagnostic'
-# Command remains 30 minutes. These separate, fixed wrapper bounds reserve
-# evidence and retained-application finalization inside the existing 40m job.
-CHILD_SECONDS = 1980
-CONTROLLER_SECONDS = 2100
-WRAPPER_SECONDS = 2250
+# Fixed existing component budgets only. No arbitrary command or duration.
+PROFILES = {'jmdns-diagnostic': ('modular-jmdns', 1800), 'macos-shared': ('modular-shared', 7200)}
+
+
+def bounds(component):
+    require(component in PROFILES, 'COMPONENT')
+    mode, seconds = PROFILES[component]
+    return dict(mode=mode, command=seconds, child=seconds + 180, native=seconds + 240,
+                controller=seconds + 300, wrapper=seconds + 450)
+
+
 ENVIRONMENT = frozenset('''PATH LANG LC_ALL TMPDIR JAVA_HOME JAVA_HOME_17_X64 JAVA_HOME_21_X64
 ANDROID_HOME ANDROID_SDK_ROOT DEVELOPER_DIR GRADLE_USER_HOME CI GITHUB_ACTIONS
 RUNNER_ENVIRONMENT RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TRACKING_ID
@@ -55,11 +60,13 @@ def require(condition, code):
         raise ContextFailure(code)
 
 
-def environment_admit(env):
+def environment_admit(env, component=COMPONENT):
+    require(component in PROFILES, 'COMPONENT')
+    events = {'workflow_dispatch'} if component == COMPONENT else {'workflow_dispatch', 'push', 'pull_request', 'schedule'}
     require(platform.system() == 'Darwin' and platform.machine() == 'x86_64' and
             env.get('RUNNER_OS') == 'macOS' and env.get('RUNNER_ARCH') == 'X64' and
             env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
-            env.get('GITHUB_REPOSITORY') == 'p2pKit/P2pKit' and env.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
+            env.get('GITHUB_REPOSITORY') == 'p2pKit/P2pKit' and env.get('GITHUB_EVENT_NAME') in events and
             env.get('GITHUB_WORKFLOW_REF', '').startswith('p2pKit/P2pKit/.github/workflows/ci.yml@') and
             re.fullmatch('[0-9a-f]{40}', env.get('GITHUB_SHA', '')) is not None and
             env.get('GITHUB_WORKFLOW_SHA') == env.get('GITHUB_SHA'), 'HOST_CONTEXT')
@@ -69,17 +76,18 @@ def environment_admit(env):
     require(not any(key.startswith('P2PKIT_AUDIT_') for key in env), 'NESTED_DOMAIN')
 
 
-def command(env):
+def command(env, component=COMPONENT):
+    budget = bounds(component)
     python = str(Path(sys.executable).resolve())
-    return [python, '-B', str(ROOT / 'scripts/ci_evidence.py'), '--component', COMPONENT,
-            '--timeout-seconds', '1800', '--source-root', str(ROOT), '--output-dir',
-            str(Path(env['RUNNER_TEMP']) / ('ci-evidence-' + COMPONENT)),
+    return [python, '-B', str(ROOT / 'scripts/ci_evidence.py'), '--component', component,
+            '--timeout-seconds', str(budget['command']), '--source-root', str(ROOT), '--output-dir',
+            str(Path(env['RUNNER_TEMP']) / ('ci-evidence-' + component)),
             '--report-glob', '**/build/test-results/**/*.xml', '--report-glob', 'build/reports/**/*',
-            '--', python, '-B', str(ROOT / 'scripts/ci_component.py'), COMPONENT]
+            '--', python, '-B', str(ROOT / 'scripts/ci_component.py'), component]
 
 
 def validate_config(config, directory):
-    require(type(config) is dict and set(config) == {'uid', 'gid', 'groups', 'source', 'environment'}, 'CONFIG')
+    require(type(config) is dict and set(config) == {'uid', 'gid', 'groups', 'source', 'environment', 'component'}, 'CONFIG')
     require(type(config['uid']) is int and type(config['gid']) is int and
             os.getuid() == os.geteuid() == config['uid'] > 0 and
             os.getgid() == os.getegid() == config['gid'] > 0 and
@@ -87,7 +95,7 @@ def validate_config(config, directory):
     env = config['environment']
     require(type(env) is dict and set(env) <= ENVIRONMENT and 'PATH' in env and
             all(type(v) is str and '\0' not in v and len(v) <= 32768 for v in env.values()), 'ENVIRONMENT')
-    environment_admit(env)
+    environment_admit(env, config['component'])
     require(os.environ.get('RUNNER_TRACKING_ID') == env['RUNNER_TRACKING_ID'], 'RUNNER_TRACKING')
     require(directory.parent == Path(env['RUNNER_TEMP']).resolve(strict=True) and
             directory.name.startswith('ci-terminal-'), 'PRIVATE_DIRECTORY')
@@ -142,6 +150,7 @@ def child(path):
     config = private.read_json(path)
     validate_config(config, directory)
     source = config['source']
+    budget = bounds(config['component'])
     require(private.source_snapshot() == source, 'SOURCE_CHANGED')
     ancestry = terminal.terminal_ancestor(directory, source)
     private.write_json(directory / 'child-admission.json', {'source': source, 'ancestry': ancestry})
@@ -153,8 +162,8 @@ def child(path):
     process, code = None, 125
     try:
         require(not (directory / 'cancel').exists(), 'CANCELLED')
-        deadline = time.monotonic() + CHILD_SECONDS
-        process = subprocess.Popen(command(env), cwd=ROOT, env=env, stdin=subprocess.DEVNULL)
+        deadline = time.monotonic() + budget['child']
+        process = subprocess.Popen(command(env, config['component']), cwd=ROOT, env=env, stdin=subprocess.DEVNULL)
         code = wait_evidence(process, directory, cancelled, deadline)
         require(private.source_snapshot() == source, 'SOURCE_CHANGED')
         require(not cancelled.is_set() and not (directory / 'cancel').exists(), 'CANCELLED')
@@ -188,10 +197,10 @@ def wait_controller(process, directory, cancelled, deadline):
     return process.returncode
 
 
-def validate_result(app, admission, finished, source, code):
+def validate_result(app, admission, finished, source, code, component=COMPONENT):
     require(type(app) is dict and set(app) == {'schema', 'executionMode', 'stage', 'exitCode',
             *terminal.OBSERVATIONS, *terminal.APPLICATION_FLAGS} and type(app.get('schema')) is int and
-            app['schema'] == 3 and app.get('executionMode') == MODE and
+            app['schema'] == 3 and app.get('executionMode') == bounds(component)['mode'] and
             app.get('stage') == 'FINALIZED' and app.get('failureCheck') == 'NONE' and
             app.get('openErrorDomain') == 'NONE' and app.get('openErrorCode') == 0 and
             all(app.get(key) is True for key in terminal.APPLICATION_FLAGS), 'APPLICATION_FINALIZATION')
@@ -202,13 +211,14 @@ def validate_result(app, admission, finished, source, code):
     terminal.validate_ancestry(admission['ancestry'])
 
 
-def run():
+def run(component=COMPONENT):
     start = time.monotonic()
-    environment_admit(os.environ)
+    budget = bounds(component)
+    environment_admit(os.environ, component)
     env = {key: value for key, value in os.environ.items() if key in ENVIRONMENT}
     directory = Path(tempfile.mkdtemp(prefix='ci-terminal-', dir=Path(env['RUNNER_TEMP']).resolve(strict=True)))
     source = private.source_snapshot()
-    config = dict(uid=os.getuid(), gid=os.getgid(), groups=sorted(set(os.getgroups())), source=source, environment=env)
+    config = dict(uid=os.getuid(), gid=os.getgid(), groups=sorted(set(os.getgroups())), source=source, environment=env, component=component)
     validate_config(config, directory)
     private.write_json(directory / 'config.json', config)
     script = command_bytes(directory)
@@ -229,13 +239,13 @@ def run():
                 compile_result['capturesClosed'], 'COMPILE_FAILED')
         require(not cancelled.is_set(), 'CANCELLED')
         with (directory / 'application.log').open('xb') as log:
-            process = subprocess.Popen([str(binary), str(directory), MODE], cwd=ROOT, stdin=subprocess.DEVNULL,
+            process = subprocess.Popen([str(binary), str(directory), budget['mode']], cwd=ROOT, stdin=subprocess.DEVNULL,
                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            code = wait_controller(process, directory, cancelled, min(start + WRAPPER_SECONDS - 60,
-                                                                      time.monotonic() + CONTROLLER_SECONDS))
+            code = wait_controller(process, directory, cancelled, min(start + budget['wrapper'] - 60,
+                                                                      time.monotonic() + budget['controller']))
         validate_result(private.read_json(directory / 'application-result.json'),
                         private.read_json(directory / 'child-admission.json'),
-                        private.read_json(directory / 'child-result.json'), source, code)
+                        private.read_json(directory / 'child-result.json'), source, code, component)
     except BaseException as error:
         failed = error
     finally:
@@ -244,12 +254,12 @@ def run():
                 # Preserve the native retained lease long enough to attempt
                 # ordinary finalization; never signal a reconstructed PID.
                 cancel_file(directory)
-                wait_controller(process, directory, cancelled, start + WRAPPER_SECONDS - 45)
+                wait_controller(process, directory, cancelled, start + budget['wrapper'] - 45)
         except BaseException as error:
             failed = failed or error
         try:
             require(private.source_snapshot() == source, 'SOURCE_CHANGED')
-            require(time.monotonic() < start + WRAPPER_SECONDS, 'WRAPPER_DEADLINE')
+            require(time.monotonic() < start + budget['wrapper'], 'WRAPPER_DEADLINE')
             require(not cancelled.is_set(), 'CANCELLED')
         except BaseException as error:
             failed = failed or error
@@ -268,10 +278,12 @@ def run():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--child', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--component', choices=tuple(PROFILES))
     args = parser.parse_args()
     os.umask(0o077)
     try:
-        return child(args.child) if args.child else run()
+        require(not args.child or args.component is None, 'COMPONENT')
+        return child(args.child) if args.child else run(args.component or COMPONENT)
     except BaseException as error:
         # Only our finite labels are public; imported native/private exceptions
         # never expose a path, environment value, address or private log.

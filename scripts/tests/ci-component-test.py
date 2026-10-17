@@ -576,7 +576,9 @@ class TerminalDiagnosticTests(unittest.TestCase):
             '--report-glob', '**/build/test-results/**/*.xml', '--report-glob', 'build/reports/**/*', '--',
             python, '-B', str(ROOT / 'scripts/ci_component.py'), 'jmdns-diagnostic'])
         workflow = (ROOT / '.github/workflows/ci-component.yml').read_text()
-        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic ]]; then\n            [[ "$MINUTES" == 30 ]]', workflow)
+        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared ]]; then', workflow)
+        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]', workflow)
+        self.assertIn('else [[ "$MINUTES" == 120 ]]; fi', workflow)
         self.assertEqual(workflow.count('python3 -B scripts/run-ci-terminal-component.py'), 1)
         self.assertIn('else\n            python3 -B scripts/ci_evidence.py', workflow)
         self.assertNotIn('jmdns-diagnostic', C.COMPONENTS)
@@ -609,7 +611,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
             directory = temp / 'ci-terminal-case'
             directory.mkdir(mode=0o700)
             env = {**self.environment(), 'RUNNER_TEMP': str(temp)}
-            config = dict(uid=501, gid=20, groups=[20, 80], source={'commit': 'a' * 40, 'tree': 'b' * 40}, environment=env)
+            config = dict(uid=501, gid=20, groups=[20, 80], source={'commit': 'a' * 40, 'tree': 'b' * 40}, environment=env, component=T.COMPONENT)
             with patch.object(T, 'environment_admit'), patch.object(T.private, 'private_parent'), \
                  patch.object(T.os, 'getuid', return_value=501), patch.object(T.os, 'geteuid', return_value=501), \
                  patch.object(T.os, 'getgid', return_value=20), patch.object(T.os, 'getegid', return_value=20), \
@@ -670,7 +672,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
     def test_terminal_native_lease_and_complete_result_cannot_be_replaced_by_inner_pass(self):
         T = self.T
         source = {'commit': 'a' * 40, 'tree': 'b' * 40}
-        app = dict(schema=3, executionMode=T.MODE, stage='FINALIZED', exitCode=0, failureCheck='NONE',
+        app = dict(schema=3, executionMode=T.bounds(T.COMPONENT)['mode'], stage='FINALIZED', exitCode=0, failureCheck='NONE',
             openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(T.terminal.APPLICATION_FLAGS, True))
         admission = dict(source=source, ancestry=dict(method=T.terminal.ANCESTRY_METHOD, depth=3,
             systemLoginAncestors=1, restrictedCombinedDenials=1))
@@ -685,8 +687,10 @@ class TerminalDiagnosticTests(unittest.TestCase):
         with self.assertRaises(T.ContextFailure):
             T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
         native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
-        self.assertIn('if (![executionMode isEqualToString:@"modular-jmdns"]) return 125;', native)
-        self.assertIn('childBound = @2040;', native)
+        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200}[executionMode]', native)
+        self.assertIn('if (!modularCommand) return 125;', native)
+        self.assertIn('childBound = @(modularCommand.doubleValue + 240);', native)
+        self.assertIn('![expectedMode isEqualToString:executionMode]', native)
         self.assertIn('config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking', native)
         self.assertIn('@"RUNNER_TRACKING_ID":tracking', native)
         self.assertIn('outcome = finalizeApplication(', native)
@@ -706,7 +710,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
                 directory = Path(tmp)
                 if cancelled:
                     (directory / 'cancel').write_bytes(b'cancel\n')
-                config = dict(source=source, environment=self.environment())
+                config = dict(source=source, environment=self.environment(), component=T.COMPONENT)
                 stack.enter_context(patch.object(T.private, 'read_json', return_value=config))
                 stack.enter_context(patch.object(T, 'validate_config'))
                 stack.enter_context(patch.object(T.private, 'source_snapshot', side_effect=[source,
@@ -787,17 +791,60 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_deadlines_and_native_tracking_failure_are_fail_closed(self):
         T = self.T
-        self.assertEqual((T.CHILD_SECONDS, T.CONTROLLER_SECONDS, T.WRAPPER_SECONDS), (1980, 2100, 2250))
-        self.assertLess(1800, T.CHILD_SECONDS)
-        self.assertLess(T.CHILD_SECONDS, 2040)
-        self.assertLess(2040 + 30, T.CONTROLLER_SECONDS)
-        self.assertLess(T.CONTROLLER_SECONDS, T.WRAPPER_SECONDS)
-        self.assertLess(T.WRAPPER_SECONDS, C.matrix('jmdns-diagnostic')['include'][0]['job_minutes'] * 60)
+        for component in T.PROFILES:
+            budget = T.bounds(component)
+            route = C.matrix(component)['include'][0]
+            self.assertEqual(budget['command'], route['minutes'] * 60)
+            self.assertLess(budget['command'], budget['child'])
+            self.assertLess(budget['child'], budget['native'])
+            self.assertLess(budget['native'] + 30, budget['controller'])
+            self.assertLess(budget['controller'], budget['wrapper'])
+            self.assertLess(budget['wrapper'], route['job_minutes'] * 60)
+        self.assertEqual(T.bounds('jmdns-diagnostic'),
+            dict(mode='modular-jmdns', command=1800, child=1980, native=2040, controller=2100, wrapper=2250))
+        self.assertEqual(T.bounds('macos-shared'),
+            dict(mode='modular-shared', command=7200, child=7380, native=7440, controller=7500, wrapper=7650))
         source = {'commit': 'a' * 40, 'tree': 'b' * 40}
-        app = dict(schema=3, executionMode=T.MODE, stage='OPEN', exitCode=125, failureCheck='RUNNER_TRACKING',
+        app = dict(schema=3, executionMode=T.bounds(T.COMPONENT)['mode'], stage='OPEN', exitCode=125, failureCheck='RUNNER_TRACKING',
             openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(T.terminal.APPLICATION_FLAGS, False))
         with self.assertRaisesRegex(T.ContextFailure, '^APPLICATION_FINALIZATION$'):
             T.validate_result(app, {}, dict(source=source, exitCode=0), source, 0)
+
+    def test_terminal_shared_fixed_profile_has_original_full_shared_command_not_a_test_subset(self):
+        T = self.T
+        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared'})
+        argv = T.command(self.environment(), 'macos-shared')
+        self.assertEqual(argv[argv.index('--component') + 1], 'macos-shared')
+        self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')
+        self.assertEqual(argv[argv.index('--output-dir') + 1], '/tmp/ci-evidence-macos-shared')
+        self.assertEqual(argv[-2:], [str(ROOT / 'scripts/ci_component.py'), 'macos-shared'])
+        self.assertEqual(C.commands('macos-shared'),
+            [('shared-platform-tests', [C.sys.executable, '-B', 'scripts/run-platform-tests.py', 'macos-shared'])])
+        for component in ('consumers', 'dependency-update', 'compatibility', 'apple-arm64', 'apple-x64', '', 'macos-shared --skip'):
+            with self.subTest(component=component), self.assertRaisesRegex(T.ContextFailure, '^COMPONENT$'):
+                T.command(self.environment(), component)
+
+    def test_terminal_shared_accepts_existing_ci_events_but_not_foreign_workflow_or_diagnostic_pr(self):
+        T = self.T
+        with patch.object(T.platform, 'system', return_value='Darwin'), patch.object(T.platform, 'machine', return_value='x86_64'):
+            for event in ('workflow_dispatch', 'push', 'pull_request', 'schedule'):
+                env = {**self.environment(), 'GITHUB_EVENT_NAME': event}
+                T.environment_admit(env, 'macos-shared')
+                if event != 'workflow_dispatch':
+                    with self.assertRaisesRegex(T.ContextFailure, '^HOST_CONTEXT$'):
+                        T.environment_admit(env, 'jmdns-diagnostic')
+            for changes in ({'GITHUB_EVENT_NAME': 'workflow_run'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40},
+                {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/publish-maven-central.yml@refs/tags/v1'}):
+                with self.subTest(changes=changes), self.assertRaisesRegex(T.ContextFailure, '^HOST_CONTEXT$'):
+                    T.environment_admit({**self.environment(), **changes}, 'macos-shared')
+        source = {'commit': 'a' * 40, 'tree': 'b' * 40}
+        app = dict(schema=3, executionMode='modular-shared', stage='FINALIZED', exitCode=0, failureCheck='NONE',
+            openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(T.terminal.APPLICATION_FLAGS, True))
+        admission = dict(source=source, ancestry=dict(method=T.terminal.ANCESTRY_METHOD, depth=3,
+            systemLoginAncestors=1, restrictedCombinedDenials=1))
+        T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0, 'macos-shared')
+        with self.assertRaisesRegex(T.ContextFailure, '^APPLICATION_FINALIZATION$'):
+            T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0, 'jmdns-diagnostic')
 
     def test_terminal_shell_waits_original_child_and_has_no_environment_or_command_override(self):
         T = self.T

@@ -67,9 +67,10 @@ jobs:
           COMPONENT: ${{ inputs.component }}
           MINUTES: ${{ inputs.minutes }}
         run: |
-          if [[ "$COMPONENT" == jmdns-diagnostic ]]; then
-            [[ "$MINUTES" == 30 ]]
-            python3 -B scripts/run-ci-terminal-component.py
+          if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared ]]; then
+            if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]
+            else [[ "$MINUTES" == 120 ]]; fi
+            python3 -B scripts/run-ci-terminal-component.py --component "$COMPONENT"
           else
             python3 -B scripts/ci_evidence.py --component "$COMPONENT" --timeout-seconds "$((MINUTES * 60))" --output-dir "$RUNNER_TEMP/ci-evidence-$COMPONENT" --report-glob '**/build/test-results/**/*.xml' --report-glob 'build/reports/**/*' -- python3 -B scripts/ci_component.py "$COMPONENT"
           fi
