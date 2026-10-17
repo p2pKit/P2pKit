@@ -111,6 +111,16 @@ final class WindowsOriginalProfileDllSecurityCandidate {
         // Identity only: completed negative ancestor diagnostics must remain readable.
     }
 
+    void requireOriginalByteInputs() {
+        requireOriginalAncestorInputs();
+        if (ancestors == null) throw new IllegalStateException("Original profile DLL bytes lack original ancestor observations");
+        requireOriginalAncestors(ancestors);
+        ancestors.completed();
+        if (!ancestors.descriptorPoliciesAccepted()) {
+            throw new IllegalStateException("Original profile DLL ancestor policy refused byte acquisition");
+        }
+    }
+
     boolean completed() { requireOriginalFile(); return query.completed(); }
     boolean descriptorPolicyAccepted() { requireOriginalFile(); return query.descriptorPolicyAccepted(); }
 }

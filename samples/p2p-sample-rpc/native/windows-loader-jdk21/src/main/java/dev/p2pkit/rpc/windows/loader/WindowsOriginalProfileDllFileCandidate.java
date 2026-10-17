@@ -34,6 +34,8 @@ final class WindowsOriginalProfileDllFileCandidate {
     private boolean securityAttempted;
     private boolean securityPolicyRefused;
     private boolean ancestorsPolicyRefused;
+    private boolean bytesAttempted;
+    private WindowsOriginalProfileDllBytesCandidate bytes;
     private WindowsOriginalProfileDllSecurityCandidate security;
 
     WindowsOriginalProfileDllFileCandidate(WindowsSystemBootstrapCandidate bootstrap, String candidatePath) {
@@ -178,5 +180,42 @@ final class WindowsOriginalProfileDllFileCandidate {
         requireOriginalNativeInputs();
         requireOriginalLease(candidate);
         return bootstrap.originalProfileDllAncestorsEntry(this, index);
+    }
+
+    WindowsOriginalProfileDllBytesCandidate inspectBytes() {
+        requireCompleted();
+        requireOriginalByteInputs(); // Missing or refused leaf/ancestor observations never consume a read attachment.
+        if (bytesAttempted) throw new IllegalStateException("Original profile DLL bytes were already attempted");
+        bytesAttempted = true;
+        try {
+            bytes = lease.newProfileDllBytes(this);
+            // Root, concrete child and core failures are retained before metadata or the first ReadFile.
+            bytes.observe();
+            return bytes;
+        } catch (Throwable caught) {
+            failure.operationFailure = caught;
+            failed = true;
+            throw failure;
+        }
+    }
+
+    void requireOriginalBytes(WindowsOriginalProfileDllBytesCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || candidate != bytes) {
+            throw new IllegalStateException("Byte candidate is not this profile DLL file's original attachment");
+        }
+    }
+
+    void requireOriginalByteInputs() {
+        requireCompleted();
+        requireOriginalNativeInputs();
+        if (security == null) throw new IllegalStateException("Original profile DLL bytes lack original security observations");
+        security.requireOriginalByteInputs();
+    }
+
+    MemorySegment originalReadEntry(WindowsOriginalFileLease candidate) {
+        requireOriginalLease(candidate);
+        requireOriginalByteInputs();
+        return bootstrap.originalProfileDllReadEntry(this);
     }
 }

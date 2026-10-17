@@ -76,6 +76,8 @@ def main():
                         "InstallationSecurityTests" in name or
                         "AncestorRetirementTests" in name or
                         "ByteReadInvocationTests" in name or
+                        "OriginalFileBytesLeaseTests" in name or
+                        "ProfileDllBytesCandidateTests" in name or
                         "PackagedVerifierTests" in name or
                         "LoadedRegistrationTests" in name or "InstalledProviderTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
@@ -276,6 +278,22 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".SystemExportPlanTests", case], 0,
             "WINDOWS_SYSTEM_EXPORT_PLAN_PASS case=" + re.escape(case) +
             r" scope=INERT_COPIED_PE_GRAPH_NOT_SYSTEM_IDENTITY_OR_LOADING_AUTHORITY\n", "")
+    byte_cases = ["owner-refusal", "substitution", "bounds", "thread", "stream-512", "stream-chunk",
+                  "stream-multi", "stream-maximum", "short-first", "short-later", "eof-first", "extra-eof",
+                  "false", "pending", "overcount", "unsigned-count", "throw-after-return", "metadata-before",
+                  "metadata-after", "metadata-false", "metadata-throw", "copy-failure", "retirement-failure",
+                  "hash-same-copy", "immutability"]
+    for case in byte_cases:
+        run("original-file-bytes-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".OriginalFileBytesLeaseTests", case], 0,
+            "WINDOWS_ORIGINAL_FILE_BYTES_PASS case=" + re.escape(case) +
+            r" scope=INERT_FULL_STREAM_AND_FRAME_NOT_FILE_CUSTODY_OR_AUTHORITY\n", "")
+    for case in ("owner-refusal", "substitution", "missing-security", "leaf-policy-refusal", "missing-ancestors",
+                 "ancestor-policy-refusal", "failure-latch"):
+        run("profile-dll-bytes-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".ProfileDllBytesCandidateTests", case], 0,
+            "WINDOWS_PROFILE_DLL_BYTES_PASS case=" + re.escape(case) +
+            r" scope=INERT_TYPED_OWNER_AND_REFUSAL_NOT_NATIVE_BYTES_OR_AUTHORITY\n", "")
     # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
     owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
                    "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]
@@ -396,6 +414,8 @@ def main():
     original_dll_security_policy = "NOT_EXECUTED"
     original_dll_ancestors_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_dll_ancestors_policy = "NOT_EXECUTED"
+    original_dll_bytes_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_dll_bytes_observation = "NOT_EXECUTED"
     if os.name == "nt":
         # A distinct development fixture, never the productive DLL or profile backend. Finish the existing
         # controls first so a new compiler/runtime failure preserves their original results.
@@ -469,6 +489,13 @@ def main():
             "WINDOWS_PROFILE_DLL_ANCESTORS_PASS case=actual scope=" + original_dll_ancestors_scope +
             r" ancestorPolicy=(NOT_EXECUTED_LEAF_POLICY_REFUSED|ACCEPTED|REFUSED)\n", "")
         original_dll_ancestors_policy = dll_ancestors.strip().rsplit("=", 1)[1]
+        original_dll_bytes_scope = "DEVELOPMENT_DLL_SNAPSHOT_NOT_PACKAGE_MAPPING_OR_LOADING_AUTHORITY"
+        dll_bytes, _ = run("profile-dll-bytes-actual", base + access + [
+            "--patch-module", MODULE + "=" + str(classes), "--module",
+            MODULE + "/" + PACKAGE + ".ProfileDllBytesCandidateTests", "actual", str(dll)], 0,
+            "WINDOWS_PROFILE_DLL_BYTES_PASS case=actual scope=" + original_dll_bytes_scope +
+            r" byteObservation=(NOT_EXECUTED_LEAF_POLICY_REFUSED|NOT_EXECUTED_ANCESTOR_POLICY_REFUSED|COMPLETED)\n", "")
+        original_dll_bytes_observation = dll_bytes.strip().rsplit("=", 1)[1]
         loaded_registration_scope = "DEV_TEST_DLL_DENY_STORAGE_NOT_INSTALLED_AUTHORITY_OR_PROVIDER"
         for case in ("pin", "success", "address"):
             connected_run("loaded-registration-" + case, "LoadedRegistrationTests",
@@ -501,6 +528,8 @@ def main():
               "originalProfileDllDescriptorPolicy": original_dll_security_policy,
               "originalProfileDllAncestorsScope": original_dll_ancestors_scope,
               "originalProfileDllAncestorPolicy": original_dll_ancestors_policy,
+              "originalProfileDllBytesScope": original_dll_bytes_scope,
+              "originalProfileDllByteObservation": original_dll_bytes_observation,
               "loadedRegistrationScope": loaded_registration_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))

@@ -329,8 +329,11 @@ public final class SystemBootstrapCandidateTests {
             originalField(ancestorCore, "originalProfileDllOwner") == null);
         boolean ancestorPolicy = ancestors.descriptorPoliciesAccepted();
         WindowsOriginalJvmBytesCandidate bytes = file.inspectBytes();
-        check(bytes.completed() && originalField(bytes, "fileHandle") == handle &&
-            originalField(bytes, "fileArena") == handleArena);
+        WindowsOriginalFileBytesLease byteCore = (WindowsOriginalFileBytesLease) originalField(bytes, "core");
+        check(bytes.completed() && originalField(byteCore, "fileHandle") == handle &&
+            originalField(byteCore, "fileArena") == handleArena);
+        check(originalField(byteCore, "originalJvmOwner") == bytes &&
+            originalField(byteCore, "originalProfileDllOwner") == null && originalField(byteCore, "originalSnapshot") == null);
         check(bytes.byteCount() > 0 && bytes.byteCount() <= 512L * 1024 * 1024);
 
         // Independent bounded read of the DEVELOPMENT fixture, not an expected installed/runtime pin.

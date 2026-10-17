@@ -813,9 +813,9 @@ pre-invocation failures retain their existing private-frame retirement, and
 original handle scopes are never closed.
 
 **This is not yet a complete DLL custody or productive loading pipeline.** The
-independent DLL still needs a bounded same-handle byte snapshot, independent
-package identity and reviewed startup/import authority. Its original-handle
-security and ancestor components are described below; existing JVM observations
+independent DLL still needs independently approved package/runtime identity and
+reviewed startup/import/load assembly. Its original-handle security, ancestor
+and bounded snapshot components are described below; existing JVM observations
 are not promoted into DLL evidence. No productive-loader return, Windows UI
 availability, profile operation, installer identity or publication pipeline is
 changed by this component.
@@ -897,3 +897,32 @@ correspondence and bootstrap authority before consuming any resulting RVA.
 Merely expanding the existing kernel32-only `GetProcAddress` allowlist would not
 solve its potential implicit forwarding effects. The new reader does not enable
 that path, change productive loading or claim real-system graph qualification.
+
+### Same-original-handle DLL byte snapshot
+
+The independent DLL file may attach its byte reader only after its own leaf and
+completed ancestor policies accept. The concrete shared engine retains the
+existing JVM hash-only path and adds a bounded DLL snapshot from the **same
+original synchronous file handle**, not the relative ancestor leaf probe. There
+is no pathname reopen, second channel, seek, selectable native export or caller-
+supplied byte limit. A DLL is 512 bytes through 32 MiB; existing JVM hashing retains
+its separate 512 MiB bound.
+
+The full operation checks original metadata before and after its reads, reads
+64 KiB chunks with an exact final EOF check (at most 513 calls for the DLL), and
+hashes the same ranges copied into the private snapshot. Whole-stream success
+and snapshot/digest getters are published only after successful frame retirement.
+Short, excess, false/pending, contradictory or throwing reads, changed metadata
+and retirement failure cannot expose a completed partial snapshot. Unknown
+native completion retains private frames and all original owners. Failure latches
+the DLL file; Stop does not unload or close original module/JNI ownership.
+
+Maintained inert full-stream controls execute the actual shared stream logic
+with explicitly test-injected Java method handles; they are not native file-I/O
+proof. The existing real Windows JVM ReadFile checks remain separate. The actual
+DLL diagnostic reports its original leaf/ancestor refusal as `NOT_EXECUTED_*`,
+without attaching or running the byte stage. Only admitted prerequisites permit
+its real read and `COMPLETED` snapshot observation. Neither result grants package
+identity, byte-to-mapping correspondence, initial OS authority or productive
+provider admission. The existing strict PE verifier and loader assembly still
+need to consume these original owned bytes under independent expected pins.

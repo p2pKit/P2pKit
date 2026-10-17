@@ -32,6 +32,7 @@ public final class ByteReadInvocationTests {
         ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT);
     private static final LinkageError RETURN_FAILURE = new LinkageError("private inert read return failure");
     private static WindowsOriginalJvmBytesCandidate candidate;
+    private static WindowsOriginalFileBytesLease core;
     private static String mode;
     private static boolean windows;
     private static int callbacks;
@@ -60,6 +61,9 @@ public final class ByteReadInvocationTests {
                     MemorySegment.class, int.class)), INFORMATION, bootstrap);
             candidate = new WindowsOriginalJvmBytesCandidate(null, linker, bootstrap, file, handle,
                 read, information, new long[8]);
+            Field attachment = WindowsOriginalJvmBytesCandidate.class.getDeclaredField("core");
+            attachment.setAccessible(true);
+            core = (WindowsOriginalFileBytesLease) attachment.get(candidate);
             expect(IllegalStateException.class, candidate::observe);
             expect(IllegalStateException.class, candidate::completed);
             expect(IllegalStateException.class, candidate::byteCount);
@@ -85,11 +89,11 @@ public final class ByteReadInvocationTests {
                     check((int) value("readCalls") == 0 && callbacks == 0 && !(boolean) value("readCompletionUnconfirmed"));
                     unchanged(buffers, before);
                 }
-                if (mode.equals("limit")) field("readCalls").setInt(candidate, MAXIMUM_CALLS - 1);
+                if (mode.equals("limit")) field("readCalls").setInt(core, MAXIMUM_CALLS - 1);
                 if (mode.equals("throw-after-return")) {
                     MethodHandle after = MethodHandles.lookup().findStatic(ByteReadInvocationTests.class,
                         "throwAfterReturn", MethodType.methodType(int.class, int.class));
-                    field("readCall").set(candidate, MethodHandles.filterReturnValue((MethodHandle) value("readCall"), after));
+                    field("readCall").set(core, MethodHandles.filterReturnValue((MethodHandle) value("readCall"), after));
                 }
                 boolean unknown = Arrays.asList("false", "pending", "throw-after-return", "excess-count", "unsigned-count").contains(mode);
                 if (unknown) {
@@ -159,7 +163,7 @@ public final class ByteReadInvocationTests {
         } else {
             invoke("prepareFrame", MemoryLayout.structLayout(ValueLayout.JAVA_INT));
             MethodHandle call = linker.downcallHandle(read, READ);
-            field("readCall").set(candidate, MethodHandles.dropArguments(call, 0, MemorySegment.class));
+            field("readCall").set(core, MethodHandles.dropArguments(call, 0, MemorySegment.class));
         }
     }
 
@@ -223,17 +227,17 @@ public final class ByteReadInvocationTests {
         }
     }
     private static Field field(String name) throws ReflectiveOperationException {
-        Field field = WindowsOriginalJvmBytesCandidate.class.getDeclaredField(name);
+        Field field = WindowsOriginalFileBytesLease.class.getDeclaredField(name);
         field.setAccessible(true);
         return field;
     }
-    private static Object value(String name) throws ReflectiveOperationException { return field(name).get(candidate); }
+    private static Object value(String name) throws ReflectiveOperationException { return field(name).get(core); }
     private static Object invoke(String name, Object... arguments) throws Throwable {
         Class<?>[] types = arguments.length == 0 ? new Class<?>[0] :
             new Class<?>[] {arguments[0] instanceof Integer ? int.class : MemoryLayout.class};
-        Method method = WindowsOriginalJvmBytesCandidate.class.getDeclaredMethod(name, types);
+        Method method = WindowsOriginalFileBytesLease.class.getDeclaredMethod(name, types);
         method.setAccessible(true);
-        try { return method.invoke(candidate, arguments); }
+        try { return method.invoke(core, arguments); }
         catch (InvocationTargetException failure) { throw failure.getCause(); }
     }
     private interface Action { void run() throws Throwable; }

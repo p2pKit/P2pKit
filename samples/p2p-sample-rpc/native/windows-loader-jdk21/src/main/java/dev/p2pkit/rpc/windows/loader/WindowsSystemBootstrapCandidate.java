@@ -381,6 +381,12 @@ final class WindowsSystemBootstrapCandidate {
         return entries[11 + index]; // GetVolumeInformationByHandleW and GetDriveTypeW only.
     }
 
+    MemorySegment originalProfileDllReadEntry(WindowsOriginalProfileDllFileCandidate candidate) {
+        requireOriginalProfileDll(candidate);
+        candidate.requireOriginalByteInputs();
+        return entries[13]; // Exact original ReadFile; no supplied export selector or alternate channel.
+    }
+
     WindowsSystemImportResolution resolveSystemImports(WindowsPackagedVerifier plan) {
         requireCompleted();
         if (importsAttempted) throw new IllegalStateException("System imports were already attempted");

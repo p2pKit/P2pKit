@@ -410,4 +410,14 @@ final class WindowsOriginalFileLease {
             requester.originalAncestorsEntry(this, 0), requester.originalAncestorsEntry(this, 1),
             handleArena, handle, sourcePath, sourceLength, first);
     }
+
+    WindowsOriginalProfileDllBytesCandidate newProfileDllBytes(WindowsOriginalProfileDllFileCandidate requester) {
+        if (requester == null || requester != originalProfileDllOwner) {
+            throw new IllegalStateException("Original file lease belongs to another profile DLL facade");
+        }
+        requireCompleted();
+        requester.requireOriginalByteInputs();
+        return new WindowsOriginalProfileDllBytesCandidate(requester, linker, bootstrapArena, handleArena, handle,
+            requester.originalReadEntry(this), informationEntry, first);
+    }
 }
