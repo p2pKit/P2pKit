@@ -218,7 +218,7 @@ jobs:
       - name: Retain only encrypted successful diagnostic originals
         id: encrypted
         timeout-minutes: 10
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: jmdns-startup-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -257,7 +257,7 @@ jobs:
         id: failed_encrypted
         if: ${{ failure() && !cancelled() && steps.startup.outcome == 'failure' && steps.startup.outputs.failedProductSha256 != '' && steps.startup.outputs.successSha256 == '' && steps.failed_guard.outcome == 'success' }}
         timeout-minutes: 10
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: jmdns-startup-failed-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
