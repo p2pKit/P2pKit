@@ -18,8 +18,11 @@ run_phase() {
 }
 
 run_phase WRAPPER scripts/check-gradle-wrapper.sh
+# Finish independent prerequisites so a failing ABI comparison does not hide
+# the other targets' diagnostics. Gradle still returns nonzero on any failure;
+# set -e stops here before integrity/provenance review or candidate publication.
 run_phase GENERATE ./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256 \
-    --no-configure-on-demand --no-daemon --console=plain
+    --continue --no-configure-on-demand --no-daemon --console=plain
 run_phase INTEGRITY scripts/check-dependency-verification.sh
 run_phase STRICT ./gradlew verifyBuildPluginSecurityFloors help --dependency-verification=strict --no-daemon --console=plain
 run_phase PROVENANCE scripts/review-dependency-verification.sh "$BASE_REF"

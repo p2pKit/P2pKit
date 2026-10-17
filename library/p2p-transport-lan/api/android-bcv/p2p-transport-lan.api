@@ -1,0 +1,36 @@
+public final class dev/p2pkit/transport/lan/AndroidLanDiag {
+	public static final field INSTANCE Ldev/p2pkit/transport/lan/AndroidLanDiag;
+	public final fun frame (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun getEnabled ()Z
+	public final fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
+	public final fun getRetainHistory ()Z
+	public final fun getTraceFrames ()Z
+	public final fun setEnabled (Z)V
+	public final fun setRetainHistory (Z)V
+	public final fun setTraceFrames (Z)V
+}
+
+public final class dev/p2pkit/transport/lan/AndroidLanDslKt {
+	public static final fun lan (Ldev/p2pkit/core/dsl/TransportsBuilder;Landroid/content/Context;)V
+	public static final fun lan (Ldev/p2pkit/core/dsl/TransportsBuilder;Landroid/content/Context;Ldev/p2pkit/transport/lan/OrganizationLan;Ldev/p2pkit/transport/lan/LanRole;)V
+}
+
+public final class dev/p2pkit/transport/lan/LanRole : java/lang/Enum {
+	public static final field DialOnly Ldev/p2pkit/transport/lan/LanRole;
+	public static final field Host Ldev/p2pkit/transport/lan/LanRole;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/transport/lan/LanRole;
+	public static fun values ()[Ldev/p2pkit/transport/lan/LanRole;
+}
+
+public final class dev/p2pkit/transport/lan/OrganizationLan {
+	public fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;I)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun allows (Ljava/lang/String;)Z
+	public final fun getAllowedSubnets ()Ljava/util/List;
+	public final fun getInterfaceName ()Ljava/lang/String;
+	public final fun getListenPort ()I
+	public final fun getLocalAddress ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+

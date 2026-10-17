@@ -273,6 +273,34 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual("--stop", self.calls[-1][0][-1])
         self.assertEqual(2, self.reports.call_count)
 
+    def test_failed_generator_retains_actual_android_originals_but_no_candidate(self):
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1]), *sys.path]):
+            import ci_evidence
+        expected = {}
+        for module in ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android"):
+            for directory in ("abi/android", "androidAbi"):
+                relative = f"library/{module}/build/kotlin/{directory}/{module}.api"
+                expected[relative] = (relative + " synthetic original\n").encode()
+                path = self.candidate / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(expected[relative])
+
+        def failed(argv, **options):
+            self.generator(argv, **options)
+            return Mock(returncode=0 if argv[-1] == "--stop" else 9)
+
+        diagnostic = io.StringIO()
+        with patch.object(sys, "path", list(sys.path)), contextlib.redirect_stdout(diagnostic):
+            with self.assertRaisesRegex(D.UpdateError, "GENERATION_OR_GRADLE_STOP_FAILED"):
+                D.execute(self.controller, self.candidate, self.request, self.output, run=failed)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.calls[-1][0][-1], "--stop")
+        self.assertEqual(diagnostic.getvalue(),
+                         "DEPENDENCY_UPDATE_STEP GENERATOR EXIT 9\nDEPENDENCY_UPDATE_STEP GRADLE_STOP EXIT 0\n")
+        destination = self.controller / "build/reports/dependency-update"
+        self.assertEqual({p.relative_to(destination).as_posix(): p.read_bytes()
+                          for p in destination.rglob("*") if p.is_file()}, expected)
+
     def test_spawn_failure_still_attempts_original_gradle_stop(self):
         calls = []
         def failed(argv, **kwargs):
@@ -354,7 +382,7 @@ class GeneratorPhaseTests(unittest.TestCase):
             expected = [
                 ("WRAPPER", ["scripts/check-gradle-wrapper.sh"]),
                 ("GENERATE", ["./gradlew", "resolveAndLockAll", "--write-locks", "--write-verification-metadata",
-                              "sha256", "--no-configure-on-demand", "--no-daemon", "--console=plain"]),
+                              "sha256", "--continue", "--no-configure-on-demand", "--no-daemon", "--console=plain"]),
                 ("INTEGRITY", ["scripts/check-dependency-verification.sh"]),
                 ("STRICT", ["./gradlew", "verifyBuildPluginSecurityFloors", "help",
                             "--dependency-verification=strict", "--no-daemon", "--console=plain"]),
@@ -391,6 +419,93 @@ class GeneratorPhaseTests(unittest.TestCase):
                                      [f"DEPENDENCY_GENERATOR_PHASE {phase} EXIT {code if i == failed else 0}"
                                       for i, (phase, _) in enumerate(expected[:count])])
                     self.assertEqual(b"RESULT: PASS" in result.stdout, failed is None)
+
+
+class AndroidAbiReportTests(unittest.TestCase):
+    """Actual bounded copying/inventory of tiny files; no Gradle, keys or network."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="dependency-abi-reports-")
+        self.addCleanup(self.temporary.cleanup)
+        self.parent = Path(self.temporary.name)
+        # Load the real collector; each controller below is an isolated data fixture.
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1]), *sys.path]):
+            import ci_evidence
+        self.evidence = ci_evidence
+        self.expected = {
+            f"library/{module}/build/kotlin/{directory}/{module}.api":
+            f"synthetic {module} {directory}\n".encode()
+            for module in ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android")
+            for directory in ("abi/android", "androidAbi")
+        }
+
+    def fixture(self, name):
+        candidate, controller = (self.parent / name / role for role in ("candidate", "controller"))
+        for relative, raw in self.expected.items():
+            path = candidate / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        controller.mkdir(parents=True)
+        return candidate, controller
+
+    def retain(self, candidate, controller):
+        with patch.object(sys, "path", list(sys.path)):
+            D.retain_reports(candidate, controller)
+        return controller / "build/reports/dependency-update"
+
+    def test_exact_four_builtin_and_four_custom_originals_are_inventoried_without_extra_files(self):
+        candidate, controller = self.fixture("complete")
+        for relative in (
+            "library/p2p-core/build/kotlin/abi/android/unrelated.api",
+            "library/p2p-core/build/kotlin/abi/jvm/p2p-core.api",
+            "library/p2p-core/build/kotlin/androidAbi/unrelated.class",
+            "library/p2p-core/api/android/p2p-core.api",
+            "library/unrelated/build/kotlin/abi/android/unrelated.api",
+            "private.txt",
+        ):
+            path = candidate / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"not a selected Android ABI original\n")
+        destination = self.retain(candidate, controller)
+        self.assertEqual({p.relative_to(destination).as_posix(): p.read_bytes()
+                          for p in destination.rglob("*") if p.is_file()}, self.expected)
+        inventory = self.evidence.archive_private(destination, self.parent / "synthetic.tar.gz")
+        self.assertEqual(inventory, [
+            {"path": path, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+            for path, raw in sorted(self.expected.items())
+        ])
+        self.assertEqual(len(inventory), 8)
+
+    def test_missing_original_is_absent_not_fabricated(self):
+        candidate, controller = self.fixture("missing")
+        absent = next(iter(self.expected))
+        (candidate / absent).unlink()
+        destination = self.retain(candidate, controller)
+        inventory = self.evidence.archive_private(destination, self.parent / "synthetic.tar.gz")
+        self.assertEqual({row["path"] for row in inventory}, set(self.expected) - {absent})
+
+    def test_original_collection_preserves_finite_count_bytes_and_link_refusal(self):
+        for kind in ("count", "bytes", "symlink", "parent-link", "hardlink"):
+            with self.subTest(kind=kind):
+                candidate, controller = self.fixture(kind)
+                path = candidate / next(iter(self.expected))
+                if kind in ("symlink", "hardlink"):
+                    outside = self.parent / (kind + "-outside")
+                    outside.write_bytes(b"unselected fixture\n")
+                    path.unlink()
+                    if kind == "symlink":
+                        path.symlink_to(outside)
+                    else:
+                        os.link(outside, path)
+                elif kind == "parent-link":
+                    outside = path.parent.with_name("other-directory")
+                    path.parent.rename(outside)
+                    path.parent.symlink_to(outside, target_is_directory=True)
+                limits = ({"MAX_REPORTS": 7} if kind == "count" else
+                          {"MAX_BUNDLE_BYTES": sum(map(len, self.expected.values())) - 1} if kind == "bytes" else {})
+                with patch.multiple(self.evidence, **limits) if limits else contextlib.nullcontext():
+                    with self.assertRaisesRegex(self.evidence.EvidenceError, "REPORTS"):
+                        self.retain(candidate, controller)
 
 
 class UnchangedCuratorTests(unittest.TestCase):
