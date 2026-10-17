@@ -276,7 +276,11 @@ def _hosted_darwin_context(environment):
         environment.get("RUNNER_ENVIRONMENT") == "github-hosted" and
         environment.get("GITHUB_REPOSITORY") == "p2pKit/P2pKit" and separator == "@" and bool(ref) and
         workflow in {"p2pKit/P2pKit/.github/workflows/ci.yml",
-                     "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml"} and
+                     "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml",
+                     "p2pKit/P2pKit/.github/workflows/publish-maven-central.yml",
+                     "p2pKit/P2pKit/.github/workflows/recover-maven-central.yml"} and
+        (not workflow.endswith("/publish-maven-central.yml") or environment.get("GITHUB_JOB") == "publish-release") and
+        (not workflow.endswith("/recover-maven-central.yml") or environment.get("GITHUB_JOB") == "verify-recovery") and
         re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None and
         environment.get("GITHUB_WORKFLOW_SHA") == environment.get("GITHUB_SHA"))
 

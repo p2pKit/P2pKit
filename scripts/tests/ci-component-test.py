@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Component routing and real task coverage, independent of remote execution."""
 import importlib.util
+import hashlib
 import json
 import os
 import signal
@@ -718,7 +719,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         with self.assertRaises(T.ContextFailure):
             T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
         native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
-        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800}[executionMode]', native)
+        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200}[executionMode]', native)
         self.assertIn('if (!modularCommand) return 125;', native)
         self.assertIn('childBound = @(modularCommand.doubleValue + 240);', native)
         self.assertIn('![expectedMode isEqualToString:executionMode]', native)
@@ -822,7 +823,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_deadlines_and_native_tracking_failure_are_fail_closed(self):
         T = self.T
-        for component in T.PROFILES.keys() - {'dependency-generate'}:
+        for component in T.PROFILES.keys() - {'dependency-generate', 'release-consumers'}:
             budget = T.bounds(component)
             route = C.matrix(component)['include'][0]
             self.assertEqual(budget['command'], route['minutes'] * 60)
@@ -843,7 +844,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_shared_fixed_profile_has_original_full_shared_command_not_a_test_subset(self):
         T = self.T
-        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate'})
+        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate', 'release-consumers'})
         argv = T.command(self.environment(), 'macos-shared')
         self.assertEqual(argv[argv.index('--component') + 1], 'macos-shared')
         self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')
@@ -1122,6 +1123,222 @@ class TerminalDependencyTests(unittest.TestCase):
         self.assertNotIn('GH_TOKEN', native)
         self.assertNotIn('GITHUB_TOKEN', native)
         self.assertEqual(self.T.PROFILES['dependency-generate'], ('modular-dependency-generate', 10800))
+
+
+class TerminalReleaseTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TerminalDiagnosticTests.setUpClass()
+        cls.T = TerminalDiagnosticTests.T
+
+    def fixture(self, root, recovery=False, version='0.8.0-rc2'):
+        T = self.T
+        workspace = root / 'workspace'; workspace.mkdir()
+        original = workspace / 'original' if recovery else workspace
+        controller = workspace / 'controller' if recovery else workspace
+        if recovery: original.mkdir(); controller.mkdir()
+        def git(*argv):
+            return subprocess.check_output(['git', '-C', str(original), *argv], stderr=subprocess.PIPE).decode().strip()
+        git('init', '--quiet'); (original / 'scripts').mkdir()
+        (original / 'scripts/check-published-consumers.sh').write_text('#!/bin/bash\nexit 0\n')
+        (original / 'gradle.properties').write_text('GROUP=io.github.apdelrahman1911\nVERSION_NAME=' + version + '\n')
+        git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'synthetic original')
+        source = dict(commit=git('rev-parse', 'HEAD'), tree=git('rev-parse', 'HEAD^{tree}'))
+        runner = root / 'runtime'; runner.mkdir()
+        directory = runner / 'consumer-command'; directory.mkdir(mode=0o700)
+        for name in ('home', 'tmp'): (directory / name).mkdir(mode=0o700)
+        ref = 'refs/heads/main' if recovery else 'refs/tags/v' + version
+        workflow = 'recover-maven-central.yml' if recovery else 'publish-maven-central.yml'
+        metadata = dict(GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(runner), GITHUB_REF=ref,
+            GITHUB_SHA='a' * 40 if recovery else source['commit'], GITHUB_WORKFLOW_SHA='a' * 40 if recovery else source['commit'],
+            GITHUB_WORKFLOW_REF='p2pKit/P2pKit/.github/workflows/' + workflow + '@' + ref,
+            GITHUB_JOB='verify-recovery' if recovery else 'publish-release',
+            GITHUB_EVENT_NAME='workflow_dispatch' if recovery else 'push', GITHUB_REPOSITORY='p2pKit/P2pKit',
+            GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='macOS', RUNNER_ARCH='X64',
+            RUNNER_TRACKING_ID='github_fixture')
+        safe = dict(PATH='/usr/bin:/bin', JAVA_HOME='/sdk17', ANDROID_HOME='/android', SDKROOT='/sdk', CI='true',
+            HOME=str(directory / 'home'), TMPDIR=str(directory / 'tmp'), P2PKIT_CONSUMER_PROFILE='complete',
+            P2PKIT_CONSUMER_REPOSITORY_URL='https://repo.maven.apache.org/maven2', P2PKIT_CONSUMER_WORK_DIR=str(directory / 'consumer'))
+        env = {**metadata, **safe, 'GRADLE_USER_HOME': str(directory / 'consumer/gradle-home'),
+               'P2PKIT_CI_COMMAND_DEADLINE_NS': '1000000000000'}
+        raw = (original / 'scripts/check-published-consumers.sh').read_bytes()
+        released = dict(source=source, directory=str(directory), script=dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()))
+        return controller, original, directory, metadata, safe, env, released
+
+    def test_release_context_preserves_two_fixed_sources_jobs_refs_and_provider_caps(self):
+        T = self.T
+        for recovery in (False, True):
+            with self.subTest(recovery=recovery), tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+                controller, original, directory, metadata, safe, env, released = self.fixture(Path(tmp).resolve(), recovery)
+                stack.enter_context(patch.object(T, 'ROOT', controller))
+                stack.enter_context(patch.object(T.time, 'monotonic', return_value=100))
+                stack.enter_context(patch.object(T.platform, 'system', return_value='Darwin'))
+                stack.enter_context(patch.object(T.platform, 'machine', return_value='x86_64'))
+                T.environment_admit(env, 'release-consumers')
+                self.assertEqual(T.release_context(env), (original, 5400 if recovery else 9000))
+                self.assertEqual(T.command(env, 'release-consumers'), ['bash', str(original / 'scripts/check-published-consumers.sh')])
+                self.assertEqual(T.release_source_check(released, env), directory)
+                for change in ({'GITHUB_JOB': 'other'}, {'GITHUB_EVENT_NAME': 'pull_request'},
+                    {'GITHUB_REF': 'refs/heads/other'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40},
+                    {'RUNNER_ARCH': 'ARM64'}, {'P2PKIT_AUDIT_JOB_ID': 'inherited'},
+                    {'P2PKIT_CI_COMMAND_DEADLINE_NS': str((100 + (5401 if recovery else 9001)) * 1000000000)}):
+                    with self.subTest(change=change), self.assertRaises(T.ContextFailure):
+                        T.environment_admit({**env, **change}, 'release-consumers')
+                (original / 'scripts/check-published-consumers.sh').write_text('changed')
+                with self.assertRaisesRegex(T.dependency.UpdateError, 'SOURCE_DIRTY'):
+                    T.release_source_check(released, env)
+
+    def test_public_api_does_not_forward_credentials_or_override_original_version(self):
+        T = self.T
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            controller, original, directory, metadata, safe, env, released = self.fixture(Path(tmp).resolve(), True)
+            stack.enter_context(patch.object(T, 'ROOT', controller))
+            stack.enter_context(patch.object(T.time, 'monotonic', return_value=100))
+            stack.enter_context(patch.object(T.platform, 'system', return_value='Darwin'))
+            stack.enter_context(patch.object(T.platform, 'machine', return_value='x86_64'))
+            stack.enter_context(patch.dict(T.os.environ, {**metadata, 'GH_TOKEN': 'PRIVATE', 'MAVEN_PASSWORD': 'PRIVATE'}, clear=True))
+            run = stack.enter_context(patch.object(T, 'run', return_value={'code': 'PASS'}))
+            self.assertEqual(T.run_release_consumers(original, released['source'], safe, directory, 1000), {'code': 'PASS'})
+            self.assertEqual(run.call_args.kwargs['released'], released)
+            effective = run.call_args.kwargs['environment']
+            self.assertEqual(effective, env)
+            self.assertNotIn('PRIVATE', json.dumps(effective))
+            for changed in ({'GH_TOKEN': 'PRIVATE'}, {'JAVA_TOOL_OPTIONS': 'PRIVATE'},
+                            {'P2PKIT_CONSUMER_REPOSITORY_URL': 'https://PRIVATE'}, {'HOME': '/PRIVATE'}):
+                with self.subTest(changed=changed), self.assertRaises(T.ContextFailure):
+                    T.run_release_consumers(original, released['source'], {**safe, **changed}, directory, 1000)
+            for deadline in (float('nan'), float('inf'), True, 100, 6000):
+                with self.subTest(deadline=deadline), self.assertRaises(T.ContextFailure):
+                    T.run_release_consumers(original, released['source'], safe, directory, deadline)
+            with self.assertRaisesRegex(T.ContextFailure, 'SOURCE_PATH'):
+                T.run_release_consumers(controller, released['source'], safe, directory, 1000)
+            with self.assertRaises(T.ContextFailure):
+                T.run_release_consumers(original, {**released['source'], 'version': 'override'}, safe, directory, 1000)
+            self.assertEqual(run.call_count, 1)
+
+    def test_release_child_preserves_fresh_home_original_script_and_closed_failure(self):
+        T = self.T
+        for case in ('pass', 'command-failure', 'cleanup', 'cancel'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+                controller, original, directory, metadata, safe, env, released = self.fixture(Path(tmp).resolve(), True)
+                native = Path(metadata['RUNNER_TEMP']) / 'ci-terminal-child'; native.mkdir(mode=0o700)
+                source = dict(commit=metadata['GITHUB_SHA'], tree='b' * 40)
+                config = dict(source=source, environment=env, component='release-consumers', release=released)
+                stack.enter_context(patch.object(T, 'ROOT', controller))
+                stack.enter_context(patch.object(T.time, 'monotonic', return_value=100))
+                stack.enter_context(patch.object(T.private, 'read_json', return_value=config))
+                stack.enter_context(patch.object(T, 'validate_config'))
+                stack.enter_context(patch.object(T, 'begin_source', return_value=(source, None)))
+                stack.enter_context(patch.object(T, 'finish_source'))
+                # Original Git validation is covered above; do not let this
+                # child-only Popen spy intercept its real subprocess fixture.
+                stack.enter_context(patch.object(T, 'release_source_check', return_value=directory))
+                stack.enter_context(patch.object(T.terminal, 'terminal_ancestor', return_value={}))
+                stack.enter_context(patch.object(T.pwd, 'getpwuid', return_value=Mock(pw_dir='/PRIVATE_ACCOUNT_HOME', pw_name='synthetic')))
+                popen = stack.enter_context(patch.object(T.subprocess, 'Popen'))
+                def execute(argv, **kwargs):
+                    self.assertEqual(argv, ['bash', str(original / 'scripts/check-published-consumers.sh')])
+                    self.assertEqual(kwargs['cwd'], original)
+                    self.assertEqual(kwargs['timeout'], 450)
+                    self.assertIs(kwargs['create_gradle_home'], False)
+                    for key in ('HOME', 'TMPDIR', 'GRADLE_USER_HOME', 'P2PKIT_CONSUMER_WORK_DIR'):
+                        self.assertEqual(kwargs['environment'][key], env[key])
+                    self.assertFalse(kwargs['cancelled']())
+                    kwargs['private'].mkdir()
+                    if case == 'cancel': (native / 'cancel').write_text('cancel')
+                    return dict(code='COMMAND_FAILED' if case == 'command-failure' else 'PASS',
+                        exitCode=7 if case == 'command-failure' else 0, timedOut=False,
+                        cleanupKnown=case != 'cleanup', capturesClosed=case != 'cleanup')
+                stack.enter_context(patch.object(T.evidence, 'run_command', side_effect=execute))
+                if case in ('pass', 'command-failure'):
+                    self.assertEqual(T.child(native / 'config.json'), 0 if case == 'pass' else 1)
+                else:
+                    with self.assertRaises(T.ContextFailure): T.child(native / 'config.json')
+                popen.assert_not_called()
+                result = json.loads((native / 'child-result.json').read_text())
+                self.assertEqual(result['exitCode'], 0 if case == 'pass' else 1 if case == 'command-failure' else 125)
+
+    def test_release_log_requires_closed_capture_and_preserves_original_nonzero(self):
+        T = self.T
+        for case in ('pass', 'failure', 'unknown', 'limit', 'symlink'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp).resolve(); capture = directory / 'capture'; capture.mkdir()
+                outcome = dict(code='COMMAND_FAILED' if case == 'failure' else 'PASS',
+                    exitCode=7 if case == 'failure' else 0, timedOut=False, cleanupKnown=case != 'unknown', capturesClosed=case != 'unknown')
+                (capture / 'result.json').write_text(json.dumps(outcome)); (capture / 'result.json').chmod(0o600)
+                (capture / 'stdout.log').write_bytes(b'out'); (capture / 'stderr.log').write_bytes(b'err')
+                if case == 'symlink':
+                    (capture / 'stderr.log').unlink(); (capture / 'stderr.log').symlink_to(capture / 'stdout.log')
+                with patch.object(T.evidence, 'MAX_LOG_BYTES', 5 if case == 'limit' else 64 * 1024 * 1024):
+                    if case in ('unknown', 'limit', 'symlink'):
+                        with self.assertRaises((T.ContextFailure, T.private.ContextFailure)):
+                            T.release_outcome(directory)
+                        self.assertFalse((directory / 'command.log').exists())
+                    else:
+                        self.assertEqual(T.release_outcome(directory), outcome)
+                        self.assertEqual((directory / 'command.log').read_bytes(), b'outerr')
+                        self.assertEqual((directory / 'command.log').stat().st_mode & 0o777, 0o600)
+
+    def test_release_parent_never_returns_inner_pass_before_native_source_and_cancel_finalization(self):
+        T = self.T
+        for failure in ('none', 'native', 'original-source', 'cancel-before', 'cancel-after'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+                controller, original, directory, metadata, safe, env, released = self.fixture(Path(tmp).resolve(), True)
+                source = dict(commit=metadata['GITHUB_SHA'], tree='b' * 40)
+                stack.enter_context(patch.object(T, 'ROOT', controller))
+                stack.enter_context(patch.object(T.time, 'monotonic', return_value=100))
+                stack.enter_context(patch.object(T, 'environment_admit'))
+                stack.enter_context(patch.object(T, 'validate_config'))
+                stack.enter_context(patch.object(T, 'begin_source', return_value=(source, None)))
+                finish = stack.enter_context(patch.object(T, 'finish_source'))
+                original_check = stack.enter_context(patch.object(T, 'release_source_check',
+                    side_effect=T.ContextFailure('SOURCE_CHANGED') if failure == 'original-source' else None))
+                stack.enter_context(patch.object(T.private, 'read_json', return_value={}))
+                stack.enter_context(patch.object(T, 'validate_result',
+                    side_effect=T.ContextFailure('APPLICATION_FINALIZATION') if failure == 'native' else None))
+                outcome = dict(code='PASS', exitCode=0, timedOut=False, cleanupKnown=True, capturesClosed=True)
+                capture = stack.enter_context(patch.object(T, 'release_outcome', return_value=outcome))
+                popen = stack.enter_context(patch.object(T.subprocess, 'Popen'))
+                popen.return_value.poll.return_value = 0
+                def compile_result(*args, **kwargs):
+                    self.assertEqual(kwargs['timeout'], 90)
+                    self.assertIs(kwargs['create_gradle_home'], False)
+                    self.assertFalse((directory / 'consumer').exists())
+                    self.assertEqual(kwargs['environment']['HOME'], safe['HOME'])
+                    if failure == 'cancel-before': kwargs['cancelled'].__self__.set()
+                    return dict(code='PASS', cleanupKnown=True, capturesClosed=True)
+                stack.enter_context(patch.object(T.evidence, 'run_command', side_effect=compile_result))
+                def wait(process, native, cancelled, deadline):
+                    self.assertEqual(deadline, 940)
+                    if failure == 'cancel-after': cancelled.set()
+                    return 0
+                stack.enter_context(patch.object(T, 'wait_controller', side_effect=wait))
+                if failure == 'none':
+                    self.assertEqual(T.run('release-consumers', released=released, environment=env), outcome)
+                    capture.assert_called_once_with(directory)
+                else:
+                    expected = {'native': 'APPLICATION_FINALIZATION', 'original-source': 'SOURCE_CHANGED',
+                                'cancel-before': 'CANCELLED', 'cancel-after': 'CANCELLED'}[failure]
+                    with self.assertRaisesRegex(T.ContextFailure, '^' + expected + '$'):
+                        T.run('release-consumers', released=released, environment=env)
+                    capture.assert_not_called()
+                finish.assert_called_once()
+                original_check.assert_called_once()
+                self.assertEqual(popen.call_count, 0 if failure == 'cancel-before' else 1)
+
+    def test_release_native_profile_is_closed_and_does_not_eagerly_create_borrowed_home(self):
+        T = self.T
+        self.assertNotIn('release-consumers', C.COMPONENTS)
+        self.assertNotIn('release-consumers', C.DIAGNOSTICS)
+        native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
+        for text in ('@"release-consumers":@"modular-release-consumers"', 'if (modularGenerate || modularRelease)',
+                     'modularRemaining(modularDeadline) > maximum', '9000 :', '5400 : 0',
+                     '![modularDeadline isEqualToString:[NSString stringWithUTF8String:original]]'):
+            self.assertIn(text, native)
+        source = (ROOT / 'scripts/run-ci-terminal-component.py').read_text()
+        self.assertIn("choices=tuple(name for name in PROFILES if name != 'release-consumers')", source)
+        self.assertIn("timeout=90, cancelled=cancelled.is_set, **({'create_gradle_home': False} if releasing else {}))", source)
 
 
 if __name__ == '__main__': unittest.main()

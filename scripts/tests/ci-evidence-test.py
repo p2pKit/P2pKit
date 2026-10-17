@@ -1271,6 +1271,17 @@ class EvidenceTests(unittest.TestCase):
         with mock.patch.object(E.platform, "system", return_value="Linux"):
             self.assertFalse(E._hosted_darwin_context(env))
 
+    def test_hosted_darwin_release_context_keeps_fixed_source_and_job_boundary(self):
+        env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', GITHUB_REPOSITORY='p2pKit/P2pKit',
+                   GITHUB_SHA='a' * 40, GITHUB_WORKFLOW_SHA='a' * 40)
+        with mock.patch.object(E.platform, 'system', return_value='Darwin'):
+            for workflow, job in (('publish-maven-central.yml', 'publish-release'), ('recover-maven-central.yml', 'verify-recovery')):
+                actual = {**env, 'GITHUB_JOB': job,
+                          'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/' + workflow + '@refs/heads/fixture'}
+                self.assertTrue(E._hosted_darwin_context(actual))
+                for change in ({'GITHUB_JOB': 'other'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40}, {'RUNNER_ENVIRONMENT': 'self-hosted'}):
+                    self.assertFalse(E._hosted_darwin_context({**actual, **change}))
+
     def test_hosted_darwin_domain_retains_positive_proofs_and_revisits_unobserved_parent(self):
         scope = object.__new__(E._HostedDarwinScope)
         scope.known, scope.foreign_sessions, scope.outside_domain_observations, scope.controller_session = {}, {}, 0, 17

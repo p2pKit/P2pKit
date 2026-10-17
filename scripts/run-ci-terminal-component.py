@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import hashlib
+import math
 import json
 import os
 from pathlib import Path
@@ -38,7 +40,8 @@ COMPONENT = 'jmdns-diagnostic'
 PROFILES = {'jmdns-diagnostic': ('modular-jmdns', 1800), 'macos-shared': ('modular-shared', 7200),
             'consumers': ('modular-consumers', 7200),
             'published-consumers-diagnostic': ('modular-published-consumers', 7200),
-            'dependency-generate': ('modular-dependency-generate', 10800)}
+            'dependency-generate': ('modular-dependency-generate', 10800),
+            'release-consumers': ('modular-release-consumers', 7200)}
 
 
 def bounds(component):
@@ -57,6 +60,13 @@ CI_EVIDENCE_RECIPIENT_SHA256 CI_EVIDENCE_RECIPIENT_FINGERPRINT'''.split())
 DEPENDENCY_ENVIRONMENT = frozenset({'DEPENDENCY_UPDATE_REQUEST', 'P2PKIT_CI_COMMAND_DEADLINE_NS',
     evidence.audit_processes.JOB_ENV, evidence.audit_processes.CHAIN_ENV, evidence.audit_processes.DOMAINS_ENV,
     evidence.audit_processes.STATE_ENV, evidence.audit_processes.PIPE_ENV})
+
+
+RELEASE_ENVIRONMENT = frozenset({'HOME', 'SDKROOT', 'P2PKIT_CONSUMER_REPOSITORY_URL', 'P2PKIT_CONSUMER_PROFILE',
+    'P2PKIT_CONSUMER_WORK_DIR', 'P2PKIT_CI_COMMAND_DEADLINE_NS'})
+RELEASE_SDK_ENVIRONMENT = frozenset({'PATH', 'JAVA_HOME', 'ANDROID_HOME', 'ANDROID_SDK_ROOT', 'DEVELOPER_DIR',
+    'SDKROOT', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'CI', 'P2PKIT_CONSUMER_REPOSITORY_URL',
+    'P2PKIT_CONSUMER_PROFILE', 'P2PKIT_CONSUMER_WORK_DIR'})
 
 
 class ContextFailure(RuntimeError):
@@ -79,20 +89,125 @@ def dependency_request(env):
     return request
 
 
-def dependency_deadline(env):
+def command_deadline(env, maximum, code):
     value = env.get('P2PKIT_CI_COMMAND_DEADLINE_NS', '')
-    require(type(value) is str and re.fullmatch('[1-9][0-9]{0,19}', value) is not None, 'DEPENDENCY_DEADLINE')
+    require(type(value) is str and re.fullmatch('[1-9][0-9]{0,19}', value) is not None, code)
     deadline = int(value) / 1_000_000_000
-    require(0 < deadline - time.monotonic() <= 10800, 'DEPENDENCY_DEADLINE')
+    require(0 < deadline - time.monotonic() <= maximum, code)
     return deadline
+
+
+def dependency_deadline(env):
+    return command_deadline(env, 10800, 'DEPENDENCY_DEADLINE')
+
+
+def release_context(env):
+    workspace = Path(env.get('GITHUB_WORKSPACE', '')).resolve(strict=True)
+    workflow, separator, ref = env.get('GITHUB_WORKFLOW_REF', '').partition('@')
+    if workflow == 'p2pKit/P2pKit/.github/workflows/publish-maven-central.yml':
+        require(separator == '@' and ref == env.get('GITHUB_REF') and ref.startswith('refs/tags/v') and
+                env.get('GITHUB_EVENT_NAME') == 'push' and env.get('GITHUB_JOB') == 'publish-release' and
+                ROOT == workspace, 'RELEASE_CONTEXT')
+        return workspace, 9000
+    require(workflow == 'p2pKit/P2pKit/.github/workflows/recover-maven-central.yml' and
+            separator == '@' and ref == env.get('GITHUB_REF') == 'refs/heads/main' and
+            env.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and env.get('GITHUB_JOB') == 'verify-recovery' and
+            ROOT == workspace / 'controller', 'RELEASE_CONTEXT')
+    return workspace / 'original', 5400
+
+
+def release_deadline(env):
+    return command_deadline(env, release_context(env)[1], 'RELEASE_DEADLINE')
+
+
+def release_source_check(released, env):
+    require(type(released) is dict and set(released) == {'source', 'directory', 'script'}, 'RELEASE_INPUT')
+    source = released['source']
+    require(type(source) is dict and set(source) == {'commit', 'tree'} and
+            all(type(value) is str and re.fullmatch('[0-9a-f]{40}', value) for value in source.values()), 'SOURCE_IDENTITY')
+    original, _ = release_context(env)
+    dependency.source(original, source['commit'], source['tree'])
+    # Reuse canonical version parsing; this release-only import is not part of
+    # dependency generation. Never run current-main fixtures for an old release.
+    import application_release_version
+    version = application_release_version.repository_version(original)['canonicalVersion']
+    require(not version.endswith('-SNAPSHOT') and
+            dependency.read(original / 'gradle.properties').decode().splitlines().count('GROUP=io.github.apdelrahman1911') == 1,
+            'RELEASE_VERSION')
+    if env['GITHUB_JOB'] == 'publish-release':
+        require(source['commit'] == env['GITHUB_SHA'] and env['GITHUB_REF'] == 'refs/tags/v' + version, 'RELEASE_VERSION')
+    raw = dependency.read(original / 'scripts/check-published-consumers.sh')
+    require(released['script'] == {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}, 'RELEASE_SCRIPT')
+    directory = Path(released['directory'])
+    private.private_parent(directory, os.getuid())
+    require(Path(env['RUNNER_TEMP']).resolve(strict=True) in directory.parents and
+            env.get('HOME') == str(directory / 'home') and env.get('TMPDIR') == str(directory / 'tmp') and
+            env.get('P2PKIT_CONSUMER_WORK_DIR') == str(directory / 'consumer') and
+            env.get('GRADLE_USER_HOME') == str(directory / 'consumer/gradle-home') and
+            env.get('P2PKIT_CONSUMER_REPOSITORY_URL') == 'https://repo.maven.apache.org/maven2' and
+            env.get('P2PKIT_CONSUMER_PROFILE') == 'complete', 'RELEASE_ENVIRONMENT')
+    for name in ('home', 'tmp'):
+        private.private_parent(directory / name, os.getuid())
+    release_deadline(env)
+    return directory
+
+
+def release_outcome(directory):
+    """Join only closed captures after independent native/source finalization."""
+    captures = directory / 'capture'
+    outcome = private.read_json(captures / 'result.json')
+    require(evidence.public_outcome(outcome) is not None and outcome.get('cleanupKnown') is True and
+            outcome.get('capturesClosed') is True, 'RELEASE_CLEANUP')
+    paths = [captures / name for name in ('stdout.log', 'stderr.log')]
+    for path in paths:
+        private.physical(path)
+        require(path.is_file(), 'RELEASE_LOG')
+    require(sum(path.stat().st_size for path in paths) <= evidence.MAX_LOG_BYTES, 'RELEASE_LOG')
+    with (directory / 'command.log').open('xb') as output:
+        os.chmod(directory / 'command.log', 0o600)
+        total = 0
+        for path in paths:
+            with path.open('rb') as stream:
+                while block := stream.read(64 * 1024):
+                    total += len(block)
+                    require(total <= evidence.MAX_LOG_BYTES, 'RELEASE_LOG')
+                    output.write(block)
+    return outcome
+
+
+def run_release_consumers(source_root, source_identity, environment, directory, deadline):
+    """Closed in-process API; caller retains its exact approval/provider clock."""
+    require(type(environment) is dict and set(environment) <= RELEASE_SDK_ENVIRONMENT and
+            all(type(value) is str and '\0' not in value for value in environment.values()), 'RELEASE_ENVIRONMENT')
+    require(type(deadline) in (int, float) and math.isfinite(deadline), 'RELEASE_DEADLINE')
+    # Add only nonsecret hosted identity, never the caller's GH/Central/signing
+    # credentials or ambient Gradle/JVM options. Fresh caller HOME/TMP stay exact.
+    identity = {key: value for key, value in os.environ.items() if key in ENVIRONMENT and
+                (key.startswith(('GITHUB_', 'RUNNER_')) or key == 'GITHUB_ACTIONS')}
+    env = {**environment, **identity, 'P2PKIT_CI_COMMAND_DEADLINE_NS': str(int(deadline * 1_000_000_000)),
+           'GRADLE_USER_HOME': str(Path(directory) / 'consumer/gradle-home')}
+    environment_admit(env, 'release-consumers')
+    original, _ = release_context(env)
+    require(Path(source_root) == original, 'SOURCE_PATH')
+    raw = dependency.read(original / 'scripts/check-published-consumers.sh')
+    released = {'source': source_identity, 'directory': str(directory),
+                'script': {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}}
+    release_source_check(released, env)
+    require(not (Path(directory) / 'consumer').exists() and not (Path(directory) / 'capture').exists(), 'CONSUMER_WORK')
+    return run('release-consumers', released=released, environment=env)
 
 
 def environment_admit(env, component=COMPONENT):
     require(component in PROFILES, 'COMPONENT')
     generating = component == 'dependency-generate'
+    releasing = component == 'release-consumers'
     events = {'workflow_dispatch'} if component in {'jmdns-diagnostic', 'published-consumers-diagnostic',
                                                    'dependency-generate'} else {'workflow_dispatch', 'push', 'pull_request', 'schedule'}
     workflow = 'dependency-update-candidate.yml' if generating else 'ci.yml'
+    if releasing:
+        release_context(env)
+        workflow = 'publish-maven-central.yml' if env['GITHUB_JOB'] == 'publish-release' else 'recover-maven-central.yml'
+        events = {'push'} if env['GITHUB_JOB'] == 'publish-release' else {'workflow_dispatch'}
     require(platform.system() == 'Darwin' and platform.machine() == 'x86_64' and
             env.get('RUNNER_OS') == 'macOS' and env.get('RUNNER_ARCH') == 'X64' and
             env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
@@ -101,7 +216,7 @@ def environment_admit(env, component=COMPONENT):
             re.fullmatch('[0-9a-f]{40}', env.get('GITHUB_SHA', '')) is not None and
             env.get('GITHUB_WORKFLOW_SHA') == env.get('GITHUB_SHA'), 'HOST_CONTEXT')
     workspace = Path(env.get('GITHUB_WORKSPACE', '')).resolve(strict=True)
-    require((workspace / 'candidate' if generating else workspace) == ROOT, 'SOURCE_PATH')
+    require(releasing or (workspace / 'candidate' if generating else workspace) == ROOT, 'SOURCE_PATH')
     require(re.fullmatch('[A-Za-z0-9_-]{1,200}', env.get('RUNNER_TRACKING_ID', '')) is not None,
             'RUNNER_TRACKING')
     if generating:
@@ -116,6 +231,8 @@ def environment_admit(env, component=COMPONENT):
         dependency_deadline(env)
     else:
         require(not any(key.startswith('P2PKIT_AUDIT_') for key in env), 'NESTED_DOMAIN')
+        if releasing:
+            release_deadline(env)
 
 
 def begin_source(component, env):
@@ -138,6 +255,8 @@ def finish_source(component, source, before):
 
 def command(env, component=COMPONENT):
     budget = bounds(component)
+    if component == 'release-consumers':
+        return ['bash', str(release_context(env)[0] / 'scripts/check-published-consumers.sh')]
     if component == 'dependency-generate':
         return [str(ROOT / 'gradlew'), 'resolveAndLockAll', '--write-locks', '--write-verification-metadata',
                 'sha256', '--continue', '--no-configure-on-demand', '--no-daemon', '--console=plain']
@@ -150,13 +269,16 @@ def command(env, component=COMPONENT):
 
 
 def validate_config(config, directory):
-    require(type(config) is dict and set(config) == {'uid', 'gid', 'groups', 'source', 'environment', 'component'}, 'CONFIG')
+    releasing = type(config) is dict and config.get('component') == 'release-consumers'
+    require(type(config) is dict and set(config) == ({'uid', 'gid', 'groups', 'source', 'environment', 'component'} |
+            ({'release'} if releasing else set())), 'CONFIG')
     require(type(config['uid']) is int and type(config['gid']) is int and
             os.getuid() == os.geteuid() == config['uid'] > 0 and
             os.getgid() == os.getegid() == config['gid'] > 0 and
             config['groups'] == sorted(set(os.getgroups())), 'CREDENTIALS')
     env = config['environment']
-    require(type(env) is dict and set(env) <= (ENVIRONMENT | (DEPENDENCY_ENVIRONMENT if config['component'] == 'dependency-generate' else frozenset())) and 'PATH' in env and
+    require(type(env) is dict and set(env) <= (ENVIRONMENT | (DEPENDENCY_ENVIRONMENT if config['component'] == 'dependency-generate' else
+                RELEASE_ENVIRONMENT if releasing else frozenset())) and 'PATH' in env and
             all(type(v) is str and '\0' not in v and len(v) <= 32768 for v in env.values()), 'ENVIRONMENT')
     environment_admit(env, config['component'])
     require(os.environ.get('RUNNER_TRACKING_ID') == env['RUNNER_TRACKING_ID'], 'RUNNER_TRACKING')
@@ -168,6 +290,8 @@ def validate_config(config, directory):
             all(type(v) is str and re.fullmatch('[0-9a-f]{40}', v) for v in source.values()) and
             source['commit'] == (dependency_request(env)['candidate_sha'] if config['component'] == 'dependency-generate'
                                  else env['GITHUB_SHA']), 'SOURCE_IDENTITY')
+    if releasing:
+        release_source_check(config['release'], env)
 
 
 def command_bytes(directory):
@@ -220,7 +344,8 @@ def child(path):
     ancestry = terminal.terminal_ancestor(directory, source)
     private.write_json(directory / 'child-admission.json', {'source': source, 'ancestry': ancestry})
     account = pwd.getpwuid(os.getuid())
-    env = {**config['environment'], 'HOME': account.pw_dir, 'USER': account.pw_name, 'LOGNAME': account.pw_name,
+    releasing = config['component'] == 'release-consumers'
+    env = {**config['environment'], 'HOME': config['environment']['HOME'] if releasing else account.pw_dir, 'USER': account.pw_name, 'LOGNAME': account.pw_name,
            'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1'}
     if config['component'] == 'published-consumers-diagnostic':
         # Match the immutable remote script's own future Gradle home BEFORE
@@ -236,21 +361,30 @@ def child(path):
     process, code, source_checked = None, 125, False
     try:
         require(not (directory / 'cancel').exists(), 'CANCELLED')
-        if config['component'] == 'dependency-generate':
-            remaining = dependency_deadline(env) - time.monotonic() - 450
-            require(remaining > 0, 'DEPENDENCY_DEADLINE')
-            reports = ROOT / 'build/reports/dependency-generation'
-            reports.parent.mkdir(parents=True, exist_ok=True)
-            outcome = evidence.run_command(command(env, config['component']), cwd=ROOT, environment=env,
-                private=reports, timeout=remaining, cancelled=lambda: cancelled.is_set() or (directory / 'cancel').exists())
+        if config['component'] == 'dependency-generate' or releasing:
+            remaining = (release_deadline(env) if releasing else dependency_deadline(env)) - time.monotonic() - 450
+            require(remaining > 0, 'RELEASE_DEADLINE' if releasing else 'DEPENDENCY_DEADLINE')
+            if releasing:
+                reports = Path(config['release']['directory']) / 'capture'
+                cwd, _ = release_context(env)
+                require(not (Path(config['release']['directory']) / 'consumer').exists(), 'CONSUMER_WORK')
+                remaining = min(7200, remaining)
+            else:
+                reports, cwd = ROOT / 'build/reports/dependency-generation', ROOT
+                reports.parent.mkdir(parents=True, exist_ok=True)
+            options = {'create_gradle_home': False} if releasing else {}
+            outcome = evidence.run_command(command(env, config['component']), cwd=cwd, environment=env,
+                private=reports, timeout=remaining, cancelled=lambda: cancelled.is_set() or (directory / 'cancel').exists(), **options)
             private.write_json(reports / 'result.json', outcome)
             code = 0 if outcome['code'] == 'PASS' else 1
-            require(outcome['cleanupKnown'] and outcome['capturesClosed'], 'GENERATION_CLEANUP')
+            require(outcome['cleanupKnown'] and outcome['capturesClosed'], 'RELEASE_CLEANUP' if releasing else 'GENERATION_CLEANUP')
         else:
             deadline = time.monotonic() + budget['child']
             process = subprocess.Popen(command(env, config['component']), cwd=ROOT, env=env, stdin=subprocess.DEVNULL)
             code = wait_evidence(process, directory, cancelled, deadline)
         finish_source(config['component'], source, before)
+        if releasing:
+            release_source_check(config['release'], env)
         source_checked = True
         require(not cancelled.is_set() and not (directory / 'cancel').exists(), 'CANCELLED')
     except BaseException:
@@ -268,6 +402,8 @@ def child(path):
         try:
             if not source_checked:
                 finish_source(config['component'], source, before)
+                if releasing:
+                    release_source_check(config['release'], env)
         except BaseException:
             code = 125
         for sig, handler in previous.items():
@@ -302,18 +438,22 @@ def validate_result(app, admission, finished, source, code, component=COMPONENT)
     terminal.validate_ancestry(admission['ancestry'])
 
 
-def run(component=COMPONENT):
+def run(component=COMPONENT, *, released=None, environment=None):
     start = time.monotonic()
     budget = bounds(component)
-    environment_admit(os.environ, component)
-    generating = component == 'dependency-generate'
-    allowed = ENVIRONMENT | (DEPENDENCY_ENVIRONMENT if generating else frozenset())
-    env = {key: value for key, value in os.environ.items() if key in allowed}
-    outer_end = dependency_deadline(env) if generating else start + budget['wrapper']
-    require(not generating or outer_end - start > 450, 'DEPENDENCY_DEADLINE')
+    original_env = os.environ if environment is None else environment
+    environment_admit(original_env, component)
+    generating, releasing = component == 'dependency-generate', component == 'release-consumers'
+    require(releasing == (released is not None), 'RELEASE_INPUT')
+    allowed = ENVIRONMENT | (DEPENDENCY_ENVIRONMENT if generating else RELEASE_ENVIRONMENT if releasing else frozenset())
+    env = {key: value for key, value in original_env.items() if key in allowed}
+    outer_end = dependency_deadline(env) if generating else release_deadline(env) if releasing else start + budget['wrapper']
+    require(not (generating or releasing) or outer_end - start > 450, 'RELEASE_DEADLINE' if releasing else 'DEPENDENCY_DEADLINE')
     directory = Path(tempfile.mkdtemp(prefix='ci-terminal-', dir=Path(env['RUNNER_TEMP']).resolve(strict=True)))
     source, before = begin_source(component, env)
     config = dict(uid=os.getuid(), gid=os.getgid(), groups=sorted(set(os.getgroups())), source=source, environment=env, component=component)
+    if releasing:
+        config['release'] = released
     validate_config(config, directory)
     private.write_json(directory / 'config.json', config)
     script = command_bytes(directory)
@@ -329,7 +469,7 @@ def run(component=COMPONENT):
             '-Werror', '-fobjc-arc', '-fblocks', '-arch', 'x86_64', '-mmacosx-version-min=15.0',
             '-DP2PKIT_MODULAR_CI', '-framework', 'AppKit', str(ROOT / 'scripts/diagnostics/apple-terminal-context.m'),
             '-o', str(binary)], cwd=ROOT, environment=env, private=directory / 'compile',
-            timeout=90, cancelled=cancelled.is_set)
+            timeout=90, cancelled=cancelled.is_set, **({'create_gradle_home': False} if releasing else {}))
         require(compile_result['code'] == 'PASS' and compile_result['cleanupKnown'] and
                 compile_result['capturesClosed'], 'COMPILE_FAILED')
         require(not cancelled.is_set(), 'CANCELLED')
@@ -353,7 +493,9 @@ def run(component=COMPONENT):
             failed = failed or error
         try:
             finish_source(component, source, before)
-            require(time.monotonic() < outer_end - (30 if generating else 0), 'WRAPPER_DEADLINE')
+            if releasing:
+                release_source_check(released, env)
+            require(time.monotonic() < outer_end - (30 if generating or releasing else 0), 'WRAPPER_DEADLINE')
             require(not cancelled.is_set(), 'CANCELLED')
         except BaseException as error:
             failed = failed or error
@@ -365,6 +507,10 @@ def run(component=COMPONENT):
     command_path.unlink()
     # This independent wrapper result is required by the Actions job. The inner
     # manifest cannot make a failed application/source finalization job succeed.
+    if releasing:
+        outcome = release_outcome(Path(released['directory']))
+        require((0 if outcome['code'] == 'PASS' else 1) == code, 'RESULT_IDENTITY')
+        return outcome
     print('CI_TERMINAL FINALIZED ' + ('PASS' if code == 0 else 'COMPONENT_FAILED'))
     return code
 
@@ -372,7 +518,7 @@ def run(component=COMPONENT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--child', type=Path, help=argparse.SUPPRESS)
-    parser.add_argument('--component', choices=tuple(PROFILES))
+    parser.add_argument('--component', choices=tuple(name for name in PROFILES if name != 'release-consumers'))
     args = parser.parse_args()
     os.umask(0o077)
     try:

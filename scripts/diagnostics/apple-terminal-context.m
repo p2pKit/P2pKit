@@ -383,10 +383,11 @@ int main(int argc, const char **argv) {
          * collector retains its unchanged component command deadline. */
         NSNumber *modularCommand = @{@"modular-jmdns":@1800, @"modular-shared":@7200,
             @"modular-consumers":@7200, @"modular-published-consumers":@7200,
-            @"modular-dependency-generate":@10800}[executionMode];
+            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200}[executionMode];
         if (!modularCommand) return 125;
         childBound = @(modularCommand.doubleValue + 240);
         BOOL modularGenerate = [executionMode isEqualToString:@"modular-dependency-generate"];
+        BOOL modularRelease = [executionMode isEqualToString:@"modular-release-consumers"];
         NSString *modularDeadline = nil;
 #endif
         if (!childBound) return 125;
@@ -470,7 +471,8 @@ int main(int argc, const char **argv) {
                 @{@"jmdns-diagnostic":@"modular-jmdns", @"macos-shared":@"modular-shared",
                   @"consumers":@"modular-consumers",
                   @"published-consumers-diagnostic":@"modular-published-consumers",
-                  @"dependency-generate":@"modular-dependency-generate"}[component] : nil;
+                  @"dependency-generate":@"modular-dependency-generate",
+                  @"release-consumers":@"modular-release-consumers"}[component] : nil;
             if (![expectedMode isEqualToString:executionMode] || !tracking.length || tracking.length > 200 ||
                 [tracking rangeOfCharacterFromSet:trackingCharacters.invertedSet].location != NSNotFound ||
                 ![config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking]) break;
@@ -489,6 +491,18 @@ int main(int argc, const char **argv) {
                 if (modularEnvironment.count != 9) break;
                 modularDeadline = modularEnvironment[@"P2PKIT_CI_COMMAND_DEADLINE_NS"];
                 if (modularRemaining(modularDeadline) <= 450) break;
+            }
+            if (modularRelease) {
+                result[@"failureCheck"] = @"RELEASE_CONTEXT";
+                const char *original = getenv("P2PKIT_CI_COMMAND_DEADLINE_NS");
+                modularDeadline = config[@"environment"][@"P2PKIT_CI_COMMAND_DEADLINE_NS"];
+                NSString *job = config[@"environment"][@"GITHUB_JOB"];
+                double maximum = [job isEqualToString:@"publish-release"] ? 9000 :
+                    [job isEqualToString:@"verify-recovery"] ? 5400 : 0;
+                if (![modularDeadline isKindOfClass:NSString.class] || !original ||
+                    ![modularDeadline isEqualToString:[NSString stringWithUTF8String:original]] ||
+                    modularRemaining(modularDeadline) <= 450 || modularRemaining(modularDeadline) > maximum) break;
+                modularEnvironment[@"P2PKIT_CI_COMMAND_DEADLINE_NS"] = modularDeadline;
             }
             configuration.environment = modularEnvironment;
 #endif
@@ -546,7 +560,7 @@ int main(int argc, const char **argv) {
             NSURL *shellURL = [directory URLByAppendingPathComponent:@"shell-result.txt"];
             BOOL childCompleted;
 #ifdef P2PKIT_MODULAR_CI
-            if (modularGenerate) {
+            if (modularGenerate || modularRelease) {
                 double remaining = modularRemaining(modularDeadline);
                 if (remaining <= 120) break;
                 childBound = @(remaining - 120);
