@@ -921,6 +921,37 @@ class TerminalDiagnosticTests(unittest.TestCase):
                     'MAVEN_CENTRAL_PASSWORD', 'ORG_GRADLE_PROJECT_signingInMemoryKey'):
             self.assertNotIn(key, T.ENVIRONMENT)
 
+    def test_terminal_remote_child_prebinds_original_home_and_preserves_fresh_private_home(self):
+        T = self.T
+        source = dict(commit='a' * 40, tree='b' * 40)
+        with tempfile.TemporaryDirectory(prefix='terminal-remote-home-') as tmp, ExitStack() as stack:
+            directory = Path(tmp).resolve()
+            env = self.environment()
+            stack.enter_context(patch.object(T.private, 'read_json', return_value=dict(
+                source=source, environment=env, component='published-consumers-diagnostic')))
+            stack.enter_context(patch.object(T, 'validate_config'))
+            stack.enter_context(patch.object(T, 'begin_source', return_value=(source, None)))
+            checked = stack.enter_context(patch.object(T, 'finish_source'))
+            stack.enter_context(patch.object(T.terminal, 'terminal_ancestor', return_value={}))
+            stack.enter_context(patch.object(T.private, 'write_json'))
+            stack.enter_context(patch.object(T.pwd, 'getpwuid', return_value=Mock(pw_dir='/PRIVATE_ACCOUNT_HOME', pw_name='synthetic')))
+            def launch(argv, **kwargs):
+                effective = kwargs['env']
+                self.assertEqual(argv, T.command(effective, 'published-consumers-diagnostic'))
+                self.assertEqual(effective['HOME'], str(directory / 'home'))
+                self.assertEqual(effective['TMPDIR'], str(directory / 'tmp'))
+                self.assertEqual(effective['P2PKIT_CONSUMER_WORK_DIR'], str(directory / 'consumer'))
+                self.assertEqual(effective['GRADLE_USER_HOME'], str(directory / 'consumer/gradle-home'))
+                self.assertFalse((directory / 'consumer').exists())
+                for name in ('home', 'tmp'):
+                    self.assertEqual((directory / name).stat().st_mode & 0o777, 0o700)
+                return Mock(poll=Mock(return_value=0))
+            launched = stack.enter_context(patch.object(T.subprocess, 'Popen', side_effect=launch))
+            stack.enter_context(patch.object(T, 'wait_evidence', return_value=0))
+            self.assertEqual(T.child(directory / 'config.json'), 0)
+            launched.assert_called_once()
+            checked.assert_called_once()
+
     def test_terminal_shell_waits_original_child_and_has_no_environment_or_command_override(self):
         T = self.T
         raw = T.command_bytes(Path('/private/synthetic folder')).decode()

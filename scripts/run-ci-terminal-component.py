@@ -222,6 +222,15 @@ def child(path):
     account = pwd.getpwuid(os.getuid())
     env = {**config['environment'], 'HOME': account.pw_dir, 'USER': account.pw_name, 'LOGNAME': account.pw_name,
            'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1'}
+    if config['component'] == 'published-consumers-diagnostic':
+        # Match the immutable remote script's own future Gradle home BEFORE
+        # the collector creates its domain; keep borrowed work new/empty.
+        for name in ('home', 'tmp'):
+            (directory / name).mkdir(mode=0o700)
+        work = directory / 'consumer'
+        require(not work.exists(), 'CONSUMER_WORK')
+        env.update(HOME=str(directory / 'home'), TMPDIR=str(directory / 'tmp'),
+                   P2PKIT_CONSUMER_WORK_DIR=str(work), GRADLE_USER_HOME=str(work / 'gradle-home'))
     cancelled = threading.Event()
     previous = {sig: signal.signal(sig, lambda _s, _f: cancelled.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
     process, code, source_checked = None, 125, False

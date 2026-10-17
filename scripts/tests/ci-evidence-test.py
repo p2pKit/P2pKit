@@ -1716,6 +1716,91 @@ class EvidenceTests(unittest.TestCase):
                     self.assertEqual(diagnostic['categories'], ['ACCESS_DENIED'] if cleanup else [])
                     self.assertNotIn('PRIVATE', json.dumps(diagnostic))
 
+    def test_deferred_gradle_home_keeps_actual_remote_subprocess_domain_coherent(self):
+        work = self.root / 'consumer'
+        home = work / 'gradle-home'
+        program = """import json, os, pathlib, subprocess, sys
+work = pathlib.Path(os.environ['P2PKIT_CONSUMER_WORK_DIR'])
+home = pathlib.Path(os.environ['GRADLE_USER_HOME'])
+assert not work.exists() and not home.exists()
+assert json.loads(os.environ['P2PKIT_AUDIT_OWNERSHIP_DOMAINS'])[-1]['home'] == str(home)
+work.mkdir(mode=0o700)
+home.mkdir(mode=0o700)
+# Same assignment made by the immutable remote consumer, now already bound.
+env = dict(os.environ, GRADLE_USER_HOME=str(work / 'gradle-home'))
+subprocess.run([sys.executable, '-I', '-B', '-c',
+    'import os,json; assert json.loads(os.environ["P2PKIT_AUDIT_OWNERSHIP_DOMAINS"])[-1]["home"] == os.environ["GRADLE_USER_HOME"]'],
+    env=env, check=True)
+print('DEFERRED_HOME_DOMAIN_PASS')
+"""
+        outcome = E.run_command([sys.executable, '-I', '-B', '-c', program], cwd=self.root,
+            environment={**os.environ, 'P2PKIT_CONSUMER_WORK_DIR': str(work), 'GRADLE_USER_HOME': str(home)},
+            private=self.root / 'deferred-capture', timeout=15, create_gradle_home=False)
+        self.assertEqual(outcome['code'], 'PASS')
+        self.assertEqual(outcome['exitCode'], 0)
+        self.assertTrue(outcome['cleanupKnown'])
+        self.assertTrue(outcome['capturesClosed'])
+        self.assertEqual((self.root / 'deferred-capture/stdout.log').read_text(), 'DEFERRED_HOME_DOMAIN_PASS\n')
+
+    def test_deferred_home_option_is_typed_and_default_still_creates_home(self):
+        for value in (None, 0, 1, 'false'):
+            with self.subTest(value=value), self.assertRaises(E.EvidenceError):
+                E.run_command(['not-executed'], cwd=self.root, environment={},
+                              private=self.root / 'invalid-option', timeout=5, create_gradle_home=value)
+        self.assertFalse((self.root / 'invalid-option').exists())
+        child = mock.Mock(stdout=io.BytesIO(b''), stderr=io.BytesIO(b''), returncode=0)
+        child.poll.return_value = 0
+        scope = mock.Mock(leaders=[child], discovery_errors=set())
+        scope.spawn.return_value = child
+        scope.drain.return_value = []
+        with mock.patch.object(E, '_command_scope', return_value=scope):
+            outcome = E.run_command(['synthetic'], cwd=self.root, environment=dict(os.environ),
+                private=self.root / 'eager-capture', timeout=5)
+        self.assertEqual(outcome['code'], 'PASS')
+        self.assertTrue(Path(scope.spawn.call_args.args[2]['GRADLE_USER_HOME']).is_dir())
+
+    def test_deferred_remote_home_accepts_only_fixed_physical_fresh_private_layout(self):
+        parent = self.root.resolve() / 'ci-terminal-synthetic'; parent.mkdir(mode=0o700)
+        for name in ('home', 'tmp'): (parent / name).mkdir(mode=0o700)
+        env = dict(RUNNER_TEMP=str(self.root.resolve()), HOME=str(parent / 'home'), TMPDIR=str(parent / 'tmp'),
+                   P2PKIT_CONSUMER_WORK_DIR=str(parent / 'consumer'), GRADLE_USER_HOME=str(parent / 'consumer/gradle-home'))
+        self.assertTrue(E.deferred_remote_consumer_home('published-consumers-diagnostic', env))
+        self.assertFalse(E.deferred_remote_consumer_home('consumers', env))
+        for changed in ({'GRADLE_USER_HOME': str(parent / 'other')}, {'HOME': str(self.root)},
+                        {'TMPDIR': '/PRIVATE'}, {'P2PKIT_CONSUMER_WORK_DIR': '../PRIVATE'},
+                        {'P2PKIT_CONSUMER_WORK_DIR': str(parent / 'other')}):
+            with self.subTest(changed=changed), self.assertRaises(E.EvidenceError):
+                E.deferred_remote_consumer_home('published-consumers-diagnostic', {**env, **changed})
+        (parent / 'consumer').mkdir()
+        with self.assertRaises(E.EvidenceError): E.deferred_remote_consumer_home('published-consumers-diagnostic', env)
+        (parent / 'consumer').rmdir()
+        (parent / 'home').chmod(0o755)
+        with self.assertRaises(E.EvidenceError): E.deferred_remote_consumer_home('published-consumers-diagnostic', env)
+        (parent / 'home').chmod(0o700)
+        (parent / 'home').rmdir(); (parent / 'home').symlink_to(parent / 'tmp')
+        with self.assertRaises(E.EvidenceError): E.deferred_remote_consumer_home('published-consumers-diagnostic', env)
+
+    def test_remote_main_passes_deferred_home_only_after_layout_admission(self):
+        parent = self.root.resolve() / 'ci-terminal-main'; parent.mkdir(mode=0o700)
+        for name in ('home', 'tmp'): (parent / name).mkdir(mode=0o700)
+        source_root = self.root / 'source'; source_root.mkdir()
+        env = dict(RUNNER_TEMP=str(self.root.resolve()), HOME=str(parent / 'home'), TMPDIR=str(parent / 'tmp'),
+                   P2PKIT_CONSUMER_WORK_DIR=str(parent / 'consumer'), GRADLE_USER_HOME=str(parent / 'consumer/gradle-home'))
+        outcome = dict(code='CLEANUP', exitCode=None, timedOut=False, cleanupKnown=False, capturesClosed=False)
+        with mock.patch.dict(E.os.environ, env), \
+             mock.patch.object(E, 'source_identity', return_value=dict(commit='a' * 40, tree='b' * 40, version='0.8.0-SNAPSHOT')), \
+             mock.patch.object(E, 'github_identity', return_value={}), \
+             mock.patch.object(E, 'run_command', return_value=outcome) as command, contextlib.redirect_stderr(io.StringIO()):
+            code = E.main(['--component', 'published-consumers-diagnostic', '--timeout-seconds', '5',
+                '--source-root', str(source_root), '--output-dir', str(self.root / 'public'), '--', 'synthetic'])
+        self.assertEqual(code, 1)
+        self.assertIs(command.call_args.kwargs['create_gradle_home'], False)
+        self.assertEqual(command.call_args.kwargs['environment']['GRADLE_USER_HOME'], env['GRADLE_USER_HOME'])
+        self.assertFalse((parent / 'consumer').exists())
+        failure = json.loads((self.root / 'public/failure.json').read_text())
+        self.assertEqual(failure['code'], 'CLEANUP')
+        self.assertFalse(failure['outcome']['cleanupKnown'])
+
     def test_unknown_native_error_retains_only_exact_allowlisted_exception_type(self):
         hostile = type('PRIVATE_CLASS_NAME', (RuntimeError,), {})
         cases = [(E.audit_processes.OwnershipError('PRIVATE_PATH'), 'OWNERSHIP_ERROR'),

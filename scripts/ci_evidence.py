@@ -287,7 +287,7 @@ def _command_scope(job, invocation, private, home, environment):
 
 
 def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
-                log_limit=MAX_LOG_BYTES, cleanup_seconds=15.0):
+                log_limit=MAX_LOG_BYTES, cleanup_seconds=15.0, create_gradle_home=True):
     """Actual command + native ownership, with the explicit hosted Darwin domain.
 
     Ordinary hosted-runner trust: POSIX marker-inheriting descendants, Windows
@@ -296,11 +296,13 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
     """
     require(type(timeout) in (int, float) and 0 < timeout <= 21600)
     require(type(log_limit) is int and 0 < log_limit <= MAX_LOG_BYTES)
+    require(type(create_gradle_home) is bool)
     private = Path(private)
     private.mkdir(mode=0o700, parents=False, exist_ok=False)
     job, invocation = uuid.uuid4().hex, uuid.uuid4().hex
     home = Path(environment.get("GRADLE_USER_HOME", str(private / "gradle-home"))).absolute()
-    home.mkdir(parents=True, exist_ok=True)
+    if create_gradle_home:
+        home.mkdir(parents=True, exist_ok=True)
     env = audit_processes.ownership_environment(dict(environment), job, invocation,
         str(private), str(home), allow_new_context=True)
     begin = time.monotonic()
@@ -1295,6 +1297,31 @@ def gpg_failure_categories(directory):
         return []
 
 
+def deferred_remote_consumer_home(component, environment):
+    """Keep the original remote script's future home in its initial domain.
+
+    The unchanged script first requires a new/empty borrowed work directory,
+    then creates its own Gradle home. Do not populate that work ahead of it.
+    """
+    if component != "published-consumers-diagnostic":
+        return False
+    work = Path(environment.get("P2PKIT_CONSUMER_WORK_DIR", ""))
+    home = Path(environment.get("GRADLE_USER_HOME", ""))
+    parent = work.parent
+    runner = Path(environment.get("RUNNER_TEMP", "")).resolve(strict=True)
+    require(work.is_absolute() and work == work.resolve() and work.name == "consumer" and
+            parent.parent == runner and parent.name.startswith("ci-terminal-") and
+            home == work / "gradle-home" and not work.exists(), "INPUT")
+    for path in (parent, parent / "home", parent / "tmp"):
+        require(path == path.resolve(strict=True) and not path.is_symlink(), "INPUT")
+        info = path.stat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and
+                stat.S_IMODE(info.st_mode) == 0o700, "INPUT")
+    require(environment.get("HOME") == str(parent / "home") and
+            environment.get("TMPDIR") == str(parent / "tmp"), "INPUT")
+    return True
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--component", required=True)
@@ -1328,8 +1355,9 @@ def main(argv=None):
         environment["CI_EVIDENCE_TOOLS_FILE"] = str(tools_file)
         stage = "COMMAND"
         cleanup_known = False
+        options = {"create_gradle_home": False} if deferred_remote_consumer_home(args.component, environment) else {}
         outcome = run_command(command, cwd=root, environment=environment, private=private / "command",
-                              timeout=args.timeout_seconds, cancelled=cancelled.is_set)
+                              timeout=args.timeout_seconds, cancelled=cancelled.is_set, **options)
         cleanup_known = outcome["cleanupKnown"]
         require(cleanup_known, "CLEANUP")
         stage = "SOURCE"
