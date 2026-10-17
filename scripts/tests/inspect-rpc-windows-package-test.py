@@ -18,6 +18,47 @@ SPEC.loader.exec_module(V)
 
 
 class PackageInspectionTests(unittest.TestCase):
+    def test_failure_diagnostic_uses_only_exact_source_errors_and_numeric_frames(self):
+        source = Path(V.M.__file__).read_text()
+        for message, category in V.E.RPC_PACKAGE_ERRORS.items():
+            with self.subTest(category=category):
+                self.assertIn('"' + message + '"', source)
+                try:
+                    V.M.require(False, message)
+                except ValueError as error:
+                    actual, lines = V.failure_diagnostic(error)
+                self.assertEqual(actual, category)
+                self.assertEqual(len(lines), 1)
+                self.assertTrue(0 < lines[0] <= 99999)
+                self.assertNotIn(str(self.directory), json.dumps([actual, lines]))
+
+    def test_failure_diagnostic_does_not_promote_private_or_foreign_errors(self):
+        for message in ("PRIVATE_PAYLOAD", "MSI application payload differs from completed image PRIVATE",
+                        " MSI application payload differs from completed image", "MSI application payload differs from completed image\n"):
+            try:
+                V.M.require(False, message)
+            except ValueError as error:
+                category, lines = V.failure_diagnostic(error)
+            self.assertIsNone(category)
+            self.assertEqual(len(lines), 1)
+        try:
+            raise ValueError("MSI application payload differs from completed image")
+        except ValueError as error:
+            self.assertEqual(V.failure_diagnostic(error), (None, []))
+
+    def test_main_retains_failure_with_safe_inspector_diagnostics(self):
+        public = io.StringIO()
+        def refuse(*_):
+            V.M.require(False, "MSI application payload differs from completed image")
+        with patch.object(V.sys, "argv", [str(SCRIPT)]), patch.object(V, "inspect_package", side_effect=refuse), \
+                contextlib.redirect_stderr(public):
+            self.assertEqual(V.main(), 1)
+        lines = public.getvalue().splitlines()
+        self.assertEqual(lines[0], "RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_BYTES")
+        self.assertRegex(lines[1], r"^RPC_WINDOWS_PACKAGE_CHECK_LINES [1-9][0-9]{0,4}$")
+        self.assertEqual(lines[2], "RPC_WINDOWS_PACKAGE_INSPECTION_REFUSED")
+        self.assertEqual(len(lines), 3)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="rpc-package-controls-")
         self.addCleanup(self.temporary.cleanup)

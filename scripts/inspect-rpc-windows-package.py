@@ -167,13 +167,34 @@ def inspect_package(root, environment):
     return result
 
 
+def failure_diagnostic(error):
+    """Return only reviewed source error labels/line numbers, never a raw path or exception."""
+    lines = []
+    frame = error.__traceback__
+    while frame is not None and len(lines) < 16:
+        if frame.tb_frame.f_code.co_filename == M.__file__ and 0 < frame.tb_lineno <= 99999:
+            lines.append(frame.tb_lineno)
+        frame = frame.tb_next
+    category = None
+    # Only a real MSI-checker frame admits its finite message. An unrelated
+    # package/tool exception cannot lend the MSI inspector its identity.
+    if lines and type(error) is ValueError and len(error.args) == 1 and type(error.args[0]) is str:
+        category = E.RPC_PACKAGE_ERRORS.get(error.args[0])
+    return category, lines
+
+
 def main():
     try:
         require(len(sys.argv) == 1, "No path, context or command overrides accepted")
         inspect_package(ROOT, dict(os.environ))
         print(SCOPE + ": PASS")
         return 0
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as error:
+        category, lines = failure_diagnostic(error)
+        if category is not None:
+            print("RPC_WINDOWS_PACKAGE_FAILURE " + category, file=sys.stderr)
+        if lines:
+            print("RPC_WINDOWS_PACKAGE_CHECK_LINES " + ",".join(map(str, lines)), file=sys.stderr)
         print("RPC_WINDOWS_PACKAGE_INSPECTION_REFUSED", file=sys.stderr)
         return 1
 

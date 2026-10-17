@@ -1003,6 +1003,24 @@ def junit_failures(root, source_commit="HEAD"):
     return rows[:32]
 
 
+# Fixed source-authored terminal errors only. These observations explain a
+# refusal, never qualify an MSI or disclose arbitrary exception text/paths.
+RPC_PACKAGE_ERRORS = {
+    "Input exceeds its bound": "RPC_MSI_INPUT_BOUND",
+    "Input changed during inspection": "RPC_MSI_INPUT_CHANGED",
+    "Expected an ordinary file": "RPC_MSI_NONORDINARY_FILE",
+    "Expected an ordinary directory": "RPC_MSI_NONORDINARY_DIRECTORY",
+    "Unsafe logical component": "RPC_MSI_UNSAFE_COMPONENT",
+    "Image has case-colliding paths": "RPC_MSI_IMAGE_CASE_COLLISION",
+    "Extraction File inventory differs from MSI table": "RPC_MSI_EXTRACTION_INVENTORY",
+    "MSI application path is outside INSTALLDIR or duplicated": "RPC_MSI_APPLICATION_PATH",
+    "Decompiler Source escapes or differs from the owned extraction": "RPC_MSI_EXTRACTION_SOURCE",
+    "Full image differs from earlier pinned components": "RPC_MSI_PINNED_IMAGE_CHANGED",
+    "MSI and completed image application paths differ": "RPC_MSI_PAYLOAD_PATHS",
+    "MSI application payload differs from completed image": "RPC_MSI_PAYLOAD_BYTES",
+    "Application payload changed during full inspection": "RPC_MSI_PAYLOAD_CHANGED",
+}
+
 def failure_diagnostics(root, command_directory, source_commit="HEAD", *, include_reports=True):
     """Public error identifiers only; logs/payloads/paths remain encrypted.
 
@@ -1010,6 +1028,7 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     the already bounded closed captures; never copy arbitrary error messages.
     """
     categories, tasks, publication_lines, platform_lines = set(), set(), [], []
+    rpc_package_lines = []
     dependency_exits, duplicate_dependency_steps = {}, set()
     generator_phases, duplicate_generator_phases = {}, set()
     phase_observations, duplicate_phases = {}, set()
@@ -1065,6 +1084,12 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 # The captures themselves are bounded; cap each parsed line too.
                 if len(line) > 4096:
                     continue
+                package_error = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_FAILURE ([A-Z_]{1,64})\r?\n?", line)
+                if package_error and package_error[1].decode("ascii") in RPC_PACKAGE_ERRORS.values():
+                    categories.add(package_error[1].decode("ascii"))
+                location = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_CHECK_LINES ([1-9][0-9]{0,4}(?:,[1-9][0-9]{0,4}){0,15})\r?\n?", line)
+                if location and not rpc_package_lines:
+                    rpc_package_lines = [int(value) for value in location[1].split(b",")]
                 consumer_keys = ("index", "listeners", "added", "resolved", "other_added", "other_resolved",
                                  "remote_srv", "remote_txt", "peers", "sees_other")
                 consumer = re.fullmatch(rb"CONSUMER_DISCOVERY_SNAPSHOT " + b" ".join(
@@ -1181,6 +1206,8 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                     if len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names:
                         tasks.add(task)
     inventory_fields = {"centralInventory": inventory_observations[0]} if len(inventory_observations) == 1 else {}
+    if rpc_package_lines:
+        inventory_fields["rpcWindowsPackageCheckLines"] = rpc_package_lines
     if consumer_snapshots:
         inventory_fields["consumerDiscoverySnapshots"] = [consumer_snapshots[key] for key in sorted(consumer_snapshots)
                                                          if key not in duplicate_consumers]

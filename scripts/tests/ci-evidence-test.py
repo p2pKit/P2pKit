@@ -27,6 +27,37 @@ PUBLIC_FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_rpc_msi_diagnostics_parse_finite_producer_codes_and_locations(self):
+        for category in E.RPC_PACKAGE_ERRORS.values():
+            for include_reports in (False, True):
+                with self.subTest(category=category, reports=include_reports):
+                    (self.root / "stderr.log").write_bytes((
+                        "RPC_WINDOWS_PACKAGE_FAILURE " + category + "\r\n"
+                        "RPC_WINDOWS_PACKAGE_CHECK_LINES 389,257,39\r\n"
+                        "RPC_WINDOWS_PACKAGE_INSPECTION_REFUSED\r\n").encode())
+                    result = E.failure_diagnostics(self.root, self.root, include_reports=include_reports)
+                    self.assertEqual(result["categories"], [category])
+                    self.assertEqual(result["rpcWindowsPackageCheckLines"], [389, 257, 39])
+
+    def test_rpc_msi_diagnostics_reject_unknown_private_and_unbounded_fields(self):
+        rows = (
+            "RPC_WINDOWS_PACKAGE_FAILURE PRIVATE", "RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_BYTES PRIVATE",
+            " RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_BYTES", "RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_BYTES ",
+            "ValueError: MSI application payload differs from completed image", "raise ValueError('PRIVATE')",
+            '  File "PRIVATE/another.py", line 39, in main',
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES 39,0", "RPC_WINDOWS_PACKAGE_CHECK_LINES 100000",
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES -1", "RPC_WINDOWS_PACKAGE_CHECK_LINES 39 PRIVATE",
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES " + ",".join("39" for _ in range(17)),
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES 39" + "x" * 4096,
+        )
+        for row in rows:
+            with self.subTest(row=row[:90]):
+                (self.root / "stderr.log").write_text(row + "\n")
+                result = E.failure_diagnostics(self.root, self.root, include_reports=False)
+                self.assertEqual(result["categories"], [])
+                self.assertNotIn("rpcWindowsPackageCheckLines", result)
+                self.assertNotIn("PRIVATE", json.dumps(result))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit-evidence-test-")
         self.root = Path(self.temporary.name).resolve()
