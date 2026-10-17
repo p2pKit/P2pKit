@@ -147,7 +147,7 @@ def required_tasks(policy, profile, arch):
         require(required <= tasks, "ARM simulator test targets are missing from the committed model")
         return required
     if profile == "macos-shared":
-        require(arch == "arm64", "macos-shared requires an Apple Silicon macOS host")
+        require(arch in ("arm64", "x64"), "macos-shared requires a native ARM64 or Intel macOS host")
         delegated = set(MACOS_SHARED_NATIVE_TASKS)
         require(len(delegated) == 8 and delegated <= tasks, "Delegated native tasks differ from the committed model")
         return tasks - delegated - set(SEPARATE_QUALIFICATION_TASKS)

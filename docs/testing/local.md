@@ -236,13 +236,13 @@ and no parallel tasks. Shared dependency caches remain available.
 Both simulator architectures share the network-test serialization service.
 The Intel and ARM profiles each request four native test tasks: core, LAN, RPC
 and the RPC sample. Modular CI executes these on their matching native hosts.
-Its required `macos-shared` profile runs original `check` on macOS 14/Xcode 16.2,
+Its required `macos-shared` profile runs original `check` on the macOS 15 Intel/Xcode 26.3 replacement candidate,
 excluding only those eight tasks with explicit `-x` arguments because both
 native lanes are separately mandatory. All 16 shared tests and non-test `check`
 dependencies remain required. The standalone `full` profile is unchanged;
 `ios-x64-tests.yml` also provides a secret-free weekly/manual Intel job. See the
-[release foundation](../releasing/release-foundation.md) for the temporary runner
-retirement limitation and the preserved macOS 26 JVM multicast failure.
+[release foundation](../releasing/release-foundation.md) for replacement qualification requirements
+and the preserved macOS 26 JVM multicast failure.
 Keep failures blocking; a configured workflow is not hosted execution evidence.
 
 The caller-managed Intel `intel-bootstatus` command has a 600-second work ceiling

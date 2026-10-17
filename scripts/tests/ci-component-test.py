@@ -143,7 +143,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_native_platform_acceptance_preserved(self):
         self.assertIn('ios-arm64', C.commands('apple-arm64')[0][1])
-        self.assertEqual(C.COMPONENTS['macos-shared'], ('macos-14', 120))
+        self.assertEqual(C.COMPONENTS['macos-shared'], ('macos-15-intel', 120))
         self.assertEqual(C.commands('macos-shared'), [('shared-platform-tests',
                          [C.sys.executable, '-B', 'scripts/run-platform-tests.py', 'macos-shared'])])
         self.assertIn('ios-x64', C.commands('apple-x64')[0][1])
@@ -170,7 +170,7 @@ class ComponentTests(unittest.TestCase):
                          'signed-bundle-test', 'xcframework', 'minimum-apple-os', 'swift-ui'} <= names)
         self.assertNotIn('isolated-consumers', names)
     def test_complete_consumers_are_independent_mandatory_and_keep_cleanup(self):
-        self.assertEqual(C.COMPONENTS['consumers'], ('macos-14', 120))
+        self.assertEqual(C.COMPONENTS['consumers'], ('macos-15-intel', 120))
         self.assertEqual(C.commands('consumers'),
                          [('isolated-consumers', ['bash', 'scripts/check-published-consumers.sh'])])
         spec = importlib.util.spec_from_file_location('component_qualification', ROOT / 'scripts/ci_qualification.py')
@@ -194,8 +194,8 @@ class ComponentTests(unittest.TestCase):
             root = Path(temporary)
             for name in ('java', 'gpg', 'gradlew', 'xcodebuild'):
                 (root / name).write_bytes(b'synthetic public tool')
-            for component in ("consumers", "macos-shared"):
-                for version in ('16.2', '26.5', '16.20'):
+            for component in ("consumers", "consumers-pom-diagnostic", "jmdns-diagnostic", "macos-shared"):
+                for version in ('26.3', '26.5', '26.30'):
                     versions = [Mock(stdout=b'openjdk version "17"'), Mock(stdout=b'gpg (GnuPG) 2.5.22'),
                                 Mock(stdout=b'Gradle 9.7.0\n'), Mock(stdout=('Xcode ' + version + '\nBuild version synthetic\n').encode())]
                     target = root / 'tools.json'
@@ -204,11 +204,11 @@ class ComponentTests(unittest.TestCase):
                             patch.object(C.shutil, 'which', side_effect=lambda name: str(root / name)), \
                             patch.object(C.subprocess, 'run', side_effect=versions), \
                             patch.dict(C.os.environ, {'CI_EVIDENCE_TOOLS_FILE': str(target)}):
-                        if version == '16.2':
+                        if version == '26.3':
                             C.record_tools(component)
                             self.assertEqual(json.loads(target.read_text())['xcode']['version'], version)
                         else:
-                            with self.assertRaisesRegex(RuntimeError, 'requires Xcode 16.2'):
+                            with self.assertRaisesRegex(RuntimeError, 'requires Xcode 26.3'):
                                 C.record_tools(component)
                             self.assertFalse(target.exists())
 
@@ -254,8 +254,8 @@ class ComponentTests(unittest.TestCase):
                 return code, report, invoked.call_args_list, error
 
     def test_bundle_diagnostic_explicit_only_and_never_in_required_all(self):
-        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-26', 30),
-                                       'consumers-pom-diagnostic': ('macos-14', 60)})
+        self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
+                                       'consumers-pom-diagnostic': ('macos-15-intel', 60)})
         self.assertEqual(len(C.COMPONENTS), 14)
         self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
         self.assertEqual({row['component'] for row in C.matrix('all')['include']}, set(C.COMPONENTS))
@@ -268,7 +268,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_pom_diagnostic_is_explicit_only_and_preserves_original_failure_and_cleanup(self):
         self.assertEqual(C.matrix('consumers-pom-diagnostic'), {'include': [{'component': 'consumers-pom-diagnostic',
-                         'os': 'macos-14', 'minutes': 60, 'job_minutes': 70}]})
+                         'os': 'macos-15-intel', 'minutes': 60, 'job_minutes': 70}]})
         self.assertNotIn('consumers-pom-diagnostic', C.COMPONENTS)
         self.assertEqual(len(C.matrix('all')['include']), 14)
         self.assertEqual(C.commands('consumers-pom-diagnostic'), [('published-pom-diagnostic',
@@ -291,7 +291,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_jmdns_diagnostic_is_focused_independent_and_preserves_failure_cleanup(self):
         self.assertEqual(C.matrix('jmdns-diagnostic'), {'include': [{'component': 'jmdns-diagnostic',
-                         'os': 'macos-26', 'minutes': 30, 'job_minutes': 40}]})
+                         'os': 'macos-15-intel', 'minutes': 30, 'job_minutes': 40}]})
         self.assertNotIn('jmdns-diagnostic', C.COMPONENTS)
         self.assertEqual(len(C.matrix('all')['include']), 14)
         for invalid in ('jmdns-diagnostic,source', 'bundle-diagnostic,jmdns-diagnostic',
@@ -466,9 +466,9 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 class SetupBaselineTests(unittest.TestCase):
-    def selected(self, component, *, os_name='macOS', arch='ARM64', release='14.8.1', xcode='16.2', present=True):
+    def selected(self, component, *, os_name='macOS', arch='X64', release='15.7', xcode='26.3', present=True):
         source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
-        begin = source.index('if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == dependency-update ]]; then')
+        begin = source.index('if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then')
         end = source.index('  xcodegen_bin_dir=', begin)
         # Actual selection/admission shell block, with synthetic readbacks only.
         # No SDK installation, GPG, Gradle, network or native evidence.
@@ -485,12 +485,12 @@ class SetupBaselineTests(unittest.TestCase):
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
             return result.returncode, output.read_text() if output.exists() else ''
 
-    def test_actual_selection_requires_exact_temporary_host_and_tool(self):
-        for component in ('consumers', 'consumers-pom-diagnostic', 'dependency-update', 'macos-shared'):
+    def test_actual_selection_requires_exact_supported_host_and_tool(self):
+        for component in ('consumers', 'consumers-pom-diagnostic', 'jmdns-diagnostic', 'dependency-update', 'macos-shared'):
             self.assertEqual(self.selected(component),
-                             (0, 'DEVELOPER_DIR=/Applications/Xcode_16.2.app/Contents/Developer\n'))
-            for changed in ({'os_name': 'Linux'}, {'arch': 'X64'}, {'release': '26.0'},
-                            {'xcode': '26.5'}, {'xcode': '16.20'}, {'present': False}):
+                             (0, 'DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer\n'))
+            for changed in ({'os_name': 'Linux'}, {'arch': 'ARM64'}, {'release': '14.8.1'}, {'release': '26.0'},
+                            {'xcode': '26.5'}, {'xcode': '26.30'}, {'present': False}):
                 with self.subTest(component=component, changed=changed):
                     code, output = self.selected(component, **changed)
                     self.assertNotEqual(code, 0)
@@ -498,7 +498,7 @@ class SetupBaselineTests(unittest.TestCase):
 
     def test_native_and_installer_xcode_selection_remains_unchanged(self):
         for component in ('compatibility', 'apple-arm64', 'desktop-macos'):
-            self.assertEqual(self.selected(component, release='26.0', xcode='26.5'),
+            self.assertEqual(self.selected(component, arch='ARM64', release='26.0', xcode='26.5'),
                              (0, 'DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer\n'))
         self.assertEqual(self.selected('apple-x64', arch='X64', release='15.7', xcode='26.3'),
                          (0, 'DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer\n'))

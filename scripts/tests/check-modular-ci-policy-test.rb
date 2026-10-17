@@ -47,14 +47,14 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', consumers,', ',')
   end
   def test_writer_cannot_select_floating_or_native_toolchain_baseline
-    altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-14', 'runs-on: macos-latest')
+    altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-15-intel', 'runs-on: macos-latest')
     altered('.github/workflows/dependency-update-candidate.yml', 'setup-ci-component.sh dependency-update',
             'setup-ci-component.sh dependencies')
   end
   def test_publication_and_recovery_require_supported_complete_consumer_context
     %w[publish-maven-central recover-maven-central].each do |workflow|
       path = ".github/workflows/#{workflow}.yml"
-      altered(path, 'runs-on: macos-14', 'runs-on: macos-26')
+      altered(path, 'runs-on: macos-15-intel', 'runs-on: macos-26')
       altered(path, 'run: bash scripts/setup-ci-component.sh consumers', 'run: true')
       altered(path, 'java-version: "21"', 'java-version: "17"')
       step = workflow == 'publish-maven-central' ? 'Verify immutable remote bytes and consumers' :

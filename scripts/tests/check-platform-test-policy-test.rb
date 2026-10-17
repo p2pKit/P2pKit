@@ -38,7 +38,7 @@ def check_platform_policy(v)
   matrix = v[:matrix].fetch('include').to_h { |row| [row.fetch('component'), row] }
   {'apple-arm64' => ['macos-26', 150, 'ios-arm64', 'native-platform-tests'],
    'apple-x64' => ['macos-15-intel', 120, 'ios-x64', 'native-platform-tests'],
-   'macos-shared' => ['macos-14', 120, 'macos-shared', 'shared-platform-tests']}.each do |name, (os, minutes, profile, task)|
+   'macos-shared' => ['macos-15-intel', 120, 'macos-shared', 'shared-platform-tests']}.each do |name, (os, minutes, profile, task)|
     need(matrix.fetch(name).values_at('os', 'minutes', 'job_minutes') == [os, minutes, minutes + 10], 'Wrong native platform or operational budget')
     commands = v.fetch(name.to_sym)
     need(commands.size == 1 && commands[0][0] == task &&
@@ -122,8 +122,8 @@ def check_platform_policy(v)
        ['${{ runner.temp }}/ci-evidence-${{ inputs.component }}/*', 14, false, 'error'],
        'Evidence must be nonempty immutable encrypted bundle, not raw logs')
   need(worker['steps'].index(run) < worker['steps'].index(upload), 'Evidence precedes actual execution')
-  need(v[:setup].include?('/Applications/Xcode_26.5.app/Contents/Developer') &&
-       v[:setup].include?('/Applications/Xcode_26.3.app/Contents/Developer') &&
+  need(v[:setup].include?('elif [[ "${RUNNER_ARCH:-}" == ARM64 ]]; then xcode=/Applications/Xcode_26.5.app/Contents/Developer') &&
+       v[:setup].include?('else xcode=/Applications/Xcode_26.3.app/Contents/Developer; fi') &&
        v[:setup].include?('echo "DEVELOPER_DIR=$xcode" >> "$GITHUB_ENV"'), 'Admitted ARM/Intel Xcode selections missing')
   # Retain actual coverage/failure decisions in the maintained driver. Its
   # behavioral tests are invoked by release-gate and the source component.
@@ -249,7 +249,7 @@ mutations = {
   'missing evidence accepted' => ->(v) { evidence(v)['with']['if-no-files-found'] = 'warn' },
   'mutable evidence' => ->(v) { evidence(v)['with']['overwrite'] = true },
   'unbounded retention' => ->(v) { evidence(v)['with']['retention-days'] = 90 },
-  'missing Intel Xcode' => ->(v) { v[:setup].sub!('/Applications/Xcode_26.3.app/Contents/Developer', '/Applications/Xcode.app/Contents/Developer') },
+  'missing Intel Xcode' => ->(v) { v[:setup].sub!('else xcode=/Applications/Xcode_26.3.app/Contents/Developer; fi', 'else xcode=/Applications/Xcode.app/Contents/Developer; fi') },
   'missing ARM Xcode' => ->(v) { v[:setup].sub!('/Applications/Xcode_26.5.app/Contents/Developer', '/Applications/Xcode.app/Contents/Developer') },
   'bypassed coverage' => ->(v) { v[:driver].gsub!('assess(report, policy, profile, arch, token,', 'skipped_coverage(') },
   'ignored native errors' => ->(v) { v[:driver].sub!('return (code or 1) if errors else 0', 'return 0') },

@@ -54,12 +54,12 @@ rc2 artifacts qualify the later snapshot or a new release.
 | jvm-linux, jvm-windows | Real library JVM tests / Ubuntu, Windows x64 |
 | android | Android unit tests, build and native APK inspection / Ubuntu |
 | apple-arm64 | Four native Apple ARM64 test tasks / macOS 26 ARM64 |
-| macos-shared | Original aggregate `check`, delegating only eight native test tasks to the two mandatory Apple lanes / macOS 14 ARM64, Xcode 16.2 |
+| macos-shared | Original aggregate `check`, delegating only eight native test tasks to the two mandatory Apple lanes / macOS 15 Intel, Xcode 26.3 |
 | apple-x64 | Actual `iosX64` execution, not cross-compilation / macOS Intel |
 | desktop-linux, desktop-windows, desktop-macos | Desktop tests and DEB/MSI/ARM64-DMG packaging |
 | security | Pinned OSV scan, unchanged expiring exceptions / Ubuntu |
 | compatibility | API/ABI, strict Dokka, SBOM, publication, XCFramework and Swift / macOS 26 ARM64 |
-| consumers | Complete isolated published-coordinate JVM/Android/KMP/iOS consumers / macOS 14 ARM64, Xcode 16.2 |
+| consumers | Complete isolated published-coordinate JVM/Android/KMP/iOS consumers / macOS 15 Intel, Xcode 26.3 |
 
 All fourteen components are mandatory for the same source. The `macos-shared`
 profile runs the original `check` with `-x` for exactly four ARM64 and four Intel
@@ -72,12 +72,13 @@ the standalone `full` profile is unchanged.
 
 The prior macOS 26 FULL [run](https://github.com/p2pKit/P2pKit/actions/runs/38823809770)
 failed actual JmDNS close tests with `NoRouteToHostException`; that failure is not
-reclassified as passed. Required shared CLI tests now execute on the reviewed
-macOS 14 baseline, not as proof of macOS 26 JVM multicast functionality. New
+reclassified as passed. The published rc2 shared CLI tests used the reviewed macOS 14 baseline.
+The current replacement candidate uses macOS 15 Intel/Xcode 26.3; no result
+on either host proves macOS 26 JVM multicast functionality. New
 current-source results from all fourteen components are required, with all four
 application artifacts (18 frozen inputs total). Splitting consumers likewise
 does not omit or weaken their tests. The full dependency-update candidate writer
-also uses the macOS 14 / Xcode 16.2 CLI baseline. The existing protected Maven
+also selects the macOS 15 Intel / Xcode 26.3 CLI baseline. The existing protected Maven
 `publish-release` and read-only `verify-recovery` jobs use this same explicit
 CLI setup, including Java 21 then Java 17, so complete remote consumers do not
 silently return to the failing plain macOS 26 context after irreversible upload.
@@ -90,12 +91,16 @@ those results do not establish execution of the separate recovery procedure.
 macOS 26 remains the native ARM64, DMG,
 XCFramework and Swift lane, with Intel native execution on macOS 15 Intel.
 
-**Temporary runner limitation:** GitHub has announced macOS 14 retirement on
-2026-11-02. Replace this baseline with a genuinely qualified supported execution
-context before runner availability ends. This date is not a new authorization
-window or internal timestamp gate. The temporary lane does not claim macOS 26
-JVM multicast/consumer qualification. Exact host/tool mismatches fail; no floating
-runner or Xcode fallback is allowed.
+**Replacement qualification:** macOS 14 retires on 2026-11-02. The current
+source selects explicit macOS 15 Intel/Xcode 26.3 instead, including the focused
+JmDNS diagnostic, complete shared/consumer components and dependency writer.
+This configuration is not yet hosted acceptance: require the unchanged real
+JmDNS tests, complete shared gate and consumers on this exact source before
+claiming the migration qualified. Protected producer/recovery configuration is
+not signing, publication or actual recovery execution evidence. No Terminal/TCC
+permission workaround or Bonjour mutation is added to these CLI routes. Native
+ARM64/Intel and Desktop/Swift lanes are unchanged. Exact host/tool mismatches
+fail; no floating runner, architecture emulation or Xcode fallback is allowed.
 
 List exact commands without executing them:
 
@@ -118,7 +123,7 @@ gh workflow run ci.yml --ref YOUR_BRANCH -f component=desktop-windows
 Run `gh workflow run ci.yml --ref YOUR_BRANCH -f component=bundle-diagnostic` for the existing disposable-key signed-bundle test alone.
 
 The 0.8+ Central bundle contains exactly 121 signed originals across 21 coordinates: 117 dependency artifacts plus the pinned Kotlin plugin's four root `-kotlin-tooling-metadata.json` sidecars (core, LAN, RPC, Android provisioning). Each original retains its signature and four checksums: 726 files. Exact filenames, bounded JSON objects, signatures and hashes are checked; equal-count substitutions are refused. Historical 0.7 bundles remain 15 coordinates / 84 originals, and the isolated-consumer dependency verification allowlist remains 117—not the four tooling sidecars.
-Run `gh workflow run ci.yml --ref YOUR_BRANCH -f component=jmdns-diagnostic` for only the existing real-resource JmDNS close tests on macOS ARM64.
+Run `gh workflow run ci.yml --ref YOUR_BRANCH -f component=jmdns-diagnostic` for only the existing real-resource JmDNS close tests on the explicit macOS 15 Intel CLI candidate.
 These optional diagnostics retain encrypted evidence but cannot aggregate/complete qualification or publish; the full required components remain unchanged.
 
 Use `component=all` for a full qualification. Main pushes and PRs run the full
