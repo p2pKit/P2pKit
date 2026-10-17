@@ -28,6 +28,14 @@ HELPERS = (
     "scripts/resolve-gradle-variant-artifact.py", "gradle/plugin-provenance-policy.txt",
 )
 XML = "gradle/verification-metadata.xml"
+# Two deliberately distinct dumpers read the four configured Android outputs.
+# Retain only their original API files, not classes, arbitrary targets, or source
+# baselines. Missing outputs remain absent; these diagnostics are not acceptance.
+ANDROID_ABI_REPORTS = tuple(
+    f"library/{module}/build/kotlin/{directory}/{module}.api"
+    for module in ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android")
+    for directory in ("abi/android", "androidAbi")
+)
 
 
 class UpdateError(ValueError):
@@ -150,7 +158,7 @@ def retain_reports(candidate, controller):
     import ci_evidence
     parent = controller / "build/reports"
     parent.mkdir(parents=True, exist_ok=True)
-    ci_evidence.collect_reports(candidate, ["**/build/test-results/**/*.xml", "build/reports/**/*"],
+    ci_evidence.collect_reports(candidate, ["**/build/test-results/**/*.xml", "build/reports/**/*", *ANDROID_ABI_REPORTS],
                                 parent / "dependency-update")
 
 
