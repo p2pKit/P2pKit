@@ -321,8 +321,12 @@ public final class SystemBootstrapCandidateTests {
         boolean filePolicy = security.descriptorPolicyAccepted();
         WindowsOriginalJvmAncestorsCandidate ancestors = security.inspectAncestors();
         check(ancestors.completed() && ancestors.ancestorCount() >= 1 && ancestors.ancestorCount() <= 63);
-        check(originalField(ancestors, "originalFileHandle") == handle &&
-            originalField(ancestors, "originalFileArena") == handleArena);
+        WindowsOriginalFileAncestorsLease ancestorCore =
+            (WindowsOriginalFileAncestorsLease) originalField(ancestors, "core");
+        check(originalField(ancestorCore, "originalFileHandle") == handle &&
+            originalField(ancestorCore, "originalFileArena") == handleArena);
+        check(originalField(ancestorCore, "originalJvmOwner") == ancestors &&
+            originalField(ancestorCore, "originalProfileDllOwner") == null);
         boolean ancestorPolicy = ancestors.descriptorPoliciesAccepted();
         WindowsOriginalJvmBytesCandidate bytes = file.inspectBytes();
         check(bytes.completed() && originalField(bytes, "fileHandle") == handle &&

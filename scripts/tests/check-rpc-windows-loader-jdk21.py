@@ -70,6 +70,8 @@ def main():
                         "ProfileDllFileCandidateTests" in name or
                         "OriginalFileSecurityQueryTests" in name or
                         "ProfileDllSecurityCandidateTests" in name or
+                        "OriginalFileAncestorsLeaseTests" in name or
+                        "ProfileDllAncestorsCandidateTests" in name or
                         "InstallationSecurityTests" in name or
                         "AncestorRetirementTests" in name or
                         "ByteReadInvocationTests" in name or
@@ -253,6 +255,18 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".ProfileDllSecurityCandidateTests", case], 0,
             "WINDOWS_PROFILE_DLL_SECURITY_PASS case=" + re.escape(case) +
             r" scope=INERT_TYPED_OWNER_AND_REFUSAL_NOT_NATIVE_SECURITY_OR_AUTHORITY\n", "")
+    ancestor_cases = ["owner-refusal", "substitution", "path-bounds", "path-copy", "descriptor-bounds",
+                      "descriptor-policy", "retirement", "retirement-failures", "retirement-unknown", "thread"]
+    for case in ancestor_cases:
+        run("original-file-ancestors-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".OriginalFileAncestorsLeaseTests", case], 0,
+            "WINDOWS_ORIGINAL_FILE_ANCESTORS_PASS case=" + re.escape(case) +
+            r" scope=INERT_OWNER_PATH_DESCRIPTOR_AND_FRAME_NOT_NATIVE_CUSTODY_OR_AUTHORITY\n", "")
+    for case in ("owner-refusal", "substitution", "failure-latch", "leaf-policy-refusal", "ancestor-policy-refusal"):
+        run("profile-dll-ancestors-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".ProfileDllAncestorsCandidateTests", case], 0,
+            "WINDOWS_PROFILE_DLL_ANCESTORS_PASS case=" + re.escape(case) +
+            r" scope=INERT_TYPED_OWNER_AND_REFUSAL_NOT_NATIVE_ANCESTORS_OR_AUTHORITY\n", "")
     # Real boot-module singleton, fresh process for each terminal outcome: no test-only reset hook.
     owner_cases = ["success", "reentrant", "concurrent", "invocation", "report", "cleanup",
                    "invocation-cleanup", "report-cleanup", "null-report", "virtual", "null-input", "copied-owner"]
@@ -371,6 +385,8 @@ def main():
     original_dll_file_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_dll_security_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
     original_dll_security_policy = "NOT_EXECUTED"
+    original_dll_ancestors_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"
+    original_dll_ancestors_policy = "NOT_EXECUTED"
     if os.name == "nt":
         # A distinct development fixture, never the productive DLL or profile backend. Finish the existing
         # controls first so a new compiler/runtime failure preserves their original results.
@@ -437,6 +453,13 @@ def main():
             "WINDOWS_PROFILE_DLL_SECURITY_PASS case=actual scope=" + original_dll_security_scope +
             r" descriptorPolicy=(ACCEPTED|REFUSED)\n", "")
         original_dll_security_policy = dll_security.strip().rsplit("=", 1)[1]
+        original_dll_ancestors_scope = "DEVELOPMENT_DLL_ANCESTOR_DIAGNOSTIC_NOT_BYTES_MAPPING_OR_LOADING_AUTHORITY"
+        dll_ancestors, _ = run("profile-dll-ancestors-actual", base + access + [
+            "--patch-module", MODULE + "=" + str(classes), "--module",
+            MODULE + "/" + PACKAGE + ".ProfileDllAncestorsCandidateTests", "actual", str(dll)], 0,
+            "WINDOWS_PROFILE_DLL_ANCESTORS_PASS case=actual scope=" + original_dll_ancestors_scope +
+            r" ancestorPolicy=(NOT_EXECUTED_LEAF_POLICY_REFUSED|ACCEPTED|REFUSED)\n", "")
+        original_dll_ancestors_policy = dll_ancestors.strip().rsplit("=", 1)[1]
         loaded_registration_scope = "DEV_TEST_DLL_DENY_STORAGE_NOT_INSTALLED_AUTHORITY_OR_PROVIDER"
         for case in ("pin", "success", "address"):
             connected_run("loaded-registration-" + case, "LoadedRegistrationTests",
@@ -467,6 +490,8 @@ def main():
               "originalProfileDllFileScope": original_dll_file_scope,
               "originalProfileDllSecurityScope": original_dll_security_scope,
               "originalProfileDllDescriptorPolicy": original_dll_security_policy,
+              "originalProfileDllAncestorsScope": original_dll_ancestors_scope,
+              "originalProfileDllAncestorPolicy": original_dll_ancestors_policy,
               "loadedRegistrationScope": loaded_registration_scope, "commands": records}
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))

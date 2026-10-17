@@ -813,10 +813,10 @@ pre-invocation failures retain their existing private-frame retirement, and
 original handle scopes are never closed.
 
 **This is not yet a complete DLL custody or productive loading pipeline.** The
-independent DLL still needs original-handle ancestor policy and a bounded same-
-handle byte snapshot, then independent package identity and reviewed startup/
-import authority. Its original-handle security query is described below; the
-existing JVM ancestor/byte observations are not promoted into DLL evidence. No productive-loader return, Windows UI
+independent DLL still needs a bounded same-handle byte snapshot, independent
+package identity and reviewed startup/import authority. Its original-handle
+security and ancestor components are described below; existing JVM observations
+are not promoted into DLL evidence. No productive-loader return, Windows UI
 availability, profile operation, installer identity or publication pipeline is
 changed by this component.
 
@@ -845,3 +845,29 @@ Neither an accepted leaf policy nor an inert descriptor test establishes ancesto
 custody, initial OS/runtime trust, package identity, mapped-image correspondence
 or absence of pre-existing writable mappings/security handles. Productive loading
 and provider activation remain unavailable until the entire boundary is complete.
+
+### Independent DLL ancestor ownership
+
+A concrete shared ancestor engine retains the existing JVM walk while adding a
+separate original DLL security → ancestor attachment. Every factory preserves
+the original file handle, pathname snapshot, metadata and system/module scopes;
+no caller chooses a handle or substitutes a JVM file as DLL authority. Root and
+handle-relative directory leases remain retained, and the final leaf probe must
+match the independently held file. Existing descriptor, reparse, case, volume,
+filesystem and metadata requirements are unchanged.
+
+The DLL's refused leaf policy prevents ancestor attachment before native effects.
+A fully completed ancestor observation may itself report refused policies: its
+Java diagnostics remain readable, but subsequent native-input factories are
+sealed. Native/retirement failure instead permanently latches the original DLL
+file/security chain with its retained failure owner. Unknown native returns keep
+private frames quarantined; the separate stricter NT completion/IOSB checks are
+preserved. No normal Stop can unload or close these owners.
+
+The maintained actual Windows diagnostic reports
+`NOT_EXECUTED_LEAF_POLICY_REFUSED` if the development DLL's real leaf policy
+refuses. That is an exercised refusal, **not** successful DLL ancestor traversal.
+An accepted leaf permits the real bounded walk and reports its actual policy
+result. No ACL, privilege or classification is changed to manufacture acceptance.
+The unchanged real JVM walk exercises the shared mechanics separately; neither
+scope is productive installation, complete byte custody or first-load authority.

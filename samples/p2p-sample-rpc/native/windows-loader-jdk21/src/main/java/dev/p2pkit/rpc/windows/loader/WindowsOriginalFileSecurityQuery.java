@@ -425,4 +425,13 @@ final class WindowsOriginalFileSecurityQuery {
         requireCompleted();
         return requester.newOriginalAncestors(this, moduleArena, module, entry, pinEntry, resolveEntry);
     }
+
+    WindowsOriginalProfileDllAncestorsCandidate newProfileDllAncestors(
+        WindowsOriginalProfileDllSecurityCandidate requester) {
+        if (requester == null || requester != originalProfileDllOwner) {
+            throw new IllegalStateException("Original security query belongs to another profile DLL facade");
+        }
+        requireCompleted();
+        return requester.newOriginalAncestors(this, moduleArena, module, entry, pinEntry, resolveEntry);
+    }
 }

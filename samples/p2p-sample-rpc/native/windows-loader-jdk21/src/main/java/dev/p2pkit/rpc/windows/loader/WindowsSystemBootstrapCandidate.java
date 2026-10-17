@@ -374,6 +374,13 @@ final class WindowsSystemBootstrapCandidate {
         return entries[1 + index]; // PIN, module pathname, system directory, exact named export resolution only.
     }
 
+    MemorySegment originalProfileDllAncestorsEntry(WindowsOriginalProfileDllFileCandidate candidate, int index) {
+        requireOriginalProfileDll(candidate);
+        candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 1) throw new IllegalArgumentException("Unknown fixed profile DLL ancestors entry");
+        return entries[11 + index]; // GetVolumeInformationByHandleW and GetDriveTypeW only.
+    }
+
     WindowsSystemImportResolution resolveSystemImports(WindowsPackagedVerifier plan) {
         requireCompleted();
         if (importsAttempted) throw new IllegalStateException("System imports were already attempted");

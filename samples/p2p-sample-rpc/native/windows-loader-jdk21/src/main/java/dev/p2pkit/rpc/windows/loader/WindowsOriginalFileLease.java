@@ -395,4 +395,19 @@ final class WindowsOriginalFileLease {
             requester.originalAncestorsEntry(this, 0), requester.originalAncestorsEntry(this, 1),
             handleArena, handle, sourcePath, sourceLength, first);
     }
+
+    WindowsOriginalProfileDllAncestorsCandidate newProfileDllAncestors(WindowsOriginalProfileDllFileCandidate requester,
+        WindowsOriginalProfileDllSecurityCandidate security, Arena moduleArena, MemorySegment module,
+        MemorySegment queryEntry, MemorySegment pinEntry, MemorySegment resolveEntry) {
+        if (requester == null || requester != originalProfileDllOwner) {
+            throw new IllegalStateException("Original file lease belongs to another profile DLL facade");
+        }
+        requireCompleted();
+        requester.requireOriginalSecurity(security);
+        security.requireOriginalAncestorInputs();
+        return new WindowsOriginalProfileDllAncestorsCandidate(security, linker, bootstrapArena, moduleArena,
+            module, queryEntry, pinEntry, resolveEntry, createEntry, informationEntry, finalPathEntry,
+            requester.originalAncestorsEntry(this, 0), requester.originalAncestorsEntry(this, 1),
+            handleArena, handle, sourcePath, sourceLength, first);
+    }
 }

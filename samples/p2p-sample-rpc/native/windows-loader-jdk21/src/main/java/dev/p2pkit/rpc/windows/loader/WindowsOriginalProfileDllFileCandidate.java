@@ -33,6 +33,7 @@ final class WindowsOriginalProfileDllFileCandidate {
     private boolean succeeded;
     private boolean securityAttempted;
     private boolean securityPolicyRefused;
+    private boolean ancestorsPolicyRefused;
     private WindowsOriginalProfileDllSecurityCandidate security;
 
     WindowsOriginalProfileDllFileCandidate(WindowsSystemBootstrapCandidate bootstrap, String candidatePath) {
@@ -114,10 +115,10 @@ final class WindowsOriginalProfileDllFileCandidate {
 
     void requireOriginalNativeInputs() {
         requireOriginalBootstrap();
-        if (securityPolicyRefused) {
+        if (securityPolicyRefused || ancestorsPolicyRefused) {
             throw new IllegalStateException("Original profile DLL security policy refused further native inputs");
         }
-        // This negative latch is not an authorization token. No productive continuation exists here.
+        // Negative latches are not authorization tokens. Accepted diagnostics do not grant loading authority.
     }
 
     Linker originalLinker() {
@@ -147,5 +148,35 @@ final class WindowsOriginalProfileDllFileCandidate {
         requireOriginalNativeInputs();
         requireOriginalLease(candidate);
         return bootstrap.originalProfileDllSecurityEntry(this, index);
+    }
+
+    WindowsOriginalProfileDllAncestorsCandidate newOriginalAncestors(WindowsOriginalProfileDllSecurityCandidate candidate,
+        Arena moduleArena, MemorySegment module, MemorySegment queryEntry, MemorySegment pinEntry,
+        MemorySegment resolveEntry) {
+        requireOriginalSecurity(candidate);
+        candidate.requireOriginalAncestorInputs();
+        return lease.newProfileDllAncestors(this, candidate, moduleArena, module, queryEntry, pinEntry, resolveEntry);
+    }
+
+    void finishOriginalAncestors(WindowsOriginalProfileDllSecurityCandidate candidate,
+        WindowsOriginalProfileDllAncestorsCandidate ancestors) {
+        requireOriginalSecurity(candidate);
+        candidate.requireOriginalAncestors(ancestors);
+        ancestorsPolicyRefused = !ancestors.descriptorPoliciesAccepted();
+        // A full bounded diagnostic walk is complete even on ordinary policy refusal. Its original
+        // scopes remain retained; only later native-input factories/continuations are sealed.
+    }
+
+    Failure failOriginalSecurity(WindowsOriginalProfileDllSecurityCandidate candidate, Throwable caught) {
+        requireOriginalSecurity(candidate);
+        failure.operationFailure = caught;
+        failed = true;
+        return failure;
+    }
+
+    MemorySegment originalAncestorsEntry(WindowsOriginalFileLease candidate, int index) {
+        requireOriginalNativeInputs();
+        requireOriginalLease(candidate);
+        return bootstrap.originalProfileDllAncestorsEntry(this, index);
     }
 }

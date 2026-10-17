@@ -15,7 +15,7 @@ public final class AncestorRetirementTests {
     }
 
     private static Field field(String name) throws ReflectiveOperationException {
-        Field field = WindowsOriginalJvmAncestorsCandidate.class.getDeclaredField(name);
+        Field field = WindowsOriginalFileAncestorsLease.class.getDeclaredField(name);
         field.setAccessible(true); // Same patched test module, never a packaged adapter or JDK opening.
         return field;
     }
@@ -30,6 +30,9 @@ public final class AncestorRetirementTests {
         } catch (IllegalStateException expected) {
             // Original identity guard refuses before allocation, native lookup or file operations.
         }
+        Field attachment = WindowsOriginalJvmAncestorsCandidate.class.getDeclaredField("core");
+        attachment.setAccessible(true);
+        WindowsOriginalFileAncestorsLease core = (WindowsOriginalFileAncestorsLease) attachment.get(candidate);
         // The backing owner allows inspection of the same bytes after the test frame's view retires.
         // This is allocated inert memory, not an address supplied to any OS function or pending request.
         try (Arena backing = Arena.ofConfined(); Arena original = Arena.ofConfined()) {
@@ -38,17 +41,17 @@ public final class AncestorRetirementTests {
                 MemorySegment storage = backing.allocate(32);
                 storage.fill((byte) 0x5a);
                 MemorySegment view = storage.reinterpret(frame, null);
-                field("frameArena").set(candidate, frame);
-                field("leaseArena").set(candidate, original);
-                ((MemorySegment[]) field("buffers").get(candidate))[0] = view;
-                field("ntCompletionUnconfirmed").setBoolean(candidate, unconfirmed);
-                Method retire = WindowsOriginalJvmAncestorsCandidate.class.getDeclaredMethod("retireFrame");
+                field("frameArena").set(core, frame);
+                field("leaseArena").set(core, original);
+                ((MemorySegment[]) field("buffers").get(core))[0] = view;
+                field("ntCompletionUnconfirmed").setBoolean(core, unconfirmed);
+                Method retire = WindowsOriginalFileAncestorsLease.class.getDeclaredMethod("retireFrame");
                 retire.setAccessible(true);
-                retire.invoke(candidate);
-                retire.invoke(candidate); // No second retirement or presumed resolution of uncertainty.
+                retire.invoke(core);
+                retire.invoke(core); // No second retirement or presumed resolution of uncertainty.
                 check(frame.scope().isAlive() == unconfirmed);
-                check(field("frameRetired").getBoolean(candidate) != unconfirmed);
-                check(field("ntCompletionUnconfirmed").getBoolean(candidate) == unconfirmed);
+                check(field("frameRetired").getBoolean(core) != unconfirmed);
+                check(field("ntCompletionUnconfirmed").getBoolean(core) == unconfirmed);
                 check(original.scope().isAlive());
                 for (long index = 0; index < storage.byteSize(); index++) {
                     check(storage.get(ValueLayout.JAVA_BYTE, index) == (unconfirmed ? (byte) 0x5a : 0));
