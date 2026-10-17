@@ -361,6 +361,13 @@ final class WindowsSystemImportResolution {
         }
     }
 
+    void requireOriginalBinding(WindowsSystemBootstrapCandidate expectedBootstrap, WindowsPackagedVerifier expectedPlan) {
+        requireOriginal();
+        if (bootstrap != expectedBootstrap || plan != expectedPlan || !succeeded || !frameRetired || callInFlight) {
+            throw new IllegalStateException("System imports do not belong to this original bootstrap and plan");
+        }
+    }
+
     long[] addresses() {
         requireOriginal();
         if (!succeeded || !frameRetired) throw new IllegalStateException("System import resolution is incomplete");

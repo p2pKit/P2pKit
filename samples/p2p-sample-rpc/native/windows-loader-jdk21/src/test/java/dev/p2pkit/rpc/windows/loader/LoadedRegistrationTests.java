@@ -41,7 +41,7 @@ public final class LoadedRegistrationTests {
     private enum Site { FIXTURE, SYSTEM_IMPORT_RESOLUTION, CLASS_BINDING, PACKAGED_ADAPTER, PACKAGED_HELPER,
         PE_IMAGE, BYTE_MANIFEST, MAPPED_CODE, IMPORT_ADDRESSES, EXPORT_ADDRESSES, JNI_PLAN,
         JNI_DECLARATION, LOADER_RUNTIME, SYSTEM_BOOTSTRAP, ORIGINAL_JVM, JVM_ACQUISITION,
-        LIBRARY_LOAD, EXPORT_LOOKUP, IMAGE_READ, REGISTRATION_INVOCATION, REGISTRATION_OWNER,
+        LIBRARY_LOAD, LOADED_IMAGE, EXPORT_LOOKUP, IMAGE_READ, REGISTRATION_INVOCATION, REGISTRATION_OWNER,
         SITE_UNKNOWN }
 
     private LoadedRegistrationTests() {}
@@ -55,7 +55,7 @@ public final class LoadedRegistrationTests {
         }
         check(args.length == 9);
         String mode = args[0];
-        check(mode.equals("success") || mode.equals("address") || mode.equals("pin"));
+        check(mode.equals("success") || mode.equals("address") || mode.equals("pin") || mode.equals("preloaded"));
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         check(Linker.nativeLinker().getClass().getName()
             .equals("jdk.internal.foreign.abi.x64.windows.Windowsx64Linker"));
@@ -97,11 +97,15 @@ public final class LoadedRegistrationTests {
         private WindowsOriginalJvmCandidate originalJvm;
         private Arena originalArena;
         private MemorySegment[] entries;
+        private Arena preloadArena;
+        private MemorySegment preloadPath;
+        private MethodHandle preloadCall;
+        private long rawPreloadedModule;
+        private boolean preloadReturnUnconfirmed;
+        private MemorySegment preloadedModule;
         private WindowsLibraryLoadInvocation load;
         private WindowsLibraryLoadInvocation.Result loaded;
-        private WindowsExportLookupInvocation[] exports;
-        private MemorySegment[] exportEntries;
-        private WindowsImageReadInvocation[] reads;
+        private WindowsLoadedProfileImageVerification image;
         private WindowsSystemImportResolution imports;
         private Arena modulePathArena;
         private MemorySegment modulePathBuffer;
@@ -177,73 +181,76 @@ public final class LoadedRegistrationTests {
             check(Arrays.equals(imports.addresses(), importTargets));
             expect(IllegalStateException.class, () -> bootstrap.resolveSystemImports(plan));
             stage = Stage.LOAD;
-            load = WindowsLibraryLoadInvocation.prepare(this, originalJvm, file, entries[5], originalArena,
-                path.toString());
+            if (args[0].equals("preloaded")) {
+                preloadedRefusal(path.toString(), abi);
+                return;
+            }
+            load = WindowsLibraryLoadInvocation.prepare(bootstrap, this, originalJvm, file, path.toString());
             loaded = load.invoke();
             MemorySegment module = loaded.module();
             requireModulePath(module, path.toString());
 
             stage = Stage.EXPORT;
-            long[] layout = plan.imageLayout();
-            String[] names = plan.exportNames();
-            long[] rvas = plan.exportRvas();
-            long[] exportTargets = new long[names.length];
-            exports = new WindowsExportLookupInvocation[names.length];
-            exportEntries = new MemorySegment[names.length];
-            for (int index = 0; index < names.length; index++) {
-                exports[index] = WindowsExportLookupInvocation.prepare(bootstrap, load, plan, entries[4], originalArena,
-                    module, originalArena, names[index], layout[0], layout[1], layout[2], rvas[index]);
-                exportEntries[index] = exports[index].invoke().entry();
-                exportTargets[index] = exportEntries[index].address();
-            }
-            stage = Stage.READ;
-            long[] requested = plan.regions(module.address());
-            reads = new WindowsImageReadInvocation[requested.length / 3];
-            byte[][] pages = new byte[reads.length][];
-            for (int index = 0; index < reads.length; index++) {
-                int kind = (int) requested[index * 3 + 2];
-                reads[index] = WindowsImageReadInvocation.prepare(bootstrap, load, plan, entries[6], entries[7],
-                    originalArena, module, originalArena, layout[0], requested[index * 3] - module.address(),
-                    Math.toIntExact(requested[index * 3 + 1]), kind == 0 ? WindowsImageReadInvocation.Kind.READ_ONLY :
-                    kind == 1 ? WindowsImageReadInvocation.Kind.EXECUTABLE : WindowsImageReadInvocation.Kind.DATA);
-                pages[index] = reads[index].invoke().bytes();
-            }
-            stage = Stage.COMPARE;
-            long[] verified;
             try {
-                verified = plan.verify(module.address(), exportTargets, importTargets, pages);
-            } catch (Throwable comparisonFailure) {
-                // Observe ONLY after refusal, with the original copied test DLL bytes and existing readbacks.
-                // No retry, additional native read, byte masking or changed acceptance requirement.
-                try {
-                    String observation = (String) helper.getMethod("mappedObservation", byte[].class, long.class,
-                        long[].class, byte[][].class).invoke(null, originalBytes, module.address(), requested, pages);
-                    check(observation.matches("WINDOWS_LOADED_MAPPED_OBSERVATION first=" +
-                        "(NONE|HEADER_RAW|HEADER_PADDING|EXECUTABLE_RAW|EXECUTABLE_PADDING|RELOCATION)" +
-                        " offset=([0-9]|[1-9][0-9]{1,2}|[1-3][0-9]{3}|40[0-8][0-9]|409[0-5])" +
-                        " headerFilePage=(MATCH|DIFFERENT) executable=(MATCH|DIFFERENT)"));
-                    mappedObservation = observation;
-                } catch (Throwable diagnosticFailure) {
-                    mappedObservationFailure = diagnosticFailure;
+                image = loaded.verifyImage(bootstrap, plan, imports);
+            } catch (WindowsLoadedProfileImageVerification.Failure comparisonFailure) {
+                image = comparisonFailure.retainedVerification;
+                int phase = (int) field(image, "phase");
+                stage = switch (phase) {
+                    case WindowsLoadedProfileImageVerification.READ -> Stage.READ;
+                    case WindowsLoadedProfileImageVerification.COMPARE -> Stage.COMPARE;
+                    default -> Stage.EXPORT;
+                };
+                if (phase == WindowsLoadedProfileImageVerification.COMPARE) {
+                    // Failure-only diagnostics consume this same owner's retained readbacks. No second
+                    // lookup/read, relaxed byte comparison, alternate import target or retry is performed.
+                    try {
+                        long[] requested = (long[]) field(image, "requested");
+                        byte[][] pages = (byte[][]) field(image, "pages");
+                        String observation = (String) helper.getMethod("mappedObservation", byte[].class, long.class,
+                            long[].class, byte[][].class).invoke(null, originalBytes, module.address(), requested, pages);
+                        check(observation.matches("WINDOWS_LOADED_MAPPED_OBSERVATION first=" +
+                            "(NONE|HEADER_RAW|HEADER_PADDING|EXECUTABLE_RAW|EXECUTABLE_PADDING|RELOCATION)" +
+                            " offset=([0-9]|[1-9][0-9]{1,2}|[1-3][0-9]{3}|40[0-8][0-9]|409[0-5])" +
+                            " headerFilePage=(MATCH|DIFFERENT) executable=(MATCH|DIFFERENT)"));
+                        mappedObservation = observation;
+                    } catch (Throwable diagnosticFailure) {
+                        mappedObservationFailure = diagnosticFailure;
+                    }
                 }
                 throw comparisonFailure;
             }
-            stage = Stage.REGISTER;
-            long[] methods = Arrays.copyOf(verified, 23);
-            MemorySegment registrar = null;
-            for (int index = 0; index < names.length; index++) {
-                if (names[index].equals("pwp_jni_register_once")) registrar = exportEntries[index];
+            check(image.declaringClass() == declaration && image.originalJvm() == originalJvm);
+            MemorySegment[] nativeMethods = image.jniEntries();
+            check(nativeMethods.length == 23);
+            long[] methods = new long[23];
+            for (int index = 0; index < methods.length; index++) methods[index] = nativeMethods[index].address();
+            MemorySegment registrar = image.registrar();
+            MemorySegment[] alteredMethods = image.jniEntries();
+            alteredMethods[0] = MemorySegment.NULL;
+            check(image.jniEntries()[0] == nativeMethods[0]);
+            expect(IllegalStateException.class, () -> loaded.verifyImage(bootstrap, plan, imports));
+            expect(IllegalStateException.class, () -> loaded.verifyImage(bootstrap, plan));
+            check(field(load, "imageVerification") == image);
+            WindowsExportLookupInvocation[] exports = (WindowsExportLookupInvocation[]) field(image, "exports");
+            WindowsImageReadInvocation[] reads = (WindowsImageReadInvocation[]) field(image, "reads");
+            check(exports.length == 24 && reads.length == ((long[]) field(image, "requested")).length / 3);
+            for (WindowsExportLookupInvocation export : exports) {
+                check(Boolean.TRUE.equals(field(export, "retired")) &&
+                    !((Arena) field(export, "frameArena")).scope().isAlive());
             }
-            check(registrar != null && registrar.address() == verified[23]);
+            for (WindowsImageReadInvocation read : reads) {
+                check(Boolean.TRUE.equals(field(read, "retired")) &&
+                    !((Arena) field(read, "frameArena")).scope().isAlive());
+            }
+            stage = Stage.REGISTER;
             WindowsJvmAcquisitionInvocation.Result vm =
                 (WindowsJvmAcquisitionInvocation.Result) field(originalJvm, "acquired");
-            WindowsJniRegistrationOwner.Retention roots = new WindowsJniRegistrationOwner.Retention(
-                this, originalJvm, load, declaration, plan);
-            if (args[0].equals("address")) methods[0]++; // Registrar compares but must never call this bad address.
-            registration = WindowsJniRegistrationInvocation.prepare(roots, registrar, vm.virtualMachine(), methods);
-            MemorySegment entriesFrame = (MemorySegment) field(registration, "entries");
-            MemorySegment reportFrame = (MemorySegment) field(registration, "output");
+            WindowsJniRegistrationOwner.Retention roots;
             if (args[0].equals("address")) {
+                roots = new WindowsJniRegistrationOwner.Retention(image, originalJvm, load, declaration, plan);
+                methods[0]++; // Existing low-level negative: registrar compares but never calls this bad address.
+                registration = WindowsJniRegistrationInvocation.prepare(roots, registrar, vm.virtualMachine(), methods);
                 WindowsJniRegistrationOwner.Failure refused = (WindowsJniRegistrationOwner.Failure)
                     expect(WindowsJniRegistrationOwner.Failure.class,
                         () -> WindowsJniRegistrationOwner.registerOnce(roots, registration));
@@ -254,7 +261,13 @@ public final class LoadedRegistrationTests {
                 stage = Stage.ABI;
                 expect(UnsatisfiedLinkError.class, () -> abi.invoke(null));
             } else {
-                owner = WindowsJniRegistrationOwner.registerOnce(roots, registration);
+                owner = image.registerOriginalJni(); // Same typed production mechanics, no caller-chosen JNI inputs.
+                registration = (WindowsJniRegistrationInvocation) field(image, "registrationInvocation");
+                roots = (WindowsJniRegistrationOwner.Retention) field(image, "registrationRoots");
+                check(field(image, "registrationVm") == vm && field(image, "registrationOwner") == owner &&
+                    field(image, "registrationFailure") == null && roots.installationOwner() == image &&
+                    roots.runtimeOwner() == originalJvm && roots.moduleOwner() == loaded &&
+                    roots.declaringClass() == declaration && roots.registrationPlan() == plan);
                 check(owner.state() == WindowsJniRegistrationOwner.State.Registered);
                 check(field(owner, "report").equals(new WindowsJniRegistrationOwner.Report(32, 1, 2, 0, 1, 0, 0, 0)));
                 stage = Stage.ABI;
@@ -263,6 +276,8 @@ public final class LoadedRegistrationTests {
                 check(abi.invoke(null).equals(13) && capabilities.invoke(null).equals(0x43L));
             }
             stage = Stage.RETIRE;
+            MemorySegment entriesFrame = (MemorySegment) field(registration, "entries");
+            MemorySegment reportFrame = (MemorySegment) field(registration, "output");
             check(owner == WindowsJniRegistrationOwner.retainedProcessOwner() && owner.retention == roots &&
                 owner.ownsInvocation(registration));
             check(!entriesFrame.scope().isAlive() && !reportFrame.scope().isAlive());
@@ -273,7 +288,74 @@ public final class LoadedRegistrationTests {
             check(field(bootstrap, "imports") == imports && field(imports, "plan") == plan);
             check(Boolean.TRUE.equals(field(imports, "frameRetired")) &&
                 !((Arena) field(imports, "frameArena")).scope().isAlive());
-            if (args[0].equals("success")) check(abi.invoke(null).equals(13));
+            if (args[0].equals("success")) {
+                expect(IllegalStateException.class, image::registerOriginalJni);
+                check(field(image, "registrationOwner") == owner && field(image, "registrationInvocation") == registration);
+                check(image.jniEntries()[0] == nativeMethods[0] && image.registrar() == registrar);
+                check(abi.invoke(null).equals(13));
+            } else {
+                // The already retained negative owner makes this separate typed attempt a controller refusal.
+                // Its private prepared frame is retained, not claimed retired or registered; there is no retry.
+                WindowsLoadedProfileImageVerification.Failure refused = (WindowsLoadedProfileImageVerification.Failure)
+                    expect(WindowsLoadedProfileImageVerification.Failure.class, image::registerOriginalJni);
+                check(refused.retainedVerification == image && refused.operationFailure instanceof IllegalStateException &&
+                    field(image, "registrationFailure") == refused.operationFailure &&
+                    field(image, "registrationVm") == vm && field(image, "registrationOwner") == null);
+                WindowsJniRegistrationInvocation unentered =
+                    (WindowsJniRegistrationInvocation) field(image, "registrationInvocation");
+                check(unentered != registration && !(boolean) field(unentered, "attempted") &&
+                    ((MemorySegment) field(unentered, "output")).scope().isAlive());
+                expect(IllegalStateException.class, image::jniEntries);
+                expect(IllegalStateException.class, image::registrar);
+                expect(IllegalStateException.class, image::originalJvm);
+                expect(IllegalStateException.class, image::registerOriginalJni);
+                check(owner == WindowsJniRegistrationOwner.retainedProcessOwner() &&
+                    field(image, "registrationInvocation") == unentered && file.isOpen());
+                expect(UnsatisfiedLinkError.class, () -> abi.invoke(null));
+            }
+        }
+
+        /** Preload only the already byte-checked maintained DENY-STORAGE fixture, outside the load process slot. */
+        private void preloadedRefusal(String path, Method abi) throws Throwable {
+            WindowsProfileDllPath.require(path);
+            Field process = WindowsLibraryLoadInvocation.class.getDeclaredField("processOwner");
+            process.setAccessible(true);
+            check(process.get(null) == null && loaded == null && owner == null && file.isOpen());
+            preloadArena = Arena.ofConfined();
+            preloadPath = preloadArena.allocate(WindowsLibraryLoadInvocation.PATH);
+            for (int index = 0; index < path.length(); index++) {
+                preloadPath.setAtIndex(ValueLayout.JAVA_SHORT, index, (short) path.charAt(index));
+            }
+            preloadCall = Linker.nativeLinker().downcallHandle(
+                bootstrap.originalLibraryLoadEntry(originalJvm, 1), WindowsLibraryLoadInvocation.DESCRIPTOR);
+            // The retained fixture owns the native input and primitive return BEFORE any wrapper or check.
+            // No WindowsLibraryLoadInvocation exists yet, no JNI binding, and this module is never unloaded.
+            preloadReturnUnconfirmed = true;
+            rawPreloadedModule = (long) preloadCall.invokeExact(preloadPath, MemorySegment.NULL,
+                WindowsLibraryLoadInvocation.SEARCH_SYSTEM32);
+            preloadReturnUnconfirmed = false;
+            check(rawPreloadedModule > 0 && (rawPreloadedModule & 65_535) == 0);
+            preloadedModule = MemorySegment.ofAddress(rawPreloadedModule).reinterpret(originalArena, null);
+            requireModulePath(preloadedModule, path);
+            check(process.get(null) == null);
+            expect(UnsatisfiedLinkError.class, () -> abi.invoke(null));
+            load = WindowsLibraryLoadInvocation.prepare(bootstrap, this, originalJvm, file, path);
+            WindowsLibraryLoadInvocation.Failure refused = (WindowsLibraryLoadInvocation.Failure)
+                expect(WindowsLibraryLoadInvocation.Failure.class, load::invoke);
+            check(refused.retainedInvocation == load && refused.probeFailure instanceof IllegalStateException &&
+                refused.invocationFailure == null && refused.readbackFailure == null && !refused.retirementFailed());
+            check(process.get(null) == load && (boolean) field(load, "attempted") &&
+                (boolean) field(load, "probeAttempted") && (boolean) field(load, "probeReturned") &&
+                (int) field(load, "probeStatus") != 0 && (long) field(load, "rawPreexistingModule") == rawPreloadedModule);
+            check(!(boolean) field(load, "nativeReturned") && !(boolean) field(load, "nativeReturnUnconfirmed") &&
+                !(boolean) field(load, "probeObservationUnconfirmed") && (long) field(load, "rawModule") == 0 &&
+                field(load, "module") == null && !(boolean) field(load, "succeeded") &&
+                !((Arena) field(load, "frameArena")).scope().isAlive());
+            expect(IllegalStateException.class, load::invoke);
+            expect(UnsatisfiedLinkError.class, () -> abi.invoke(null));
+            check(loaded == null && image == null && registration == null && owner == null && file.isOpen() &&
+                !preloadReturnUnconfirmed && preloadArena.scope().isAlive() && originalJvm.completed() &&
+                preloadedModule.scope().isAlive());
         }
 
         // Preserve the original candidate pathname assertion separately from production import mechanics.
@@ -307,6 +389,8 @@ public final class LoadedRegistrationTests {
                 next = ((InvocationTargetException) actual).getTargetException();
             } else if (actual.getClass() == WindowsSystemImportResolution.Failure.class) {
                 next = ((WindowsSystemImportResolution.Failure) actual).operationFailure;
+            } else if (actual.getClass() == WindowsLoadedProfileImageVerification.Failure.class) {
+                next = ((WindowsLoadedProfileImageVerification.Failure) actual).operationFailure;
             } else break;
             if (next == null || next == actual) break;
             actual = next;
@@ -361,6 +445,7 @@ public final class LoadedRegistrationTests {
             case LOADER + "WindowsOriginalJvmCandidate" -> Site.ORIGINAL_JVM;
             case LOADER + "WindowsJvmAcquisitionInvocation" -> Site.JVM_ACQUISITION;
             case LOADER + "WindowsLibraryLoadInvocation" -> Site.LIBRARY_LOAD;
+            case LOADER + "WindowsLoadedProfileImageVerification" -> Site.LOADED_IMAGE;
             case LOADER + "WindowsExportLookupInvocation" -> Site.EXPORT_LOOKUP;
             case LOADER + "WindowsImageReadInvocation" -> Site.IMAGE_READ;
             case LOADER + "WindowsJniRegistrationInvocation" -> Site.REGISTRATION_INVOCATION;
@@ -391,6 +476,20 @@ public final class LoadedRegistrationTests {
                 " stage=IMPORT category=STATE site=SYSTEM_IMPORT_RESOLUTION line=200"));
         } catch (ReflectiveOperationException unexpected) {
             throw new AssertionError("Inert retained-failure diagnostic fixture failed", unexpected);
+        }
+        try {
+            var constructor = WindowsLoadedProfileImageVerification.Failure.class
+                .getDeclaredConstructor(WindowsLoadedProfileImageVerification.class);
+            constructor.setAccessible(true);
+            WindowsLoadedProfileImageVerification.Failure imageFailure = constructor.newInstance((Object) null);
+            imageFailure.operationFailure = new IllegalStateException(secret);
+            imageFailure.operationFailure.setStackTrace(new StackTraceElement[] {
+                new StackTraceElement(LOADER + "WindowsLoadedProfileImageVerification", secret, secret, 120),
+            });
+            check(diagnostic(Stage.COMPARE, imageFailure).equals("WINDOWS_LOADED_REGISTRATION_REFUSED" +
+                " stage=COMPARE category=STATE site=LOADED_IMAGE line=120"));
+        } catch (ReflectiveOperationException unexpected) {
+            throw new AssertionError("Inert loaded-image diagnostic fixture failed", unexpected);
         }
         Throwable nested = assertion;
         for (int depth = 0; depth < 8; depth++) nested = new InvocationTargetException(nested, secret);

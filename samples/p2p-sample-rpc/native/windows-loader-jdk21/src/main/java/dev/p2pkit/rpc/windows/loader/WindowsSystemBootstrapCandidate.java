@@ -500,6 +500,48 @@ final class WindowsSystemBootstrapCandidate {
         return imports;
     }
 
+    void requireOriginalLibraryLoadInputs(WindowsOriginalJvmCandidate candidate) {
+        requireOriginalJvm(candidate);
+        candidate.completed();
+    }
+
+    Arena originalLibraryLoadArena(WindowsOriginalJvmCandidate candidate) {
+        requireOriginalLibraryLoadInputs(candidate);
+        return originalArena;
+    }
+
+    MemorySegment originalLibraryLoadEntry(WindowsOriginalJvmCandidate candidate, int index) {
+        requireOriginalLibraryLoadInputs(candidate);
+        if (index != 0 && index != 1) throw new IllegalArgumentException("Unknown fixed library load entry");
+        return entries[index == 0 ? 1 : 5]; // Fixed-name PIN and fixed LoadLibraryExW only.
+    }
+
+    void requireOriginalLoadedImage(WindowsLibraryLoadInvocation.Result result) {
+        requireCompleted();
+        if (result == null) throw new IllegalArgumentException("Missing original library load result");
+        requireOriginalJvm(originalJvm);
+        result.retainedInvocation.requireOriginalBinding(result, entries[5], originalArena, originalJvm);
+    }
+
+    Arena originalLoadedImageArena(WindowsLibraryLoadInvocation.Result result) {
+        requireOriginalLoadedImage(result);
+        return originalArena;
+    }
+
+    WindowsOriginalJvmCandidate originalLoadedImageJvm(WindowsLibraryLoadInvocation.Result result) {
+        requireOriginalLoadedImage(result);
+        return originalJvm;
+    }
+
+    MemorySegment originalLoadedImageEntry(WindowsLibraryLoadInvocation.Result result, int index) {
+        requireOriginalLoadedImage(result);
+        // No caller-supplied callable address: only the original export/query/read entries are available.
+        if (index != 4 && index != 6 && index != 7) {
+            throw new IllegalArgumentException("Unknown fixed loaded image observation entry");
+        }
+        return entries[index];
+    }
+
     void requireOriginalImports(WindowsSystemImportResolution candidate) {
         requireCompleted();
         if (candidate == null || imports != candidate) {

@@ -292,7 +292,15 @@ A future caller must transfer the whole result's ownership to the permanent JNI 
 only a borrowed address. Count/address validation alone is not proof of the original JVM's identity.
 
 `WindowsLibraryLoadInvocation` implements the fixed post-admission `LoadLibraryExW` call with a bounded
-canonical absolute DLL path, NULL reserved file argument and `LOAD_LIBRARY_SEARCH_SYSTEM32` only. Real
+canonical absolute DLL path, NULL reserved file argument and `LOAD_LIBRARY_SEARCH_SYSTEM32` only.
+Its preparation now requires the exact bootstrap and its original JVM; the old caller-supplied callable
+entry/arena overload is absent. Before loading, the process-owned attempt calls that bootstrap's fixed
+`GetModuleHandleExW(PIN)` for `p2pkit-windows-profile.dll`. Only a confirmed false return, NULL output and
+`ERROR_MOD_NOT_FOUND` (126) proceed. An existing module, contradictory output or incomplete return refuses
+before `LoadLibraryExW`; any acquired PIN remains retained. Probe buffers are quarantined if native return
+or output readback is uncertain. No retry, unpin, basename substitution or search fallback is allowed.
+The absence observation is not an atomic exclusion of arbitrary concurrent loading, nor startup/installer
+authority; the reviewed process/startup boundary remains required. Real
 preparation checks the original boot `java.base` Windows-x64 linker, not mutable OS/architecture hints. It
 captures `GetLastError` in the same downcall and captures the Windows-x64 HMODULE return register as a
 primitive `long` before any allocating segment wrapper, error readback or scope recheck. Only after those
@@ -392,6 +400,35 @@ high-32-bit count mismatch, exact read-only header policy, region/protection cha
 refusal, independent owner scopes, synchronous return and retained cleanup failures. Writable, copy-on-write
 and executable header refusals complete one query and no read, retaining their original ownership and cleanup
 checks. No installed-runtime or native-storage credit follows.
+
+## Once-owned loaded-image comparison
+
+`WindowsLibraryLoadInvocation.Result` attaches one
+`WindowsLoadedProfileImageVerification` before any export lookup or image read.
+The attachment derives its module, arena, original JVM and fixed OS entries from
+that exact load and bootstrap. It retains every export/read invocation and partial
+result, then uses the real Java17 PE verifier to compare all planned header/code
+pages and IAT slots. JNI ordering selects the original scoped export views; it
+never turns a returned numeric comparison result into a new callable pointer.
+
+Owned file comparisons must retain the same original DLL file/path and prebound
+system cohort. The separate conditional development comparison requires the
+original bootstrap's exact kernel32 resolver and exact unowned byte plan. Neither
+route falls back to the other after failure. Failure consumes the attachment and
+retains the complete original chain; no retry, unload or provider publication is
+introduced. After full comparison, the zero-argument `registerOriginalJni()` reserves
+one attempt and obtains only the same original JVM acquisition, declaring class,
+23 verified views and registrar. It retains the exact VM result, registration frame,
+roots and successful/failed native owner. Preparation/controller failures also seal
+the attachment without speculative frame retirement or retry. No supplied numeric
+address array, alternate VM or native registration callback enters this composition.
+The actual deny-storage DLL fixture uses this same comparison and registration
+sequence; its original bad-address registrar control remains separate.
+
+This is post-load composition, **not** the independently trusted first-load or
+existing-mapping/backing-file authority. The public loader remains unavailable;
+original installation/runtime authority and productive activation are still
+required. Component tests do not qualify installed protected storage.
 
 ## Conditional first-system-call candidate (not production authority)
 

@@ -88,6 +88,7 @@ def main():
                         "ProtectedProfileDllSnapshotTests" in name or
                         "PackagedVerifierTests" in name or
                         "OriginalProfileDllSystemImportsTests" in name or
+                        "LoadedProfileImageVerificationTests" in name or
                         "LoadedRegistrationTests" in name or "InstalledProviderTests" in name or
                         name.startswith("META-INF/versions/") for name in entries),
                 "Noncanonical production adapter inventory")
@@ -239,6 +240,15 @@ def main():
     connected_run("installed-provider-unavailable", "InstalledProviderTests", [str(main_directory),
                   bindings[2]["sha256"], bindings[3]["sha256"], bindings[1]["sha256"], bindings[4]["sha256"]],
         r"WINDOWS_INSTALLED_PROVIDER_REFUSAL_PASS scope=REAL_JDK21_TO_JDK17_TYPED_REFUSAL_NOT_INSTALLED_OR_NATIVE\n")
+    loaded_image_cases = ["unattached", "once", "thread", "unprepared", "owned-required", "order",
+                          "wrong-order", "substituted-view", "missing-name", "duplicate-name", "closed-scope",
+                          "declaration", "registration-before-verification", "registration-after-failure",
+                          "registration-thread"]
+    for case in loaded_image_cases:
+        run("loaded-image-verification-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".LoadedProfileImageVerificationTests", case], 0,
+            "WINDOWS_LOADED_IMAGE_VERIFICATION_PASS case=" + re.escape(case) +
+            r" scope=INERT_BINDING_NOT_NATIVE_OR_AUTHORITY\n", "")
     run("loaded-registration-diagnostics", base + ["--patch-module", MODULE + "=" + str(classes),
         "--module", MODULE + "/" + PACKAGE + ".LoadedRegistrationTests", "diagnostics"], 0,
         r"WINDOWS_LOADED_REGISTRATION_DIAGNOSTICS_PASS scope=INERT_FORMATTING_NOT_DLL_OR_AUTHORITY\n", "")
@@ -362,7 +372,10 @@ def main():
             r" scope=JDK_UPCALL_MARSHALING_NOT_VM_LOOKUP_OR_AUTHORITY\n", "")
     load_cases = ["success", "arguments", "virtual", "thread", "reentrant", "duplicate", "close-after-result",
                   "retired-frame", "null-module", "unaligned-module", "high-module", "readback-failure",
-                  "clear-failure", "closed-entry", "late-scope-close", "return-failure", "invocation-failure"]
+                  "clear-failure", "closed-entry", "late-scope-close", "return-failure", "invocation-failure",
+                  "probe-present", "probe-malformed-present", "probe-false-handle", "probe-true-zero",
+                  "probe-wrong-error", "probe-stale-output", "probe-invocation-failure", "probe-return-failure",
+                  "probe-output-readback", "probe-error-readback", "probe-foreign-jvm", "probe-substituted-entry"]
     capture_scope = "WINDOWS_GET_LAST_ERROR" if os.name == "nt" else "NOT_EXECUTED"
     byte_cases = ["full", "short", "eof", "false", "pending", "throw-after-return", "excess-count",
                   "unsigned-count", "thread", "bounds", "limit"]
@@ -570,7 +583,7 @@ def main():
             r" byteObservation=(NOT_EXECUTED_LEAF_POLICY_REFUSED|NOT_EXECUTED_ANCESTOR_POLICY_REFUSED|COMPLETED)\n", "")
         original_dll_bytes_observation = dll_bytes.strip().rsplit("=", 1)[1]
         loaded_registration_scope = "DEV_TEST_DLL_DENY_STORAGE_NOT_INSTALLED_AUTHORITY_OR_PROVIDER"
-        for case in ("pin", "success", "address"):
+        for case in ("pin", "success", "address", "preloaded"):
             connected_run("loaded-registration-" + case, "LoadedRegistrationTests",
                 [case, str(dll), bound["sha256"], str(bound["bytes"]), receipt["source"], receipt["tree"],
                  str(main_directory), bindings[0]["sha256"], bindings[1]["sha256"]],

@@ -65,6 +65,8 @@ ADAPTER_ENTRIES = (
     ADAPTER_PREFIX + "WindowsLibraryLoadInvocation.class",
     ADAPTER_PREFIX + "WindowsLibraryLoadInvocation$Failure.class",
     ADAPTER_PREFIX + "WindowsLibraryLoadInvocation$Result.class",
+    ADAPTER_PREFIX + "WindowsLoadedProfileImageVerification.class",
+    ADAPTER_PREFIX + "WindowsLoadedProfileImageVerification$Failure.class",
     ADAPTER_PREFIX + "WindowsExportLookupInvocation.class",
     ADAPTER_PREFIX + "WindowsExportLookupInvocation$Failure.class",
     ADAPTER_PREFIX + "WindowsExportLookupInvocation$Result.class",

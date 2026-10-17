@@ -222,6 +222,27 @@ final class WindowsPackagedVerifier {
         } catch (Throwable caught) { throw originalBytes.failOriginalPackagedVerifier(this, caught); }
     }
 
+    void requireDevelopmentImportComparison() {
+        requirePrepared();
+        if (originalBytes != null || systemImportsAttempted) {
+            throw new IllegalStateException("Owned DLL comparison cannot substitute development system imports");
+        }
+    }
+
+    void requireOriginalLoadedFile(WindowsLibraryLoadInvocation.Result load) {
+        requirePrepared();
+        if (originalBytes == null) throw new IllegalStateException("No original owned DLL bytes for this load");
+        originalBytes.requireOriginalLoadedFile(this, load);
+    }
+
+    void requireOriginalImportBootstrap(WindowsSystemBootstrapCandidate bootstrap) {
+        requirePrepared();
+        if (bootstrap == null || originalBytes == null || !systemImportsPrepared) {
+            throw new IllegalStateException("Original owned system imports were not prepared for this bootstrap");
+        }
+        originalSystemModules.requireOriginalBootstrap(bootstrap);
+    }
+
     long[] originalSystemImportTargets() {
         requirePrepared();
         if (!systemImportsPrepared) throw new IllegalStateException("Original system imports have not been compared");

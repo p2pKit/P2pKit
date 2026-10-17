@@ -94,6 +94,11 @@ final class WindowsOriginalProfileDllBytesCandidate {
         }
     }
 
+    void requireOriginalLoadedFile(WindowsPackagedVerifier candidate, WindowsLibraryLoadInvocation.Result load) {
+        requireOriginalPackagedVerifier(candidate);
+        file.requireOriginalLoadedFile(this, load);
+    }
+
     WindowsOriginalSystemModulesCandidate originalSystemModules(WindowsPackagedVerifier candidate) {
         requireOriginalPackagedVerifier(candidate);
         return file.originalSystemModules(this);

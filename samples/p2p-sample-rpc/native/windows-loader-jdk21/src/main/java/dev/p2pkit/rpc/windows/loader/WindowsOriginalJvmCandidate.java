@@ -360,6 +360,14 @@ final class WindowsOriginalJvmCandidate {
     boolean completed() { requireCompleted(); return true; }
     boolean singleVirtualMachineObserved() { requireCompleted(); return true; }
 
+    WindowsJvmAcquisitionInvocation.Result originalVirtualMachineFor(WindowsLoadedProfileImageVerification image) {
+        requireCompleted();
+        if (image == null || image.originalJvm() != this) {
+            throw new IllegalStateException("Verified image does not retain this original JVM");
+        }
+        return acquired; // Exact retained acquisition; no numeric reconstruction, lookup or alternate VM.
+    }
+
     WindowsOriginalJvmFileCandidate inspectFile() {
         requireCompleted();
         if (fileAttempted) throw new IllegalStateException("Original JVM file candidate was already attempted");

@@ -219,6 +219,14 @@ final class WindowsOriginalProfileDllFileCandidate {
         return bootstrap.originalProfileDllSystemModules(this);
     }
 
+    void requireOriginalLoadedFile(WindowsOriginalProfileDllBytesCandidate candidate,
+                                   WindowsLibraryLoadInvocation.Result load) {
+        requireOriginalBytes(candidate);
+        requireOriginalByteInputs();
+        bootstrap.requireOriginalLoadedImage(load);
+        load.retainedInvocation.requireOriginalFile(this, candidatePath);
+    }
+
     void requireOriginalByteInputs() {
         requireCompleted();
         requireOriginalNativeInputs();
