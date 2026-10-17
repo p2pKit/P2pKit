@@ -4,9 +4,11 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Fixed JNI_GetCreatedJavaVMs-shaped FFM round trips to inert JDK upcalls, NOT actual VM lookup. */
@@ -19,18 +21,33 @@ public final class VmAcquisitionInvocationTests {
     private static MemorySegment expectedVm;
     private static Throwable callbackFailure;
     private static int callbacks;
+    private static Arena originalArena;
+    private static byte[] expectedVmBytes;
+    private static byte[] expectedCountBytes;
+    private static final LinkageError RETURN_FAILURE = new LinkageError("private inert JVM call-return failure");
 
     public static void main(String[] arguments) throws Throwable {
         check(arguments.length == 1);
         mode = arguments[0];
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         Arena runtimeArena = Arena.ofConfined();
+        originalArena = runtimeArena;
         try {
             expectedVm = runtimeArena.allocate(8, 8); // Inert data, never interpreted as a real JavaVM.
             MemorySegment entry = stub(runtimeArena);
             if (mode.equals("arguments")) invalidArguments(entry, runtimeArena);
             if (mode.equals("virtual")) virtualRefusal(entry, runtimeArena);
             invocation = WindowsJvmAcquisitionInvocation.prepare(RUNTIME_OWNER, entry, runtimeArena);
+            if (mode.equals("return-failure") || mode.equals("late-scope-close")) {
+                MethodHandle after = MethodHandles.lookup().findStatic(VmAcquisitionInvocationTests.class,
+                    "afterNativeReturn", MethodType.methodType(int.class, int.class));
+                setField("call", MethodHandles.filterReturnValue((MethodHandle) field("call"), after));
+            }
+            if (mode.equals("invocation-failure")) {
+                MethodHandle failed = MethodHandles.throwException(int.class, LinkageError.class).bindTo(RETURN_FAILURE);
+                setField("call", MethodHandles.dropArguments(failed, 0,
+                    MemorySegment.class, int.class, MemorySegment.class));
+            }
             if (mode.equals("partial-frame-alias")) {
                 // A real 4-byte-aligned count buffer need not be 8-byte aligned. Force that valid placement.
                 Arena frame = (Arena) field("frameArena");
@@ -44,6 +61,8 @@ public final class VmAcquisitionInvocationTests {
             MemorySegment vmBuffer = (MemorySegment) field("vmBuffer");
             MemorySegment countBuffer = (MemorySegment) field("countBuffer");
             check(vmBuffer.byteSize() == 8 && countBuffer.byteSize() == 4);
+            expectedVmBytes = vmBuffer.toArray(ValueLayout.JAVA_BYTE);
+            expectedCountBytes = countBuffer.toArray(ValueLayout.JAVA_BYTE);
             if (mode.equals("thread")) wrongThreadRefusal(reserved);
             if (mode.equals("closed-entry")) runtimeArena.close();
             if (mode.equals("retired-frame")) invocation.retireFrame();
@@ -68,15 +87,37 @@ public final class VmAcquisitionInvocationTests {
                 case "retired-frame" -> expect(IllegalStateException.class, invocation::invoke);
                 case "status", "zero-count", "multiple-count", "negative-count", "null-vm", "unaligned-vm",
                      "high-vm", "frame-alias", "partial-frame-alias", "clear-failure", "count-clear-failure", "readback-cleanup",
-                     "closed-entry" -> {
+                     "closed-entry", "invocation-failure", "return-failure", "late-scope-close", "readback-failure" -> {
                     WindowsJvmAcquisitionInvocation.Failure failure =
                         (WindowsJvmAcquisitionInvocation.Failure)
                             expect(WindowsJvmAcquisitionInvocation.Failure.class, invocation::invoke);
                     check(failure.retainedInvocation == invocation && failure.getCause() == null &&
                         failure.getSuppressed().length == 0 && invocation.runtimeOwner == RUNTIME_OWNER);
-                    if (mode.equals("closed-entry")) {
+                    if (unknownReturn()) {
+                        check(failure.invocationFailure == RETURN_FAILURE && failure.readbackFailure == null &&
+                            !failure.retirementFailed() && field("failure") == failure && field("vm") == null);
+                        // This assertion precedes new-field reflection so the prior JAR fails for
+                        // destroying the original frame, not because bookkeeping fields are absent.
+                        check(vmBuffer.scope().isAlive() && countBuffer.scope().isAlive());
+                        check(Arrays.equals(expectedVmBytes, vmBuffer.toArray(ValueLayout.JAVA_BYTE)) &&
+                            Arrays.equals(expectedCountBytes, countBuffer.toArray(ValueLayout.JAVA_BYTE)));
+                        check((boolean) field("nativeReturnUnconfirmed") && !(boolean) field("nativeReturned") &&
+                            (int) field("nativeStatus") == 0 && !(boolean) field("retired") &&
+                            !(boolean) field("succeeded"));
+                        invocation.retireFrame();
+                        invocation.retireFrame();
+                        wrongThreadRefusal(reserved);
+                        check(vmBuffer.scope().isAlive() && countBuffer.scope().isAlive() &&
+                            Arrays.equals(expectedVmBytes, vmBuffer.toArray(ValueLayout.JAVA_BYTE)) &&
+                            Arrays.equals(expectedCountBytes, countBuffer.toArray(ValueLayout.JAVA_BYTE)) &&
+                            field("runtimeArena") == runtimeArena && field("entry") == entry &&
+                            ((Arena) field("frameArena")).scope().equals(vmBuffer.scope()));
+                    } else if (mode.equals("closed-entry")) {
                         check(failure.invocationFailure instanceof IllegalStateException &&
                             failure.readbackFailure == null && !failure.retirementFailed());
+                    } else if (mode.equals("readback-failure")) {
+                        check(failure.invocationFailure == null && failure.readbackFailure instanceof IndexOutOfBoundsException &&
+                            !failure.retirementFailed() && field("vm") == null);
                     } else if (mode.equals("clear-failure") || mode.equals("readback-cleanup")) {
                         check(failure.invocationFailure == null &&
                             (mode.equals("readback-cleanup") ? failure.readbackFailure instanceof IllegalStateException :
@@ -99,19 +140,43 @@ public final class VmAcquisitionInvocationTests {
                 default -> throw new AssertionError("Unknown original JVM invocation control");
             }
             if (callbackFailure != null) throw new AssertionError("Inert JVM upcall contract failed", callbackFailure);
-            int expectedCalls = mode.equals("closed-entry") || mode.equals("retired-frame") ? 0 : 1;
-            check(callbacks == expectedCalls && !vmBuffer.scope().isAlive() && !countBuffer.scope().isAlive());
-            if (!mode.equals("closed-entry") && !mode.equals("close-after-result")) {
+            int expectedCalls = mode.equals("closed-entry") || mode.equals("retired-frame") ||
+                mode.equals("invocation-failure") ? 0 : 1;
+            check(callbacks == expectedCalls && vmBuffer.scope().isAlive() == unknownReturn() &&
+                countBuffer.scope().isAlive() == unknownReturn());
+            check((boolean) field("nativeReturnUnconfirmed") == unknownReturn() &&
+                (boolean) field("nativeReturned") == (expectedCalls == 1 && !unknownReturn()) &&
+                (int) field("nativeStatus") == (mode.equals("status") ? -1 : 0) &&
+                (boolean) field("retired") != unknownReturn());
+            if (!mode.equals("closed-entry") && !mode.equals("close-after-result") && !mode.equals("late-scope-close")) {
                 check(runtimeArena.scope().isAlive() && entry.scope().isAlive() && expectedVm.scope().isAlive());
             }
             expect(IllegalStateException.class, invocation::invoke);
             check(callbacks == expectedCalls);
         } finally {
-            // Only the test owns these inert arenas; production invocation never closes runtime ownership.
+            // Only this test owns the inert runtime, and every actual callback has already returned.
+            // Unknown-return private frames remain quarantined until process exit; no real VM was acquired.
             if (runtimeArena.scope().isAlive()) runtimeArena.close();
         }
         System.out.println("WINDOWS_JVM_FFM_ACQUISITION_PASS case=" + mode +
             " scope=JDK_UPCALL_MARSHALING_NOT_VM_LOOKUP_OR_AUTHORITY");
+    }
+
+    private static boolean unknownReturn() {
+        return mode.equals("invocation-failure") || mode.equals("return-failure");
+    }
+
+    private static int afterNativeReturn(int status) throws ReflectiveOperationException {
+        check(status == 0 && callbacks == 1);
+        if (mode.equals("return-failure")) {
+            // Native output bytes already exist, but the caller has not observed a primitive return.
+            expectedVmBytes = ((MemorySegment) field("vmBuffer")).toArray(ValueLayout.JAVA_BYTE);
+            expectedCountBytes = ((MemorySegment) field("countBuffer")).toArray(ValueLayout.JAVA_BYTE);
+            throw RETURN_FAILURE;
+        }
+        // Closing inside an acquired upcall would be refused; this runs after its actual return.
+        originalArena.close();
+        return status;
     }
 
     private static MemorySegment stub(Arena arena) throws ReflectiveOperationException {
@@ -156,6 +221,9 @@ public final class VmAcquisitionInvocationTests {
                     mode.equals("count-clear-failure") ? "countBuffer" : "vmBuffer");
                 buffer.setAccessible(true);
                 buffer.set(invocation, ((MemorySegment) buffer.get(invocation)).asReadOnly());
+            }
+            if (mode.equals("readback-failure")) {
+                setField("vmBuffer", ((MemorySegment) field("vmBuffer")).asSlice(0, 1));
             }
             return mode.equals("status") ? -1 : 0;
         } catch (Throwable caught) {
@@ -214,6 +282,12 @@ public final class VmAcquisitionInvocationTests {
         Field field = WindowsJvmAcquisitionInvocation.class.getDeclaredField(name);
         field.setAccessible(true);
         return field.get(invocation);
+    }
+
+    private static void setField(String name, Object value) throws ReflectiveOperationException {
+        Field field = WindowsJvmAcquisitionInvocation.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(invocation, value);
     }
 
     private interface Action { void run() throws Throwable; }

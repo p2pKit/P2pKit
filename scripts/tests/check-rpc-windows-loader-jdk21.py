@@ -353,7 +353,8 @@ def main():
     vm_cases = ["success", "arguments", "virtual", "thread", "reentrant", "close-after-result", "retired-frame",
                 "status", "zero-count", "multiple-count", "negative-count", "null-vm", "unaligned-vm",
                 "high-vm", "frame-alias", "partial-frame-alias", "clear-failure", "count-clear-failure",
-                "readback-cleanup", "closed-entry"]
+                "readback-cleanup", "closed-entry", "invocation-failure", "return-failure", "late-scope-close",
+                "readback-failure"]
     for case in vm_cases:
         run("vm-acquisition-invocation-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
             "--module", MODULE + "/" + PACKAGE + ".VmAcquisitionInvocationTests", case], 0,

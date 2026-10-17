@@ -277,6 +277,11 @@ DLL loading, protected NTFS, installed application or production authority quali
 disjoint eight-byte VM output and four-byte count output, requires status zero and exactly one positive,
 aligned VM pointer, and rejects pointers into its own output buffers. Its result retains the original runtime
 owner, arena and entry; retiring private buffers neither invalidates the original VM view nor closes its owner.
+The primitive JNI status is retained before output or scope readback. An unconfirmed native return quarantines
+the entire original VM/count frame unchanged, including across repeated retirement requests; it cannot publish
+a VM or authorize retry. Known pre-call failures and known-return validation/readback failures still retire
+their unused private frames. Inert pre-call and post-native-return failures test this distinction, not pending
+native work or original-JVM identity.
 There is no lookup, `JNI_CreateJavaVM`, attach/detach fallback or production numeric-address construction.
 A future caller must transfer the whole result's ownership to the permanent JNI registration owner, not pass
 only a borrowed address. Count/address validation alone is not proof of the original JVM's identity.

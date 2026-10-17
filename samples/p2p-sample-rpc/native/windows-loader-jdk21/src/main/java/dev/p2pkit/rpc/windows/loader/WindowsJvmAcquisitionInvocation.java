@@ -29,7 +29,8 @@ final class WindowsJvmAcquisitionInvocation {
 
         MemorySegment virtualMachine() {
             retainedInvocation.requireThread();
-            if (!retainedInvocation.succeeded) {
+            if (!retainedInvocation.succeeded || !retainedInvocation.retired ||
+                !retainedInvocation.nativeReturned || retainedInvocation.nativeReturnUnconfirmed) {
                 throw new IllegalStateException("Original JVM acquisition has not completed successfully");
             }
             retainedInvocation.requireOriginalRuntime();
@@ -69,6 +70,9 @@ final class WindowsJvmAcquisitionInvocation {
     private MemorySegment countBuffer;
     private MethodHandle call;
     private MemorySegment vm;
+    private int nativeStatus;
+    private boolean nativeReturned;
+    private boolean nativeReturnUnconfirmed;
     private boolean attempted;
     private boolean active;
     private boolean retired;
@@ -138,11 +142,15 @@ final class WindowsJvmAcquisitionInvocation {
         attempted = true;
         boolean accepted = false;
         try {
-            int status;
             try {
                 requireOriginalRuntime();
                 active = true;
-                try { status = (int) call.invokeExact(vmBuffer, 1, countBuffer); }
+                try {
+                    nativeReturnUnconfirmed = true;
+                    nativeStatus = (int) call.invokeExact(vmBuffer, 1, countBuffer);
+                    nativeReturned = true;
+                    nativeReturnUnconfirmed = false;
+                }
                 finally { active = false; }
             } catch (Throwable caught) {
                 failure.invocationFailure = caught;
@@ -154,7 +162,7 @@ final class WindowsJvmAcquisitionInvocation {
                 long address = observed.address();
                 // A JavaVM begins with an 8-byte interface pointer. Reject any overlap of that word,
                 // not merely a start address inside an output: countBuffer has only 4-byte alignment.
-                if (status != 0 || countBuffer.get(ValueLayout.JAVA_INT, 0) != 1 ||
+                if (nativeStatus != 0 || countBuffer.get(ValueLayout.JAVA_INT, 0) != 1 ||
                     address <= 0 || address > Long.MAX_VALUE - 8 || (address & 7) != 0 ||
                     (address < vmBuffer.address() + 8 && vmBuffer.address() < address + 8) ||
                     (address < countBuffer.address() + 4 && countBuffer.address() < address + 8)) {
@@ -170,7 +178,10 @@ final class WindowsJvmAcquisitionInvocation {
             }
         } finally {
             try { retireFrame(); }
-            finally { succeeded = accepted && !failure.retirementFailed(); }
+            finally {
+                succeeded = accepted && retired && nativeReturned && !nativeReturnUnconfirmed &&
+                    !failure.retirementFailed();
+            }
         }
         return result;
     }
@@ -179,6 +190,9 @@ final class WindowsJvmAcquisitionInvocation {
     void retireFrame() {
         requireThread();
         if (active) throw new IllegalStateException("Original JVM invocation is still active");
+        // A thrown handle does not establish native return. Retain both original output buffers
+        // and their arena instead of inferring argument retirement from the Java active flag.
+        if (nativeReturnUnconfirmed) return;
         if (retired) {
             if (failure.retirementFailed()) throw failure;
             return;
