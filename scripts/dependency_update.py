@@ -26,6 +26,12 @@ HELPERS = (
     "scripts/check-dependency-verification.sh", "scripts/review-dependency-verification.sh",
     "scripts/validate-gradle-plugin-marker.sh", "scripts/validate-gradle-plugin-metadata.py",
     "scripts/resolve-gradle-variant-artifact.py", "gradle/plugin-provenance-policy.txt",
+    "scripts/dependency_update.py", "scripts/run-ci-terminal-component.py",
+    "scripts/diagnostics/apple-terminal-context.m", "scripts/ci_evidence.py", "scripts/audit_processes.py",
+    "scripts/audit_exec_gate.py",
+    "scripts/with-darwin-terminal-context.py", "scripts/with-darwin-launchd-context.py",
+    "scripts/rpc_apple_network_diagnostics.py", "scripts/rpc_apple_runner_context.py", "scripts/hosted_evidence.py",
+    "scripts/hosted_evidence_primitives.py",
 )
 XML = "gradle/verification-metadata.xml"
 # Two deliberately distinct dumpers read the four configured Android outputs.
@@ -197,7 +203,8 @@ def execute(controller, candidate, request, output, *, run=subprocess.run, repor
         # verification-policy, strict resolution and plugin-floor checks first.
         generator_code = run([str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]],
                              cwd=candidate, check=False,
-                             env={**os.environ, "P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED": "1"}).returncode
+                             env={**os.environ, "P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED": "1",
+                                  "P2PKIT_DEPENDENCY_TERMINAL_GENERATE": "1"}).returncode
         step_exit_diagnostic("GENERATOR", generator_code)
     finally:
         try:

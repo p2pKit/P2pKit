@@ -9,7 +9,7 @@ on:
         description: all, one component, or a focused diagnostic (not qualification)
         default: all
         type: choice
-        options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, macos-shared, bundle-diagnostic, jmdns-diagnostic, consumers-pom-diagnostic]
+        options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, macos-shared, bundle-diagnostic, jmdns-diagnostic, published-consumers-diagnostic, consumers-pom-diagnostic]
       qualification_selection:
         description: Optional exact-source selection JSON to aggregate previously successful components without rebuilding
         default: ''
@@ -52,7 +52,7 @@ jobs:
   qualify:
     name: Qualify release components
     needs: [plan, component]
-    if: ${{ always() && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && needs.plan.result == 'success' && (inputs.qualification_selection != '' || ((inputs.component == 'all' || inputs.component == '') && needs.component.result == 'success')) }}
+    if: ${{ always() && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && needs.plan.result == 'success' && (inputs.qualification_selection != '' || ((inputs.component == 'all' || inputs.component == '') && needs.component.result == 'success')) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -75,7 +75,7 @@ jobs:
           overwrite: false
   complete-gate:
     needs: [qualify]
-    if: ${{ always() && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name != 'workflow_dispatch' || inputs.component == 'all' || inputs.qualification_selection != '') }}
+    if: ${{ always() && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name != 'workflow_dispatch' || inputs.component == 'all' || inputs.qualification_selection != '') }}
     runs-on: ubuntu-24.04
     steps:
       - name: Require real complete qualification, including all failed/skipped dependencies

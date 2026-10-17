@@ -78,6 +78,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(["gradle.lockfile", D.XML], [row["path"] for row in result["changes"]])
         self.assertEqual([str(self.candidate / "scripts/prepare-dependency-update.sh"), self.request["dependency_base_sha"]], self.calls[0][0])
         self.assertEqual("1", self.calls[0][1]["env"]["P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED"])
+        self.assertEqual("1", self.calls[0][1]["env"]["P2PKIT_DEPENDENCY_TERMINAL_GENERATE"])
         self.assertNotIn("env", self.calls[1][1])
         self.assertEqual(([str(self.candidate / "gradlew"), "--stop"], 90), (self.calls[1][0], self.calls[1][1]["timeout"]))
         self.assertEqual({"generated-dependencies.patch", "generated-dependencies.json"}, {p.name for p in self.output.iterdir()})
@@ -98,6 +99,7 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(result["releaseQualified"])
         self.assertEqual(2, len(self.calls))  # modeled real generator, then original bounded stop
         self.assertEqual("1", self.calls[0][1]["env"]["P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED"])
+        self.assertEqual("1", self.calls[0][1]["env"]["P2PKIT_DEPENDENCY_TERMINAL_GENERATE"])
         self.assertNotIn("env", self.calls[1][1])
         self.assertEqual(before_environment, dict(os.environ))
         self.reports.assert_called_once()
@@ -395,29 +397,33 @@ class GeneratorPhaseTests(unittest.TestCase):
                     "phase={'check-gradle-wrapper.sh':'WRAPPER','check-dependency-verification.sh':'INTEGRITY',"
                     "'review-dependency-verification.sh':'PROVENANCE','git':'DIFF'}.get(name)\n"
                     "if name=='gradlew': phase='GENERATE' if sys.argv[1]=='resolveAndLockAll' else 'STRICT'\n"
+                    "if name=='python3': phase='GENERATE'\n"
                     "with open(os.environ['TRACE'],'a') as stream: stream.write(json.dumps([phase,sys.argv[1:]])+'\\n')\n"
                     "sys.exit(int(os.environ['FAIL_CODE']) if phase==os.environ.get('FAIL_PHASE') else 0)\n")
             for name in ("scripts/check-gradle-wrapper.sh", "scripts/check-dependency-verification.sh",
-                         "scripts/review-dependency-verification.sh", "gradlew", "bin/git"):
+                         "scripts/review-dependency-verification.sh", "gradlew", "bin/git", "bin/python3"):
                 path = root / name
                 path.write_text(fake); path.chmod(0o755)
             trace = root / "trace"
-            for failed in (None, *range(len(expected))):
+            for terminal, failed in ((terminal, failed) for terminal in (False, True) for failed in (None, *range(len(expected)))):
+                current = list(expected)
+                if terminal:
+                    current[1] = ("GENERATE", ["python3", "-B", "scripts/run-ci-terminal-component.py", "--component", "dependency-generate"])
                 trace.write_text("")
                 count = len(expected) if failed is None else failed + 1
                 code = 0 if failed is None else 37 + failed
                 environment = {**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
                                "TRACE": str(trace), "FAIL_PHASE": "" if failed is None else expected[failed][0],
-                               "FAIL_CODE": str(code)}
+                               "FAIL_CODE": str(code), "P2PKIT_DEPENDENCY_TERMINAL_GENERATE": "1" if terminal else ""}
                 result = subprocess.run(["bash", str(script), "synthetic-base"], env=environment,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-                with self.subTest(failed=failed):
+                with self.subTest(terminal=terminal, failed=failed):
                     self.assertEqual(result.returncode, code)
                     self.assertEqual([json.loads(line) for line in trace.read_text().splitlines()],
-                                     [[phase, argv[1:]] for phase, argv in expected[:count]])
+                                     [[phase, argv[1:]] for phase, argv in current[:count]])
                     self.assertEqual(result.stderr.decode().splitlines(),
                                      [f"DEPENDENCY_GENERATOR_PHASE {phase} EXIT {code if i == failed else 0}"
-                                      for i, (phase, _) in enumerate(expected[:count])])
+                                      for i, (phase, _) in enumerate(current[:count])])
                     self.assertEqual(b"RESULT: PASS" in result.stdout, failed is None)
 
 

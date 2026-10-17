@@ -43,6 +43,12 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', consumers-pom-diagnostic]', ']')
     altered('.github/workflows/ci.yml', "inputs.component != 'consumers-pom-diagnostic' && inputs.component", 'inputs.component')
   end
+  def test_published_consumer_diagnostic_requires_choice_and_cannot_qualify
+    altered('.github/workflows/ci.yml', ', published-consumers-diagnostic,', ',')
+    altered('.github/workflows/ci.yml', "inputs.component != 'published-consumers-diagnostic' && inputs.component", 'inputs.component')
+    altered('.github/workflows/ci.yml', "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'published-consumers-diagnostic' && inputs.component",
+            "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component")
+  end
   def test_complete_consumers_remain_independently_required
     altered('.github/workflows/ci.yml', ', consumers,', ',')
   end
