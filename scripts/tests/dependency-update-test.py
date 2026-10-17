@@ -384,7 +384,8 @@ class GeneratorPhaseTests(unittest.TestCase):
             expected = [
                 ("WRAPPER", ["scripts/check-gradle-wrapper.sh"]),
                 ("GENERATE", ["./gradlew", "resolveAndLockAll", "--write-locks", "--write-verification-metadata",
-                              "sha256", "--continue", "--no-configure-on-demand", "--no-daemon", "--console=plain"]),
+                              "sha256", "--continue", "--no-configure-on-demand", "--no-daemon",
+                              "--max-workers=2", "--no-parallel", "--console=plain"]),
                 ("INTEGRITY", ["scripts/check-dependency-verification.sh"]),
                 ("STRICT", ["./gradlew", "verifyBuildPluginSecurityFloors", "help",
                             "--dependency-verification=strict", "--no-daemon", "--console=plain"]),

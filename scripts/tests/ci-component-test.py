@@ -1118,7 +1118,7 @@ class TerminalDependencyTests(unittest.TestCase):
         self.assertNotIn('dependency-generate', C.DIAGNOSTICS)
         self.assertEqual(T.command({}, 'dependency-generate'), [str(ROOT / 'gradlew'),
             'resolveAndLockAll', '--write-locks', '--write-verification-metadata', 'sha256', '--continue',
-            '--no-configure-on-demand', '--no-daemon', '--console=plain'])
+            '--no-configure-on-demand', '--no-daemon', '--max-workers=2', '--no-parallel', '--console=plain'])
 
     def test_inherited_deadline_rejects_missing_expired_future_and_malformed_values(self):
         T = self.T
