@@ -70,6 +70,11 @@ administrator's command-line destination override, or admit the productive
 provider. The actual installed root and ordinary-user behavior still require
 runtime validation.
 
+The MSI payload inspector verifies the actual decompiled package's x64
+`ALLUSERS=1` default, `ProgramFiles64Folder` directory chain and absence of the
+directory chooser. Its `installationDefaults` receipt is static package
+validation only, not an installed-root or ACL admission.
+
 ## Failure and security boundaries
 
 - Staging accepts an empty destination or an exact complete prior two-file byte stage. Partial, unknown, modified,

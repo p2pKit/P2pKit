@@ -53,6 +53,11 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.save_receipt()
         self.xml = ET.Element(CHECK.NS + "Wix")
         self.product = ET.SubElement(self.xml, CHECK.NS + "Product")
+        # Exact scope representation observed in the ccb18938 hosted dark output:
+        # x64 Package and ALLUSERS=1; no authored InstallScope attribute survives.
+        ET.SubElement(self.product, CHECK.NS + "Package", Platform="x64", Compressed="yes",
+                      InstallerVersion="200", Languages="1033")
+        ET.SubElement(self.product, CHECK.NS + "Property", Id="ALLUSERS", Value="1")
         base = ET.SubElement(self.product, CHECK.NS + "Directory", Id="TARGETDIR", Name="SourceDir")
         base = ET.SubElement(base, CHECK.NS + "Directory", Id="ProgramFiles64Folder")
         install = ET.SubElement(base, CHECK.NS + "Directory", Id="INSTALLDIR", Name="P2pKit Sample")
@@ -101,6 +106,114 @@ class StaticMsiPayloadTest(unittest.TestCase):
             self.assertEqual("NOT_PERFORMED", result[key])
         self.assertIn("CALLER_OWNED", result["extractionInvocation"])
         self.assertNotIn(str(self.root), json.dumps(result))
+
+    def test_actual_dark_machine_default_is_observed_without_installed_authority(self):
+        self.assertNotIn("InstallScope", self.product.find(CHECK.NS + "Package").attrib)
+        result = self.inspect()
+        self.assertEqual({"scope": "STATIC_MSI_DEFAULTS_NOT_INSTALLED_AUTHORITY", "platform": "x64", "allUsers": "1",
+                          "directoryChain": [{"id": "TARGETDIR", "name": "SourceDir"},
+                                             {"id": "ProgramFiles64Folder", "name": None},
+                                             {"id": "INSTALLDIR", "name": "P2pKit Sample"}],
+                          "directoryChooser": "NOT_DECLARED", "administrativeOverrides": "NOT_PREVENTED"},
+                         result["installationDefaults"])
+        self.assertEqual("NOT_PERFORMED", result["installation"])
+        self.product.find(CHECK.NS + "Package").set("InstallScope", "perMachine")
+        self.save_xml()
+        self.assertEqual(result["installationDefaults"], self.inspect()["installationDefaults"])
+
+    def test_missing_duplicate_or_conflicting_package_scope_is_refused(self):
+        package = self.product.find(CHECK.NS + "Package")
+        self.product.remove(package)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "package"):
+            self.inspect()
+        self.product.append(package)
+        duplicate = ET.SubElement(self.product, CHECK.NS + "Package", Platform="x64")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "package"):
+            self.inspect()
+        self.product.remove(duplicate)
+        for name, value in (("Platform", "x86"), ("Platform", "arm64"), ("InstallScope", "perUser")):
+            original = dict(package.attrib)
+            package.set(name, value)
+            self.save_xml()
+            with self.subTest(name=name, value=value), self.assertRaisesRegex(ValueError, "package"):
+                self.inspect()
+            package.attrib.clear()
+            package.attrib.update(original)
+
+    def test_allusers_is_exact_and_per_user_or_duplicate_properties_refuse(self):
+        prop = self.product.find(CHECK.NS + "Property")
+        for value in ("", "0", "2", "[ALLUSERS]"):
+            prop.set("Value", value)
+            self.save_xml()
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "properties"):
+                self.inspect()
+        self.product.remove(prop)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "properties"):
+            self.inspect()
+        prop.set("Value", "1")
+        self.product.append(prop)
+        for identifier in ("ALLUSERS", "MSIINSTALLPERUSER"):
+            other = ET.SubElement(self.product, CHECK.NS + "Property", Id=identifier, Value="1")
+            self.save_xml()
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(ValueError, "properties"):
+                self.inspect()
+            self.product.remove(other)
+
+    def test_install_default_root_name_and_ancestry_are_exact(self):
+        directory = {node.get("Id"): node for node in self.xml.iter(CHECK.NS + "Directory")}
+        for identifier, attribute, value in (("ProgramFiles64Folder", "Id", "LocalAppDataFolder"),
+                                            ("ProgramFiles64Folder", "Id", "ProgramFilesFolder"),
+                                            ("ProgramFiles64Folder", "Name", "other-root"),
+                                            ("TARGETDIR", "Name", "other-root"),
+                                            ("INSTALLDIR", "Name", "Other Application")):
+            node = directory[identifier]
+            original = dict(node.attrib)
+            node.set(attribute, value)
+            self.save_xml()
+            with self.subTest(identifier=identifier, attribute=attribute), self.assertRaisesRegex(ValueError, "directory"):
+                self.inspect()
+            node.attrib.clear()
+            node.attrib.update(original)
+        base, install = directory["ProgramFiles64Folder"], directory["INSTALLDIR"]
+        base.remove(install)
+        extra = ET.SubElement(base, CHECK.NS + "Directory", Id="extraParent", Name="extra")
+        extra.append(install)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "directory"):
+            self.inspect()
+
+    def test_direct_install_directory_property_cannot_override_default(self):
+        for value in ("", "C:\\Other", "[LocalAppDataFolder]"):
+            node = ET.SubElement(self.product, CHECK.NS + "Property", Id="INSTALLDIR", Value=value)
+            self.save_xml()
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "overrides"):
+                self.inspect()
+            self.product.remove(node)
+
+    def test_directory_chooser_properties_dialogs_and_routing_are_refused(self):
+        cases = [("Property", {"Id": "WIXUI_INSTALLDIR", "Value": "INSTALLDIR"}),
+                 ("Dialog", {"Id": "InstallDirDlg"}), ("Dialog", {"Id": "BrowseDlg"}),
+                 ("DialogRef", {"Id": "InstallDirDlg"}),
+                 ("Publish", {"Dialog": "InstallDirDlg", "Event": "NewDialog", "Value": "VerifyReadyDlg"}),
+                 ("Publish", {"Dialog": "WelcomeDlg", "Event": "NewDialog", "Value": "BrowseDlg"}),
+                 ("Publish", {"Property": "INSTALLDIR", "Value": "[LocalAppDataFolder]"}),
+                 ("Publish", {"Event": "SetTargetPath", "Value": "[WIXUI_INSTALLDIR]"})]
+        for tag, attributes in cases:
+            node = ET.SubElement(self.product, CHECK.NS + tag, **attributes)
+            self.save_xml()
+            with self.subTest(tag=tag, attributes=attributes), self.assertRaisesRegex(ValueError, "chooser"):
+                self.inspect()
+            self.product.remove(node)
+
+    def test_generic_ui_and_arp_metadata_are_not_misclassified_as_directory_chooser(self):
+        ET.SubElement(self.product, CHECK.NS + "UIRef", Id="WixUI_InstallDir")
+        ET.SubElement(self.product, CHECK.NS + "CustomAction", Id="JpSetARPINSTALLLOCATION",
+                      Property="ARPINSTALLLOCATION", Value="[INSTALLDIR]")
+        self.save_xml()
+        self.assertEqual("PASS", self.inspect()["result"])
 
     def add_adapter(self):
         self.adapter = self.image / "app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar"

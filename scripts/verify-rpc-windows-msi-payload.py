@@ -109,6 +109,45 @@ def beneath(root, parts):
     return current
 
 
+def installation_defaults(product, elements, parents):
+    """Validate the observed dark form, not installed ACLs or arbitrary MSI actions."""
+    packages = [node for node in elements if node.tag == NS + "Package"]
+    require(len(packages) == 1 and parents.get(packages[0]) is product and
+            packages[0].get("Platform") == "x64" and
+            packages[0].get("InstallScope") in (None, "perMachine"),
+            "MSI package must declare unambiguous x64 machine defaults")
+    properties = [node for node in elements if node.tag == NS + "Property"]
+    all_users = [node for node in properties if node.get("Id") == "ALLUSERS"]
+    require(len(all_users) == 1 and parents.get(all_users[0]) is product and
+            all_users[0].get("Value") == "1" and
+            not any(node.get("Id") in ("MSIINSTALLPERUSER", "WIXUI_INSTALLDIR") for node in properties),
+            "MSI machine default or chooser properties conflict")
+    require(not any(parents.get(node) is product and node.get("Id") == "INSTALLDIR" and
+                    node.get("Value") is not None for node in properties),
+            "MSI INSTALLDIR property overrides its directory default")
+    directories = {node.get("Id"): node for node in elements if node.tag == NS + "Directory"}
+    expected = (("INSTALLDIR", "P2pKit Sample"), ("ProgramFiles64Folder", None), ("TARGETDIR", "SourceDir"))
+    current = directories.get("INSTALLDIR")
+    for identifier, name in expected:
+        require(current is not None and current is directories.get(identifier) and
+                current.get("Name") == name, "MSI default installation directory differs")
+        current = parents.get(current)
+    require(current is product, "MSI default directory is outside the original Product")
+    chooser_dialogs = {"InstallDirDlg", "BrowseDlg"}
+    for node in elements:
+        require(not (node.tag in (NS + "Dialog", NS + "DialogRef") and node.get("Id") in chooser_dialogs),
+                "MSI declares an installation directory chooser")
+        if node.tag == NS + "Publish":
+            require(node.get("Dialog") not in chooser_dialogs and node.get("Value") not in chooser_dialogs and
+                    node.get("Property") not in ("INSTALLDIR", "WIXUI_INSTALLDIR") and
+                    not (node.get("Event") == "SetTargetPath" and node.get("Value") in
+                         ("INSTALLDIR", "WIXUI_INSTALLDIR", "[INSTALLDIR]", "[WIXUI_INSTALLDIR]")),
+                    "MSI routes an installation directory chooser")
+    return {"scope": "STATIC_MSI_DEFAULTS_NOT_INSTALLED_AUTHORITY", "platform": "x64", "allUsers": "1",
+            "directoryChain": [{"id": identifier, "name": name} for identifier, name in reversed(expected)],
+            "directoryChooser": "NOT_DECLARED", "administrativeOverrides": "NOT_PREVENTED"}
+
+
 def file_table(xml):
     text = xml.decode("utf-8-sig")
     require("<!DOCTYPE" not in text.upper() and "<!ENTITY" not in text.upper(),
@@ -150,7 +189,7 @@ def file_table(xml):
                                                owner.get("Id") == "INSTALLDIR") else None
         rows.append((name, identifier, node.get("Source", ""), logical))
     require("INSTALLDIR" in directories and rows, "Application Directory/File inventory is missing")
-    return rows
+    return rows, installation_defaults(root.find(NS + "Product"), elements, parents)
 
 
 def pin_content(jar):
@@ -186,7 +225,7 @@ def inspect(wxs, extracted, image, inspection, msi):
             "Unexpected parent-pin JAR")
     msi_observation = file_hash(msi, MAX_MSI)
     require(receipt.get("msi") == {"file": msi.name, **msi_observation}, "MSI differs from image inspection")
-    rows = file_table(xml)
+    rows, defaults = file_table(xml)
     expected = [(DLL, "app/resources/rpc-profile/windows-x64/" + DLL, 32 * 1024 * 1024,
                  receipt["dllSha256"]),
                 ("component.manifest", "app/resources/rpc-profile/windows-x64/component.manifest", 4096,
@@ -246,6 +285,7 @@ def inspect(wxs, extracted, image, inspection, msi):
     return {"scope": SCOPE, "result": "PASS", "source": receipt["source"], "tree": receipt["tree"],
             "msi": {"file": msi.name, **msi_observation}, "wxsSha256": digest(xml),
             "imageInspectionSha256": digest(receipt_bytes), "comparedFiles": comparisons,
+            "installationDefaults": defaults,
             "extractionInvocation": "CALLER_OWNED_SOURCE_BOUND_DARK_RUN_REQUIRED",
             "fullApplicationPayloadEquality": "NOT_PERFORMED", "installation": "NOT_PERFORMED",
             "nativeExecution": "NOT_PERFORMED", "runtimeQualification": "NOT_PERFORMED",
