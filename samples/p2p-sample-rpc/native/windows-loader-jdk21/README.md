@@ -287,7 +287,10 @@ preparation checks the original boot `java.base` Windows-x64 linker, not mutable
 captures `GetLastError` in the same downcall and captures the Windows-x64 HMODULE return register as a
 primitive `long` before any allocating segment wrapper, error readback or scope recheck. Only after those
 checks does it create the original-arena view. A late readback/scope failure retains the raw return; a
-downcall that does not complete normally retains the permanent owner without inventing a returned handle.
+downcall that does not complete normally retains the permanent owner and the complete private path/error
+frame without clearing or closing it, inventing a returned handle, or treating Java unwinding as native
+retirement. Repeated retirement requests remain no-ops while return is unconfirmed. Known pre-invocation
+refusals and known native returns followed by readback failures still retire their unused private frames.
 It does not require zero error state on a successful call. No search-path mutation or `FreeLibrary` API exists.
 One permanent process owner is reserved before invocation and retains the original installation, runtime,
 file and call owners on success or failure; uncertain outcomes cannot authorize retry or unload.

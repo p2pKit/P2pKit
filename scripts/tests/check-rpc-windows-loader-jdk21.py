@@ -361,7 +361,7 @@ def main():
             r" scope=JDK_UPCALL_MARSHALING_NOT_VM_LOOKUP_OR_AUTHORITY\n", "")
     load_cases = ["success", "arguments", "virtual", "thread", "reentrant", "duplicate", "close-after-result",
                   "retired-frame", "null-module", "unaligned-module", "high-module", "readback-failure",
-                  "clear-failure", "closed-entry", "late-scope-close", "return-failure"]
+                  "clear-failure", "closed-entry", "late-scope-close", "return-failure", "invocation-failure"]
     capture_scope = "WINDOWS_GET_LAST_ERROR" if os.name == "nt" else "NOT_EXECUTED"
     byte_cases = ["full", "short", "eof", "false", "pending", "throw-after-return", "excess-count",
                   "unsigned-count", "thread", "bounds", "limit"]

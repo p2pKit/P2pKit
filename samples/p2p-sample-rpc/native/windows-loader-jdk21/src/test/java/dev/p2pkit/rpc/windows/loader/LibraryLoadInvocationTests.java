@@ -30,6 +30,7 @@ public final class LibraryLoadInvocationTests {
     private static Throwable callbackFailure;
     private static int callbacks;
     private static Arena originalArena;
+    private static byte[] expectedFailureState;
     private static final LinkageError RETURN_FAILURE = new LinkageError("private inert post-return failure");
     // Deliberately independent of the production integer-return descriptor: the inert native stub
     // returns a pointer, proving its actual host ABI return register is received as all 64 raw bits.
@@ -58,10 +59,18 @@ public final class LibraryLoadInvocationTests {
                     "afterNativeReturn", MethodType.methodType(long.class, long.class));
                 setField("call", MethodHandles.filterReturnValue(actual, after));
             }
+            if (mode.equals("invocation-failure")) {
+                MethodHandle failed = MethodHandles.throwException(long.class, LinkageError.class)
+                    .bindTo(RETURN_FAILURE);
+                setField("call", MethodHandles.dropArguments(failed, 0,
+                    MemorySegment.class, MemorySegment.class, MemorySegment.class, int.class));
+            }
             WindowsLibraryLoadInvocation.Result reserved = (WindowsLibraryLoadInvocation.Result) field("result");
             expect(IllegalStateException.class, reserved::module);
             MemorySegment path = (MemorySegment) field("pathBuffer");
             MemorySegment state = (MemorySegment) field("capturedState");
+            byte[] originalPath = path.toArray(ValueLayout.JAVA_BYTE);
+            expectedFailureState = state.toArray(ValueLayout.JAVA_BYTE);
             check(path.byteSize() == 520 && state.byteSize() >= 4 && state.byteSize() <= 64);
             check(((MemorySegment) field("pathView")).isReadOnly());
             if (mode.equals("thread")) wrongThreadRefusal(reserved);
@@ -95,7 +104,7 @@ public final class LibraryLoadInvocationTests {
                 }
                 case "retired-frame" -> expect(IllegalStateException.class, invocation::invoke);
                 case "null-module", "unaligned-module", "high-module", "readback-failure", "clear-failure",
-                     "closed-entry", "late-scope-close", "return-failure" -> {
+                     "closed-entry", "late-scope-close", "return-failure", "invocation-failure" -> {
                     WindowsLibraryLoadInvocation.Failure failure = (WindowsLibraryLoadInvocation.Failure)
                         expect(WindowsLibraryLoadInvocation.Failure.class, invocation::invoke);
                     check(failure.retainedInvocation == invocation && failure.getCause() == null &&
@@ -104,12 +113,25 @@ public final class LibraryLoadInvocationTests {
                         check(failure.invocationFailure instanceof IllegalStateException &&
                             failure.readbackFailure == null && !failure.retirementFailed());
                         check(!(boolean) field("nativeReturned") && (long) field("rawModule") == 0 && field("module") == null);
-                    } else if (mode.equals("return-failure")) {
+                    } else if (unknownReturn()) {
                         check(failure.invocationFailure == RETURN_FAILURE && failure.readbackFailure == null &&
                             !failure.retirementFailed());
-                        // The native stub returned, but the downcall handle did not finish. Ownership is
-                        // retained without inventing a handle observation or retrying an uncertain load.
+                        // Neither a pre-call throw nor a failed return filter gives the invocation proof
+                        // of native return. Its complete frame must remain live, not merely its owners.
                         check(!(boolean) field("nativeReturned") && (long) field("rawModule") == 0 && field("module") == null);
+                        check(path.scope().isAlive() && state.scope().isAlive());
+                        check(java.util.Arrays.equals(originalPath, path.toArray(ValueLayout.JAVA_BYTE)) &&
+                            java.util.Arrays.equals(expectedFailureState, state.toArray(ValueLayout.JAVA_BYTE)));
+                        check((boolean) field("nativeReturnUnconfirmed") && !(boolean) field("retired"));
+                        invocation.retireFrame();
+                        invocation.retireFrame();
+                        check(path.scope().isAlive() && state.scope().isAlive() &&
+                            java.util.Arrays.equals(originalPath, path.toArray(ValueLayout.JAVA_BYTE)) &&
+                            java.util.Arrays.equals(expectedFailureState, state.toArray(ValueLayout.JAVA_BYTE)));
+                        WindowsLibraryLoadInvocation other = prepareInert(entry, original);
+                        expect(IllegalStateException.class, other::invoke);
+                        other.retireFrame();
+                        check(staticField("processOwner") == invocation && !(boolean) field("succeeded"));
                     } else if (mode.equals("late-scope-close")) {
                         check(failure.invocationFailure == null && failure.readbackFailure instanceof IllegalStateException &&
                             !failure.retirementFailed() && !(boolean) field("errorObserved"));
@@ -138,8 +160,11 @@ public final class LibraryLoadInvocationTests {
             check(invocation.installationOwner == INSTALLATION && invocation.runtimeOwner == RUNTIME &&
                 invocation.fileOwner == FILE);
             if (callbackFailure != null) throw new AssertionError("Inert load upcall failed", callbackFailure);
-            int expectedCalls = mode.equals("closed-entry") || mode.equals("retired-frame") ? 0 : 1;
-            check(callbacks == expectedCalls && !path.scope().isAlive() && !state.scope().isAlive());
+            int expectedCalls = mode.equals("closed-entry") || mode.equals("retired-frame") ||
+                mode.equals("invocation-failure") ? 0 : 1;
+            check(callbacks == expectedCalls && path.scope().isAlive() == unknownReturn() &&
+                state.scope().isAlive() == unknownReturn());
+            check((boolean) field("nativeReturnUnconfirmed") == unknownReturn());
             if (!mode.equals("closed-entry") && !mode.equals("close-after-result") && !mode.equals("late-scope-close")) {
                 check(original.scope().isAlive());
             }
@@ -147,12 +172,17 @@ public final class LibraryLoadInvocationTests {
             check(callbacks == expectedCalls);
             if (!mode.equals("retired-frame")) check(staticField("processOwner") == invocation);
         } finally {
-            // Only this inert fixture retires its arena after all callbacks return. No module was loaded/unloaded.
+            // Only this inert fixture retires its original arena after all callbacks return. Unknown-return
+            // private frames stay quarantined until process exit. No module was loaded or unloaded.
             if (original.scope().isAlive()) original.close();
         }
         System.out.println("WINDOWS_LIBRARY_FFM_LOAD_PASS case=" + mode +
             " scope=JDK_UPCALL_MARSHALING_NOT_DLL_LOADING_OR_AUTHORITY capture=" +
             (windows ? "WINDOWS_GET_LAST_ERROR" : "NOT_EXECUTED"));
+    }
+
+    private static boolean unknownReturn() {
+        return mode.equals("return-failure") || mode.equals("invocation-failure");
     }
 
     private static WindowsLibraryLoadInvocation prepareInert(MemorySegment entry, Arena original) throws Throwable {
@@ -183,9 +213,12 @@ public final class LibraryLoadInvocationTests {
                 POINTER_RETURN, arena);
     }
 
-    private static long afterNativeReturn(long returned) {
+    private static long afterNativeReturn(long returned) throws ReflectiveOperationException {
         check(returned == expectedModule.address() && callbacks == 1);
-        if (mode.equals("return-failure")) throw RETURN_FAILURE;
+        if (mode.equals("return-failure")) {
+            expectedFailureState = ((MemorySegment) field("capturedState")).toArray(ValueLayout.JAVA_BYTE);
+            throw RETURN_FAILURE;
+        }
         // This filter runs after the actual native downcall returns and releases its acquired sessions.
         // Closing an active callback's arena would be refused and would not model a late scope loss.
         originalArena.close();

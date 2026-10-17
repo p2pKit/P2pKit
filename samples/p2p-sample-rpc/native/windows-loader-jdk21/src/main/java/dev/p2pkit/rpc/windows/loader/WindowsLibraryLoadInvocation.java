@@ -79,6 +79,7 @@ final class WindowsLibraryLoadInvocation {
     private MemorySegment module;
     private long rawModule;
     private boolean nativeReturned;
+    private boolean nativeReturnUnconfirmed;
     private int lastError;
     private boolean errorObserved;
     private boolean attempted;
@@ -191,9 +192,11 @@ final class WindowsLibraryLoadInvocation {
                 requireOriginalScope();
                 active = true;
                 try {
+                    nativeReturnUnconfirmed = true;
                     rawModule = (long) call.invokeExact(
                         capturedState, pathView, MemorySegment.NULL, SEARCH_SYSTEM32);
                     nativeReturned = true;
+                    nativeReturnUnconfirmed = false;
                 }
                 finally { active = false; }
             } catch (Throwable caught) {
@@ -217,15 +220,19 @@ final class WindowsLibraryLoadInvocation {
             }
         } finally {
             try { retireFrame(); }
-            finally { succeeded = accepted && !failure.retirementFailed(); }
+            finally { succeeded = accepted && retired && !nativeReturnUnconfirmed && !failure.retirementFailed(); }
         }
         return result;
     }
 
-    /** Only private call buffers retire. No original arena, loaded module, file or installation owner is closed. */
+    /**
+     * Only confirmed-unused private call buffers retire. An unobserved native return quarantines the
+     * complete frame; no original arena, loaded module, file or installation owner is closed or unloaded.
+     */
     void retireFrame() {
         requireThread();
         if (active) throw new IllegalStateException("Windows library load is still active");
+        if (nativeReturnUnconfirmed) return; // Java unwinding is not proof that native arguments retired.
         if (retired) {
             if (failure.retirementFailed()) throw failure;
             return;
