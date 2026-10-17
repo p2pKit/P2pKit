@@ -54,11 +54,23 @@ public final class InstalledProfilePreparationTests {
             case "parent-archive" -> parentArchive();
             case "manifest-bounds" -> manifestBounds();
             case "load-gates" -> loadGates();
+            case "registration-contract" -> registrationContract();
+            case "registration-unprepared" -> registrationUnprepared();
+            case "registration-owner" -> registrationOwner();
+            case "registration-policy" -> registrationPolicy();
+            case "registration-thread" -> registrationThread();
+            case "registration-failed" -> registrationFailed();
+            case "registration-consumed" -> registrationConsumed();
             default -> throw new AssertionError("Unknown installed pre-load control");
         }
         expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
-        System.out.println("WINDOWS_INSTALLED_PRELOAD_PASS case=" + mode +
-            " scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION");
+        if (mode.startsWith("registration-")) {
+            System.out.println("WINDOWS_INSTALLED_REGISTRATION_GUARDS_PASS case=" + mode +
+                " scope=GUARDS_ONLY_NOT_LOAD_VERIFY_OR_JNI_EXECUTION");
+        } else {
+            System.out.println("WINDOWS_INSTALLED_PRELOAD_PASS case=" + mode +
+                " scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION");
+        }
     }
 
     private static Object staticCall(Class<?> type, String name, Class<?>[] types, Object... arguments) throws Throwable {
@@ -314,6 +326,91 @@ public final class InstalledProfilePreparationTests {
             check(value(fixture.child, "load") == null && value(fixture.child, "profile") == null);
             expect(IllegalStateException.class, () -> fixture.child.attachOriginalLoad(null));
             expect(IllegalStateException.class, () -> fixture.child.requireOriginalLoad(null));
+        }
+    }
+
+    private static void registrationUnobserved(WindowsInstalledProfileCandidate child, boolean attempted) throws Throwable {
+        check((boolean) value(child, "registrationAttempted") == attempted);
+        check(value(child, "loadResult") == null && value(child, "imageVerification") == null &&
+            value(child, "registrationOwner") == null && value(child, "load") == null);
+    }
+
+    private static void registrationContract() throws Throwable {
+        Method entry = WindowsInstalledProfileCandidate.class.getDeclaredMethod("registerOriginalProfile");
+        check(entry.getParameterCount() == 0 && entry.getReturnType() == WindowsJniRegistrationOwner.class);
+        check(!Modifier.isPublic(entry.getModifiers()) && !Modifier.isProtected(entry.getModifiers()) &&
+            !Modifier.isStatic(entry.getModifiers()));
+        check(Arrays.stream(WindowsInstalledProfileCandidate.class.getDeclaredMethods())
+            .filter(method -> method.getName().equals("registerOriginalProfile")).count() == 1);
+        WindowsInstalledProfileCandidate empty = new WindowsInstalledProfileCandidate(null);
+        expect(IllegalStateException.class, empty::registerOriginalProfile);
+        registrationUnobserved(empty, false);
+    }
+
+    private static void registrationUnprepared() throws Throwable {
+        try (Fixture fixture = new Fixture()) {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                expect(IllegalStateException.class, fixture.child::registerOriginalProfile);
+                registrationUnobserved(fixture.child, false);
+                check(!(boolean) value(fixture.child, "failed"));
+            }
+        }
+    }
+
+    private static void registrationOwner() throws Throwable {
+        try (Fixture fixture = new Fixture(); Fixture other = new Fixture()) {
+            field(fixture.installation, "installedProfile").set(fixture.installation, other.child);
+            expect(IllegalStateException.class, fixture.child::registerOriginalProfile);
+            registrationUnobserved(fixture.child, false);
+            registrationUnobserved(other.child, false);
+        }
+    }
+
+    private static void registrationPolicy() throws Throwable {
+        for (String flag : new String[] {"leafPolicyRefused", "ancestorPolicyRefused"}) {
+            try (Fixture fixture = new Fixture()) {
+                field(fixture.installation, flag).setBoolean(fixture.installation, true);
+                expect(IllegalStateException.class, fixture.child::registerOriginalProfile);
+                registrationUnobserved(fixture.child, false);
+            }
+        }
+    }
+
+    private static void registrationThread() throws Throwable {
+        try (Fixture fixture = new Fixture()) {
+            for (boolean virtual : new boolean[] {false, true}) {
+                AtomicReference<Throwable> caught = new AtomicReference<>();
+                Runnable action = () -> {
+                    try { expect(IllegalStateException.class, fixture.child::registerOriginalProfile); }
+                    catch (Throwable failure) { caught.set(failure); }
+                };
+                Thread thread = virtual ? Thread.ofVirtual().start(action) : Thread.ofPlatform().start(action);
+                thread.join();
+                check(caught.get() == null);
+                registrationUnobserved(fixture.child, false);
+            }
+        }
+    }
+
+    private static void registrationFailed() throws Throwable {
+        try (Fixture fixture = new Fixture()) {
+            field(fixture.bootstrap, "systemModulesAttempted").setBoolean(fixture.bootstrap, true);
+            Throwable failed = expect(WindowsInstalledProfileCandidate.Failure.class, fixture.child::prepare);
+            Throwable original = ((WindowsInstalledProfileCandidate.Failure) failed).operationFailure;
+            check(expect(WindowsInstalledProfileCandidate.Failure.class, fixture.child::registerOriginalProfile) == failed);
+            check(((WindowsInstalledProfileCandidate.Failure) failed).operationFailure == original);
+            check(((WindowsInstalledProfileCandidate.Failure) failed).retainedCandidate == fixture.child);
+            registrationUnobserved(fixture.child, false);
+        }
+    }
+
+    private static void registrationConsumed() throws Throwable {
+        try (Fixture fixture = new Fixture()) {
+            // Inert consumed-state model, not a fabricated successful load/registration owner.
+            field(fixture.child, "registrationAttempted").setBoolean(fixture.child, true);
+            Throwable refusal = expect(IllegalStateException.class, fixture.child::registerOriginalProfile);
+            check(refusal.getMessage().equals("Installed profile registration is already consumed"));
+            registrationUnobserved(fixture.child, true);
         }
     }
 

@@ -296,6 +296,13 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".InstalledProfilePreparationTests", case], 0,
             "WINDOWS_INSTALLED_PRELOAD_PASS case=" + re.escape(case) +
             r" scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION\n", "")
+    registration_cases = ["registration-contract", "registration-unprepared", "registration-owner",
+                          "registration-policy", "registration-thread", "registration-failed", "registration-consumed"]
+    for case in registration_cases:
+        run("installed-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".InstalledProfilePreparationTests", case], 0,
+            "WINDOWS_INSTALLED_REGISTRATION_GUARDS_PASS case=" + re.escape(case) +
+            r" scope=GUARDS_ONLY_NOT_LOAD_VERIFY_OR_JNI_EXECUTION\n", "")
     dll_file_cases = ["path-valid", "path-refusal", "owner-refusal", "substitution", "failure-latch"]
     for case in dll_file_cases:
         run("profile-dll-file-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),

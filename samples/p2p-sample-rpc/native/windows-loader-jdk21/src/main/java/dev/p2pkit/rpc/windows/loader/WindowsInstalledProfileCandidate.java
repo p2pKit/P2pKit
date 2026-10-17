@@ -12,7 +12,8 @@ import java.util.HexFormat;
 /**
  * Closed installation -> original JVM/file -> pinned profile bytes -> typed pre-load preparation.
  * Conditional on trusted OS/JVM/application startup and independently qualified installed package bytes.
- * No supplied path/pin/token, library invocation, JNI registration or provider availability is exposed.
+ * The closed original registration continuation accepts no supplied path/pin/token or replacement owner.
+ * No public installed-provider availability or qualification follows from these dormant methods.
  */
 final class WindowsInstalledProfileCandidate {
     static final class Failure extends RuntimeException {
@@ -42,10 +43,14 @@ final class WindowsInstalledProfileCandidate {
     private byte[] manifest;
     private WindowsPackagedVerifier packaged;
     private WindowsLibraryLoadInvocation load;
+    private WindowsLibraryLoadInvocation.Result loadResult;
+    private WindowsLoadedProfileImageVerification imageVerification;
+    private WindowsJniRegistrationOwner registrationOwner;
     private boolean attempted;
     private boolean profileAttempted;
     private boolean inputsReady;
     private boolean prepared;
+    private boolean registrationAttempted;
     private boolean failed;
 
     WindowsInstalledProfileCandidate(WindowsOriginalInstallationCandidate installation) {
@@ -88,6 +93,31 @@ final class WindowsInstalledProfileCandidate {
         } catch (Throwable caught) {
             failure.operationFailure = caught;
             failed = true;
+            throw failure;
+        }
+    }
+
+    /** Complete only this retained original chain; registration is not complete provider qualification. */
+    WindowsJniRegistrationOwner registerOriginalProfile() {
+        requireOriginal();
+        if (registrationAttempted) throw new IllegalStateException("Installed profile registration is already consumed");
+        prepared();
+        registrationAttempted = true;
+        try {
+            // Each existing process-rooted parent attaches its child before the child's native effects.
+            // Never recreate a module view, choose another import plan, or enter the development overload.
+            loadResult = load.invoke();
+            imageVerification = loadResult.verifyImage(originalBootstrap(), packaged);
+            registrationOwner = imageVerification.registerOriginalJni();
+            if (registrationOwner.state() != WindowsJniRegistrationOwner.State.Registered) {
+                throw new IllegalStateException("Original installed registration did not complete");
+            }
+            return registrationOwner;
+        } catch (Throwable caught) {
+            failure.operationFailure = caught;
+            failed = true;
+            // Deeper failure carriers and permanent load/image/JNI roots retain partial original owners.
+            // No speculative frame retirement, unload, retry or conversion to no-effects Unavailable.
             throw failure;
         }
     }

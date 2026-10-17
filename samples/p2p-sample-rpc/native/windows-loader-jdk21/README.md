@@ -1182,3 +1182,15 @@ not invoke LoadLibrary, register JNI, publish a provider or change the permanent
 public refusal. Owners stay confined to their original platform thread, with
 failed/uncertain effects retained and no reset or retry. Inert tests and static
 package checks do not qualify actual ordinary-user installation or native use.
+
+The same prepared child has a separate package-private, zero-argument
+`registerOriginalProfile()` continuation: its retained load result enters the
+existing original mapped-image/import/export verification and then the existing
+original JNI registrar. Each stage retains its exact original owner before
+effects; failure seals the child without retry, unload or conversion to the
+before-effects `Unavailable`. This continuation has no productive public caller.
+Its new local controls exercise refusal/ownership/lifetime guards only, not the
+successful installed load/verification/JNI path. The public loader still always
+refuses; actual standard-user installation and native/provider qualification are
+required before connecting it. Future profile opens must reuse the same completed
+registration, never transfer or re-enter confined FFM owners from another thread.
