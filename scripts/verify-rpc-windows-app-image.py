@@ -122,7 +122,8 @@ ADAPTER_JAR = "p2pkit-windows-loader-jdk21.jar"
 ADAPTER_PATH = "app/resources/rpc-loader-jdk21/" + ADAPTER_JAR
 ADAPTER_SCOPE = "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY"
 ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".class" for name in (
-    "Probe", "WindowsLoader", "WindowsLoader$Unavailable", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
+    "Probe", "WindowsLoader", "WindowsLoader$Unavailable", "WindowsLoader$InstalledState",
+    "WindowsLoader$InstalledFailure", "WindowsLoader$InstalledAttempt", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
     "WindowsX64Frame$CloseFailure", "WindowsX64Frame$CleanupObservation", "WindowsX64Frame$1",
     "WindowsJniRegistrationOwner", "WindowsJniRegistrationOwner$Failure", "WindowsJniRegistrationOwner$FailureKind",
     "WindowsJniRegistrationOwner$Invocation", "WindowsJniRegistrationOwner$Report",

@@ -72,6 +72,7 @@ def main():
                         "SystemBootstrapCandidateTests" in name or
                         "OriginalInstallationCandidateTests" in name or
                         "InstalledProfilePreparationTests" in name or
+                        "InstalledProcessControllerTests" in name or
                         "BootstrapReturnTests" in name or
                         "SystemImportResolutionTests" in name or
                         "SystemExportPlanTests" in name or
@@ -296,6 +297,13 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".InstalledProfilePreparationTests", case], 0,
             "WINDOWS_INSTALLED_PRELOAD_PASS case=" + re.escape(case) +
             r" scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION\n", "")
+    controller_cases = ["contract", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
+                        "missing-registration", "unfinished-registration", "wrong-thread", "wrong-owner"]
+    for case in controller_cases:
+        run("installed-process-controller-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".InstalledProcessControllerTests", case], 0,
+            "WINDOWS_INSTALLED_CONTROLLER_MODEL_PASS case=" + re.escape(case) +
+            r" scope=INERT_ONCE_REUSE_NOT_INSTALLED_NATIVE_OR_PROVIDER_EXECUTION\n", "")
     registration_cases = ["registration-contract", "registration-unprepared", "registration-owner",
                           "registration-policy", "registration-thread", "registration-failed", "registration-consumed"]
     for case in registration_cases:

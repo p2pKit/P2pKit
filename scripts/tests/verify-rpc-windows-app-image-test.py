@@ -45,6 +45,8 @@ ADAPTER_PREFIX = "dev/p2pkit/rpc/windows/loader/"
 ADAPTER_ENTRIES = (
     "module-info.class", ADAPTER_PREFIX + "Probe.class", ADAPTER_PREFIX + "WindowsLoader.class",
     ADAPTER_PREFIX + "WindowsLoader$Unavailable.class",
+    ADAPTER_PREFIX + "WindowsLoader$InstalledState.class",
+    ADAPTER_PREFIX + "WindowsLoader$InstalledFailure.class", ADAPTER_PREFIX + "WindowsLoader$InstalledAttempt.class",
     ADAPTER_PREFIX + "WindowsLoaderRuntime.class", ADAPTER_PREFIX + "WindowsX64Frame.class",
     ADAPTER_PREFIX + "WindowsX64Frame$AcquisitionFailure.class",
     ADAPTER_PREFIX + "WindowsX64Frame$CloseFailure.class", ADAPTER_PREFIX + "WindowsX64Frame$CleanupObservation.class",
@@ -398,6 +400,7 @@ class ImageInspectionTest(unittest.TestCase):
         self.add_adapter()
         for extra in (ADAPTER_PREFIX + "WindowsLoaderTest.class", ADAPTER_PREFIX + "RegistrationOwnerTests.class",
                       ADAPTER_PREFIX + "RegistrationInvocationTests.class",
+                      ADAPTER_PREFIX + "InstalledProcessControllerTests.class",
                       ADAPTER_PREFIX + "VmAcquisitionInvocationTests.class",
                       ADAPTER_PREFIX + "LibraryLoadInvocationTests.class",
                       ADAPTER_PREFIX + "ExportLookupInvocationTests.class",

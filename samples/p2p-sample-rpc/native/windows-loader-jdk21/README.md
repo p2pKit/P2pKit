@@ -1194,3 +1194,12 @@ successful installed load/verification/JNI path. The public loader still always
 refuses; actual standard-user installation and native/provider qualification are
 required before connecting it. Future profile opens must reuse the same completed
 registration, never transfer or re-enter confined FFM owners from another thread.
+
+The closed, package-private `WindowsLoader.completeOriginalInstalledProvider()`
+now composes original bootstrap → installation → preparation → registration under
+one process attempt. Only the initial claiming platform thread accesses confined
+owners; subsequent completed reuse reads the safely published registration state
+without exposing or revisiting those owners. In-progress calls refuse, admitted
+failure remains sealed, and no attempt resets. The public entry still always
+returns its original `Unavailable` failure; inert controller models do not execute
+this first native composition or qualify an installed provider.
