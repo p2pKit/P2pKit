@@ -924,5 +924,39 @@ DLL diagnostic reports its original leaf/ancestor refusal as `NOT_EXECUTED_*`,
 without attaching or running the byte stage. Only admitted prerequisites permit
 its real read and `COMPLETED` snapshot observation. Neither result grants package
 identity, byte-to-mapping correspondence, initial OS authority or productive
-provider admission. The existing strict PE verifier and loader assembly still
-need to consume these original owned bytes under independent expected pins.
+provider admission.
+
+### Original byte owner to the fixed packaged verifier
+
+The original DLL byte facade now attaches the existing `WindowsPackagedVerifier`
+exactly once, before snapshot or helper initialization. It supplies only its own
+completed snapshot and digest; the digest of that exact private clone must match
+before the unchanged Java17 PE, manifest, mapped-code and IAT algorithms run.
+There is no caller DLL array, reopened pathname, native entry or callback in this
+connection. Every owned result getter and comparison requires the original byte
+attachment and retained file chain; an operation failure seals that file through
+its original failure carriers. Ordinary wrong-thread or duplicate refusal before
+effects does not poison a good completed owner.
+
+The supplied manifest/source/tree pins remain **comparison data**, not evidence
+that Foundation admitted their origin. The unchanged unowned verifier still
+supports inert comparisons and cannot turn into an owned verifier. Twelve
+maintained cases use explicitly fabricated inert owners and the real compiled
+Java17 helper; they do not establish native custody, installed class provenance,
+maximum-size end-to-end heap sufficiency or productive loading. Original helper
+and JNI declaration hashes are checked separately by this test connection.
+The loader still requires independent package/runtime authority, complete system
+provider custody and mapped-image/import verification before activation.
+
+### Bootstrap and JVM call-return quarantine
+
+The original bootstrap and JVM continuations retain their private call frames
+when any fixed downcall fails to return normally. No clearing, closing, retry or
+success publication follows uncertain completion. Normal-return primitives,
+including the Windows-x64 `GetProcAddress` result, are retained before allocating
+pointer views. Retirement requires the original thread and cannot close module
+or JVM lifetime scopes. Eighteen inert fixed-call/retirement controls cover these
+paths; two wrong-thread regressions also fail against the prior implementation.
+These are conservative failure/lifetime controls, not a demonstrated asynchronous
+Windows exploit or approval of the first-OS bootstrap. Actual Windows calling
+conventions remain covered by the separate original-JVM runtime checks.

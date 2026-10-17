@@ -98,11 +98,12 @@ public final class SystemImportResolutionTests {
     private static WindowsSystemImportResolution inertCandidate() throws Exception {
         // Reflection constructs only inert copied-plan data, never an original bootstrap or executable entry.
         Constructor<WindowsPackagedVerifier> constructor = WindowsPackagedVerifier.class.getDeclaredConstructor(
-            Object.class, Class.class, Class.class, Method.class, Method.class,
-            long[].class, String[].class, long[].class, String[].class);
+            WindowsOriginalProfileDllBytesCandidate.class);
         constructor.setAccessible(true);
-        WindowsPackagedVerifier plan = constructor.newInstance(null, null, null, null, null,
-            null, null, null, new String[] {"kernel32.dll", "CloseHandle"});
+        WindowsPackagedVerifier plan = constructor.newInstance((Object) null);
+        // Deliberately unowned inert inventory only; never fabricate an admitted file or native input.
+        set(plan, "imports", new String[] {"kernel32.dll", "CloseHandle"});
+        set(plan, "prepared", true);
         return new WindowsSystemImportResolution(null, plan, null, null, null, null, null, null);
     }
 

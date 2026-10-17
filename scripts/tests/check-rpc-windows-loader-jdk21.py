@@ -209,6 +209,14 @@ def main():
                       bindings[0]["sha256"], bindings[1]["sha256"]],
             "WINDOWS_PACKAGED_VERIFIER_PASS case=" + re.escape(case) +
             r" scope=REAL_JDK21_TO_JDK17_BYTE_COMPARISON_NOT_LOAD_OR_AUTHORITY\n", case == "missing-helper")
+    original_packaged_cases = ["owner-refusal", "incomplete", "substitution", "thread", "success", "immutability",
+                              "hash-mismatch", "invalid-pin", "manifest-pin", "source-pin", "malformed-pe",
+                              "operation-failure"]
+    for case in original_packaged_cases:
+        connected_run("original-profile-dll-packaged-" + case, "OriginalProfileDllPackagedVerifierTests",
+            [case, str(main_directory), bindings[0]["sha256"], bindings[1]["sha256"]],
+            "WINDOWS_ORIGINAL_PROFILE_DLL_PACKAGED_PASS case=" + re.escape(case) +
+            r" scope=OWNED_INERT_SNAPSHOT_TO_REAL_JDK17_COMPARISON_NOT_NATIVE_CUSTODY_OR_AUTHORITY\n")
     connected_run("installed-provider-unavailable", "InstalledProviderTests", [str(main_directory),
                   bindings[2]["sha256"], bindings[3]["sha256"], bindings[1]["sha256"], bindings[4]["sha256"]],
         r"WINDOWS_INSTALLED_PROVIDER_REFUSAL_PASS scope=REAL_JDK21_TO_JDK17_TYPED_REFUSAL_NOT_INSTALLED_OR_NATIVE\n")

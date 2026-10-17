@@ -2,6 +2,8 @@ package dev.p2pkit.rpc.windows.loader;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -11,7 +13,9 @@ import java.util.Set;
  * This is data verification only: supplied pins/arrays, class names and successful comparisons grant no
  * startup, package, filesystem, loaded-module or native-call authority. No native function is invoked.
  * The future productive owner must supply independently admitted inputs and retain its original scoped
- * observations separately. There is no caller-selected class, method, classloader, reflection fallback,
+ * observations separately. The optional original-byte child binds the same comparison to its retained
+ * original file/security/ancestors/byte chain; supplied manifest pins still grant no admission. There is
+ * no caller-selected class, method, classloader, reflection fallback,
  * forced JNI initialization, module read/export change, or provider activation.
  */
 final class WindowsPackagedVerifier {
@@ -22,31 +26,68 @@ final class WindowsPackagedVerifier {
     private static final int MAXIMUM_LIBRARY = 32 * 1024 * 1024;
     private static final long MAXIMUM_IMAGE = 128L * 1024 * 1024;
     private static final int MAXIMUM_REGIONS = 40_961; // <=128MiB code/header + <=32MiB page-split IAT.
-    private final Object originalVerifier;
-    private final Class<?> helperClass;
-    private final Class<?> declaringClass;
-    private final Method regionsMethod;
-    private final Method verifyMethod;
-    private final long[] image;
-    private final String[] exports;
-    private final long[] rvas;
-    private final String[] imports;
+    private final WindowsOriginalProfileDllBytesCandidate originalBytes;
+    private Object originalVerifier;
+    private Class<?> helperClass;
+    private Class<?> declaringClass;
+    private Method regionsMethod;
+    private Method verifyMethod;
+    private long[] image;
+    private String[] exports;
+    private long[] rvas;
+    private String[] imports;
+    private byte[] originalSnapshotSha256;
+    private boolean attempted;
+    // Publish the once-written data together, including for the legacy unowned comparison API.
+    private volatile boolean prepared;
 
-    private WindowsPackagedVerifier(Object originalVerifier, Class<?> helperClass, Class<?> declaringClass,
-        Method regionsMethod, Method verifyMethod, long[] image, String[] exports, long[] rvas, String[] imports) {
-        this.originalVerifier = originalVerifier;
-        this.helperClass = helperClass;
-        this.declaringClass = declaringClass;
-        this.regionsMethod = regionsMethod;
-        this.verifyMethod = verifyMethod;
-        this.image = image;
-        this.exports = exports;
-        this.rvas = rvas;
-        this.imports = imports;
+    private WindowsPackagedVerifier(WindowsOriginalProfileDllBytesCandidate originalBytes) {
+        this.originalBytes = originalBytes;
+    }
+
+    static WindowsPackagedVerifier forOriginalBytes(WindowsOriginalProfileDllBytesCandidate originalBytes) {
+        if (originalBytes == null) throw new IllegalArgumentException("Original DLL byte owner is required");
+        return new WindowsPackagedVerifier(originalBytes);
+    }
+
+    void prepareOriginalBytes(byte[] comparisonManifest, String comparisonManifestSha256,
+        String comparisonSource, String comparisonTree) throws ReflectiveOperationException {
+        if (originalBytes == null) throw new IllegalStateException("Unowned byte comparison cannot acquire an owner");
+        originalBytes.requireOriginalPackagedVerifier(this);
+        if (attempted) throw new IllegalStateException("Original DLL packaged comparison was already prepared");
+        attempted = true;
+        // Only the original completed byte core supplies the DLL and digest. The clone hashed here is
+        // the exact private input to the existing bridge, never a caller DLL array or a reopened path.
+        byte[] snapshot = originalBytes.snapshot();
+        originalSnapshotSha256 = originalBytes.sha256();
+        MessageDigest digest;
+        try { digest = MessageDigest.getInstance("SHA-256", "SUN"); }
+        catch (GeneralSecurityException caught) {
+            throw new IllegalStateException("Original DLL snapshot digest provider is unavailable", caught);
+        }
+        require(digest.getProvider().getClass().getModule() == Object.class.getModule() &&
+            digest.getProvider().getClass().getClassLoader() == null &&
+            digest.getProvider().getClass().getName().equals("sun.security.provider.Sun") && digest.getDigestLength() == 32,
+            "Original DLL snapshot digest provider differs");
+        require(originalSnapshotSha256.length == 32 &&
+            MessageDigest.isEqual(digest.digest(snapshot), originalSnapshotSha256),
+            "Original DLL snapshot differs from its completed original digest");
+        prepareData(comparisonManifest, snapshot, comparisonManifestSha256, comparisonSource, comparisonTree);
+        originalBytes.requireOriginalPackagedVerifier(this);
+        prepared = true;
     }
 
     static WindowsPackagedVerifier prepare(byte[] manifest, byte[] library, String manifestSha256,
                                            String source, String tree) throws ReflectiveOperationException {
+        WindowsPackagedVerifier verifier = new WindowsPackagedVerifier(null);
+        verifier.attempted = true;
+        verifier.prepareData(manifest, library, manifestSha256, source, tree);
+        verifier.prepared = true;
+        return verifier;
+    }
+
+    private void prepareData(byte[] manifest, byte[] library, String manifestSha256,
+        String source, String tree) throws ReflectiveOperationException {
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         require(WindowsPackagedVerifier.class.getModule() == WindowsLoaderRuntime.class.getModule(),
             "Packaged verifier must remain in the original named module");
@@ -54,7 +95,8 @@ final class WindowsPackagedVerifier {
             library.length >= 512 && library.length <= MAXIMUM_LIBRARY && hexadecimal(manifestSha256, 64) &&
             hexadecimal(source, 40) && hexadecimal(tree, 40), "Invalid bounded packaged verifier data");
         byte[] manifestSnapshot = manifest.clone();
-        byte[] librarySnapshot = library.clone();
+        // The owned path has already made and hashed this private clone; preserve that exact input.
+        byte[] librarySnapshot = originalBytes == null ? library.clone() : library;
         ClassLoader system = ClassLoader.getSystemClassLoader();
         require(system != null, "Packaged verifier requires the maintained system classloader");
         Class<?> helper = Class.forName(HELPER, false, system);
@@ -105,17 +147,66 @@ final class WindowsPackagedVerifier {
             require(imports[index] != null && libraries.contains(imports[index]) && asciiName(imports[index + 1], 128) &&
                 tuples.add(imports[index] + "/" + imports[index + 1]), "Packaged verifier returned an invalid import tuple");
         }
-        return new WindowsPackagedVerifier(delegate, helper, declaration, regionsMethod, verifyMethod,
-            image, exports, rvas, imports);
+        originalVerifier = delegate;
+        helperClass = helper;
+        declaringClass = declaration;
+        this.regionsMethod = regionsMethod;
+        this.verifyMethod = verifyMethod;
+        this.image = image;
+        this.exports = exports;
+        this.rvas = rvas;
+        this.imports = imports;
     }
 
-    Class<?> declaringClass() { return declaringClass; }
-    long[] imageLayout() { return image.clone(); }
-    String[] exportNames() { return exports.clone(); }
-    long[] exportRvas() { return rvas.clone(); }
-    String[] importNames() { return imports.clone(); }
+    private void requirePrepared() {
+        if (originalBytes != null) originalBytes.requireOriginalPackagedVerifier(this);
+        if (!prepared) throw new IllegalStateException("Packaged verifier comparison is incomplete");
+    }
+
+    Class<?> declaringClass() { requirePrepared(); return declaringClass; }
+    long[] imageLayout() {
+        requirePrepared();
+        try { return image.clone(); }
+        catch (Throwable caught) {
+            if (originalBytes != null) throw originalBytes.failOriginalPackagedVerifier(this, caught);
+            throw caught;
+        }
+    }
+    String[] exportNames() {
+        requirePrepared();
+        try { return exports.clone(); }
+        catch (Throwable caught) {
+            if (originalBytes != null) throw originalBytes.failOriginalPackagedVerifier(this, caught);
+            throw caught;
+        }
+    }
+    long[] exportRvas() {
+        requirePrepared();
+        try { return rvas.clone(); }
+        catch (Throwable caught) {
+            if (originalBytes != null) throw originalBytes.failOriginalPackagedVerifier(this, caught);
+            throw caught;
+        }
+    }
+    String[] importNames() {
+        requirePrepared();
+        try { return imports.clone(); }
+        catch (Throwable caught) {
+            if (originalBytes != null) throw originalBytes.failOriginalPackagedVerifier(this, caught);
+            throw caught;
+        }
+    }
 
     long[] regions(long moduleBase) throws ReflectiveOperationException {
+        requirePrepared();
+        try { return compareRegions(moduleBase); }
+        catch (Throwable caught) {
+            if (originalBytes != null) throw originalBytes.failOriginalPackagedVerifier(this, caught);
+            throw caught;
+        }
+    }
+
+    private long[] compareRegions(long moduleBase) throws ReflectiveOperationException {
         requireMapping(moduleBase);
         require(originalVerifier.getClass() == helperClass, "Original packaged verifier plan was replaced");
         long[] ranges = longs(regionsMethod.invoke(originalVerifier, moduleBase), 9, MAXIMUM_REGIONS * 3);
@@ -150,7 +241,17 @@ final class WindowsPackagedVerifier {
 
     long[] verify(long moduleBase, long[] exportTargets, long[] importTargets, byte[][] pages)
         throws ReflectiveOperationException {
-        long[] requested = regions(moduleBase);
+        requirePrepared();
+        try { return compareImage(moduleBase, exportTargets, importTargets, pages); }
+        catch (Throwable caught) {
+            if (originalBytes != null) throw originalBytes.failOriginalPackagedVerifier(this, caught);
+            throw caught;
+        }
+    }
+
+    private long[] compareImage(long moduleBase, long[] exportTargets, long[] importTargets, byte[][] pages)
+        throws ReflectiveOperationException {
+        long[] requested = compareRegions(moduleBase);
         require(exportTargets != null && exportTargets.length == 24 && importTargets != null &&
             importTargets.length == imports.length / 2 && pages != null && pages.length == requested.length / 3,
             "Packaged verifier observations have an invalid cardinality");

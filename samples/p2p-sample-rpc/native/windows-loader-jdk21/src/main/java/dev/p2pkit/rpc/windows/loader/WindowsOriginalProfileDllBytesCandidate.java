@@ -23,6 +23,8 @@ final class WindowsOriginalProfileDllBytesCandidate {
     private final WindowsOriginalFileBytesLease core;
     private boolean attempted;
     private boolean failed;
+    private boolean packagedAttempted;
+    private WindowsPackagedVerifier packaged;
 
     WindowsOriginalProfileDllBytesCandidate(WindowsOriginalProfileDllFileCandidate file, Linker linker,
         Arena bootstrapArena, Arena fileArena, MemorySegment fileHandle, MemorySegment readEntry,
@@ -63,6 +65,42 @@ final class WindowsOriginalProfileDllBytesCandidate {
     void requireOriginalNativeInputs() {
         requireOriginalFile();
         file.requireOriginalByteInputs();
+    }
+
+    WindowsPackagedVerifier inspectPackagedBytes(byte[] comparisonManifest, String comparisonManifestSha256,
+        String comparisonSource, String comparisonTree) {
+        requireOriginalNativeInputs();
+        if (!core.completed()) throw new IllegalStateException("Original DLL bytes are incomplete");
+        if (packagedAttempted) throw new IllegalStateException("Original DLL packaged comparison was already attempted");
+        packagedAttempted = true;
+        try {
+            // The existing byte/file failure roots precede allocation; attach this concrete child before
+            // cloning bytes, computing their digest or initializing the fixed application-side helper.
+            packaged = WindowsPackagedVerifier.forOriginalBytes(this);
+            packaged.prepareOriginalBytes(comparisonManifest, comparisonManifestSha256, comparisonSource, comparisonTree);
+            return packaged;
+        } catch (Throwable caught) {
+            failure.operationFailure = caught;
+            WindowsOriginalProfileDllFileCandidate.Failure retained = file.failOriginalBytes(this, failure);
+            failed = true;
+            throw retained;
+        }
+    }
+
+    void requireOriginalPackagedVerifier(WindowsPackagedVerifier candidate) {
+        requireOriginalNativeInputs();
+        if (candidate == null || candidate != packaged || !packagedAttempted || !core.completed()) {
+            throw new IllegalStateException("Packaged verifier is not this original completed DLL byte attachment");
+        }
+    }
+
+    WindowsOriginalProfileDllFileCandidate.Failure failOriginalPackagedVerifier(
+        WindowsPackagedVerifier candidate, Throwable caught) {
+        requireOriginalPackagedVerifier(candidate);
+        failure.operationFailure = caught;
+        WindowsOriginalProfileDllFileCandidate.Failure retained = file.failOriginalBytes(this, failure);
+        failed = true;
+        return retained;
     }
 
     boolean completed() { requireOriginalFile(); return core.completed(); }

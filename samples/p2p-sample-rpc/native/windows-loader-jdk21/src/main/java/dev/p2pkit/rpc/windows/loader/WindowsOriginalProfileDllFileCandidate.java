@@ -206,6 +206,13 @@ final class WindowsOriginalProfileDllFileCandidate {
         }
     }
 
+    Failure failOriginalBytes(WindowsOriginalProfileDllBytesCandidate candidate, Throwable caught) {
+        requireOriginalBytes(candidate);
+        failure.operationFailure = caught;
+        failed = true;
+        return failure;
+    }
+
     void requireOriginalByteInputs() {
         requireCompleted();
         requireOriginalNativeInputs();
