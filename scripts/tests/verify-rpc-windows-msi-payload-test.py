@@ -5,10 +5,13 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -61,6 +64,7 @@ class StaticMsiPayloadTest(unittest.TestCase):
         base = ET.SubElement(self.product, CHECK.NS + "Directory", Id="TARGETDIR", Name="SourceDir")
         base = ET.SubElement(base, CHECK.NS + "Directory", Id="ProgramFiles64Folder")
         install = ET.SubElement(base, CHECK.NS + "Directory", Id="INSTALLDIR", Name="P2pKit Sample")
+        self.install = install
         self.app = ET.SubElement(install, CHECK.NS + "Directory", Id="appDir", Name="app")
         self.resources = ET.SubElement(self.app, CHECK.NS + "Directory", Id="resourceDir", Name="resources")
         profile = ET.SubElement(self.resources, CHECK.NS + "Directory", Id="profileDir", Name="rpc-profile")
@@ -68,6 +72,10 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.dll_node = self.add_file(self.arch, "nativeDll", self.dll)
         self.manifest_node = self.add_file(self.arch, "manifest", self.manifest)
         self.jar_node = self.add_file(self.app, "pinJar", self.jar)
+        for path, identifier in (("P2pKit Sample.exe", "launcher"), ("app/P2pKit Sample.cfg", "launcherCfg"),
+                                 ("runtime/release", "runtimeRelease"), ("runtime/lib/modules", "runtimeModules"),
+                                 ("runtime/bin/server/jvm.dll", "runtimeJvm"), ("runtime/bin/jli.dll", "runtimeJli")):
+            self.add_payload(path, identifier, ("synthetic-not-executable:" + identifier).encode())
         self.save_xml()
 
     def add_file(self, parent, identifier, original):
@@ -78,6 +86,21 @@ class StaticMsiPayloadTest(unittest.TestCase):
 
     def save_xml(self):
         self.wxs.write_bytes(ET.tostring(self.xml, encoding="utf-8", xml_declaration=True))
+
+    def add_payload(self, relative, identifier, data):
+        parts = relative.split("/")
+        parent = self.install
+        for part in parts[:-1]:
+            match = next((node for node in parent if node.tag == CHECK.NS + "Directory" and
+                          node.get("Name") == part), None)
+            if match is None:
+                match = ET.SubElement(parent, CHECK.NS + "Directory",
+                                      Id="payloadDir" + str(len(list(self.xml.iter()))), Name=part)
+            parent = match
+        file = self.image.joinpath(*parts)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(data)
+        return self.add_file(parent, identifier, file)
 
     def save_receipt(self):
         self.inspection.write_text(json.dumps(self.receipt), encoding="utf-8")
@@ -101,11 +124,149 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.assertEqual({"File/nativeDll", "File/manifest", "File/pinJar"},
                          {file["extractedMember"] for file in result["comparedFiles"]})
         self.assertEqual(CHECK.digest(self.wxs.read_bytes()), result["wxsSha256"])
-        for key in ("installation", "nativeExecution", "signing", "runtimeQualification",
-                    "fullApplicationPayloadEquality"):
+        for key in ("installation", "nativeExecution", "signing", "runtimeQualification"):
             self.assertEqual("NOT_PERFORMED", result[key])
+        self.assertEqual("PASS", result["fullApplicationPayloadEquality"])
         self.assertIn("CALLER_OWNED", result["extractionInvocation"])
         self.assertNotIn(str(self.root), json.dumps(result))
+
+    def test_full_payload_binds_every_application_file_and_empty_auxiliary_bytes(self):
+        self.add_payload("runtime/legal/empty-notice", "emptyNotice", b"")
+        self.save_xml()
+        result = self.inspect()
+        files = {str(path.relative_to(self.image)).replace("\\", "/"):
+                 {"bytes": len(path.read_bytes()), "sha256": CHECK.digest(path.read_bytes())}
+                 for path in self.image.rglob("*") if path.is_file()}
+        canonical = json.dumps(files, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        self.assertEqual({"scope": "STATIC_APPLICATION_FILES_NOT_INSTALLED_OR_STARTUP_AUTHORITY",
+                          "files": 10, "bytes": sum(value["bytes"] for value in files.values()),
+                          "inventorySha256": CHECK.digest(canonical), "excludedImageMetadata": []},
+                         result["applicationPayload"])
+        with self.assertRaisesRegex(ValueError, "bound"):
+            CHECK.file_hash(self.files / "emptyNotice", CHECK.MAX_MSI)
+        self.assertEqual(3, len(result["comparedFiles"]))
+
+    def test_full_payload_detects_changed_launcher_configuration_and_runtime(self):
+        for identifier in ("launcher", "launcherCfg", "runtimeRelease", "runtimeModules", "runtimeJvm", "runtimeJli"):
+            path = self.files / identifier
+            original = path.read_bytes()
+            path.write_bytes(original + b"changed")
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(ValueError, "application payload differs"):
+                self.inspect()
+            path.write_bytes(original)
+
+    def test_full_payload_cannot_replace_earlier_pins_with_matching_interstage_mutations(self):
+        original = CHECK.full_payload
+        def mutate(*args):
+            self.dll.write_bytes(b"coordinated-interstage-change")
+            shutil.copyfile(self.dll, self.files / "nativeDll")
+            return original(*args)
+        with mock.patch.object(CHECK, "full_payload", side_effect=mutate), \
+                self.assertRaisesRegex(ValueError, "earlier pinned components"):
+            self.inspect()
+
+    def test_full_payload_rejects_missing_and_extra_application_paths(self):
+        extra = self.image / "app/unknown.bin"
+        extra.write_bytes(b"not-packaged")
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+        extra.unlink()
+        removed = self.image / "runtime/lib/modules"
+        original = removed.read_bytes()
+        removed.unlink()
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+        removed.write_bytes(original)
+        extra = self.root / "msi-only.bin"
+        extra.write_bytes(b"not-in-image")
+        self.add_file(self.app, "msiOnly", extra)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+
+    def test_full_payload_rejects_outside_install_directory_and_duplicate_case_paths(self):
+        node = next(node for node in self.xml.iter(CHECK.NS + "File") if node.get("Id") == "runtimeRelease")
+        owner = next(parent for parent in self.xml.iter() if node in parent)
+        directory = next(parent for parent in self.xml.iter() if owner in parent)
+        directory.remove(owner)
+        self.product.find(CHECK.NS + "Directory").append(owner)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "outside INSTALLDIR"):
+            self.inspect()
+        self.product.find(CHECK.NS + "Directory").remove(owner)
+        directory.append(owner)
+        duplicate = self.add_file(directory, "secondRelease", self.image / "runtime/release")
+        duplicate.set("Name", "RELEASE")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            self.inspect()
+
+    def test_full_payload_rejects_unreferenced_extraction_and_unsafe_general_source(self):
+        extra = self.files / "unreferenced"
+        extra.write_bytes(b"extra")
+        with self.assertRaisesRegex(ValueError, "File inventory differs"):
+            self.inspect()
+        extra.unlink()
+        node = next(node for node in self.xml.iter(CHECK.NS + "File") if node.get("Id") == "runtimeModules")
+        node.set("Source", str(self.files / ".." / "File" / "runtimeModules"))
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "Decompiler Source"):
+            self.inspect()
+
+    def test_full_payload_excludes_only_exact_jpackage_metadata_and_observes_its_bytes(self):
+        path = self.image / "app/.jpackage.xml"
+        path.write_bytes(b"synthetic-jpackage-build-metadata")
+        result = self.inspect()
+        self.assertEqual([{"target": "app/.jpackage.xml", "bytes": path.stat().st_size,
+                           "sha256": CHECK.digest(path.read_bytes())}], result["applicationPayload"]["excludedImageMetadata"])
+        self.assertEqual(9, result["applicationPayload"]["files"])
+        path.unlink()
+        wrong = self.image / "runtime/.jpackage.xml"
+        wrong.write_bytes(b"not-excluded")
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+        wrong.unlink()
+        self.add_payload("app/.jpackage.xml", "packagedMetadata", b"must-not-be-installed")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+
+    def test_full_payload_rejects_case_colliding_image_and_link_or_reparse_members(self):
+        # Pure filesystem observation models; no claim of real Windows reparse qualification.
+        original_iterdir, original_lstat = Path.iterdir, Path.lstat
+        runtime = self.image / "runtime"
+        def collision(path):
+            entries = list(original_iterdir(path))
+            return iter(entries + [runtime / "RELEASE"]) if path == runtime else iter(entries)
+        with mock.patch.object(Path, "iterdir", collision), self.assertRaisesRegex(ValueError, "case-colliding"):
+            self.inspect()
+        for target, mode, attributes in ((runtime / "release", stat.S_IFLNK, 0),
+                                         (runtime / "release", stat.S_IFREG, 0x400),
+                                         (runtime, stat.S_IFDIR, 0x400)):
+            def unsafe(path, *args, **kwargs):
+                return (SimpleNamespace(st_mode=mode, st_file_attributes=attributes) if path == target
+                        else original_lstat(path, *args, **kwargs))
+            with self.subTest(mode=mode, attributes=attributes), mock.patch.object(Path, "lstat", unsafe), \
+                    self.assertRaisesRegex(ValueError, "ordinary"):
+                self.inspect()
+
+    def test_full_payload_rechecks_complete_image_and_extraction_after_comparison(self):
+        for function, target in (("image_inventory", self.image / "runtime/lib/modules"),
+                                  ("extracted_inventory", self.files / "runtimeModules")):
+            original_function, original_bytes = getattr(CHECK, function), target.read_bytes()
+            calls = 0
+            def mutate(*args):
+                nonlocal calls
+                result = original_function(*args)
+                calls += 1
+                if calls == 1:
+                    target.write_bytes(original_bytes + b"changed-after-observation")
+                return result
+            with self.subTest(function=function), mock.patch.object(CHECK, function, side_effect=mutate), \
+                    self.assertRaisesRegex(ValueError, "changed during full inspection"):
+                self.inspect()
+            self.assertEqual(2, calls)
+            target.write_bytes(original_bytes)
 
     def test_actual_dark_machine_default_is_observed_without_installed_authority(self):
         self.assertNotIn("InstallScope", self.product.find(CHECK.NS + "Package").attrib)

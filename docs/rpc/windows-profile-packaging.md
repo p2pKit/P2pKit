@@ -104,6 +104,12 @@ remain the byte bindings.
 the preview-adapter JAR after a bounded,
 source-bound static WiX `dark` extraction of that same MSI. It checks concrete installed target paths and the
 extracted bytes; it does not install the MSI or execute custom actions.
+It also requires the entire MSI application File-table payload to match the
+completed image: launcher, configuration, runtime and application files. Only
+`app/.jpackage.xml`, which the pinned JDK producer deliberately does not install,
+is excluded; its observed hash is recorded separately. The receipt records the
+complete inventory digest, file count and byte count. This does not cover MSI
+custom-action resources, an actual installation or pre-JVM startup integrity.
 
 The modular `desktop-windows` component invokes `scripts/inspect-rpc-windows-package.py` after its existing
 Gradle installer task. This wrapper runs the two maintained inspectors and the installed WiX tool through
