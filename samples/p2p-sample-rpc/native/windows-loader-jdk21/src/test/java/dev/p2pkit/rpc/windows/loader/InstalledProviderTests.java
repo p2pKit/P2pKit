@@ -2,7 +2,10 @@ package dev.p2pkit.rpc.windows.loader;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
 
 import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.invoke;
 import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.value;
@@ -12,6 +15,10 @@ public final class InstalledProviderTests {
     private InstalledProviderTests() {}
 
     public static void main(String[] args) throws Throwable {
+        if (args.length == 3) {
+            runtimeModule(args);
+            return;
+        }
         if (args.length == 4) {
             installedDiagnostic(args);
             return;
@@ -41,6 +48,74 @@ public final class InstalledProviderTests {
         }
         System.out.println("WINDOWS_INSTALLED_PROVIDER_REFUSAL_PASS" +
             " scope=REAL_JDK21_TO_JDK17_TYPED_REFUSAL_NOT_INSTALLED_OR_NATIVE");
+    }
+
+    private static void runtimeModule(String[] args) throws Throwable {
+        String mode = args[0];
+        check(mode.equals("diagnostic-runtime-module-absent") || mode.equals("diagnostic-runtime-module-present"));
+        WindowsLoaderRuntime.requireDiagnosticRuntime();
+        requireNoInstalledAttempt();
+        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        Class<?> readback = PackagedVerifierTests.actualApplicationClass(
+            "dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback", Path.of(args[1]).toRealPath(), args[2]);
+        // Internal Kotlin method names include the actual compiler module suffix. Constrain the original
+        // declared method, not caller text; never open application internals or invoke its native entry.
+        Method[] observers = Arrays.stream(readback.getDeclaredMethods()).filter(method ->
+            (method.getName().equals("observeRuntime") || method.getName().startsWith("observeRuntime$")) &&
+            method.getParameterCount() == 0 && method.getReturnType().getName().equals(
+                "dev.p2pkit.sample.rpc.desktop.WindowsRuntimeObservation")).toArray(Method[]::new);
+        check(observers.length == 1);
+        Method observer = observers[0];
+        check(observer.getDeclaringClass() == readback && Modifier.isPublic(observer.getModifiers()) &&
+            Modifier.isFinal(observer.getModifiers()) && !Modifier.isStatic(observer.getModifiers()) &&
+            !observer.isBridge() && !observer.isSynthetic());
+        Object instance = readback.getField("INSTANCE").get(null);
+        ModuleLayer boot = ModuleLayer.boot();
+        if (mode.equals("diagnostic-runtime-module-absent")) {
+            check(boot.findModule("jdk.unsupported").isEmpty());
+            boolean refused = false;
+            try { observer.invoke(instance); }
+            catch (InvocationTargetException caught) {
+                Throwable original = caught.getTargetException();
+                check(original.getClass() == NoClassDefFoundError.class &&
+                    "com/sun/nio/file/ExtendedOpenOption".equals(original.getMessage()));
+                refused = true;
+            }
+            check(refused);
+        } else {
+            Module module = boot.findModule("jdk.unsupported").orElseThrow();
+            check(boot.configuration().findModule("jdk.unsupported").orElseThrow().reference()
+                .location().orElseThrow().toString().equals("jrt:/jdk.unsupported"));
+            Class<?> options = Class.forName(module, "com.sun.nio.file.ExtendedOpenOption");
+            check(options != null && options.getModule() == module && module.getLayer() == boot &&
+                module.isExported("com.sun.nio.file", readback.getModule()));
+            Object actual = observer.invoke(instance);
+            Class<?> observation = observer.getReturnType();
+            check(actual != null && actual.getClass() == observation &&
+                observation.getClassLoader() == readback.getClassLoader() &&
+                observation.getModule() == readback.getModule());
+            check(observation.getMethod("getJavaFeature").invoke(actual).equals(Runtime.version().feature()) &&
+                observation.getMethod("getJavaVersion").invoke(actual).equals(Runtime.version().toString()) &&
+                observation.getMethod("getModuleName").invoke(actual).equals("jdk.unsupported"));
+            for (String getter : List.of("getBootModule", "getRuntimeImageModule", "getExported", "getOptionType"))
+                check(observation.getMethod(getter).invoke(actual).equals(Boolean.TRUE));
+            check(observation.getMethod("getOptionNames").invoke(actual).equals(
+                List.of("NOSHARE_READ", "NOSHARE_WRITE", "NOSHARE_DELETE")));
+        }
+        requireNoInstalledAttempt();
+        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        System.out.println("WINDOWS_RUNTIME_MODULE_CONNECTION_PASS case=" + mode +
+            " scope=ACTUAL_JVM_MODULE_RESOLUTION_NOT_WINDOWS_OR_INSTALLED_NATIVE");
+    }
+
+    private static void requireNoInstalledAttempt() throws ReflectiveOperationException {
+        // Test-patched module's existing private-state inspection only; no access override on application code.
+        var installed = WindowsLoader.class.getDeclaredField("installedAttempt");
+        var bootstrap = WindowsSystemBootstrapCandidate.class.getDeclaredField("processOwner");
+        installed.setAccessible(true);
+        bootstrap.setAccessible(true);
+        check(installed.get(null) == null && bootstrap.get(null) == null &&
+            WindowsJniRegistrationOwner.retainedProcessOwner() == null);
     }
 
     private static void installedDiagnostic(String[] args) throws Throwable {

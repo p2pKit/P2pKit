@@ -245,6 +245,11 @@ def main():
     connected_run("installed-provider-unavailable", "InstalledProviderTests", [str(main_directory),
                   bindings[2]["sha256"], bindings[3]["sha256"], bindings[1]["sha256"], bindings[4]["sha256"]],
         r"WINDOWS_INSTALLED_PROVIDER_REFUSAL_PASS scope=REAL_JDK21_TO_JDK17_TYPED_REFUSAL_NOT_INSTALLED_OR_NATIVE\n")
+    for mode, flags in (("absent", ()), ("present", ("--add-modules=jdk.unsupported",))):
+        case = "diagnostic-runtime-module-" + mode
+        connected_run(case, "InstalledProviderTests", [case, str(main_directory), bindings[5]["sha256"]],
+            "WINDOWS_RUNTIME_MODULE_CONNECTION_PASS case=" + re.escape(case) +
+            r" scope=ACTUAL_JVM_MODULE_RESOLUTION_NOT_WINDOWS_OR_INSTALLED_NATIVE\n", flags=flags)
     diagnostic_connection_cases = (["diagnostic-connected-reuse", "diagnostic-connected-failure",
                                     "diagnostic-connected-in-progress"] if os.name == "nt" else
                                    ["diagnostic-connected-source-or-host-refusal"])
@@ -252,7 +257,8 @@ def main():
         connected_run("installed-" + case, "InstalledProviderTests", [case, str(main_directory),
                       bindings[5]["sha256"], bindings[6]["sha256"]],
             "WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + re.escape(case) +
-            r" scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION\n")
+            r" scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION\n",
+            flags=("--add-modules=jdk.unsupported",))
     loaded_image_cases = ["unattached", "once", "thread", "unprepared", "owned-required", "order",
                           "wrong-order", "substituted-view", "missing-name", "duplicate-name", "closed-scope",
                           "declaration", "registration-before-verification", "registration-after-failure",
