@@ -58,6 +58,11 @@ final class WindowsOriginalProfileDllAncestorsCandidate {
         if (failed) throw failure;
     }
 
+    void requireInstallationRoot(WindowsInstalledProfileCandidate candidate) {
+        candidate.requireOriginalProfileAncestors(this);
+        candidate.joinRoot(core);
+    }
+
     void requireOriginalCore(WindowsOriginalFileAncestorsLease candidate) {
         if (candidate == null || candidate != core) {
             throw new IllegalStateException("Ancestor core is not this profile DLL facade's original attachment");

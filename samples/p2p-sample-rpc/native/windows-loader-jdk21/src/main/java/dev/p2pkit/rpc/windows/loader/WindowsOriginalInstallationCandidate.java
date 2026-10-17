@@ -60,6 +60,8 @@ final class WindowsOriginalInstallationCandidate {
     private boolean observationCompleted;
     private char[] originalPath;
     private char[] originalRoot;
+    private boolean profilePreparationAttempted;
+    private WindowsInstalledProfileCandidate installedProfile;
     private boolean fileAttempted;
     private boolean fileObserved;
     private boolean securityAttempted;
@@ -316,6 +318,44 @@ final class WindowsOriginalInstallationCandidate {
     MemorySegment originalAncestorsEntry(WindowsOriginalFileLease candidate, int index) {
         requireOriginalFileLease(candidate); requireOriginalAncestorInputs();
         return bootstrap.originalInstallationAncestorsEntry(this, index);
+    }
+
+    WindowsInstalledProfileCandidate prepareProfileLoad() {
+        if (!custodyAccepted()) throw new IllegalStateException("Installed preparation requires accepted original custody");
+        if (profilePreparationAttempted) throw new IllegalStateException("Installed profile preparation is already consumed");
+        profilePreparationAttempted = true;
+        try {
+            installedProfile = new WindowsInstalledProfileCandidate(this);
+            installedProfile.prepare(); // Exact child/failure attached before every subsequent effect.
+            return installedProfile;
+        } catch (Throwable caught) {
+            failure.operationFailure = caught;
+            failed = true;
+            throw failure;
+        }
+    }
+
+    void requireOriginalProfile(WindowsInstalledProfileCandidate candidate) {
+        if (!custodyAccepted() || !profilePreparationAttempted || candidate == null || candidate != installedProfile) {
+            throw new IllegalStateException("Installed preparation is not the original accepted installation attachment");
+        }
+    }
+
+    WindowsSystemBootstrapCandidate originalBootstrap(WindowsInstalledProfileCandidate candidate) {
+        requireOriginalProfile(candidate); return bootstrap;
+    }
+
+    String originalRoot(WindowsInstalledProfileCandidate candidate) {
+        requireOriginalProfile(candidate); return new String(originalRoot, 0, originalRoot.length - 1);
+    }
+
+    void requireRootJoin(WindowsInstalledProfileCandidate candidate, WindowsOriginalFileAncestorsLease member) {
+        requireOriginalProfile(candidate);
+        ancestors.requireSameInstallationRoot(candidate, member);
+    }
+
+    void requireProfileRootCore(WindowsInstalledProfileCandidate candidate, WindowsOriginalFileAncestorsLease core) {
+        requireOriginalProfile(candidate); requireOriginalAncestors(core);
     }
 
     boolean completed() {

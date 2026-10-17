@@ -71,6 +71,7 @@ def main():
                         "ImageReadInvocationTests" in name or
                         "SystemBootstrapCandidateTests" in name or
                         "OriginalInstallationCandidateTests" in name or
+                        "InstalledProfilePreparationTests" in name or
                         "BootstrapReturnTests" in name or
                         "SystemImportResolutionTests" in name or
                         "SystemExportPlanTests" in name or
@@ -287,6 +288,14 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".OriginalInstallationCandidateTests", case], 0,
             "WINDOWS_ORIGINAL_INSTALLATION_PASS case=" + re.escape(case) +
             r" scope=INERT_OWNERS_AND_FRAMES_NOT_INSTALLED_CUSTODY_OR_AUTHORITY\n", "")
+    installed_cases = ["contract", "owners", "policy", "failure-latch", "thread", "root-match", "root-mutations",
+                       "known-folder-path", "folder-call", "folder-unknown", "folder-retirement", "parent-fields",
+                       "parent-origin", "parent-archive", "manifest-bounds", "load-gates"]
+    for case in installed_cases:
+        run("installed-preload-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".InstalledProfilePreparationTests", case], 0,
+            "WINDOWS_INSTALLED_PRELOAD_PASS case=" + re.escape(case) +
+            r" scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION\n", "")
     dll_file_cases = ["path-valid", "path-refusal", "owner-refusal", "substitution", "failure-latch"]
     for case in dll_file_cases:
         run("profile-dll-file-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),

@@ -213,10 +213,10 @@ public final class LibraryLoadInvocationTests {
     private static WindowsLibraryLoadInvocation prepareInert(MemorySegment entry, Arena original) throws Throwable {
         WindowsLibraryLoadInvocation candidate;
         if (windows) {
-            candidate = WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, FILE, PATH);
+            candidate = WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, FILE, PATH);
         } else {
             expect(IllegalStateException.class,
-                () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, FILE, PATH));
+                () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, FILE, PATH));
             Constructor<WindowsLibraryLoadInvocation> constructor = WindowsLibraryLoadInvocation.class.getDeclaredConstructor(
                 WindowsSystemBootstrapCandidate.class, Object.class, WindowsOriginalJvmCandidate.class, Object.class,
                 MemorySegment.class, MemorySegment.class, Arena.class, String.class);
@@ -434,37 +434,37 @@ public final class LibraryLoadInvocationTests {
             "C:\\a\u0000\\p2pkit-windows-profile.dll",
             "C:\\" + "a".repeat(260) + "\\p2pkit-windows-profile.dll"}) {
             expect(IllegalArgumentException.class,
-                () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, FILE, invalid));
+                () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, FILE, invalid));
         }
         expect(IllegalArgumentException.class,
-            () -> WindowsLibraryLoadInvocation.prepare(bootstrap, null, runtime, FILE, PATH));
+            () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, null, runtime, FILE, PATH));
         expect(IllegalArgumentException.class,
-            () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, null, FILE, PATH));
+            () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, null, FILE, PATH));
         expect(IllegalArgumentException.class,
-            () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, null, PATH));
+            () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, null, PATH));
         expect(IllegalArgumentException.class,
-            () -> WindowsLibraryLoadInvocation.prepare(null, INSTALLATION, runtime, FILE, PATH));
+            () -> WindowsLibraryLoadInvocation.prepareDevelopment(null, INSTALLATION, runtime, FILE, PATH));
         MemorySegment[] entries = (MemorySegment[]) get(bootstrap, "entries");
         for (MemorySegment bad : new MemorySegment[] {null, MemorySegment.NULL, MemorySegment.ofArray(new byte[8])}) {
             entries[5] = bad;
             expect(IllegalArgumentException.class,
-                () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, FILE, PATH));
+                () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, FILE, PATH));
         }
         entries[5] = entry;
         try (Arena other = Arena.ofConfined()) {
             entries[5] = stub(other);
             expect(IllegalArgumentException.class,
-                () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, FILE, PATH));
+                () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, FILE, PATH));
         }
         entries[5] = stub(Arena.global());
         expect(IllegalArgumentException.class,
-            () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, FILE, PATH));
+            () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, FILE, PATH));
         entries[5] = entry;
         expect(IllegalArgumentException.class, () -> bootstrap.originalLibraryLoadEntry(runtime, 2));
         WindowsOriginalJvmCandidate foreign = new WindowsOriginalJvmCandidate(bootstrap, Linker.nativeLinker(),
             original, pinEntry, entry, entry);
         expect(IllegalStateException.class,
-            () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, foreign, FILE, PATH));
+            () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, foreign, FILE, PATH));
         check(callbacks == 0 && staticField("processOwner") == null);
     }
 
@@ -472,7 +472,7 @@ public final class LibraryLoadInvocationTests {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread test = Thread.ofVirtual().start(() -> {
             try { expect(IllegalStateException.class,
-                () -> WindowsLibraryLoadInvocation.prepare(bootstrap, INSTALLATION, runtime, FILE, PATH)); }
+                () -> WindowsLibraryLoadInvocation.prepareDevelopment(bootstrap, INSTALLATION, runtime, FILE, PATH)); }
             catch (Throwable caught) { failure.set(caught); }
         });
         test.join(5000);

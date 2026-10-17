@@ -638,6 +638,49 @@ final class WindowsOriginalFileAncestorsLease {
             throw new IllegalStateException("Original JVM ancestors have no completed observation");
         }
     }
+    void requireSameInstallationRoot(WindowsInstalledProfileCandidate requester, WindowsOriginalFileAncestorsLease member) {
+        requireCompleted();
+        if (requester == null || originalInstallationOwner == null || member == null || member == this) {
+            throw new IllegalStateException("Root join requires an original installation and distinct member");
+        }
+        originalInstallationOwner.requireProfileRootCore(requester, this);
+        member.requireCompleted();
+        if (member.originalJvmOwner != null) requester.requireOriginalJvmAncestors(member.originalJvmOwner);
+        else if (member.originalProfileDllOwner != null) requester.requireOriginalProfileAncestors(member.originalProfileDllOwner);
+        else throw new IllegalStateException("Root join has another member role");
+        if (!allPoliciesAccepted || !member.allPoliciesAccepted) throw new IllegalStateException("Root join lacks accepted policies");
+        compareRootObservations(requester.originalRoot(), member.originalPath, member.pathLength,
+            rootGuid, member.rootGuid, metadata, member.metadata, directoryCount, member.directoryCount);
+    }
+
+    private static void compareRootObservations(String root, char[] memberPath, int memberLength,
+        char[] originalGuid, char[] memberGuid, long[][] original, long[][] member, int originalCount, int memberCount) {
+        if (root == null || memberPath == null || memberLength < 0 || memberLength >= memberPath.length ||
+            memberLength <= root.length() || memberPath[root.length()] != '\\' || originalGuid == null ||
+            memberGuid == null || originalGuid.length != 49 || memberGuid.length != originalGuid.length ||
+            originalCount < 1 || originalCount >= LIMIT || memberCount <= originalCount || memberCount >= LIMIT ||
+            original == null || member == null || original.length < originalCount || member.length < memberCount) {
+            throw new IllegalStateException("Root join lacks bounded complete observations");
+        }
+        for (int index = 0; index < originalGuid.length; index++) {
+            if (fold(originalGuid[index]) != fold(memberGuid[index])) throw new IllegalStateException("Installed member has another volume GUID");
+        }
+        for (int index = 0; index < root.length(); index++) {
+            if (fold(root.charAt(index)) != fold(memberPath[index])) throw new IllegalStateException("Installed member root path differs");
+        }
+        // Retained original IDs/type, not a path string, mutable allocation or directory size.
+        for (int directory = 0; directory < originalCount; directory++) {
+            if (original[directory] == null || member[directory] == null || original[directory].length != 8 || member[directory].length != 8) {
+                throw new IllegalStateException("Root join has malformed original metadata");
+            }
+            for (int item : new int[] {0, 1, 2, 5, 6, 7}) {
+                if (original[directory][item] != member[directory][item]) {
+                    throw new IllegalStateException("Installed member root directory identity differs");
+                }
+            }
+        }
+    }
+
     boolean completed() { requireCompleted(); return true; }
     int ancestorCount() { requireCompleted(); return directoryCount; } // Root + directories, excluding the leaf probe.
     boolean descriptorPoliciesAccepted() { requireCompleted(); return allPoliciesAccepted; } // Ancestors only.

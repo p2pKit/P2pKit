@@ -222,6 +222,13 @@ final class WindowsPackagedVerifier {
         } catch (Throwable caught) { throw originalBytes.failOriginalPackagedVerifier(this, caught); }
     }
 
+    void requireInstalledPreparation(WindowsOriginalProfileDllBytesCandidate candidate) {
+        requirePrepared();
+        if (candidate == null || candidate != originalBytes) throw new IllegalStateException("Installed plan has another original byte owner");
+        requireOriginalSystemGraph();
+        if (!systemImportsPrepared) throw new IllegalStateException("Installed plan lacks original system imports");
+    }
+
     void requireDevelopmentImportComparison() {
         requirePrepared();
         if (originalBytes != null || systemImportsAttempted) {

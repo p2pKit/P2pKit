@@ -55,6 +55,14 @@ final class WindowsOriginalJvmFileCandidate {
         runtime.requireOriginalFile(this);
     }
 
+    void requireInstalledPath(WindowsInstalledProfileCandidate candidate) {
+        requireCompleted();
+        candidate.requireOriginalJvmFile(this);
+        if (!new String(originalPath, 0, originalPathLength).equalsIgnoreCase(candidate.fixedJvmPath())) {
+            throw new IllegalStateException("Original JVM file is outside the fixed installed runtime");
+        }
+    }
+
     private void requireCompleted() { lease.completed(); }
 
     WindowsOriginalJvmBytesCandidate inspectBytes() {
