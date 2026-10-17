@@ -23,7 +23,7 @@ static HANDLE parents[16], directory_handle, file_handle, writer, source_handle;
 static unsigned parent_count;
 static wchar_t directory_path[LIMIT], dll_path[LIMIT], nonce[37];
 static wchar_t source_pin[41], tree_pin[41], dll_pin[65];
-/* error_code records only immediate create/delete Win32 failures; zero also covers policy refusal. */
+/* error_code records only immediate failed Win32 calls; zero also covers policy/identity refusal. */
 static DWORD dll_bytes, error_code;
 static int directory_created;
 static FILE_ID_INFO directory_id, file_id, parent_ids[16];
@@ -332,17 +332,20 @@ static int cleanup(void) {
     }
     if (!CloseHandle(deletion) || !CloseHandle(file_handle)) return 0;
     file_handle = NULL;
-    stage = "DELETE_DIRECTORY";
+    stage = "QUERY_DIRECTORY_ID";
     /* ReOpenFile cannot reopen directories. NTFS FileIdType comes from the ORIGINAL held handle,
      * not a guessed truncation of FILE_ID_128 or a later path lookup. The original handle prevents
      * identifier reuse; the returned handle must still match the complete original identity/ACL. */
     if (!GetFileInformationByHandle(directory_handle, &information)) { error_code = GetLastError(); return 0; }
     if (!directory_file_descriptor(&information, &descriptor)) return 0;
+    stage = "OPEN_DIRECTORY_ID";
     deletion = OpenFileById(directory_handle, &descriptor, DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
     if (!good(deletion)) { error_code = GetLastError(); return 0; }
+    stage = "DELETE_DIRECTORY"; /* Original-identity/ACL refusal, not a guessed native error. */
     if (!original(deletion, 1, &directory_id, 1)) return 0;
+    stage = "DISPOSE_DIRECTORY";
     if (!SetFileInformationByHandle(deletion, FileDispositionInfo, &disposition, sizeof(disposition))) {
         error_code = GetLastError(); return 0;
     }

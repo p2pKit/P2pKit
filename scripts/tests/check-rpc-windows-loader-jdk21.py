@@ -477,7 +477,7 @@ def main():
     fixture_sources = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/jvm"
     run("protected-dll-fixture-controls", [sys.executable, "-I", "-B",
         fixture_sources / "test-protected-dll-fixture.py"], 0,
-        r"WINDOWS_PROTECTED_DLL_FIXTURE_CONTROLS_PASS tests=34 "
+        r"WINDOWS_PROTECTED_DLL_FIXTURE_CONTROLS_PASS tests=35 "
         r"scope=INERT_RECEIPT_AND_HANDSHAKE_NOT_NATIVE_CUSTODY_OR_AUTHORITY\n", "")
     protected_fixture_scope = "NOT_REQUESTED"
     loaded_registration_scope = "UNSUPPORTED_HOST_NOT_EXECUTED"

@@ -1011,7 +1011,7 @@ completion preserves the fixture, fails the gate and leaves the existing outer
 supervisor responsible for uncertain descendants. No recursive path cleanup or
 retry is performed. The reader's 60-second limit and 128MiB heap are unchanged.
 
-Thirty-four portable controls cover closed receipts, handshake ownership,
+Thirty-five portable controls cover closed receipts, handshake ownership,
 bounded installed-SDK header selection and privacy-safe terminal diagnostics.
 On cleanup failure, only a fully retired helper with two original-bound receipts
 may export a fixed stage and bounded Win32 code. Otherwise the diagnostic is
@@ -1022,6 +1022,12 @@ This is administrator **development-file/PE coverage**, not standard-user
 protected-profile storage, MSI installation, productive JNI/Host–Client testing,
 approved bootstrap authority or W01–W11 qualification. No helper/test input enters
 production resources, the adapter JAR, MSI or publication artifact inventory.
+
+Directory diagnostics distinguish the original ID query, by-ID open and
+disposition call. The older `DELETE_DIRECTORY` stage remains the original
+identity/ACL refusal boundary. A prior coarse error cannot identify which API
+failed; these fixed stage names do not authorize a different cleanup path,
+relaxed flags or a retry.
 
 ### Original system-module disk observations
 
