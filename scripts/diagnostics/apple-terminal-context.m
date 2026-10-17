@@ -363,7 +363,8 @@ int main(int argc, const char **argv) {
 #ifdef P2PKIT_MODULAR_CI
         /* Fixed modular commands, not the historical CI envelope. Each
          * collector retains its unchanged component command deadline. */
-        NSNumber *modularCommand = @{@"modular-jmdns":@1800, @"modular-shared":@7200}[executionMode];
+        NSNumber *modularCommand = @{@"modular-jmdns":@1800, @"modular-shared":@7200,
+            @"modular-consumers":@7200, @"modular-published-consumers":@7200}[executionMode];
         if (!modularCommand) return 125;
         childBound = @(modularCommand.doubleValue + 240);
 #endif
@@ -444,7 +445,9 @@ int main(int argc, const char **argv) {
             result[@"failureCheck"] = @"RUNNER_TRACKING";
             id component = config[@"component"];
             NSString *expectedMode = [component isKindOfClass:NSString.class] ?
-                @{@"jmdns-diagnostic":@"modular-jmdns", @"macos-shared":@"modular-shared"}[component] : nil;
+                @{@"jmdns-diagnostic":@"modular-jmdns", @"macos-shared":@"modular-shared",
+                  @"consumers":@"modular-consumers",
+                  @"published-consumers-diagnostic":@"modular-published-consumers"}[component] : nil;
             if (![expectedMode isEqualToString:executionMode] || !tracking.length || tracking.length > 200 ||
                 [tracking rangeOfCharacterFromSet:trackingCharacters.invertedSet].location != NSNotFound ||
                 ![config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking]) break;

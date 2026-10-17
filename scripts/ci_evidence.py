@@ -138,7 +138,7 @@ TASK_NAMES = frozenset({
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
     "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "shared-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
-    "isolated-consumers", "published-pom-diagnostic", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
+    "isolated-consumers", "published-pom-diagnostic", "published-consumers-diagnostic", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",
     "prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop", "gradle-stop", "component-setup"})
 
 

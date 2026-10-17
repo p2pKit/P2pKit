@@ -198,7 +198,7 @@ class ComponentTests(unittest.TestCase):
             root = Path(temporary)
             for name in ('java', 'gpg', 'gradlew', 'xcodebuild'):
                 (root / name).write_bytes(b'synthetic public tool')
-            for component in ("consumers", "consumers-pom-diagnostic", "jmdns-diagnostic", "macos-shared"):
+            for component in ("consumers", "published-consumers-diagnostic", "consumers-pom-diagnostic", "jmdns-diagnostic", "macos-shared"):
                 for version in ('26.3', '26.5', '26.30'):
                     versions = [Mock(stdout=b'openjdk version "17"'), Mock(stdout=b'gpg (GnuPG) 2.5.22'),
                                 Mock(stdout=b'Gradle 9.7.0\n'), Mock(stdout=('Xcode ' + version + '\nBuild version synthetic\n').encode())]
@@ -259,6 +259,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_bundle_diagnostic_explicit_only_and_never_in_required_all(self):
         self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
+                                       'published-consumers-diagnostic': ('macos-15-intel', 120),
                                        'consumers-pom-diagnostic': ('macos-15-intel', 60)})
         self.assertEqual(len(C.COMPONENTS), 14)
         self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
@@ -285,6 +286,36 @@ class ComponentTests(unittest.TestCase):
         for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
             code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
                                                            component='consumers-pom-diagnostic')
+            self.assertIsNone(error)
+            self.assertEqual(code, status or stopped)
+            self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
+                                               {'task': 'gradle-stop', 'exitCode': stopped}])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+            self.assertEqual(calls[-1].kwargs['timeout'], 90)
+            self.assertEqual(len(calls), 2)
+
+    def test_published_consumer_diagnostic_has_fixed_remote_scope_and_preserves_failure_cleanup(self):
+        name = 'published-consumers-diagnostic'
+        self.assertEqual(C.matrix(name), {'include': [{'component': name,
+                         'os': 'macos-15-intel', 'minutes': 120, 'job_minutes': 130}]})
+        self.assertNotIn(name, C.COMPONENTS)
+        self.assertEqual(len(C.matrix('all')['include']), 14)
+        self.assertEqual(C.commands(name), [(name, ['env',
+            'P2PKIT_CONSUMER_REPOSITORY_URL=https://repo.maven.apache.org/maven2',
+            'bash', 'scripts/check-published-consumers.sh', '--latest-published'])])
+        self.assertEqual(C.commands('consumers'), [('isolated-consumers',
+                         ['bash', 'scripts/check-published-consumers.sh'])])
+        evidence_spec = importlib.util.spec_from_file_location('ci_evidence_remote_routes', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        self.assertTrue({task for task, argv in C.commands(name)} <= evidence.TASK_NAMES)
+        for invalid in (name + ',source', 'all,' + name, name + ',' + name):
+            with self.assertRaises(ValueError):
+                C.matrix(invalid)
+        for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
+                                                           component=name)
             self.assertIsNone(error)
             self.assertEqual(code, status or stopped)
             self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
@@ -472,7 +503,7 @@ class ComponentTests(unittest.TestCase):
 class SetupBaselineTests(unittest.TestCase):
     def selected(self, component, *, os_name='macOS', arch='X64', release='15.7', xcode='26.3', present=True):
         source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
-        begin = source.index('if [[ "$component" == macos-shared || "$component" == consumers || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then')
+        begin = source.index('if [[ "$component" == macos-shared || "$component" == consumers || "$component" == published-consumers-diagnostic || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then')
         end = source.index('  xcodegen_bin_dir=', begin)
         # Actual selection/admission shell block, with synthetic readbacks only.
         # No SDK installation, GPG, Gradle, network or native evidence.
@@ -490,7 +521,7 @@ class SetupBaselineTests(unittest.TestCase):
             return result.returncode, output.read_text() if output.exists() else ''
 
     def test_actual_selection_requires_exact_supported_host_and_tool(self):
-        for component in ('consumers', 'consumers-pom-diagnostic', 'jmdns-diagnostic', 'dependency-update', 'macos-shared'):
+        for component in ('consumers', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'jmdns-diagnostic', 'dependency-update', 'macos-shared'):
             self.assertEqual(self.selected(component),
                              (0, 'DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer\n'))
             for changed in ({'os_name': 'Linux'}, {'arch': 'ARM64'}, {'release': '14.8.1'}, {'release': '26.0'},
@@ -576,7 +607,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
             '--report-glob', '**/build/test-results/**/*.xml', '--report-glob', 'build/reports/**/*', '--',
             python, '-B', str(ROOT / 'scripts/ci_component.py'), 'jmdns-diagnostic'])
         workflow = (ROOT / '.github/workflows/ci-component.yml').read_text()
-        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared ]]; then', workflow)
+        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic ]]; then', workflow)
         self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]', workflow)
         self.assertIn('else [[ "$MINUTES" == 120 ]]; fi', workflow)
         self.assertEqual(workflow.count('python3 -B scripts/run-ci-terminal-component.py'), 1)
@@ -687,7 +718,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         with self.assertRaises(T.ContextFailure):
             T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
         native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
-        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200}[executionMode]', native)
+        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200}[executionMode]', native)
         self.assertIn('if (!modularCommand) return 125;', native)
         self.assertIn('childBound = @(modularCommand.doubleValue + 240);', native)
         self.assertIn('![expectedMode isEqualToString:executionMode]', native)
@@ -812,7 +843,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_shared_fixed_profile_has_original_full_shared_command_not_a_test_subset(self):
         T = self.T
-        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared'})
+        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic'})
         argv = T.command(self.environment(), 'macos-shared')
         self.assertEqual(argv[argv.index('--component') + 1], 'macos-shared')
         self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')
@@ -820,7 +851,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         self.assertEqual(argv[-2:], [str(ROOT / 'scripts/ci_component.py'), 'macos-shared'])
         self.assertEqual(C.commands('macos-shared'),
             [('shared-platform-tests', [C.sys.executable, '-B', 'scripts/run-platform-tests.py', 'macos-shared'])])
-        for component in ('consumers', 'dependency-update', 'compatibility', 'apple-arm64', 'apple-x64', '', 'macos-shared --skip'):
+        for component in ('dependency-update', 'compatibility', 'apple-arm64', 'apple-x64', '', 'macos-shared --skip'):
             with self.subTest(component=component), self.assertRaisesRegex(T.ContextFailure, '^COMPONENT$'):
                 T.command(self.environment(), component)
 
@@ -845,6 +876,50 @@ class TerminalDiagnosticTests(unittest.TestCase):
         T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0, 'macos-shared')
         with self.assertRaisesRegex(T.ContextFailure, '^APPLICATION_FINALIZATION$'):
             T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0, 'jmdns-diagnostic')
+
+    def test_terminal_consumers_preserve_full_driver_and_bind_native_modes(self):
+        T = self.T
+        native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
+        source = {'commit': 'a' * 40, 'tree': 'b' * 40}
+        admission = dict(source=source, ancestry=dict(method=T.terminal.ANCESTRY_METHOD, depth=3,
+            systemLoginAncestors=1, restrictedCombinedDenials=1))
+        for component, mode in (('consumers', 'modular-consumers'),
+                                ('published-consumers-diagnostic', 'modular-published-consumers')):
+            argv = T.command(self.environment(), component)
+            self.assertEqual(argv[argv.index('--component') + 1], component)
+            self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')
+            self.assertEqual(argv[argv.index('--output-dir') + 1], '/tmp/ci-evidence-' + component)
+            self.assertEqual(argv[-2:], [str(ROOT / 'scripts/ci_component.py'), component])
+            self.assertEqual(T.bounds(component),
+                dict(mode=mode, command=7200, child=7380, native=7440, controller=7500, wrapper=7650))
+            self.assertIn('@"' + component + '":@"' + mode + '"', native)
+            self.assertIn('@"' + mode + '":@7200', native)
+            app = dict(schema=3, executionMode=mode, stage='FINALIZED', exitCode=0, failureCheck='NONE',
+                openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(T.terminal.APPLICATION_FLAGS, True))
+            T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0, component)
+            for other in T.PROFILES.keys() - {component}:
+                with self.subTest(component=component, other=other), self.assertRaisesRegex(T.ContextFailure, '^APPLICATION_FINALIZATION$'):
+                    T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0, other)
+
+    def test_terminal_remote_diagnostic_is_dispatch_only_and_passes_no_endpoint_or_secret_override(self):
+        T = self.T
+        with patch.object(T.platform, 'system', return_value='Darwin'), patch.object(T.platform, 'machine', return_value='x86_64'):
+            for event in ('workflow_dispatch', 'push', 'pull_request', 'schedule'):
+                env = {**self.environment(), 'GITHUB_EVENT_NAME': event}
+                T.environment_admit(env, 'consumers')
+                if event == 'workflow_dispatch':
+                    T.environment_admit(env, 'published-consumers-diagnostic')
+                else:
+                    with self.assertRaisesRegex(T.ContextFailure, '^HOST_CONTEXT$'):
+                        T.environment_admit(env, 'published-consumers-diagnostic')
+            for component in ('consumers', 'published-consumers-diagnostic'):
+                for changes in ({'GITHUB_EVENT_NAME': 'workflow_run'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40},
+                    {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/publish-maven-central.yml@refs/tags/v1'}):
+                    with self.subTest(component=component, changes=changes), self.assertRaisesRegex(T.ContextFailure, '^HOST_CONTEXT$'):
+                        T.environment_admit({**self.environment(), **changes}, component)
+        for key in ('P2PKIT_CONSUMER_REPOSITORY_URL', 'GH_TOKEN', 'GITHUB_TOKEN', 'MAVEN_CENTRAL_USERNAME',
+                    'MAVEN_CENTRAL_PASSWORD', 'ORG_GRADLE_PROJECT_signingInMemoryKey'):
+            self.assertNotIn(key, T.ENVIRONMENT)
 
     def test_terminal_shell_waits_original_child_and_has_no_environment_or_command_override(self):
         T = self.T

@@ -35,7 +35,7 @@ module ModularCI
     required = %w[source dependencies jvm-linux jvm-windows android apple-arm64 apple-x64
                   desktop-linux desktop-windows desktop-macos security compatibility consumers macos-shared]
     require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').sort ==
-             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'consumers-pom-diagnostic'].sort,
+             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic'].sort,
              'Missing or extra independently selectable required component')
     writer = load(File.join(root, '.github/workflows/dependency-update-candidate.yml')).fetch('jobs').fetch('generate')
     require!(writer['runs-on'] == 'macos-15-intel' && writer.fetch('steps').any? { |s|
@@ -61,7 +61,7 @@ module ModularCI
       require!(consumer && setup < consumer && !steps[consumer]['if'] && !steps[consumer]['continue-on-error'],
                'Complete remote consumers must remain required after supported setup')
     end
-    %w[bundle-diagnostic jmdns-diagnostic consumers-pom-diagnostic].each do |diagnostic|
+    %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic].each do |diagnostic|
       require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),
                'Explicit focused diagnostic route missing')
       %w[qualify complete-gate].each do |name|

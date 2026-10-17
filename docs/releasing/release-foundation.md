@@ -124,6 +124,8 @@ Run `gh workflow run ci.yml --ref YOUR_BRANCH -f component=bundle-diagnostic` fo
 
 The 0.8+ Central bundle contains exactly 121 signed originals across 21 coordinates: 117 dependency artifacts plus the pinned Kotlin plugin's four root `-kotlin-tooling-metadata.json` sidecars (core, LAN, RPC, Android provisioning). Each original retains its signature and four checksums: 726 files. Exact filenames, bounded JSON objects, signatures and hashes are checked; equal-count substitutions are refused. Historical 0.7 bundles remain 15 coordinates / 84 originals, and the isolated-consumer dependency verification allowlist remains 117—not the four tooling sidecars.
 Run `gh workflow run ci.yml --ref YOUR_BRANCH -f component=jmdns-diagnostic` for only the existing real-resource JmDNS close tests on the explicit macOS 15 Intel CLI candidate.
+Run `gh workflow run ci.yml --ref YOUR_BRANCH -f component=published-consumers-diagnostic` for the complete maintained `--latest-published` consumer checks against fixed public Maven Central in the Terminal context; this downloads dependencies but does not publish.
+The required `consumers` component still checks locally produced current-source coordinates; the remote diagnostic cannot replace it.
 These optional diagnostics retain encrypted evidence but cannot aggregate/complete qualification or publish; the full required components remain unchanged.
 
 Use `component=all` for a full qualification. Main pushes and PRs run the full

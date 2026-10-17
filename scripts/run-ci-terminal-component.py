@@ -33,7 +33,9 @@ spec.loader.exec_module(terminal)
 private = terminal.private
 COMPONENT = 'jmdns-diagnostic'
 # Fixed existing component budgets only. No arbitrary command or duration.
-PROFILES = {'jmdns-diagnostic': ('modular-jmdns', 1800), 'macos-shared': ('modular-shared', 7200)}
+PROFILES = {'jmdns-diagnostic': ('modular-jmdns', 1800), 'macos-shared': ('modular-shared', 7200),
+            'consumers': ('modular-consumers', 7200),
+            'published-consumers-diagnostic': ('modular-published-consumers', 7200)}
 
 
 def bounds(component):
@@ -62,7 +64,7 @@ def require(condition, code):
 
 def environment_admit(env, component=COMPONENT):
     require(component in PROFILES, 'COMPONENT')
-    events = {'workflow_dispatch'} if component == COMPONENT else {'workflow_dispatch', 'push', 'pull_request', 'schedule'}
+    events = {'workflow_dispatch'} if component in {'jmdns-diagnostic', 'published-consumers-diagnostic'} else {'workflow_dispatch', 'push', 'pull_request', 'schedule'}
     require(platform.system() == 'Darwin' and platform.machine() == 'x86_64' and
             env.get('RUNNER_OS') == 'macOS' and env.get('RUNNER_ARCH') == 'X64' and
             env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
