@@ -70,7 +70,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_signed_original_and_recovery_regressions_are_run_offline_in_source(self):
         actual = dict(C.commands('source'))
-        for name in ('central-bundle-evidence-test.py', 'maven-recovery-test.py'):
+        for name in ('central-bundle-evidence-test.py', 'maven-recovery-test.py', 'verify-rpc-windows-jdk21-test.py'):
             self.assertEqual(actual[name], [C.sys.executable, '-B', 'scripts/tests/' + name, '-v'])
         evidence_spec = importlib.util.spec_from_file_location('ci_evidence_routes', ROOT / 'scripts/ci_evidence.py')
         evidence = importlib.util.module_from_spec(evidence_spec)
