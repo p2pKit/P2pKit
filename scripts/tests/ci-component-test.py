@@ -718,7 +718,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         with self.assertRaises(T.ContextFailure):
             T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
         native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
-        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200}[executionMode]', native)
+        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800}[executionMode]', native)
         self.assertIn('if (!modularCommand) return 125;', native)
         self.assertIn('childBound = @(modularCommand.doubleValue + 240);', native)
         self.assertIn('![expectedMode isEqualToString:executionMode]', native)
@@ -822,7 +822,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_deadlines_and_native_tracking_failure_are_fail_closed(self):
         T = self.T
-        for component in T.PROFILES:
+        for component in T.PROFILES.keys() - {'dependency-generate'}:
             budget = T.bounds(component)
             route = C.matrix(component)['include'][0]
             self.assertEqual(budget['command'], route['minutes'] * 60)
@@ -843,7 +843,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_shared_fixed_profile_has_original_full_shared_command_not_a_test_subset(self):
         T = self.T
-        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic'})
+        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate'})
         argv = T.command(self.environment(), 'macos-shared')
         self.assertEqual(argv[argv.index('--component') + 1], 'macos-shared')
         self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')
@@ -931,6 +931,166 @@ class TerminalDiagnosticTests(unittest.TestCase):
         self.assertIn('exit "$status"', raw)
         self.assertNotIn('exec ', raw)
         self.assertNotIn(' &', raw)
+
+
+class TerminalDependencyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TerminalDiagnosticTests.setUpClass()
+        cls.T = TerminalDiagnosticTests.T
+
+    def environment(self, workspace):
+        T = self.T
+        request = dict(controller_sha='a' * 40, controller_tree='b' * 40,
+                       candidate_sha='c' * 40, candidate_tree='d' * 40, dependency_base_sha='e' * 40)
+        env = dict(PATH='/usr/bin:/bin', GITHUB_WORKSPACE=str(workspace), GITHUB_SHA='a' * 40,
+            GITHUB_WORKFLOW_SHA='a' * 40,
+            GITHUB_WORKFLOW_REF='p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml@refs/heads/test',
+            GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_JOB='generate', GITHUB_REPOSITORY='p2pKit/P2pKit',
+            GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='macOS', RUNNER_ARCH='X64',
+            RUNNER_TRACKING_ID='github_123-test', RUNNER_TEMP=str(workspace),
+            DEPENDENCY_UPDATE_REQUEST=json.dumps(request), P2PKIT_CI_COMMAND_DEADLINE_NS='1000000000000')
+        return {**T.evidence.audit_processes.ownership_environment(env, 'a' * 32, 'b' * 32,
+            str(workspace / 'state'), str(workspace / 'gradle-home'), allow_new_context=True),
+            T.evidence.audit_processes.PIPE_ENV: '[]'}
+
+    def test_candidate_workflow_request_and_inherited_domain_must_all_match(self):
+        T = self.T
+        with tempfile.TemporaryDirectory(prefix='terminal-generator-') as tmp:
+            root = Path(tmp).resolve(); candidate = root / 'candidate'; candidate.mkdir()
+            env = self.environment(root)
+            with patch.object(T, 'ROOT', candidate), patch.object(T.time, 'monotonic', return_value=100), \
+                 patch.object(T.platform, 'system', return_value='Darwin'), patch.object(T.platform, 'machine', return_value='x86_64'):
+                T.environment_admit(env, 'dependency-generate')
+                for changed in ({'GITHUB_JOB': 'component'}, {'GITHUB_SHA': 'c' * 40},
+                    {'GITHUB_EVENT_NAME': 'push'}, {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/ci.yml@refs/heads/test'},
+                    {'DEPENDENCY_UPDATE_REQUEST': '{}'}, {'GRADLE_USER_HOME': str(root / 'different')},
+                    {'P2PKIT_AUDIT_STATE_DIR': str(root / 'different')}, {'P2PKIT_AUDIT_OWNERSHIP_CHAIN': ''},
+                    {'P2PKIT_AUDIT_EXTRA': 'unexpected'}):
+                    with self.subTest(changed=changed), self.assertRaises((T.ContextFailure, T.evidence.audit_processes.OwnershipError)):
+                        T.environment_admit({**env, **changed}, 'dependency-generate')
+        self.assertNotIn('dependency-generate', C.COMPONENTS)
+        self.assertNotIn('dependency-generate', C.DIAGNOSTICS)
+        self.assertEqual(T.command({}, 'dependency-generate'), [str(ROOT / 'gradlew'),
+            'resolveAndLockAll', '--write-locks', '--write-verification-metadata', 'sha256', '--continue',
+            '--no-configure-on-demand', '--no-daemon', '--console=plain'])
+
+    def test_inherited_deadline_rejects_missing_expired_future_and_malformed_values(self):
+        T = self.T
+        with patch.object(T.time, 'monotonic', return_value=100):
+            self.assertEqual(T.dependency_deadline({'P2PKIT_CI_COMMAND_DEADLINE_NS': '1000000000000'}), 1000)
+            for value in ('', '100000000000', '11000000000000', 'NaN', '1000000000000 PRIVATE', '-1', '1e12', True):
+                with self.subTest(value=value), self.assertRaisesRegex(T.ContextFailure, '^DEPENDENCY_DEADLINE$'):
+                    T.dependency_deadline({'P2PKIT_CI_COMMAND_DEADLINE_NS': value})
+
+    def test_candidate_delta_allows_only_existing_locks_xml_not_product_or_new_files(self):
+        T = self.T
+        with tempfile.TemporaryDirectory(prefix='terminal-mutable-') as tmp:
+            root = Path(tmp).resolve()
+            def git(*argv):
+                return subprocess.check_output(['git', '-C', str(root), *argv], stderr=subprocess.PIPE)
+            git('init', '--quiet'); (root / 'gradle').mkdir()
+            for name in ('gradle.lockfile', 'gradle/verification-metadata.xml', 'product.txt'):
+                (root / name).write_text('original')
+            (root / '.gitignore').write_text('build/\n')
+            git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                                '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'synthetic')
+            request = dict(controller_sha='a' * 40, controller_tree='b' * 40,
+                           candidate_sha=git('rev-parse', 'HEAD').decode().strip(),
+                           candidate_tree=git('rev-parse', 'HEAD^{tree}').decode().strip(), dependency_base_sha='e' * 40)
+            with patch.object(T, 'ROOT', root):
+                source, before = T.begin_source('dependency-generate', {'DEPENDENCY_UPDATE_REQUEST': json.dumps(request)})
+                (root / 'gradle.lockfile').write_text('generated'); (root / 'gradle/verification-metadata.xml').write_text('generated')
+                (root / 'build/reports').mkdir(parents=True); (root / 'build/reports/original.log').write_text('synthetic')
+                T.finish_source('dependency-generate', source, before)
+                (root / 'product.txt').write_text('changed')
+                with self.assertRaisesRegex(T.dependency.UpdateError, 'NON_DEPENDENCY_SOURCE_CHANGED'):
+                    T.finish_source('dependency-generate', source, before)
+                (root / 'product.txt').write_text('original'); (root / 'unexpected').write_text('new')
+                with self.assertRaisesRegex(T.dependency.UpdateError, 'CANDIDATE_ROSTER_CHANGED'):
+                    T.finish_source('dependency-generate', source, before)
+                (root / 'unexpected').unlink(); git('add', 'gradle.lockfile')
+                with self.assertRaisesRegex(T.dependency.UpdateError, 'CANDIDATE_ROSTER_CHANGED'):
+                    T.finish_source('dependency-generate', source, before)
+
+    def test_generator_child_preserves_command_failure_cleanup_cancel_and_remaining_budget(self):
+        T = self.T
+        source = dict(commit='c' * 40, tree='d' * 40)
+        for case in ('success', 'command-failure', 'cleanup', 'cancel-before', 'cancel-after', 'exhausted'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory(prefix='terminal-generator-child-') as tmp, ExitStack() as stack:
+                root = Path(tmp).resolve(); directory = root / 'private'; directory.mkdir()
+                env = self.environment(root)
+                if case == 'exhausted': env['P2PKIT_CI_COMMAND_DEADLINE_NS'] = '500000000000'
+                if case == 'cancel-before': (directory / 'cancel').write_text('cancel')
+                stack.enter_context(patch.object(T, 'ROOT', root))
+                stack.enter_context(patch.object(T.private, 'read_json', return_value=dict(source=source, environment=env, component='dependency-generate')))
+                stack.enter_context(patch.object(T, 'validate_config'))
+                stack.enter_context(patch.object(T, 'begin_source', return_value=(source, {})))
+                checked = stack.enter_context(patch.object(T, 'finish_source'))
+                stack.enter_context(patch.object(T.terminal, 'terminal_ancestor', return_value={}))
+                stack.enter_context(patch.object(T.pwd, 'getpwuid', return_value=Mock(pw_dir='/nonsecret', pw_name='synthetic')))
+                stack.enter_context(patch.object(T.time, 'monotonic', return_value=100))
+                writes = stack.enter_context(patch.object(T.private, 'write_json'))
+                popen = stack.enter_context(patch.object(T.subprocess, 'Popen'))
+                def execute(argv, **kwargs):
+                    self.assertEqual(kwargs['timeout'], 450)
+                    self.assertEqual(kwargs['private'], root / 'build/reports/dependency-generation')
+                    self.assertEqual(argv, T.command(env, 'dependency-generate'))
+                    self.assertFalse(kwargs['cancelled']())
+                    for key in T.DEPENDENCY_ENVIRONMENT:
+                        self.assertEqual(kwargs['environment'][key], env[key])
+                    if case == 'cancel-after': (directory / 'cancel').write_text('cancel')
+                    return dict(code='COMMAND_FAILED' if case == 'command-failure' else 'PASS',
+                                cleanupKnown=case != 'cleanup', capturesClosed=case != 'cleanup', exitCode=7 if case == 'command-failure' else 0)
+                executed = stack.enter_context(patch.object(T.evidence, 'run_command', side_effect=execute))
+                if case in ('success', 'command-failure'):
+                    self.assertEqual(T.child(directory / 'config.json'), 0 if case == 'success' else 1)
+                else:
+                    with self.assertRaises(T.ContextFailure): T.child(directory / 'config.json')
+                popen.assert_not_called()
+                self.assertGreaterEqual(checked.call_count, 1)
+                self.assertEqual(executed.call_count, 0 if case in ('cancel-before', 'exhausted') else 1)
+                expected = 0 if case == 'success' else 1 if case == 'command-failure' else 125
+                writes.assert_called_with(directory / 'child-result.json', dict(source=source, exitCode=expected))
+
+    def test_generator_compiler_native_and_child_environments_never_receive_provenance_token(self):
+        T = self.T
+        source = dict(commit='c' * 40, tree='d' * 40)
+        with tempfile.TemporaryDirectory(prefix='terminal-generator-parent-') as tmp, ExitStack() as stack:
+            root = Path(tmp).resolve(); env = {**self.environment(root), 'GH_TOKEN': 'PRIVATE_TOKEN',
+                'GITHUB_TOKEN': 'PRIVATE_TOKEN', 'ORG_GRADLE_PROJECT_signingInMemoryKey': 'PRIVATE_KEY'}
+            stack.enter_context(patch.dict(T.os.environ, env, clear=True))
+            stack.enter_context(patch.object(T.time, 'monotonic', return_value=100))
+            stack.enter_context(patch.object(T, 'environment_admit'))
+            stack.enter_context(patch.object(T, 'validate_config'))
+            stack.enter_context(patch.object(T, 'begin_source', return_value=(source, {})))
+            stack.enter_context(patch.object(T, 'finish_source'))
+            stack.enter_context(patch.object(T.private, 'read_json', return_value={}))
+            stack.enter_context(patch.object(T, 'validate_result'))
+            writes = stack.enter_context(patch.object(T.private, 'write_json'))
+            compile_call = stack.enter_context(patch.object(T.evidence, 'run_command', return_value=dict(code='PASS', cleanupKnown=True, capturesClosed=True)))
+            popen = stack.enter_context(patch.object(T.subprocess, 'Popen')); popen.return_value.poll.return_value = 0
+            waited = stack.enter_context(patch.object(T, 'wait_controller', return_value=0))
+            self.assertEqual(T.run('dependency-generate'), 0)
+            self.assertEqual(waited.call_args.args[3], 940)
+            observed = (compile_call.call_args.kwargs['environment'], popen.call_args.kwargs['env'], writes.call_args_list[0].args[1]['environment'])
+            for environment in observed:
+                for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'ORG_GRADLE_PROJECT_signingInMemoryKey'):
+                    self.assertNotIn(key, environment)
+                for key in T.DEPENDENCY_ENVIRONMENT:
+                    self.assertEqual(environment[key], env[key])
+
+    def test_native_generator_requires_same_deadline_and_owned_domain_not_new_context(self):
+        native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
+        for text in ('mach_absolute_time()', '10800ULL * 1000000000ULL',
+                     'modularRemaining(modularDeadline) <= 450', 'childBound = @(remaining - 120)',
+                     'P2PKIT_CI_COMMAND_DEADLINE_NS', 'P2PKIT_AUDIT_OWNERSHIP_DOMAINS',
+                     '![value isEqualToString:[NSString stringWithUTF8String:original]]',
+                     'if (modularEnvironment.count != 9) break;'):
+            self.assertIn(text, native)
+        self.assertNotIn('GH_TOKEN', native)
+        self.assertNotIn('GITHUB_TOKEN', native)
+        self.assertEqual(self.T.PROFILES['dependency-generate'], ('modular-dependency-generate', 10800))
 
 
 if __name__ == '__main__': unittest.main()

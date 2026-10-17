@@ -305,6 +305,9 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
         str(private), str(home), allow_new_context=True)
     begin = time.monotonic()
     end = begin + timeout
+    # Source-owned deadline for bounded nested operations; never trust a caller
+    # override or reset the enclosing command's clock in a Terminal descendant.
+    env["P2PKIT_CI_COMMAND_DEADLINE_NS"] = str(int(end * 1_000_000_000))
     scope, child, captures = None, None, []
     code, returncode, cleanup_known = "PASS", None, False
     native_error = None
@@ -430,6 +433,17 @@ def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
             "elapsedSeconds": round(time.monotonic() - begin, 6)}
 
 
+def pending_failure_kind(message):
+    """Reuse source-owned Darwin failure labels; never return message content."""
+    if type(message) is not str or len(message) > 4096:
+        return "OTHER"
+    kind = PENDING_FAILURES.get(message, "OTHER")
+    for operation, label in PENDING_OPERATIONS.items():
+        if message.startswith("Darwin " + operation + " unresolved after bounded observation: "):
+            return label
+    return kind
+
+
 def pending_context_diagnostic(scope):
     """Bounded recorded counts only; no native call or ownership/exit authority."""
     try:
@@ -444,14 +458,7 @@ def pending_context_diagnostic(scope):
             session = record.get("auditSessionExclusion")
             label = session if type(session) is str and session in audit_processes.DARWIN_SESSION_EXCLUSIONS else "NOT_RECORDED"
             result["sessionExclusions"][label] = result["sessionExclusions"].get(label, 0) + 1
-            message = record.get("lastFailure")
-            kind = "OTHER"
-            if type(message) is str and len(message) <= 4096:
-                kind = PENDING_FAILURES.get(message, "OTHER")
-                for operation, label in PENDING_OPERATIONS.items():
-                    if message.startswith("Darwin " + operation + " unresolved after bounded observation: "):
-                        kind = label
-                        break
+            kind = pending_failure_kind(record.get("lastFailure"))
             result["failureKinds"][kind] = result["failureKinds"].get(kind, 0) + 1
         return public_pending_context(result)
     except BaseException:
@@ -1228,6 +1235,38 @@ def native_error_diagnostic(error):
                      "Command executable does not resolve to an existing file": "EXECUTABLE_UNAVAILABLE"}
             if message in fixed:
                 result.update(kind="OWNERSHIP", operation=fixed[message])
+    # Finite source-owned type labels distinguish an ownership/shape/timeout
+    # error without reading unclosed logs or exposing exception text/arguments.
+    if result["kind"] == "UNKNOWN":
+        labels = {audit_processes.OwnershipError: "OWNERSHIP_ERROR",
+                  audit_processes.DiscoveryUncertain: "DISCOVERY_UNCERTAIN",
+                  audit_processes.DarwinObservationExhausted: "DARWIN_OBSERVATION_EXHAUSTED",
+                  audit_processes.DarwinObservationError: "DARWIN_OBSERVATION_ERROR",
+                  subprocess.TimeoutExpired: "TIMEOUT_EXPIRED",
+                  RuntimeError: "RUNTIME_ERROR", ValueError: "VALUE_ERROR", TypeError: "TYPE_ERROR",
+                  KeyError: "KEY_ERROR", IndexError: "INDEX_ERROR", AttributeError: "ATTRIBUTE_ERROR",
+                  AssertionError: "ASSERTION_ERROR", OverflowError: "OVERFLOW_ERROR",
+                  MemoryError: "MEMORY_ERROR", RecursionError: "RECURSION_ERROR"}
+        result["exceptionType"] = labels.get(type(error), "UNKNOWN")
+        if type(error) in (audit_processes.DiscoveryUncertain, audit_processes.DarwinObservationExhausted):
+            result["failureKind"] = pending_failure_kind(error.args[0] if len(error.args) == 1 else None)
+        # Source-bound line numbers locate an otherwise opaque internal failure.
+        # No function names, caller paths, frame locals, or exception text escape.
+        scripts = Path(__file__).resolve().parent
+        owned_files = {str(scripts / name): label for name, label in (
+            ("ci_evidence.py", "EVIDENCE"), ("audit_processes.py", "OWNERSHIP"),
+            ("audit_exec_gate.py", "EXEC_GATE"))}
+        frames, cursor = [], error.__traceback__
+        for _ in range(64):
+            if cursor is None:
+                break
+            label = owned_files.get(cursor.tb_frame.f_code.co_filename)
+            if label is not None and type(cursor.tb_lineno) is int and 0 < cursor.tb_lineno <= 1000000:
+                frames.append({"source": label, "line": cursor.tb_lineno})
+                frames = frames[-3:]
+            cursor = cursor.tb_next
+        if frames:
+            result["sourceFrames"] = frames
     return result
 
 

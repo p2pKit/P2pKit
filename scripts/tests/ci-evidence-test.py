@@ -1716,6 +1716,88 @@ class EvidenceTests(unittest.TestCase):
                     self.assertEqual(diagnostic['categories'], ['ACCESS_DENIED'] if cleanup else [])
                     self.assertNotIn('PRIVATE', json.dumps(diagnostic))
 
+    def test_unknown_native_error_retains_only_exact_allowlisted_exception_type(self):
+        hostile = type('PRIVATE_CLASS_NAME', (RuntimeError,), {})
+        cases = [(E.audit_processes.OwnershipError('PRIVATE_PATH'), 'OWNERSHIP_ERROR'),
+                 (E.audit_processes.DiscoveryUncertain('PRIVATE_STATE'), 'DISCOVERY_UNCERTAIN'),
+                 (subprocess.TimeoutExpired(['PRIVATE_COMMAND'], 8, output=b'PRIVATE_PAYLOAD'), 'TIMEOUT_EXPIRED'),
+                 (TypeError('PRIVATE_TYPE'), 'TYPE_ERROR'), (KeyError('PRIVATE_KEY'), 'KEY_ERROR'),
+                 (ValueError('PRIVATE_VALUE'), 'VALUE_ERROR'), (AttributeError('PRIVATE_ATTR'), 'ATTRIBUTE_ERROR'),
+                 (hostile('PRIVATE_MESSAGE'), 'UNKNOWN')]
+        for error, label in cases:
+            with self.subTest(label=label):
+                result = E.native_error_diagnostic(error)
+                expected = dict(kind='UNKNOWN', operation=None, errno=None, winerror=None, exceptionType=label)
+                if type(error) is E.audit_processes.DiscoveryUncertain:
+                    expected['failureKind'] = 'OTHER'
+                self.assertEqual(result, expected)
+                public = E.public_outcome(dict(code='CLEANUP', exitCode=None, timedOut=False,
+                                               cleanupKnown=False, nativeError=result))
+                self.assertEqual(public['nativeError'], result)
+                self.assertNotIn('PRIVATE', json.dumps(public))
+                self.assertLess(len(json.dumps(result)), 160)
+
+    def test_unknown_native_darwin_cause_reuses_only_finite_source_owned_labels(self):
+        causes = [*E.PENDING_FAILURES.items(),
+                  *(("Darwin " + operation + " unresolved after bounded observation: PRIVATE_DETAILS", label)
+                    for operation, label in E.PENDING_OPERATIONS.items())]
+        for error_type in (E.audit_processes.DiscoveryUncertain, E.audit_processes.DarwinObservationExhausted):
+            for message, label in [*causes, ("PRIVATE_UNKNOWN", "OTHER"),
+                                   (next(iter(E.PENDING_FAILURES)) + " PRIVATE_SUFFIX", "OTHER"),
+                                   ("Darwin PRIVATE_OPERATION unresolved after bounded observation: PRIVATE", "OTHER"),
+                                   ("Darwin environment unresolved after bounded observation: " + "x" * 4096, "OTHER"),
+                                   (object(), "OTHER")]:
+                with self.subTest(error_type=error_type.__name__, label=label):
+                    result = E.native_error_diagnostic(error_type(message))
+                    self.assertEqual(result['kind'], 'UNKNOWN')
+                    self.assertEqual(result['failureKind'], label)
+                    self.assertNotIn('PRIVATE', json.dumps(result))
+                    self.assertLess(len(json.dumps(result)), 220)
+        hostile = type('PRIVATE_ERROR_CLASS', (E.audit_processes.DiscoveryUncertain,), {})
+        for error in (hostile(next(iter(E.PENDING_FAILURES))), RuntimeError(next(iter(E.PENDING_FAILURES)))):
+            result = E.native_error_diagnostic(error)
+            self.assertNotIn('failureKind', result)
+            self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_unknown_native_frames_are_bounded_to_exact_own_sources_without_private_data(self):
+        # Synthetic source bindings, not source execution or a native ownership claim.
+        namespace = {}
+        source = "def frame(n):\n    if n: return frame(n - 1)\n    raise ValueError('PRIVATE_MESSAGE')\n"
+        exec(compile(source, str(SCRIPTS / 'audit_processes.py'), 'exec'), namespace)
+        try:
+            namespace['frame'](8)
+        except ValueError as error:
+            result = E.native_error_diagnostic(error)
+        self.assertEqual(result['kind'], 'UNKNOWN')
+        self.assertEqual(result['exceptionType'], 'VALUE_ERROR')
+        self.assertEqual(result['sourceFrames'], [dict(source='OWNERSHIP', line=2),
+                         dict(source='OWNERSHIP', line=2), dict(source='OWNERSHIP', line=3)])
+        self.assertNotIn('PRIVATE', json.dumps(result))
+        self.assertNotIn(str(SCRIPTS), json.dumps(result))
+        for path in ('/PRIVATE/audit_processes.py', str(SCRIPTS / 'audit_processes.py') + '.PRIVATE'):
+            try:
+                exec(compile("raise TypeError('PRIVATE_DETAILS')", path, 'exec'), {})
+            except TypeError as error:
+                result = E.native_error_diagnostic(error)
+            self.assertNotIn('sourceFrames', result)
+            self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_nested_command_deadline_is_assigned_from_original_timeout_not_caller(self):
+        child = mock.Mock(stdout=io.BytesIO(b''), stderr=io.BytesIO(b''), returncode=0)
+        child.poll.return_value = 0
+        scope = mock.Mock(leaders=[child], discovery_errors=set())
+        scope.spawn.return_value = child
+        scope.drain.return_value = []
+        environment = {**os.environ, 'P2PKIT_CI_COMMAND_DEADLINE_NS': '99999999999999999999'}
+        with mock.patch.object(E, '_command_scope', return_value=scope), mock.patch.object(E.time, 'monotonic', return_value=100):
+            result = E.run_command(['synthetic'], cwd=self.root, environment=environment,
+                                   private=self.root / 'deadline', timeout=5)
+        self.assertEqual(result['code'], 'PASS')
+        self.assertTrue(result['cleanupKnown'])
+        self.assertTrue(result['capturesClosed'])
+        self.assertEqual(scope.spawn.call_args.args[2]['P2PKIT_CI_COMMAND_DEADLINE_NS'], '105000000000')
+        self.assertEqual(environment['P2PKIT_CI_COMMAND_DEADLINE_NS'], '99999999999999999999')
+
     def test_native_spawn_error_diagnostic_exposes_only_fixed_operation_and_numbers(self):
         os_error = OSError(13, 'PRIVATE_OS_MESSAGE', 'PRIVATE_PATH')
         os_error.winerror = 5
@@ -1732,8 +1814,15 @@ class EvidenceTests(unittest.TestCase):
                 result = E.run_command(['no-command-executed'], cwd=self.root, environment=dict(os.environ),
                     private=self.root / ('spawn-' + str(index)), timeout=1)
             self.assertEqual(result['code'], 'SPAWN')
-            self.assertEqual(result['nativeError'], {'kind': kind, 'operation': operation,
-                                                   'errno': errno, 'winerror': winerror})
+            expected = {'kind': kind, 'operation': operation, 'errno': errno, 'winerror': winerror}
+            if kind == 'UNKNOWN':
+                expected['exceptionType'] = 'OWNERSHIP_ERROR' if type(error) is E.audit_processes.OwnershipError else 'RUNTIME_ERROR'
+                frames = result['nativeError']['sourceFrames']
+                self.assertEqual(len(frames), 1)
+                self.assertEqual(frames[0]['source'], 'EVIDENCE')
+                self.assertGreater(frames[0]['line'], 0)
+                expected['sourceFrames'] = frames
+            self.assertEqual(result['nativeError'], expected)
             self.assertEqual(E.public_outcome(result)['nativeError'], result['nativeError'])
             self.assertNotIn('PRIVATE', json.dumps(E.public_outcome(result)))
 

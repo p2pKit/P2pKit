@@ -18,8 +18,15 @@ run_phase() {
 }
 
 run_phase WRAPPER scripts/check-gradle-wrapper.sh
-run_phase GENERATE ./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256 \
-    --no-configure-on-demand --no-daemon --console=plain
+# Only the reviewed hosted candidate adapter opts in; the Terminal helper
+# independently admits its fixed workflow/source/ownership/deadline inputs.
+# Integrity, strict verification and authenticated provenance stay outside it.
+if [[ "${P2PKIT_DEPENDENCY_TERMINAL_GENERATE:-}" == 1 ]]; then
+    run_phase GENERATE python3 -B scripts/run-ci-terminal-component.py --component dependency-generate
+else
+    run_phase GENERATE ./gradlew resolveAndLockAll --write-locks --write-verification-metadata sha256 \
+        --continue --no-configure-on-demand --no-daemon --console=plain
+fi
 run_phase INTEGRITY scripts/check-dependency-verification.sh
 run_phase STRICT ./gradlew verifyBuildPluginSecurityFloors help --dependency-verification=strict --no-daemon --console=plain
 run_phase PROVENANCE scripts/review-dependency-verification.sh "$BASE_REF"
