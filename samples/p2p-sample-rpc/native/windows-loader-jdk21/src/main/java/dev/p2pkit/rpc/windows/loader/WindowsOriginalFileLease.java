@@ -374,6 +374,17 @@ final class WindowsOriginalFileLease {
             requester.originalSecurityEntry(this, 2), requester.originalSecurityEntry(this, 3));
     }
 
+    WindowsOriginalProfileDllSecurityCandidate newProfileDllSecurity(WindowsOriginalProfileDllFileCandidate requester) {
+        if (requester == null || requester != originalProfileDllOwner) {
+            throw new IllegalStateException("Original file lease belongs to another profile DLL facade");
+        }
+        requireCompleted();
+        // No caller supplies a HANDLE or chooses native exports. These are this lease's exact originals.
+        return new WindowsOriginalProfileDllSecurityCandidate(requester, linker, bootstrapArena, handleArena, handle,
+            requester.originalSecurityEntry(this, 0), requester.originalSecurityEntry(this, 1),
+            requester.originalSecurityEntry(this, 2), requester.originalSecurityEntry(this, 3));
+    }
+
     WindowsOriginalJvmAncestorsCandidate newJvmAncestors(WindowsOriginalJvmFileCandidate requester,
         WindowsOriginalJvmSecurityCandidate security, Arena moduleArena, MemorySegment module,
         MemorySegment queryEntry, MemorySegment pinEntry, MemorySegment resolveEntry) {

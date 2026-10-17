@@ -813,9 +813,35 @@ pre-invocation failures retain their existing private-frame retirement, and
 original handle scopes are never closed.
 
 **This is not yet a complete DLL custody or productive loading pipeline.** The
-independent DLL still needs the shared original-handle security/ancestor policy
-and bounded same-handle byte snapshot, then the independent package identity and
-reviewed startup/import authority. The existing JVM security/ancestor/byte children
-are not promoted into DLL evidence. No productive-loader return, Windows UI
+independent DLL still needs original-handle ancestor policy and a bounded same-
+handle byte snapshot, then independent package identity and reviewed startup/
+import authority. Its original-handle security query is described below; the
+existing JVM ancestor/byte observations are not promoted into DLL evidence. No productive-loader return, Windows UI
 availability, profile operation, installer identity or publication pipeline is
 changed by this component.
+
+### Shared original-handle OWNER/DACL query
+
+The original JVM and independent DLL security attachments now use one concrete
+native query engine. Their exact original file and handle owners remain distinct;
+a DLL cannot select a JVM facade, supply a replacement handle or choose a native
+export. Original facade/core/failure roots precede every native effect. Existing
+JVM ancestor inspection still follows its own original typed chain and retains
+its unchanged policy and native algorithm.
+
+The DLL query uses its original read-only handle's READ_CONTROL access for the
+fixed bounded OWNER|DACL request. It grants no privilege and requests no SACL.
+Module PINs, raw resolved entry, original handle and scopes remain retained. An
+unobserved normal native return quarantines private buffers; normal failed native
+results remain failures. `GetProcAddress` is captured as a primitive before any
+address wrapper is allocated. These conditional mechanics do not authorize the
+first system call or possible forwarder execution.
+
+Completion of a diagnostic query is separate from descriptor-policy acceptance.
+A native/retirement failure permanently latches the DLL file and security owner.
+An ordinary policy refusal remains readable as a completed diagnostic, but seals
+the DLL file's native-input accessors, including direct typed-bootstrap access.
+Neither an accepted leaf policy nor an inert descriptor test establishes ancestor
+custody, initial OS/runtime trust, package identity, mapped-image correspondence
+or absence of pre-existing writable mappings/security handles. Productive loading
+and provider activation remain unavailable until the entire boundary is complete.

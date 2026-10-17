@@ -312,8 +312,12 @@ public final class SystemBootstrapCandidateTests {
         check(leasePath != runtimePath && java.util.Arrays.equals(leasePath, runtimePath));
 
         WindowsOriginalJvmSecurityCandidate security = file.inspectSecurity();
-        check(security.completed() && originalField(security, "fileHandle") == handle &&
-            originalField(security, "fileArena") == handleArena);
+        WindowsOriginalFileSecurityQuery securityQuery =
+            (WindowsOriginalFileSecurityQuery) originalField(security, "query");
+        check(security.completed() && originalField(securityQuery, "fileHandle") == handle &&
+            originalField(securityQuery, "fileArena") == handleArena &&
+            originalField(securityQuery, "originalJvmOwner") == security &&
+            originalField(securityQuery, "originalProfileDllOwner") == null);
         boolean filePolicy = security.descriptorPolicyAccepted();
         WindowsOriginalJvmAncestorsCandidate ancestors = security.inspectAncestors();
         check(ancestors.completed() && ancestors.ancestorCount() >= 1 && ancestors.ancestorCount() <= 63);

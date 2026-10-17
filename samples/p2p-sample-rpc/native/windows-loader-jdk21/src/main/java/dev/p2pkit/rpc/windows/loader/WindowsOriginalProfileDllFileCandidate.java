@@ -31,6 +31,9 @@ final class WindowsOriginalProfileDllFileCandidate {
     private boolean attempted;
     private boolean failed;
     private boolean succeeded;
+    private boolean securityAttempted;
+    private boolean securityPolicyRefused;
+    private WindowsOriginalProfileDllSecurityCandidate security;
 
     WindowsOriginalProfileDllFileCandidate(WindowsSystemBootstrapCandidate bootstrap, String candidatePath) {
         this.bootstrap = bootstrap;
@@ -85,26 +88,64 @@ final class WindowsOriginalProfileDllFileCandidate {
     boolean completed() { requireCompleted(); return true; }
     boolean leaseHeld() { requireCompleted(); return true; }
 
-    Linker originalLinker() {
+    WindowsOriginalProfileDllSecurityCandidate inspectSecurity() {
+        requireCompleted();
+        if (securityAttempted) throw new IllegalStateException("Original profile DLL security was already attempted");
+        securityAttempted = true;
+        try {
+            security = lease.newProfileDllSecurity(this);
+            // Both concrete facade/core failure roots exist before any module PIN or security query.
+            security.observe();
+            securityPolicyRefused = !security.descriptorPolicyAccepted();
+            return security;
+        } catch (Throwable caught) {
+            failure.operationFailure = caught;
+            failed = true;
+            throw failure;
+        }
+    }
+
+    void requireOriginalSecurity(WindowsOriginalProfileDllSecurityCandidate candidate) {
+        requireCompleted();
+        if (candidate == null || candidate != security) {
+            throw new IllegalStateException("Security candidate is not this profile DLL file's original attachment");
+        }
+    }
+
+    void requireOriginalNativeInputs() {
         requireOriginalBootstrap();
+        if (securityPolicyRefused) {
+            throw new IllegalStateException("Original profile DLL security policy refused further native inputs");
+        }
+        // This negative latch is not an authorization token. No productive continuation exists here.
+    }
+
+    Linker originalLinker() {
+        requireOriginalNativeInputs();
         return bootstrap.originalProfileDllLinker(this);
     }
 
     Arena originalBootstrapArena() {
-        requireOriginalBootstrap();
+        requireOriginalNativeInputs();
         return bootstrap.originalProfileDllArena(this);
     }
 
     MemorySegment originalFileEntry(int index) {
-        requireOriginalBootstrap();
+        requireOriginalNativeInputs();
         return bootstrap.originalProfileDllFileEntry(this, index);
     }
 
     char[] originalPathSnapshot() {
-        requireOriginalBootstrap();
+        requireOriginalNativeInputs();
         if (!attempted || originalPath == null) {
             throw new IllegalStateException("Original profile DLL pathname has not been validated");
         }
         return originalPath.clone();
+    }
+
+    MemorySegment originalSecurityEntry(WindowsOriginalFileLease candidate, int index) {
+        requireOriginalNativeInputs();
+        requireOriginalLease(candidate);
+        return bootstrap.originalProfileDllSecurityEntry(this, index);
     }
 }

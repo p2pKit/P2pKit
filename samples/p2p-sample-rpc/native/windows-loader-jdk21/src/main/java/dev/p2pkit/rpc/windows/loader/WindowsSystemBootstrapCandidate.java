@@ -350,18 +350,28 @@ final class WindowsSystemBootstrapCandidate {
 
     Linker originalProfileDllLinker(WindowsOriginalProfileDllFileCandidate candidate) {
         requireOriginalProfileDll(candidate);
+        candidate.requireOriginalNativeInputs();
         return linker;
     }
 
     Arena originalProfileDllArena(WindowsOriginalProfileDllFileCandidate candidate) {
         requireOriginalProfileDll(candidate);
+        candidate.requireOriginalNativeInputs();
         return originalArena;
     }
 
     MemorySegment originalProfileDllFileEntry(WindowsOriginalProfileDllFileCandidate candidate, int index) {
         requireOriginalProfileDll(candidate);
+        candidate.requireOriginalNativeInputs();
         if (index < 0 || index > 2) throw new IllegalArgumentException("Unknown fixed profile DLL file entry");
         return entries[8 + index]; // CreateFileW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW only.
+    }
+
+    MemorySegment originalProfileDllSecurityEntry(WindowsOriginalProfileDllFileCandidate candidate, int index) {
+        requireOriginalProfileDll(candidate);
+        candidate.requireOriginalNativeInputs();
+        if (index < 0 || index > 3) throw new IllegalArgumentException("Unknown fixed profile DLL security entry");
+        return entries[1 + index]; // PIN, module pathname, system directory, exact named export resolution only.
     }
 
     WindowsSystemImportResolution resolveSystemImports(WindowsPackagedVerifier plan) {
