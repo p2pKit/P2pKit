@@ -41,12 +41,11 @@ git -C "$ROOT" ls-files --error-unmatch "osv-scanner.toml" >/dev/null 2>&1 ||
     fail "OSV exception policy is not tracked"
 [[ "$(grep -Fxc '        --config=./osv-scanner.toml' "$WORKFLOW" || true)" == "1" ]] ||
     fail "OSV workflow must apply the repository-wide exception policy exactly once"
-[[ "$(grep -Fxc 'id = "GHSA-r937-wjx7-w2jp"' "$CONFIG" || true)" == "1" ]] ||
-    fail "Kotlin build-cache advisory exception must be explicit and unique"
-grep -Fqx 'ignoreUntil = 2026-10-31' "$CONFIG" ||
-    fail "Kotlin build-cache advisory exception must expire on 2026-10-31"
-grep -Fq 'caches/build-cache-1' "$CONFIG" ||
-    fail "Kotlin advisory exception must document the enforced cache isolation"
+# The candidate must be scanned without the retired Kotlin exception or a
+# replacement alias/package filter. Permit only comments and blank lines;
+# accepting any future scanner configuration requires an explicit policy review.
+awk '/^[[:space:]]*(#|$)/ { next } { exit 1 }' "$CONFIG" ||
+    fail "OSV repository config must contain only comments and blank lines; filters are not permitted"
 
 # Gradle verification metadata is a checksum allowlist that retains historical
 # artifacts. It is not resolved dependency state, so treating it as a lockfile

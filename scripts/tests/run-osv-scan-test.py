@@ -26,6 +26,38 @@ CLEAN_SARIF = json.dumps({"version": "2.1.0", "runs": [{
 
 
 class OsvScanTest(unittest.TestCase):
+    def test_repository_config_policy_refuses_retired_advisory_alias_and_other_filters(self):
+        source = (ROOT / "scripts/tests/check-osv-lockfile-coverage.sh").read_text()
+        start = source.index('git -C "$ROOT" ls-files --error-unmatch "osv-scanner.toml"')
+        end = source.index("# Gradle verification metadata", start)
+        # Execute the maintained config guard, not a duplicate implementation.
+        program = ('ROOT="$1"; CONFIG="$ROOT/osv-scanner.toml"; '
+                   'WORKFLOW="$ROOT/.github/workflows/osv-scanner.yml"\n'
+                   'fail() { printf "%s\\n" "$*" >&2; exit 1; }\n' + source[start:end])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/osv-scanner.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("        --config=./osv-scanner.toml\n")
+            config = root / "osv-scanner.toml"
+            config.write_bytes((ROOT / "osv-scanner.toml").read_bytes())
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(root), "add", "osv-scanner.toml"],
+                           check=True, capture_output=True)
+            cases = [(config.read_text(), True), ("\n # public comment\n\t\n", True)]
+            for advisory in ("GHSA-r937-wjx7-w2jp", "CVE-2026-53914", "GHSA-test-test-test"):
+                cases.append((f'[[IgnoredVulns]]\nid = "{advisory}"\nignoreUntil = 2026-10-31\n', False))
+            cases.extend([('[[PackageOverrides]]\nname = "kotlin-gradle-plugin"\nignore = true\n', False),
+                          ('[UnknownPolicy]\nallow = true\n', False)])
+            for raw, accepted in cases:
+                with self.subTest(config=raw):
+                    config.write_text(raw)
+                    result = subprocess.run(["bash", "-euc", program, "osv-config-policy", str(root)],
+                                            capture_output=True)
+                    self.assertEqual(result.returncode, 0 if accepted else 1)
+                    if not accepted:
+                        self.assertIn(b"filters are not permitted", result.stderr)
+
     def controlled_scan(self, root, returncode, payload):
         report_dir = root / "reports"
         # Derive the expected physical path independently of the controller;
