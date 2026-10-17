@@ -2,12 +2,13 @@
 
 P2pKit is a Kotlin Multiplatform local-network P2P library for Android API 24+,
 JVM 17/Desktop, and iOS. Authenticated protocol v2 is the fail-closed default.
-The latest published release is `0.7.0-rc3`; current source is the
-`0.8.0-rc2` unpublished integration candidate.
+The latest published release candidate is `0.8.0-rc2`; current development
+source is `0.8.0-SNAPSHOT`. Published library and sample artifacts are immutable.
 
 ## Repository map
 
 - `library/p2p-core` — API, protocol, security, sessions, durable transfer.
+- `library/p2p-rpc` — optional typed organization-LAN RPC.
 - `library/p2p-transport-lan` — JmDNS/Bonjour and TCP implementations.
 - `library/p2p-network-provisioning-*` — optional platform sidecars.
 - `samples/` — Android, JVM CLI, Desktop UI, KMP, iOS, and diagnostics apps.
@@ -37,8 +38,8 @@ their original project names, for example `:p2p-core:jvmTest`,
 ## Compatibility and security constraints
 
 - Published tags, coordinates, artifacts, API baselines, and release history
-  are immutable. Never move `v0.7.0-rc1`, `v0.7.0-rc2`, or `v0.7.0-rc3`.
-- Do not retroactively change the published `0.7.0-rc3` API or wire protocol.
+  are immutable. Never move historical tags, `v0.8.0-rc2`, or `samples-v0.8.0-rc2`.
+- Do not retroactively change the published releases’ API or wire protocol.
 - Keep JVM, Android, and Apple transport/protocol behavior aligned.
 - Never downgrade after authenticated-v2 failure or weaken identity checks.
 - Surface typed failures and preserve cancellation. Do not weaken assertions,
@@ -62,7 +63,7 @@ is ignored and must not become a source of truth.
 - `docs/testing/local.md` — automated checks.
 - `docs/validation/` — physical, hostile-network, independent, and audit execution handbooks.
 - `docs/releasing/checklist.md` — release process.
-- `docs/releases/0.7.0-rc3.md` — latest immutable publication evidence.
+- `docs/releases/0.8.0-rc2.md` — latest immutable publication evidence.
 
 The six external areas in `docs/validation/README.md` remain pending;
 do not promote them from compilation or simulator results.

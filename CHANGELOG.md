@@ -3,23 +3,38 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc2 (unpublished candidate)
+## Unreleased
 
-The owner authorized preparing this new candidate, not merging, tagging, signing
-or publishing it. `LATEST_PUBLISHED_VERSION` remains `0.7.0-rc3`.
+Development continues as `0.8.0-SNAPSHOT`. This is an unpublished development
+label, not the next approved RC/stable release or a new Maven publication.
 
-- Replace the undocumented internal Central namespace preflight with one bounded,
-  authenticated request to the documented, exact-namespace deployments API.
-  The sanitized report establishes token authentication and accepted namespace
-  query access, **not** namespace `VERIFIED` state or permission to publish.
-- Inherit the combined Foundation/RPC functionality and limitations recorded for
-  rc1 below, including unavailable Windows sample RPC Host/Client and unperformed
-  protected-profile/JNI/installed-application qualification. No product, runtime,
-  platform-support, security-control or test-deferral changes are made here.
-- Require fresh exact-source modular qualification and four application artifacts
-  before separate final approvals. rc1's successful checks and frozen artifacts
-  are historical evidence, not rc2 qualification. Real-world, independent
-  interoperability and professional-audit work remains pending.
+## 0.8.0-rc2 — release candidate (2026-10-17)
+
+Published to Maven Central from immutable `v0.8.0-rc2`, source
+`bd98deeb6ab44b5f5126d88742aa69b57f290c32`. The same-source frozen APK,
+Windows x64 MSI, macOS ARM64 DMG and Linux x64 DEB are available in the
+[development sample prerelease](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc2).
+See the [release record](docs/releases/0.8.0-rc2.md) for exact approvals,
+qualification, signed bundle, Central deployment and public-download hashes.
+
+- Replace the undocumented internal Central namespace preflight with a bounded,
+  authenticated request to the documented exact-namespace deployments API.
+  This check reports token authentication and accepted namespace-query access,
+  not namespace `VERIFIED` state. Actual Central publication and remote
+  byte/consumer verification subsequently passed.
+- Publish the combined Foundation/RPC changes described under the rc1 history
+  below, including the 0.8-only discovery, admission and queue changes. RPC adds
+  six coordinates to the existing fifteen. Its section is part of the existing
+  samples rather than a separate application-release pipeline.
+- Fresh same-source modular qualification, native ARM64/Intel simulator checks,
+  and all four app builds passed. Separate protected Maven and post-build sample
+  approvals were recorded; all seven public release assets passed complete
+  anonymous-download hash verification. No rc1 artifacts were relabeled as rc2.
+- Windows sample RPC Host/Client remains technically unavailable; protected
+  loader/profile integration and real Windows runtime qualification are not
+  completed. Physical-device, hostile-network, independent interoperability and
+  professional-audit scopes remain open. Publication is not a production-readiness
+  claim; the existing Kotlin advisory exception is not a remediation.
 
 ## 0.8.0-rc1 (tagged, not published)
 

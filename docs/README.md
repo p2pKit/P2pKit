@@ -3,6 +3,11 @@
 This directory separates current user and maintainer guidance from historical
 remediation records. Start with the repository [README](../README.md).
 
+Current development source is `0.8.0-SNAPSHOT`; the latest published release is
+[`0.8.0-rc2`](releases/0.8.0-rc2.md), including Maven libraries and development
+sample applications. Publication does not complete the remaining runtime and
+independent validation scopes.
+
 ## Use and design
 
 - [Architecture overview](architecture/overview.md)
@@ -15,7 +20,7 @@ remediation records. Start with the repository [README](../README.md).
 - [Error handling and recovery](guides/error-handling.md)
 - [Custom transport providers](guides/custom-transports.md)
 - [Samples](guides/samples.md)
-- [Optional organization-LAN RPC](rpc/README.md) — feature source; not published or qualified
+- [Optional organization-LAN RPC](rpc/README.md) — published in `0.8.0-rc2`; runtime limitations remain
 
 ## Test and release
 
@@ -27,6 +32,7 @@ remediation records. Start with the repository [README](../README.md).
 - [Validation evidence schema](validation/evidence-schema.md)
 - [Release checklist](releasing/checklist.md)
 - [Maven Central procedure](releasing/maven-central.md)
+- [`0.8.0-rc2` release evidence](releases/0.8.0-rc2.md)
 - [`0.7.0-rc3` release evidence](releases/0.7.0-rc3.md)
 - [`0.7.0-rc2` release evidence](releases/0.7.0-rc2.md)
 
