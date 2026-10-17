@@ -102,12 +102,16 @@ class BudgetTests(unittest.TestCase):
             (output / "compiler-receipt.json").write_bytes(original)
 
             def refuse(progress):
-                self.assertEqual(progress["deadline"] - progress["started"], 150)
+                # Fractional clocks need not round-trip through subtraction exactly.
+                # Check the actual unchanged deadline contract, not float cancellation.
+                self.assertEqual(progress["started"], 106.1)
+                self.assertEqual(progress["deadline"], progress["started"] + 150)
                 progress.update(stage="COMPILE", timeout="PHASE", output=output)
                 raise RuntimeError("SYNTHETIC_PRIVATE_DETAIL")
 
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch.object(COMPILER, "compile_fixture", side_effect=refuse), \
+            with patch.object(COMPILER.time, "monotonic", return_value=106.1), \
+                    patch.object(COMPILER, "compile_fixture", side_effect=refuse), \
                     contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 self.assertEqual(COMPILER.main(), 1)
             self.assertEqual(stdout.getvalue(), "")
