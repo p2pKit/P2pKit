@@ -3,11 +3,14 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc3 — candidate preparation (2026-10-18)
+## 0.8.0-rc3 — development release candidate (2026-10-18)
 
-Not yet tagged or published. Maven and application publication require fresh
-same-source qualification, protected approvals and the exact frozen app set.
-`0.8.0-rc2` remains the latest published version until remote verification passes.
+Published and verified on Maven Central from immutable `v0.8.0-rc3`, source
+`db5d6c01e9a5f0c46fdb51ed0d885a5a394bbe5c`. The matching frozen Android APK,
+Windows x64 MSI, macOS ARM64 DMG and Linux x64 DEB are publicly available.
+See the [release record](docs/releases/0.8.0-rc3.md) for exact-source qualification,
+publication and complete anonymous-download verification. This is not productive
+Windows RPC or installed-application qualification.
 
 - Retain main's Kotlin 2.4.20/security dependency outputs and macOS execution
   fixes while integrating the newer RPC Windows native/controller work.
