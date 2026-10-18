@@ -109,10 +109,31 @@ class RpcDesktopWindowsRuntimeReadbackTest {
         }
     }
 
+    @Test fun systemCohortFailureLabelsSurviveApplicationReportingWithoutReplacingTheCarrier() {
+        val original = LinkageError("PRIVATE_PATH_SID_ADDRESS_PAYLOAD")
+        for (operation in listOf(
+            "SYSTEM_MODULE_ABSENT_SLOT_FOUR", "SYSTEM_LEAF_POLICY_SLOT_ZERO",
+            "SYSTEM_ANCESTOR_POLICY_SLOT_THREE", "SYSTEM_RETURN_UNKNOWN_SLOT_ONE",
+            "SYSTEM_RETIREMENT_NO_SLOT", "SYSTEM_FILE_SLOT_SIX", "SYSTEM_BYTES_SLOT_SEVEN",
+            "SYSTEM_EXPORT_GRAPH_NO_SLOT", "SYSTEM_UNKNOWN_OPERATION_UNKNOWN_SLOT",
+        )) {
+            val lines = mutableListOf<String>()
+            assertSame(original, assertFailsWith<LinkageError> {
+                reportInstalledAdmissionFailure(InstalledAdmissionPhase.NATIVE_ADMISSION, operation, original, lines::add)
+            })
+            assertEquals(listOf("WINDOWS_INSTALLED_ADMISSION_FAILURE stage=NATIVE_ADMISSION operation=$operation"), lines)
+            assertTrue(lines.single().length < 192)
+        }
+    }
+
     @Test fun untrustedOrMissingOperationCannotEscapeTheClosedVocabulary() {
         val original = IllegalStateException("PRIVATE")
         val badObject = object { override fun toString(): String = error("Private object stringified") }
-        for (operation in listOf(null, badObject, 1, "", "PRIVATE", "BOOTSTRAP\nPASS", "X".repeat(10000))) {
+        for (operation in listOf(
+            null, badObject, 1, "", "PRIVATE", "BOOTSTRAP\nPASS", "X".repeat(10000),
+            "SYSTEM_MODULE_ABSENT_SLOT_EIGHT", "SYSTEM_MODULE_ABSENT_SLOT_FOUR\nPRIVATE",
+            "SYSTEM_FILE_C:\\PRIVATE", "SYSTEM_FILE_SLOT_ZERO ", "SYSTEM_FILE_SLOT_ZERO\u0000",
+        )) {
             val lines = mutableListOf<String>()
             assertSame(original, assertFailsWith<IllegalStateException> {
                 reportInstalledAdmissionFailure(InstalledAdmissionPhase.NATIVE_ADMISSION, operation, original, lines::add)

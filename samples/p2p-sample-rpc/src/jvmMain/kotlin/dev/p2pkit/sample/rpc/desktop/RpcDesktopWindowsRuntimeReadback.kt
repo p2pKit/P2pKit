@@ -192,7 +192,22 @@ private val installedFailureOperations = setOf(
     "PROFILE_LOAD_IMAGE",
     "PROFILE_VERIFY_IMAGE",
     "PROFILE_REGISTER_JNI",
-)
+) + buildSet {
+    // Fixed diagnostic vocabulary shared with the retained JDK21 cohort. No arbitrary suffix/text
+    // is accepted, and none of these labels changes the original failure or grants admission.
+    val operations = listOf(
+        "SYSTEM_MODULE_ABSENT", "SYSTEM_LEAF_POLICY", "SYSTEM_ANCESTOR_POLICY", "SYSTEM_GRAPH_RECHECK",
+        "SYSTEM_UNKNOWN_OUTCOME", "SYSTEM_RETURN_UNKNOWN", "SYSTEM_RETIREMENT", "SYSTEM_PRECONDITION",
+        "SYSTEM_FRAME", "SYSTEM_DIRECTORY", "SYSTEM_MODULE_PIN", "SYSTEM_MODULE_PATH", "SYSTEM_FILE",
+        "SYSTEM_SECURITY", "SYSTEM_ANCESTORS", "SYSTEM_BYTE_BOUND", "SYSTEM_BYTES", "SYSTEM_EXPORT_INPUT",
+        "SYSTEM_EXPORT_GRAPH", "SYSTEM_UNKNOWN_OPERATION",
+    )
+    val slots = listOf(
+        "NO_SLOT", "SLOT_ZERO", "SLOT_ONE", "SLOT_TWO", "SLOT_THREE", "SLOT_FOUR",
+        "SLOT_FIVE", "SLOT_SIX", "SLOT_SEVEN", "UNKNOWN_SLOT",
+    )
+    for (operation in operations) for (slot in slots) add("${operation}_$slot")
+}
 
 /** Secondary readback/output failures never replace the original retained failure. */
 internal fun reportInstalledAdmissionFailure(

@@ -251,10 +251,13 @@ def main():
             "WINDOWS_RUNTIME_MODULE_CONNECTION_PASS case=" + re.escape(case) +
             r" scope=ACTUAL_JVM_MODULE_RESOLUTION_NOT_WINDOWS_OR_INSTALLED_NATIVE\n", flags=flags)
     diagnostic_connection_cases = (["diagnostic-connected-reuse", "diagnostic-connected-failure",
+                                    "diagnostic-connected-system-absent", "diagnostic-connected-system-unknown",
                                     "diagnostic-connected-in-progress"] if os.name == "nt" else
                                    ["diagnostic-connected-source-or-host-refusal"])
     diagnostic_failure_lines = {
         "diagnostic-connected-failure": "NATIVE_ADMISSION operation=RESERVATION",
+        "diagnostic-connected-system-absent": "NATIVE_ADMISSION operation=SYSTEM_MODULE_ABSENT_SLOT_FOUR",
+        "diagnostic-connected-system-unknown": "NATIVE_ADMISSION operation=SYSTEM_RETURN_UNKNOWN_SLOT_ONE",
         "diagnostic-connected-in-progress": "NATIVE_ADMISSION operation=NO_MATCHING_RETAINED_FAILURE",
         "diagnostic-connected-source-or-host-refusal": "RUNTIME_PRECHECK operation=DIAGNOSTIC_UNAVAILABLE",
     }

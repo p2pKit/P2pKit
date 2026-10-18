@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 
+import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.field;
 import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.invoke;
 import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.value;
 
@@ -121,6 +122,7 @@ public final class InstalledProviderTests {
     private static void installedDiagnostic(String[] args) throws Throwable {
         String mode = args[0];
         check(mode.equals("diagnostic-connected-reuse") || mode.equals("diagnostic-connected-failure") ||
+            mode.equals("diagnostic-connected-system-absent") || mode.equals("diagnostic-connected-system-unknown") ||
             mode.equals("diagnostic-connected-in-progress") || mode.equals("diagnostic-connected-source-or-host-refusal"));
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
@@ -147,6 +149,24 @@ public final class InstalledProviderTests {
             if (mode.equals("diagnostic-connected-failure")) {
                 expectedFailure = invoke(attempt, "seal", new Class<?>[] {Throwable.class},
                     new LinkageError("inert original admitted failure"));
+            } else if (mode.startsWith("diagnostic-connected-system-")) {
+                WindowsInstalledProfileCandidate profile = new WindowsInstalledProfileCandidate(null);
+                field(profile, "failed").setBoolean(profile, true);
+                field(profile, "diagnosticPhase").setInt(profile, 1);
+                WindowsOriginalSystemModulesCandidate systems = new WindowsOriginalSystemModulesCandidate(null);
+                field(systems, "failed").setBoolean(systems, true);
+                if (mode.equals("diagnostic-connected-system-absent")) {
+                    field(systems, "outcome").set(systems, "MODULE_ABSENT");
+                    field(systems, "stoppedSlot").setInt(systems, 4);
+                    field(profile, "systems").set(profile, systems);
+                } else {
+                    field(systems, "activeSlot").setInt(systems, 1);
+                    field(systems, "nativeReturnUnconfirmed").setBoolean(systems, true);
+                    Object profileFailure = value(profile, "failure");
+                    field(profileFailure, "operationFailure").set(profileFailure, value(systems, "failure"));
+                }
+                field(attempt, "diagnosticPhase").setInt(attempt, 4);
+                expectedFailure = invoke(attempt, "seal", new Class<?>[] {Throwable.class}, value(profile, "failure"));
             }
         }
         if (mode.equals("diagnostic-connected-reuse")) {
