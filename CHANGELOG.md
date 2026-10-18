@@ -3,10 +3,25 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## Unreleased
+## 0.8.0-rc3 — candidate preparation (2026-10-18)
 
-Development continues as `0.8.0-SNAPSHOT`. This is an unpublished development
-label, not the next approved RC/stable release or a new Maven publication.
+Not yet tagged or published. Maven and application publication require fresh
+same-source qualification, protected approvals and the exact frozen app set.
+`0.8.0-rc2` remains the latest published version until remote verification passes.
+
+- Retain main's Kotlin 2.4.20/security dependency outputs and macOS execution
+  fixes while integrating the newer RPC Windows native/controller work.
+- Add bounded installed-admission failure-stage diagnostics. Existing source,
+  module, native ownership and cleanup checks remain; failure still exits nonzero.
+- Preserve original-process Windows supervision and its six successful control
+  results. The actual installed admission failed; the new diagnostic has not yet
+  been qualified against a newly installed application.
+- Repair the reconnect test's transient-StateFlow observation ordering without
+  changing library behavior, deadlines, attempt limits or success assertions.
+- Windows public protected-provider integration and sample RPC Host/Client remain
+  unavailable. W01–W11 and other real installed/device/network acceptance remain
+  open; this development candidate must not be presented as their completion.
+  See the [current Windows scope](docs/rpc/windows-release-scope.md).
 
 ## 0.8.0-rc2 — release candidate (2026-10-17)
 
