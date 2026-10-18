@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSource,
+    [ValidateSet('admission', 'profile-create', 'profile-reopen')][string]$Operation = 'admission',
     [Parameter(Mandatory = $true)][string]$PrivateParent,
     [Parameter(Mandatory = $true)][string]$Python
 )
@@ -12,7 +13,7 @@ $status = 'FAIL'
 try {
     Add-Type -Path (Join-Path $PSScriptRoot 'windows_installed_observer.cs')
     $observation = [P2pKit.WindowsQualification.InstalledObserver]::RunInstalled(
-        $PSScriptRoot, $Python, $PrivateParent, $ExpectedSource)
+        $PSScriptRoot, $Python, $PrivateParent, $ExpectedSource, $Operation)
     $status = $observation.Status
 } catch { $status = 'FAIL' }
 Write-Output ('WINDOWS_INSTALLED_DIAGNOSTIC_OBSERVER ' + $status)

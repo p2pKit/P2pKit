@@ -113,9 +113,9 @@ class FinishedThread:
 class Fixture:
     def __init__(self, root, clock):
         self.root, self.clock, self.operations = root, clock, []
-        self.args = types.SimpleNamespace(private_parent=str(root), expected_source=SOURCE,
+        self.args = types.SimpleNamespace(private_parent=str(root), expected_source=SOURCE, operation="admission",
             start_counter=1000, counter_frequency=1000, worker=False)
-        self.value = {"schema": 1, "appSource": SOURCE, "outcome": outcome(), "admissionMatched": True}
+        self.value = {"schema": 1, "appSource": SOURCE, "operation": "admission", "outcome": outcome(), "admissionMatched": True}
         self.child = types.SimpleNamespace(stdout=io.BytesIO(), stderr=io.BytesIO(),
             poll=lambda: 0, wait=lambda timeout: 0)
         fixture = self
@@ -253,7 +253,7 @@ class SupervisorTests(unittest.TestCase):
             del partial[missing]
             self.assertFalse(H.command_pass(partial))
         self.assertFalse(H.command_pass({**outcome(), "unexpected": True}))
-        value = {"schema":1,"appSource":SOURCE,"outcome":outcome(),"admissionMatched":True}
+        value = {"schema":1,"appSource":SOURCE,"operation":"admission","outcome":outcome(),"admissionMatched":True}
         self.assertTrue(H.validate_worker(value, SOURCE))
         for key, bad in (("schema",True),("appSource","a"*40),("admissionMatched",1)):
             with self.assertRaises(ValueError): H.validate_worker({**value,key:bad},SOURCE)
@@ -344,7 +344,7 @@ class SupervisorTests(unittest.TestCase):
 
     def test_worker_fixed_launcher_and_clipped_original_e_budgets(self):
         directory = self.root / "run"; directory.mkdir()
-        args = types.SimpleNamespace(private_parent=str(self.root),expected_source=SOURCE)
+        args = types.SimpleNamespace(private_parent=str(self.root),expected_source=SOURCE,operation="admission")
         calls = []
         def command(argv, **kw):
             calls.append((argv,kw)); kw["private"].mkdir()
@@ -362,6 +362,48 @@ class SupervisorTests(unittest.TestCase):
     def test_bounded_reader_refuses_oversized_result(self):
         path=self.root/"large";path.write_bytes(b'x'*(H.RECORD_LIMIT+1))
         with self.assertRaises(ValueError):H.read_bounded(path,H.RECORD_LIMIT)
+
+    def test_operation_is_bound_to_worker_command_output_and_every_receipt(self):
+        for operation, flag in H.OPERATIONS.items():
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                args = H.arguments(["--start-counter", "1000", "--counter-frequency", "1000",
+                    "--expected-source", SOURCE, "--private-parent", str(root), "--operation", operation])
+                argv = H.worker_argv(args, root / "run")
+                self.assertEqual(argv[argv.index("--operation") + 1], operation)
+                (root / "run").mkdir()
+                calls = []
+                def command(argv, **options):
+                    calls.append(argv)
+                    options["private"].mkdir()
+                    raw = json.dumps(H.expected_result(SOURCE, operation), separators=(",", ":")).encode() + b"\n"
+                    (options["private"] / "stdout.log").write_bytes(raw)
+                    (options["private"] / "stderr.log").write_bytes(b"")
+                    return outcome()
+                E = types.SimpleNamespace(run_command=command, encoded=lambda value: json.dumps(value).encode(),
+                                          write_private=lambda path, raw: path.write_bytes(raw))
+                with patch.object(H, "installed_launcher", return_value=Path("/ProgramFiles/P2pKit Sample.exe")):
+                    self.assertEqual(H.worker(args, H.Deadline(Clock(), 1000, 1000), E), 0)
+                self.assertEqual(calls[0][1:], [flag])
+                receipt = json.loads((root / "run/worker.json").read_bytes())
+                self.assertTrue(H.validate_worker(receipt, SOURCE, operation))
+                for other in H.OPERATIONS.keys() - {operation}:
+                    with self.assertRaises(ValueError): H.validate_worker(receipt, SOURCE, other)
+                    raw = json.dumps(H.expected_result(SOURCE, other), separators=(",", ":")).encode() + b"\n"
+                    self.assertFalse(H.admission_matches(raw, SOURCE, operation))
+            with tempfile.TemporaryDirectory() as tmp:
+                fixture = Fixture(Path(tmp), Clock())
+                fixture.args.operation = operation
+                fixture.value["operation"] = operation
+                code, receipt = fixture.run()
+                self.assertEqual(code, 0)
+                self.assertEqual(receipt["operation"], operation)
+
+    def test_unrecognized_operation_is_not_a_command_or_profile_override(self):
+        for operation in ("", "Profile-create", "profile-create ", "profile-reset", "--help", "admission;exit"):
+            with self.subTest(operation=operation), self.assertRaises(ValueError):
+                H.arguments(["--start-counter", "1000", "--counter-frequency", "1000",
+                    "--expected-source", SOURCE, "--private-parent", str(self.root), "--operation", operation])
 
     def test_failed_final_record_or_late_capture_never_returns_success(self):
         f=Fixture(self.root,Clock())
@@ -658,7 +700,7 @@ def native_worker(case, directory):
         stdout = H.read_bounded(directory / "command/stdout.log", H.LOG_LIMIT)
         stderr = H.read_bounded(directory / "command/stderr.log", H.LOG_LIMIT)
         accepted = case == "normal" and not stderr and stdout in (NORMAL_OUTPUT, NORMAL_OUTPUT.replace(b"\n", b"\r\n"))
-    H.write_new(E,directory/"worker.json",{"schema":1,"appSource":SOURCE,
+    H.write_new(E,directory/"worker.json",{"schema":1,"appSource":SOURCE,"operation":"admission",
         "outcome":actual,"admissionMatched":accepted})
     return 0 if accepted else 1
 

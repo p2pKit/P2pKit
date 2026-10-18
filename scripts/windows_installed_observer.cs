@@ -178,16 +178,18 @@ namespace P2pKit.WindowsQualification {
         }
         // Evidence parser only; these values never authorize process creation or installation.
         public static void ValidateReceipt(byte[] bytes, string source, string scope, long start, long frequency,
-            Dictionary<string, string> hashes) {
+            Dictionary<string, string> hashes, string operation = "admission") {
+            Require(operation == "admission" || operation == "profile-create" || operation == "profile-reopen");
             Require(bytes != null && bytes.Length > 0 && bytes.Length <= ReceiptLimit);
             using (var document = JsonDocument.Parse(Utf8.GetString(bytes), new JsonDocumentOptions { MaxDepth = 16 })) {
                 var root = document.RootElement; NoDuplicates(root);
-                ObjectShape(root, "schema", "scope", "status", "appSource", "supervisorSource", "startCounter",
+                ObjectShape(root, "schema", "scope", "status", "appSource", "operation", "supervisorSource", "startCounter",
                     "counterFrequency", "deadlineCounter", "watchdogCounter", "completedCounter", "workerOutcome",
                     "outerCleanupKnown", "capturesClosed");
                 long end = checked(start + frequency * 30);
                 Require(Integer(root.GetProperty("schema")) == 1 && Text(root.GetProperty("scope"), scope));
                 Require(Text(root.GetProperty("status"), "PASS") && Text(root.GetProperty("appSource"), source));
+                Require(Text(root.GetProperty("operation"), operation));
                 Require(Integer(root.GetProperty("startCounter")) == start && Integer(root.GetProperty("counterFrequency")) == frequency);
                 Require(Integer(root.GetProperty("deadlineCounter")) == end && Integer(root.GetProperty("watchdogCounter")) == end - frequency);
                 long completed = Integer(root.GetProperty("completedCounter")); Require(completed >= start && completed < end);
@@ -195,21 +197,25 @@ namespace P2pKit.WindowsQualification {
                 Require(root.GetProperty("capturesClosed").ValueKind == JsonValueKind.True);
                 var observed = root.GetProperty("supervisorSource"); ObjectShape(observed, hashes.Keys.ToArray());
                 foreach (var pair in hashes) Require(Text(observed.GetProperty(pair.Key), pair.Value));
-                var worker = root.GetProperty("workerOutcome"); ObjectShape(worker, "schema", "appSource", "outcome", "admissionMatched");
+                var worker = root.GetProperty("workerOutcome");
+                ObjectShape(worker, "schema", "appSource", "operation", "outcome", "admissionMatched");
+                Require(Text(worker.GetProperty("operation"), operation));
                 Require(Integer(worker.GetProperty("schema")) == 1 && Text(worker.GetProperty("appSource"), source));
                 Require(worker.GetProperty("admissionMatched").ValueKind == JsonValueKind.True);
                 CommandPass(worker.GetProperty("outcome"));
             }
         }
-        public static Observation RunInstalled(string scripts, string python, string parent, string source) {
-            return Run(scripts, python, parent, source, null);
+        public static Observation RunInstalled(string scripts, string python, string parent, string source,
+            string operation = "admission") {
+            Require(operation == "admission" || operation == "profile-create" || operation == "profile-reopen");
+            return Run(scripts, python, parent, source, null, operation);
         }
         public static Observation RunControl(string scripts, string python, string parent, Control control) {
             Require(Enum.IsDefined(typeof(Control), control));
             string choice = new[] { "normal", "nonzero", "output-overflow", "blocked-worker", "blocked-outer", "observer-output-overflow" }[(int)control];
-            return Run(scripts, python, parent, new string('0', 40), choice);
+            return Run(scripts, python, parent, new string('0', 40), choice, "admission");
         }
-        static Observation Run(string scripts, string python, string parent, string source, string control) {
+        static Observation Run(string scripts, string python, string parent, string source, string control, string operation) {
             Require(OperatingSystem.IsWindows() && Environment.Is64BitProcess && Stopwatch.IsHighResolution);
             Require(Regex.IsMatch(source, "^[0-9a-f]{40}$") && Path.IsPathFullyQualified(python) && File.Exists(python));
             scripts = Path.GetFullPath(scripts); string capsule = Capsule(parent);
@@ -231,7 +237,10 @@ namespace P2pKit.WindowsQualification {
                     control == null ? "run-windows-installed-diagnostic.py" : "tests/run-windows-installed-diagnostic-test.py") })
                     info.ArgumentList.Add(arg);
                 if (control != null) { info.ArgumentList.Add("--native"); info.ArgumentList.Add(control); }
-                else { info.ArgumentList.Add("--expected-source"); info.ArgumentList.Add(source); }
+                else {
+                    info.ArgumentList.Add("--expected-source"); info.ArgumentList.Add(source);
+                    info.ArgumentList.Add("--operation"); info.ArgumentList.Add(operation);
+                }
                 info.ArgumentList.Add("--private-parent"); info.ArgumentList.Add(capsule);
                 start = Now(); end = checked(start + frequency * 30); Require(start > 0);
                 info.ArgumentList.Add("--start-counter"); info.ArgumentList.Add(start.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -256,8 +265,8 @@ namespace P2pKit.WindowsQualification {
                 Require(output == "WINDOWS_INSTALLED_SUPERVISOR PASS\n" || output == "WINDOWS_INSTALLED_SUPERVISOR PASS\r\n");
                 stage = "RECEIPT";
                 ValidateReceipt(ReadClosed(Path.Combine(capsule, "run", "supervisor.json"), ReceiptLimit), source,
-                    control == null ? "INSTALLED_ADMISSION_SUPERVISION_NOT_PROFILE_QUALIFICATION" : "SUPERVISOR_NATIVE_CONTROL_NOT_INSTALLED",
-                    start, frequency, hashes);
+                    control == null ? "INSTALLED_OPERATION_SUPERVISION_NOT_HOST_CLIENT_QUALIFICATION" : "SUPERVISOR_NATIVE_CONTROL_NOT_INSTALLED",
+                    start, frequency, hashes, operation);
                 var after = SourceHashes(scripts, control != null);
                 Require(hashes.All(pair => after.TryGetValue(pair.Key, out string value) && value == pair.Value));
                 var observerAfter = ObserverHashes(scripts, control != null);
@@ -300,6 +309,7 @@ namespace P2pKit.WindowsQualification {
             var record = new Dictionary<string, object> {
                 ["schema"] = 1, ["scope"] = control == null ? "EXTERNAL_PROCESS_EXIT_OBSERVER_NOT_PROFILE_QUALIFICATION" : "EXTERNAL_NATIVE_CONTROL_NOT_INSTALLED",
                 ["status"] = status, ["stage"] = stage, ["appSource"] = source, ["control"] = control,
+                ["operation"] = operation,
                 ["phase"] = "CANDIDATE_REQUIRES_OBSERVED_EXTERNAL_EXIT", ["finalizationCompleted"] = false,
                 ["observerSource"] = observerHashes,
                 ["supervisorSource"] = hashes, ["startCounter"] = start, ["counterFrequency"] = frequency,

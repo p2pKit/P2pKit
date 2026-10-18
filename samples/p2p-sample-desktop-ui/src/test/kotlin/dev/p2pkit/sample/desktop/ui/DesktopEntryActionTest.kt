@@ -5,6 +5,19 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class DesktopEntryActionTest {
+    @Test fun productiveControlsRequireTheirExactSingleExplicitArgument() {
+        for ((flag, action) in mapOf(
+            "--rpc-windows-disposable-profile-create" to DesktopEntryAction.WindowsProfileCreate,
+            "--rpc-windows-disposable-profile-reopen" to DesktopEntryAction.WindowsProfileReopen,
+        )) {
+            assertEquals(action, desktopEntryAction(arrayOf(flag)))
+            for (arguments in listOf(arrayOf(flag, "extra"), arrayOf("$flag=1"), arrayOf("$flag "),
+                arrayOf(flag.uppercase()), arrayOf(flag, "--rpc-windows-installed-admission"))) {
+                assertFailsWith<IllegalArgumentException> { desktopEntryAction(arguments) }
+            }
+        }
+    }
+
     @Test fun installedNativeDiagnosticRequiresItsSingleExactExplicitArgument() {
         assertEquals(DesktopEntryAction.WindowsInstalledAdmission,
             desktopEntryAction(arrayOf("--rpc-windows-installed-admission")))

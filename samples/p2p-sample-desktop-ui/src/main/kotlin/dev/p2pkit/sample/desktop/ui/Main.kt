@@ -146,7 +146,7 @@ import kotlinx.coroutines.runBlocking
 
 fun main(arguments: Array<String>) {
     try {
-        when (desktopEntryAction(arguments)) {
+        when (val action = desktopEntryAction(arguments)) {
             DesktopEntryAction.NativeReadback -> {
                 println(dev.p2pkit.sample.rpc.desktop.RpcDesktopNativeReadback.run())
                 return
@@ -166,6 +166,16 @@ fun main(arguments: Array<String>) {
                     // A sealed native attempt retains its original owners until process exit. This
                     // bounded failure is not a before-effects/refused-provider classification.
                     System.err.println("WINDOWS_INSTALLED_ADMISSION_REFUSED_OR_FAILED_NOT_QUALIFIED")
+                    kotlin.system.exitProcess(1)
+                }
+                return
+            }
+            DesktopEntryAction.WindowsProfileCreate, DesktopEntryAction.WindowsProfileReopen -> {
+                try {
+                    val control = dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsProfileControl
+                    println(if (action == DesktopEntryAction.WindowsProfileCreate) control.create() else control.reopen())
+                } catch (_: Throwable) {
+                    System.err.println("WINDOWS_INSTALLED_PROFILE_REFUSED_OR_FAILED_NOT_QUALIFIED")
                     kotlin.system.exitProcess(1)
                 }
                 return

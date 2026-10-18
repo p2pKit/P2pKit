@@ -64,6 +64,7 @@ def validate_observer(observed, args, hashes, deadline, witnesses, wrapper_id, e
     H.require(type(observed) is dict and type(observed["schema"]) is int and observed["schema"] == 1)
     H.require(observed["scope"] == "EXTERNAL_PROCESS_EXIT_OBSERVER_NOT_PROFILE_QUALIFICATION")
     H.require(observed["status"] == "PASS" and observed["appSource"] == args.expected_source)
+    H.require(observed["operation"] == args.operation)
     H.require(observed["control"] is None and observed["stage"] == "RECEIPT")
     H.require(observed["phase"] == "CANDIDATE_REQUIRES_OBSERVED_EXTERNAL_EXIT")
     H.require(observed["finalizationCompleted"] is False)
@@ -95,6 +96,7 @@ def validate_observer(observed, args, hashes, deadline, witnesses, wrapper_id, e
 def arguments(argv):
     parser = H.Parser(add_help=False, allow_abbrev=False)
     parser.add_argument("--expected-source", required=True)
+    parser.add_argument("--operation", choices=tuple(H.OPERATIONS), default="admission")
     parser.add_argument("--private-parent", required=True)
     parser.add_argument("--python", required=True)
     args = parser.parse_args(argv)
@@ -133,6 +135,7 @@ def run(argv=None):
         witnesses = Witnesses(scope, deadline)
         command = [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
                    str(SCRIPTS / "run-windows-installed-diagnostic.ps1"), "-ExpectedSource", args.expected_source,
+                   "-Operation", args.operation,
                    "-PrivateParent", str(run_directory.path), "-Python", args.python]
         stage = "WRAPPER_START"
         child = scope.spawn(command, str(SCRIPTS), environment)
@@ -176,9 +179,10 @@ def run(argv=None):
         subject_end = validate_observer(observed, args, hashes, deadline, witnesses, wrapper_id,
                                         wrapper_exit_counter, powershell, launcher)
         H.require(inner["status"] == "PASS" and inner["appSource"] == args.expected_source)
+        H.require(inner["operation"] == args.operation)
         H.require(inner["scope"] == H.SCOPE and inner["supervisorSource"] == {name: hashes[name] for name in H.SOURCE_FILES})
         H.require(inner["outerCleanupKnown"] is True and inner["capturesClosed"] is True)
-        H.require(H.validate_worker(inner["workerOutcome"], args.expected_source))
+        H.require(H.validate_worker(inner["workerOutcome"], args.expected_source, args.operation))
         stage = "FINAL_SOURCE_BINDING"
         H.require(source_identity() == hashes)
         accepted = True
@@ -231,8 +235,9 @@ def run(argv=None):
                 failures.append(failure_detail("WITNESS_CLOSE", error))
         passed = (accepted and not failures and cleanup and captures_closed and
                   subject_end is not None and deadline.now() < subject_end)
-        record = {"schema": 1, "scope": "INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION",
+        record = {"schema": 1, "scope": "INSTALLED_FIXED_OPERATION_NOT_HOST_CLIENT_QUALIFICATION",
                   "status": "PASS" if passed else "FAIL", "appSource": args.expected_source, "sourceFiles": hashes,
+                  "operation": args.operation,
                   "phase": "CANDIDATE_REQUIRES_OBSERVED_DRIVER_EXIT", "finalizationCompleted": False,
                   "preparationStartCounter": deadline.start, "counterFrequency": deadline.frequency,
                   "preparationDeadlineCounter": deadline.end, "subjectDeadlineCounter": subject_end,

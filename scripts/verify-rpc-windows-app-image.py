@@ -23,6 +23,9 @@ APPLICATION_CLASSES = (
 RPC_CLASSES = (
     "dev/p2pkit/sample/rpc/desktop/RpcDesktopPanel.class",
     "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
+    "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsProfileControl.class",
+    "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsProfileControl$Owner.class",
+    "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsProfileControlKt.class",
     "dev/p2pkit/sample/rpc/desktop/WindowsDesktopRuntimePreparation.class",
     "dev/p2pkit/sample/rpc/desktop/WindowsDesktopRuntimePreparationKt.class",
     "dev/p2pkit/sample/rpc/desktop/DesktopRpcProfile.class",

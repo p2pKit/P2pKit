@@ -252,6 +252,33 @@ before the separately reviewed harmless Windows controls. Their model/fixture
 results establish no installed load, protected storage, JNI or Host/Client
 qualification. Actual installed admission remains a distinct, explicit step.
 
+### Explicit productive profile controls
+
+After genuine installed admission and independent account, runtime, package and
+supervisor admission, the same driver accepts `--operation profile-create` or
+`--operation profile-reopen`. Its default remains `admission`, which never opens
+profile storage. Operation selection is bound through every supervisor receipt
+and to one exact application argument; there is no arbitrary command, path,
+credential or deadline override. The original whole-application limit is 30000ms.
+
+Use a disposable **application** context separate from retained native-smoke
+fixtures. `profile-create` requires an empty admitted root before profile writes.
+It uses a public synthetic fixture passphrase through the real encrypted profile
+implementation. `profile-reopen` requires complete existing inventory and its
+encrypted marker; it cannot create a replacement identity or repair partial
+state. Both exercise native creation/read/replace/delete, acknowledged close and
+another provider/session open in the same process. Separate create and reopen
+invocations test process restart. Unexpected scratch or pending records refuse
+and remain available for investigation. Never erase them to make a retry pass.
+
+The synthetic credential is exclusively for these explicit controls, never an
+application credential or fallback. Do not run them against personal profiles.
+Keep ciphertext and raw receipts private. Successful control output establishes
+only the operations actually executed; it does not certify hostile-path cases,
+power-loss durability, wrong-password/tamper handling, LAN RPC or complete
+resource qualification. The unchanged admission-only diagnostic and previous
+receipts remain evidence for their original source and scope.
+
 The [Windows fixture witness](../../scripts/tests/run-windows-installed-observer-native.py)
 accepts only `Normal`, `Nonzero`, `OutputOverflow`, `BlockedWorker`,
 `BlockedOuter` and `ObserverOutputOverflow`. Supply `--case`, `--private-parent`
