@@ -203,7 +203,7 @@ def main():
                       "iat-byte", "export-address", "page-count"]
     empty_classpath = output / "empty-application-classpath"
     empty_classpath.mkdir()
-    def connected_run(name, test_class, arguments, expected, missing_helper=False, flags=()):
+    def connected_run(name, test_class, arguments, expected, missing_helper=False, flags=(), expected_stderr=""):
         connected = base[1:] + list(flags) + access + ["--patch-module", MODULE + "=" + str(classes)]
         connected += ["--class-path", str(empty_classpath) if missing_helper else
                       os.pathsep.join(str(path) for path in application_paths)]
@@ -216,7 +216,7 @@ def main():
         argument_file = output / (name + ".args")
         with argument_file.open("x", encoding="utf-8", newline="\n") as target:
             target.write(arguments)
-        run(name, [java21, "@" + str(argument_file)], 0, expected, "")
+        run(name, [java21, "@" + str(argument_file)], 0, expected, expected_stderr)
 
     for case in packaged_cases:
         connected_run("packaged-verifier-" + case, "PackagedVerifierTests", [case, str(main_directory),
@@ -253,12 +253,20 @@ def main():
     diagnostic_connection_cases = (["diagnostic-connected-reuse", "diagnostic-connected-failure",
                                     "diagnostic-connected-in-progress"] if os.name == "nt" else
                                    ["diagnostic-connected-source-or-host-refusal"])
+    diagnostic_failure_lines = {
+        "diagnostic-connected-failure": "NATIVE_ADMISSION operation=RESERVATION",
+        "diagnostic-connected-in-progress": "NATIVE_ADMISSION operation=NO_MATCHING_RETAINED_FAILURE",
+        "diagnostic-connected-source-or-host-refusal": "RUNTIME_PRECHECK operation=DIAGNOSTIC_UNAVAILABLE",
+    }
     for case in diagnostic_connection_cases:
+        failure_line = diagnostic_failure_lines.get(case)
+        expected_stderr = (re.escape("WINDOWS_INSTALLED_ADMISSION_FAILURE stage=" + failure_line + "\n")
+                           if failure_line is not None else "")
         connected_run("installed-" + case, "InstalledProviderTests", [case, str(main_directory),
                       bindings[5]["sha256"], bindings[6]["sha256"]],
             "WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + re.escape(case) +
             r" scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION\n",
-            flags=("--add-modules=jdk.unsupported",))
+            flags=("--add-modules=jdk.unsupported",), expected_stderr=expected_stderr)
     loaded_image_cases = ["unattached", "once", "thread", "unprepared", "owned-required", "order",
                           "wrong-order", "substituted-view", "missing-name", "duplicate-name", "closed-scope",
                           "declaration", "registration-before-verification", "registration-after-failure",
@@ -314,6 +322,7 @@ def main():
             "WINDOWS_INSTALLED_PRELOAD_PASS case=" + re.escape(case) +
             r" scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION\n", "")
     controller_cases = ["diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress",
+                        "diagnostic-stages", "diagnostic-child-stages",
                         "contract", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
                         "missing-registration", "unfinished-registration", "wrong-thread", "wrong-owner"]
     for case in controller_cases:

@@ -52,6 +52,7 @@ final class WindowsInstalledProfileCandidate {
     private boolean prepared;
     private boolean registrationAttempted;
     private boolean failed;
+    private int diagnosticPhase; // Does not confer authority or change any admission/cleanup transition.
 
     WindowsInstalledProfileCandidate(WindowsOriginalInstallationCandidate installation) {
         this.installation = installation;
@@ -62,31 +63,46 @@ final class WindowsInstalledProfileCandidate {
         if (attempted) throw new IllegalStateException("Installed preparation is already consumed");
         attempted = true;
         try {
+            diagnosticPhase = 1;
             systems = originalBootstrap().inspectOriginalSystemModules();
             systems.requireOriginalExportGraph();
+            diagnosticPhase = 2;
             programFiles = new WindowsOriginalProgramFilesCandidate(this);
             programFiles.observe();
+            diagnosticPhase = 3;
             parentPin = WindowsInstalledParentPin.read(this);
+            diagnosticPhase = 4;
             jvm = originalBootstrap().inspectOriginalJvm();
+            diagnosticPhase = 5;
             jvmFile = jvm.inspectFile();
             jvmFile.requireInstalledPath(this);
+            diagnosticPhase = 6;
             jvmSecurity = jvmFile.inspectSecurity();
             if (!jvmSecurity.descriptorPolicyAccepted()) throw new IllegalStateException("Original installed JVM leaf policy refused");
+            diagnosticPhase = 7;
             jvmAncestors = jvmSecurity.inspectAncestors();
             requireJvmJoin();
+            diagnosticPhase = 8;
             profileAttempted = true;
             originalBootstrap().inspectInstalledProfileDll(this);
+            diagnosticPhase = 9;
             profileSecurity = profile.inspectSecurity();
             if (!profileSecurity.descriptorPolicyAccepted()) throw new IllegalStateException("Original installed profile leaf policy refused");
+            diagnosticPhase = 10;
             profileAncestors = profileSecurity.inspectAncestors();
             profileAncestors.requireInstallationRoot(this);
+            diagnosticPhase = 11;
             bytes = profile.inspectBytes();
+            diagnosticPhase = 12;
             manifest = readManifest(Path.of(originalRoot()).resolve("app/resources/rpc-profile/windows-x64/component.manifest"));
             if (!HexFormat.of().formatHex(bytes.sha256()).equals(parentPin.dllSha256())) {
                 throw new IllegalStateException("Original profile DLL differs from the trusted application parent pin");
             }
+            diagnosticPhase = 13;
             packaged = bytes.inspectPackagedBytes(manifest, parentPin.manifestSha256(), parentPin.source(), parentPin.tree());
+            diagnosticPhase = 14;
             packaged.prepareOriginalSystemImports();
+            diagnosticPhase = 15;
             inputsReady = true;
             WindowsLibraryLoadInvocation.prepareInstalled(this); // Attaches load before its private frame effects.
             prepared = true;
@@ -106,8 +122,11 @@ final class WindowsInstalledProfileCandidate {
         try {
             // Each existing process-rooted parent attaches its child before the child's native effects.
             // Never recreate a module view, choose another import plan, or enter the development overload.
+            diagnosticPhase = 16;
             loadResult = load.invoke();
+            diagnosticPhase = 17;
             imageVerification = loadResult.verifyImage(originalBootstrap(), packaged);
+            diagnosticPhase = 18;
             registrationOwner = imageVerification.registerOriginalJni();
             if (registrationOwner.state() != WindowsJniRegistrationOwner.State.Registered) {
                 throw new IllegalStateException("Original installed registration did not complete");
@@ -120,6 +139,31 @@ final class WindowsInstalledProfileCandidate {
             // No speculative frame retirement, unload, retry or conversion to no-effects Unavailable.
             throw failure;
         }
+    }
+
+    /** Read stored stage only; failed confined/native owners are never dereferenced by this diagnostic. */
+    String failureOperation() {
+        return switch (diagnosticPhase) {
+            case 1 -> "PROFILE_SYSTEM_MODULES";
+            case 2 -> "PROFILE_KNOWN_FOLDER";
+            case 3 -> "PROFILE_PARENT_PIN";
+            case 4 -> "PROFILE_JVM_IMAGE";
+            case 5 -> "PROFILE_JVM_FILE";
+            case 6 -> "PROFILE_JVM_SECURITY";
+            case 7 -> "PROFILE_JVM_ANCESTORS";
+            case 8 -> "PROFILE_FILE";
+            case 9 -> "PROFILE_SECURITY";
+            case 10 -> "PROFILE_ANCESTORS";
+            case 11 -> "PROFILE_BYTES";
+            case 12 -> "PROFILE_MANIFEST";
+            case 13 -> "PROFILE_PACKAGE";
+            case 14 -> "PROFILE_IMPORTS";
+            case 15 -> "PROFILE_PREPARE_LOAD";
+            case 16 -> "PROFILE_LOAD_IMAGE";
+            case 17 -> "PROFILE_VERIFY_IMAGE";
+            case 18 -> "PROFILE_REGISTER_JNI";
+            default -> "PROFILE_PRECONDITION";
+        };
     }
 
     private static byte[] readManifest(Path path) throws Exception {

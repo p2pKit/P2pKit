@@ -31,6 +31,8 @@ public final class InstalledProcessControllerTests {
         switch (arguments[0]) {
             case "diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress" ->
                 diagnostic(arguments[0]);
+            case "diagnostic-stages" -> diagnosticStages();
+            case "diagnostic-child-stages" -> diagnosticChildStages();
             case "contract" -> contract();
             case "claim" -> firstClaim();
             case "in-progress" -> inProgress();
@@ -203,6 +205,71 @@ public final class InstalledProcessControllerTests {
             }
             emptyChildren(attempt);
         }
+    }
+
+    private static void diagnosticStages() throws Throwable {
+        Method reader = Probe.class.getDeclaredMethod("installedAdmissionFailureStage", Throwable.class);
+        check(reader.getReturnType() == String.class && Modifier.isStatic(reader.getModifiers()) &&
+            Modifier.isPublic(reader.getModifiers()));
+        Throwable privateFailure = new Error("PRIVATE_PATH_SID_ADDRESS_PAYLOAD") {
+            @Override public String getMessage() { throw new AssertionError("Private message accessed"); }
+            @Override public synchronized Throwable getCause() { throw new AssertionError("Arbitrary cause traversed"); }
+        };
+        check(Probe.installedAdmissionFailureStage(privateFailure).equals("NO_MATCHING_RETAINED_FAILURE"));
+        check(root() == null);
+        Object attempt = firstClaim();
+        check(Probe.installedAdmissionFailureStage((Throwable) value(attempt, "failure"))
+            .equals("NO_MATCHING_RETAINED_FAILURE")); // Reserved is not a sealed failure.
+        Throwable carrier = (Throwable) invoke(attempt, "seal", new Class<?>[] {Throwable.class}, privateFailure);
+        String[] expected = {"RESERVATION", "BOOTSTRAP", "INSTALLATION", "PROFILE_PREPARATION",
+            "JNI_REGISTRATION", "PUBLISH_REGISTERED", "UNKNOWN_RETAINED_OPERATION"};
+        for (int phase = 0; phase < expected.length; phase++) {
+            field(attempt, "diagnosticPhase").setInt(attempt, phase);
+            check(Probe.installedAdmissionFailureStage(carrier).equals(expected[phase]));
+            check(Probe.installedAdmissionFailureStage(privateFailure).equals("NO_MATCHING_RETAINED_FAILURE"));
+            onThread(false, () -> check(Probe.installedAdmissionFailureStage(carrier).matches("[A-Z_]{1,64}")));
+            check(root() == attempt && value(carrier, "operationFailure") == privateFailure);
+            check(expect(RuntimeException.class, Probe::installedAdmissionReadback) == carrier);
+        }
+        emptyChildren(attempt); // No acquisition, retry, cleanup or child getter was invoked.
+    }
+
+    private static void diagnosticChildStages() throws Throwable {
+        Object attempt = firstClaim();
+        Throwable carrier = (Throwable) invoke(attempt, "seal", new Class<?>[] {Throwable.class}, new Error());
+        Constructor<WindowsSystemBootstrapCandidate> constructor =
+            WindowsSystemBootstrapCandidate.class.getDeclaredConstructor(java.lang.foreign.Linker.class);
+        constructor.setAccessible(true);
+        WindowsSystemBootstrapCandidate bootstrap = constructor.newInstance(new Object[] {null});
+        field(carrier, "operationFailure").set(carrier, value(bootstrap, "failure"));
+        field(attempt, "diagnosticPhase").setInt(attempt, 1);
+        String[] early = {"BOOTSTRAP_FRAME", "BOOTSTRAP_EXPORTS", "BOOTSTRAP_PROCESS", "BOOTSTRAP_SYSTEM_PATH"};
+        for (int phase = 0; phase < 32; phase++) {
+            field(bootstrap, "phase").setInt(bootstrap, phase);
+            String expected = phase < 4 ? early[phase] : phase % 2 == 0 ?
+                "BOOTSTRAP_PROVIDER_PIN" : "BOOTSTRAP_PROVIDER_PATH";
+            check(Probe.installedAdmissionFailureStage(carrier).equals(expected));
+        }
+        WindowsInstalledProfileCandidate profile = new WindowsInstalledProfileCandidate(null);
+        field(profile, "failed").setBoolean(profile, true); // Its ordinary guards cannot be used.
+        WindowsOriginalInstallationCandidate installation = new WindowsOriginalInstallationCandidate(null);
+        Object installationFailure = value(installation, "failure");
+        field(installationFailure, "operationFailure").set(installationFailure, value(profile, "failure"));
+        String[] operations = {"PROFILE_PRECONDITION", "PROFILE_SYSTEM_MODULES", "PROFILE_KNOWN_FOLDER",
+            "PROFILE_PARENT_PIN", "PROFILE_JVM_IMAGE", "PROFILE_JVM_FILE", "PROFILE_JVM_SECURITY",
+            "PROFILE_JVM_ANCESTORS", "PROFILE_FILE", "PROFILE_SECURITY", "PROFILE_ANCESTORS",
+            "PROFILE_BYTES", "PROFILE_MANIFEST", "PROFILE_PACKAGE", "PROFILE_IMPORTS",
+            "PROFILE_PREPARE_LOAD", "PROFILE_LOAD_IMAGE", "PROFILE_VERIFY_IMAGE", "PROFILE_REGISTER_JNI"};
+        for (int stage : new int[] {3, 4}) {
+            field(attempt, "diagnosticPhase").setInt(attempt, stage);
+            field(carrier, "operationFailure").set(carrier, stage == 3 ? installationFailure : value(profile, "failure"));
+            for (int phase = 0; phase < operations.length; phase++) {
+                field(profile, "diagnosticPhase").setInt(profile, phase);
+                check(Probe.installedAdmissionFailureStage(carrier).equals(operations[phase]));
+            }
+        }
+        check(value(profile, "attempted").equals(false) && value(profile, "registrationAttempted").equals(false));
+        emptyChildren(attempt);
     }
 
     private static void incomplete(boolean unfinished) throws Throwable {

@@ -175,6 +175,20 @@ final class WindowsSystemBootstrapCandidate {
         if (!succeeded) throw failure;
     }
 
+    /** Bounded Java metadata after failure, with no native access or completed-owner guard. */
+    String failureOperation() {
+        if (phase >= 4 && phase < 4 + 2 * EXPORTS.length) {
+            return phase % 2 == 0 ? "BOOTSTRAP_PROVIDER_PIN" : "BOOTSTRAP_PROVIDER_PATH";
+        }
+        return switch (phase) {
+            case 0 -> "BOOTSTRAP_FRAME";
+            case 1 -> "BOOTSTRAP_EXPORTS";
+            case 2 -> "BOOTSTRAP_PROCESS";
+            case 3 -> "BOOTSTRAP_SYSTEM_PATH";
+            default -> "UNKNOWN_RETAINED_OPERATION";
+        };
+    }
+
     private void prepareFrames() {
         MemoryLayout state = Linker.Option.captureStateLayout();
         MemoryLayout error = state.select(MemoryLayout.PathElement.groupElement("GetLastError"));

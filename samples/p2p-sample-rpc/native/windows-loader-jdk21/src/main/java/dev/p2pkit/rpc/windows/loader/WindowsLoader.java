@@ -39,6 +39,7 @@ public final class WindowsLoader {
         final Thread ownerThread = Thread.currentThread();
         final InstalledFailure failure = new InstalledFailure(this);
         InstalledState state = InstalledState.Reserved;
+        int diagnosticPhase; // Pure metadata only, set before each existing operation.
         WindowsSystemBootstrapCandidate bootstrap;
         WindowsOriginalInstallationCandidate installation;
         WindowsInstalledProfileCandidate profile;
@@ -58,10 +59,15 @@ public final class WindowsLoader {
             // No monitor is held across any original native acquisition. Each deeper owner attaches
             // its own partial children before effects, including when a call does not return a child.
             try {
+                diagnosticPhase = 1;
                 bootstrap = WindowsSystemBootstrapCandidate.inspect();
+                diagnosticPhase = 2;
                 installation = bootstrap.inspectOriginalInstallation();
+                diagnosticPhase = 3;
                 profile = installation.prepareProfileLoad();
+                diagnosticPhase = 4;
                 registration = profile.registerOriginalProfile();
+                diagnosticPhase = 5;
                 publishRegistered();
             } catch (Throwable caught) {
                 throw seal(caught);
@@ -117,6 +123,35 @@ public final class WindowsLoader {
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         InstalledAttempt attempt = claimOriginalInstalledProvider();
         if (attempt != null) attempt.complete();
+    }
+
+    /** Pure retained-state readback: never acquire/retire/retry or call a completed-owner guard. */
+    static synchronized String installedFailureStage(Throwable original) {
+        InstalledAttempt attempt = installedAttempt;
+        if (attempt == null || attempt.state != InstalledState.Failed || original != attempt.failure) {
+            return "NO_MATCHING_RETAINED_FAILURE";
+        }
+        Throwable operation = attempt.failure.operationFailure;
+        if (attempt.diagnosticPhase == 1 && operation instanceof WindowsSystemBootstrapCandidate.Failure value) {
+            return value.retainedCandidate.failureOperation();
+        }
+        // Only these fixed, source-owned carriers are inspected; no arbitrary getCause/toString walk.
+        if (attempt.diagnosticPhase == 3 && operation instanceof WindowsOriginalInstallationCandidate.Failure value) {
+            operation = value.operationFailure;
+        }
+        if ((attempt.diagnosticPhase == 3 || attempt.diagnosticPhase == 4) &&
+            operation instanceof WindowsInstalledProfileCandidate.Failure value) {
+            return value.retainedCandidate.failureOperation();
+        }
+        return switch (attempt.diagnosticPhase) {
+            case 0 -> "RESERVATION";
+            case 1 -> "BOOTSTRAP";
+            case 2 -> "INSTALLATION";
+            case 3 -> "PROFILE_PREPARATION";
+            case 4 -> "JNI_REGISTRATION";
+            case 5 -> "PUBLISH_REGISTERED";
+            default -> "UNKNOWN_RETAINED_OPERATION";
+        };
     }
 
     /**

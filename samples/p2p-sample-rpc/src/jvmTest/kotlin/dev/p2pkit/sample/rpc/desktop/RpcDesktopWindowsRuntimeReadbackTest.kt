@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertSame
 
 class RpcDesktopWindowsRuntimeReadbackTest {
     private val source = "a".repeat(40)
@@ -90,6 +91,43 @@ class RpcDesktopWindowsRuntimeReadbackTest {
             }
         }
         assertEquals(1, calls)
+    }
+
+    @Test fun failureStagesAreBoundedAndPreserveTheOriginalError() {
+        val original = LinkageError("PRIVATE_PATH_SID_ADDRESS_PAYLOAD")
+        for (phase in InstalledAdmissionPhase.entries) {
+            val lines = mutableListOf<String>()
+            val actual = assertFailsWith<LinkageError> {
+                reportInstalledAdmissionFailure(phase, "PROFILE_PARENT_PIN", original, lines::add)
+            }
+            assertSame(original, actual)
+            assertEquals(1, lines.size)
+            val code = if (phase == InstalledAdmissionPhase.NATIVE_ADMISSION) "PROFILE_PARENT_PIN" else "DIAGNOSTIC_UNAVAILABLE"
+            assertEquals("WINDOWS_INSTALLED_ADMISSION_FAILURE stage=${phase.name} operation=$code", lines.single())
+            assertTrue(lines.single().length < 192)
+            assertFalse(lines.single().contains("PRIVATE"))
+        }
+    }
+
+    @Test fun untrustedOrMissingOperationCannotEscapeTheClosedVocabulary() {
+        val original = IllegalStateException("PRIVATE")
+        val badObject = object { override fun toString(): String = error("Private object stringified") }
+        for (operation in listOf(null, badObject, 1, "", "PRIVATE", "BOOTSTRAP\nPASS", "X".repeat(10000))) {
+            val lines = mutableListOf<String>()
+            assertSame(original, assertFailsWith<IllegalStateException> {
+                reportInstalledAdmissionFailure(InstalledAdmissionPhase.NATIVE_ADMISSION, operation, original, lines::add)
+            })
+            assertEquals(listOf("WINDOWS_INSTALLED_ADMISSION_FAILURE stage=NATIVE_ADMISSION operation=DIAGNOSTIC_UNAVAILABLE"), lines)
+        }
+    }
+
+    @Test fun secondaryDiagnosticOutputFailureCannotReplaceTheOriginalCarrier() {
+        val original = LinkageError("ORIGINAL_PRIVATE")
+        assertSame(original, assertFailsWith<LinkageError> {
+            reportInstalledAdmissionFailure(InstalledAdmissionPhase.RUNTIME_PRECHECK, null, original) {
+                throw OutOfMemoryError("SECONDARY_PRIVATE")
+            }
+        })
     }
 
     private fun read(actual: WindowsRuntimeObservation) =

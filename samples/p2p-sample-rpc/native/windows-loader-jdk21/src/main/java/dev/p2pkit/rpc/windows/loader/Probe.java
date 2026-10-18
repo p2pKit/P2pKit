@@ -26,6 +26,11 @@ public final class Probe {
             "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}";
     }
 
+    /** Read only an exact retained failure; this method grants no runtime or installation authority. */
+    public static String installedAdmissionFailureStage(Throwable original) {
+        return WindowsLoader.installedFailureStage(original);
+    }
+
     public static void main(String[] arguments) {
         if (arguments.length != 0) {
             System.err.println("JDK21_LOADER_PROBE_REFUSED_ARGUMENTS");
