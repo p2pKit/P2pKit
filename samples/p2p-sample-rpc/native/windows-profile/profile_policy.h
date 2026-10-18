@@ -13,6 +13,7 @@
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
 #define PWP_CUSTODY_ABI 13
 #define PWP_TOKEN_BUFFER_LIMIT 4096u
+#define PWP_TOKEN_GROUP_BUFFER_LIMIT 16384u
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -30,6 +31,10 @@ int pwp_token_valid(uint64_t token);
  * Outputs are cleared on refusal. This proves byte bounds/revision only, not account or token policy. */
 int pwp_token_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t header,
                        uintptr_t address, size_t *offset, size_t *length);
+/* Same bounded SID decoding for a group query. The caller must first validate the complete SDK
+ * group table and supply its end as table_bytes; no SID may overlap any table entry. */
+int pwp_token_group_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t table_bytes,
+                             uintptr_t address, size_t *offset, size_t *length);
 int pwp_append_path(uint16_t *path, size_t capacity, const uint16_t *name, size_t length);
 int pwp_component(const uint16_t *name, size_t length);
 int pwp_absolute_path(const uint16_t *path, size_t length);

@@ -90,9 +90,77 @@ static void invalid_outputs(void) {
                               (uintptr_t)(bytes+16), &out, NULL));
     assert(out == 0);
 }
+static void group_refuse(const unsigned char *bytes, size_t capacity, size_t returned, size_t table,
+                          uintptr_t address) {
+    size_t offset = 99, length = 99;
+    assert(!pwp_token_group_sid_view(bytes, capacity, returned, table, address, &offset, &length));
+    assert(offset == 0 && length == 0);
+}
+static void group_query_and_table_bounds(void) {
+    _Alignas(8) unsigned char bytes[64] = {0}; bytes[40] = 1; bytes[41] = 2;
+    uintptr_t sid = (uintptr_t)(bytes+40);
+    size_t offset = 0, length = 0;
+    assert(pwp_token_group_sid_view(bytes, sizeof(bytes), 56, 40, sid, &offset, &length));
+    assert(offset == 40 && length == 16);
+    for (size_t used = 0; used < 56; ++used) group_refuse(bytes, sizeof(bytes), used, 40, sid);
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes)+1, 40, sid);
+    group_refuse(bytes, 0, 0, 40, sid);
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes), 0, sid);
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes), SIZE_MAX, sid);
+    group_refuse(bytes, sizeof(bytes), SIZE_MAX, 40, sid);
+    group_refuse(NULL, sizeof(bytes), sizeof(bytes), 40, sid);
+    /* A plausible SID inside a later group-table entry must not be admitted. */
+    bytes[24] = 1; bytes[25] = 2;
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, (uintptr_t)(bytes+24));
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes), 44, sid);
+}
+static void group_sid_pointer_and_extent_bounds(void) {
+    _Alignas(8) unsigned char bytes[56] = {0}; bytes[40] = 1; bytes[41] = 2;
+    uintptr_t base = (uintptr_t)bytes;
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, 0);
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, base-1);
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, UINTPTR_MAX);
+    for (size_t n = 1; n < 4; ++n) {
+        bytes[40+n] = 1;
+        group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, base+40+n);
+    }
+    bytes[41] = 2;
+    for (size_t n = 49; n <= 64; ++n) group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, base+n);
+    for (unsigned revision = 0; revision < 256; ++revision) {
+        if (revision == 1) continue;
+        bytes[40] = (unsigned char)revision;
+        group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, base+40);
+    }
+    bytes[40] = 1;
+    for (unsigned count = 3; count < 256; ++count) {
+        bytes[41] = (unsigned char)count;
+        group_refuse(bytes, sizeof(bytes), sizeof(bytes), 40, base+40);
+    }
+    bytes[41] = 2;
+    size_t out = 99;
+    assert(!pwp_token_group_sid_view(bytes, sizeof(bytes), sizeof(bytes), 40, base+40, NULL, &out));
+    assert(out == 0); out = 99;
+    assert(!pwp_token_group_sid_view(bytes, sizeof(bytes), sizeof(bytes), 40, base+40, &out, NULL));
+    assert(out == 0);
+}
+static void group_buffer_has_its_own_limit(void) {
+    _Alignas(8) unsigned char bytes[PWP_TOKEN_GROUP_BUFFER_LIMIT] = {0};
+    size_t start = sizeof(bytes)-68;
+    bytes[start] = 1; bytes[start+1] = 15;
+    uintptr_t sid = (uintptr_t)(bytes+start);
+    size_t offset = 0, length = 0;
+    assert(pwp_token_group_sid_view(bytes, sizeof(bytes), sizeof(bytes), 40, sid, &offset, &length));
+    assert(offset == start && length == 68);
+    group_refuse(bytes, sizeof(bytes), sizeof(bytes)-1, 40, sid);
+    group_refuse(bytes, sizeof(bytes)+1, sizeof(bytes), 40, sid);
+    group_refuse(bytes, SIZE_MAX, sizeof(bytes), 40, sid);
+    /* Group support must not widen the existing user/default-owner query limit. */
+    refuse(bytes, sizeof(bytes), sizeof(bytes), 40, sid);
+}
 int main(void) {
     valid_sid_sizes(); query_bounds(); foreign_and_unaligned_pointers(); malformed_sid_header();
     no_read_outside_returned_view(); invalid_outputs();
-    puts("6 token SID view regression groups passed (portable bytes, not Windows token execution)");
+    group_query_and_table_bounds(); group_sid_pointer_and_extent_bounds(); group_buffer_has_its_own_limit();
+    puts("9 token SID view regression groups passed (portable bytes, not Windows token execution)");
     return 0;
 }

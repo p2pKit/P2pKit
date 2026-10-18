@@ -62,6 +62,12 @@ Read-only preflight checks:
   or an inability to establish absence causes refusal before calling the native root API.
 - Uncertain preflight handle closure is an explicit non-success; original handles are never retried.
 
+The preflight copies token headers and validates each embedded user, owner and group SID's complete
+extent before any SID API reads it. Group SIDs must lie beyond the entire validated group table and
+inside the returned 16 KiB query; user/owner queries retain their separate 4 KiB limit. Malformed or
+foreign pointers refuse before profile entry. Portable decoder controls and smoke compilation do not
+establish real token-context rejection, protected storage or supervised execution.
+
 The absence observation is **not an atomic reservation**. The production `openRoot()` can open an existing
 safe tree if another process creates it after this check. Therefore the independently disposable,
 exclusive account/VM prerequisite is primary; this preflight does not make a shared account safe.

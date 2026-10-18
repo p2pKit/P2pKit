@@ -8,11 +8,11 @@ pwp_result pwp_cleanup_result(pwp_result result, int failed, int poisoned) {
 
 int pwp_token_valid(uint64_t token) { return token > 0 && token <= INT64_MAX; }
 
-int pwp_token_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t header,
-                       uintptr_t address, size_t *offset, size_t *length) {
+static int token_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t header,
+                          uintptr_t address, size_t *offset, size_t *length, size_t limit) {
     if (offset) *offset = 0;
     if (length) *length = 0;
-    if (!offset || !length || !bytes || !capacity || capacity > PWP_TOKEN_BUFFER_LIMIT ||
+    if (!offset || !length || !bytes || !capacity || capacity > limit ||
         returned > capacity || !header || header > returned || address % 4 != 0) return 0;
     uintptr_t base = (uintptr_t)bytes;
     /* Compare integer addresses before subtraction; never subtract unrelated C pointers or form base+size. */
@@ -24,6 +24,17 @@ int pwp_token_sid_view(const unsigned char *bytes, size_t capacity, size_t retur
     if (size > returned-start) return 0;
     *offset = start; *length = size;
     return 1;
+}
+
+int pwp_token_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t header,
+                       uintptr_t address, size_t *offset, size_t *length) {
+    return token_sid_view(bytes, capacity, returned, header, address, offset, length, PWP_TOKEN_BUFFER_LIMIT);
+}
+
+int pwp_token_group_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t table_bytes,
+                             uintptr_t address, size_t *offset, size_t *length) {
+    return token_sid_view(bytes, capacity, returned, table_bytes, address, offset, length,
+                           PWP_TOKEN_GROUP_BUFFER_LIMIT);
 }
 
 static uint16_t lower(uint16_t c) { return c >= 'A' && c <= 'Z' ? (uint16_t)(c + 32) : c; }
