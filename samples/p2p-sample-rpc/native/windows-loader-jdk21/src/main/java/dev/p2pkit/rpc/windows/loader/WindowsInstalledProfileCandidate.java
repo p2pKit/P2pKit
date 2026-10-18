@@ -144,7 +144,7 @@ final class WindowsInstalledProfileCandidate {
     /** Read stored stage only; failed confined/native owners are never dereferenced by this diagnostic. */
     String failureOperation() {
         return switch (diagnosticPhase) {
-            case 1 -> "PROFILE_SYSTEM_MODULES";
+            case 1 -> systemFailureOperation();
             case 2 -> "PROFILE_KNOWN_FOLDER";
             case 3 -> "PROFILE_PARENT_PIN";
             case 4 -> "PROFILE_JVM_IMAGE";
@@ -164,6 +164,15 @@ final class WindowsInstalledProfileCandidate {
             case 18 -> "PROFILE_REGISTER_JNI";
             default -> "PROFILE_PRECONDITION";
         };
+    }
+
+    private String systemFailureOperation() {
+        // inspectOriginalSystemModules() can throw before assigning systems. Its exact typed carrier
+        // already retains the original collection; never re-enter the bootstrap to find or retry it.
+        if (failure.operationFailure instanceof WindowsOriginalSystemModulesCandidate.Failure original) {
+            return original.retainedCandidate.failureOperation();
+        }
+        return systems == null ? "PROFILE_SYSTEM_MODULES" : systems.failureOperation();
     }
 
     private static byte[] readManifest(Path path) throws Exception {

@@ -1229,3 +1229,14 @@ later public-provider qualification/connection remain pending. Supervise that
 future installed executable with the existing bounded Windows Job Object runner;
 this diagnostic does not widen the GHA build-image readback wrapper or replace
 its two no-native-load probes.
+
+The failure line includes bounded `stage` and `operation` labels. For system-module
+inspection, the operation distinguishes confirmed absence, descriptor-policy
+refusal, the last entered file/export step, unknown native return and frame
+retirement failure. `SLOT_ZERO` through `SLOT_SEVEN` refer, in order, to kernel32,
+advapi32, ntdll, shell32, ole32, kernelbase, sechost and combase. `NO_SLOT` identifies
+a collection-wide step. Labels are read only from retained Java state, including
+failures thrown before the profile receives its collection reference; they do not
+query failed native owners or disclose exception text, paths, SIDs or addresses.
+A last-entered step is not proof of the underlying cause. A missing already-loaded
+module still refuses admission; these diagnostics add no loading fallback.

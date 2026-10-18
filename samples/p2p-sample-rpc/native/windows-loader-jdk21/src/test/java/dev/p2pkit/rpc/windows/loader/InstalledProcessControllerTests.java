@@ -33,6 +33,7 @@ public final class InstalledProcessControllerTests {
                 diagnostic(arguments[0]);
             case "diagnostic-stages" -> diagnosticStages();
             case "diagnostic-child-stages" -> diagnosticChildStages();
+            case "diagnostic-system-stages" -> diagnosticSystemStages();
             case "contract" -> contract();
             case "claim" -> firstClaim();
             case "in-progress" -> inProgress();
@@ -270,6 +271,73 @@ public final class InstalledProcessControllerTests {
         }
         check(value(profile, "attempted").equals(false) && value(profile, "registrationAttempted").equals(false));
         emptyChildren(attempt);
+    }
+
+    private static void diagnosticSystemStages() throws Throwable {
+        Object attempt = firstClaim();
+        Throwable privateFailure = new Error("PRIVATE_PATH_SID_ADDRESS_PAYLOAD") {
+            @Override public String getMessage() { throw new AssertionError("Private message accessed"); }
+            @Override public synchronized Throwable getCause() { throw new AssertionError("Arbitrary cause traversed"); }
+        };
+        Throwable carrier = (Throwable) invoke(attempt, "seal", new Class<?>[] {Throwable.class}, privateFailure);
+        field(attempt, "diagnosticPhase").setInt(attempt, 4);
+        WindowsInstalledProfileCandidate profile = new WindowsInstalledProfileCandidate(null);
+        field(profile, "failed").setBoolean(profile, true);
+        field(profile, "diagnosticPhase").setInt(profile, 1);
+        Object profileFailure = value(profile, "failure");
+        field(carrier, "operationFailure").set(carrier, profileFailure);
+        WindowsOriginalSystemModulesCandidate systems = new WindowsOriginalSystemModulesCandidate(null);
+        field(systems, "failed").setBoolean(systems, true); // All ordinary completion/native guards refuse.
+        Object systemFailure = value(systems, "failure");
+        field(systemFailure, "operationFailure").set(systemFailure, privateFailure);
+        String[] slots = {"NO_SLOT", "SLOT_ZERO", "SLOT_ONE", "SLOT_TWO", "SLOT_THREE", "SLOT_FOUR",
+            "SLOT_FIVE", "SLOT_SIX", "SLOT_SEVEN", "UNKNOWN_SLOT"};
+        // Both a completed negative cohort and a throw before the assignment to profile.systems must
+        // survive the exact original failure chain. Neither path can query or recreate a native owner.
+        for (boolean assigned : new boolean[] {false, true}) {
+            field(profile, "systems").set(profile, assigned ? systems : null);
+            field(profileFailure, "operationFailure").set(profileFailure, assigned ? privateFailure : systemFailure);
+            for (int slot = -1; slot <= 8; slot++) {
+                field(systems, "activeSlot").setInt(systems, slot);
+                field(systems, "stoppedSlot").setInt(systems, slot);
+                for (String[] outcome : new String[][] {
+                    {"MODULE_ABSENT", "SYSTEM_MODULE_ABSENT_"}, {"LEAF_POLICY_REFUSED", "SYSTEM_LEAF_POLICY_"},
+                    {"ANCESTOR_POLICY_REFUSED", "SYSTEM_ANCESTOR_POLICY_"}, {"COMPLETE", "SYSTEM_GRAPH_RECHECK_"},
+                    {"PRIVATE_PATH_SID_ADDRESS_PAYLOAD", "SYSTEM_UNKNOWN_OUTCOME_"},
+                }) {
+                    field(systems, "outcome").set(systems, outcome[0]);
+                    diagnosticLabel(carrier, outcome[1] + slots[slot + 1]);
+                }
+            }
+            field(systems, "outcome").set(systems, null);
+            field(systems, "activeSlot").setInt(systems, 4);
+            String[] operations = {"PRECONDITION", "FRAME", "DIRECTORY", "MODULE_PIN", "MODULE_PATH",
+                "FILE", "SECURITY", "ANCESTORS", "BYTE_BOUND", "BYTES", "EXPORT_INPUT", "EXPORT_GRAPH",
+                "UNKNOWN_OPERATION"};
+            for (int phase = 0; phase < operations.length; phase++) {
+                field(systems, "diagnosticPhase").setInt(systems, phase);
+                diagnosticLabel(carrier, "SYSTEM_" + operations[phase] + (phase == 11 ? "_NO_SLOT" : "_SLOT_FOUR"));
+            }
+            field(systems, "nativeReturnUnconfirmed").setBoolean(systems, true);
+            diagnosticLabel(carrier, "SYSTEM_RETURN_UNKNOWN_SLOT_FOUR");
+            field(systems, "nativeReturnUnconfirmed").setBoolean(systems, false);
+            field(systemFailure, "arenaCloseFailure").set(systemFailure, privateFailure);
+            diagnosticLabel(carrier, "SYSTEM_RETIREMENT_SLOT_FOUR");
+            field(systemFailure, "arenaCloseFailure").set(systemFailure, null);
+            check(value(systemFailure, "operationFailure") == privateFailure);
+        }
+        check(!(boolean) value(systems, "attempted") && !(boolean) value(systems, "frameRetired") &&
+            value(systems, "frameArena") == null && value(systems, "moduleArena") == null &&
+            Arrays.stream((Object[]) value(systems, "modules")).allMatch(element -> element == null));
+        check(!(boolean) value(profile, "attempted") && !(boolean) value(profile, "registrationAttempted"));
+        check(expect(RuntimeException.class, Probe::installedAdmissionReadback) == carrier);
+        emptyChildren(attempt);
+    }
+
+    private static void diagnosticLabel(Throwable carrier, String expected) throws Throwable {
+        check(Probe.installedAdmissionFailureStage(carrier).equals(expected));
+        check(expected.matches("[A-Z_]{1,64}"));
+        onThread(true, () -> check(Probe.installedAdmissionFailureStage(carrier).equals(expected)));
     }
 
     private static void incomplete(boolean unfinished) throws Throwable {

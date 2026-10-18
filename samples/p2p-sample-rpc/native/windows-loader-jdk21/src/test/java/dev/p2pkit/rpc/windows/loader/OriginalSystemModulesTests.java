@@ -184,6 +184,7 @@ public final class OriginalSystemModulesTests {
             } else if (absent) {
                 check(fixture.pinCalls == 3 && fixture.pathCalls == 2 && !(boolean) value(fixture.collection, "pinsComplete"));
                 check(value(fixture.collection, "outcome").equals("MODULE_ABSENT") && (int) value(fixture.collection, "stoppedSlot") == 2);
+                check(fixture.collection.failureOperation().equals("SYSTEM_MODULE_ABSENT_SLOT_TWO"));
                 check(fixture.modules[0].pinned() && fixture.modules[1].pinned() && !fixture.modules[2].pinned());
             } else if (mode.equals("pin-unknown")) {
                 check(fixture.pinCalls == 1 && fixture.pathCalls == 0);
@@ -202,6 +203,10 @@ public final class OriginalSystemModulesTests {
                 check((long) value(fixture.modules[0], "rawModule") == (mode.equals("pin-contradictory") ? base(0) : 0));
             }
             check(Arrays.stream(fixture.modules).noneMatch(module -> module.fileObserved()));
+            if (unknown) check(fixture.collection.failureOperation().equals("SYSTEM_RETURN_UNKNOWN_" +
+                (mode.equals("system-path-unknown") ? "NO_SLOT" : "SLOT_ZERO")));
+            if (mode.equals("path-mismatch")) check(fixture.collection.failureOperation().equals("SYSTEM_MODULE_PATH_SLOT_ONE"));
+            if (mode.equals("pin-false")) check(fixture.collection.failureOperation().equals("SYSTEM_MODULE_PIN_SLOT_ZERO"));
             byte[][] observed = fixture.bufferCopy();
             int calls = fixture.calls();
             expect(IllegalStateException.class, () -> invoke(fixture.collection, "observeLoadedModules"));
