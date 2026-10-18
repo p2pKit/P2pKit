@@ -190,3 +190,63 @@ Its bounded result and retained failures are described in the
 [adapter contract](../../samples/p2p-sample-rpc/native/windows-loader-jdk21/README.md#explicit-installed-admission-diagnostic-not-provider-availability).
 Actual standard-user installed execution of the independently checked exact
 package/runtime remains required; source/model controls are not that evidence.
+
+### Fixed Windows supervisor
+
+The maintained [PowerShell entry](../../scripts/run-windows-installed-diagnostic.ps1)
+uses an [original-process observer](../../scripts/windows_installed_observer.cs)
+and the [Python supervisor](../../scripts/run-windows-installed-diagnostic.py).
+It derives the installed executable from the OS Program Files location and
+passes only `--rpc-windows-installed-admission`. It has no command, timeout,
+account or provider-enable override.
+
+Before invocation, independently admit the actual ordinary-user interactive
+session, startup inputs, protected installation/runtime and an owned private
+NTFS evidence parent. The supervisor does not supply those authorities. Use
+PowerShell 7 and an admitted AMD64 Python installation with absolute paths.
+For qualification, the [fixed admission driver](../../scripts/run-windows-installed-admission.py)
+also observes the PowerShell wrapper and its descendants through original
+handles before its own cleanup:
+
+```powershell
+& '<admitted python.exe>' -I -B -S .\scripts\run-windows-installed-admission.py `
+    --expected-source '<installed application commit, 40 lowercase hex characters>' `
+    --private-parent '<admitted existing private directory>' `
+    --python '<same admitted python.exe>'
+```
+
+One QPC deadline starts before Python creation and expires after 30,000 ms.
+The Python watchdog remains armed through exit and fires at 29 seconds.
+Canonical `audit_processes.WindowsScope` atomically admits the worker to its
+job; unchanged `ci_evidence.run_command` owns the installed launcher and its
+nested descendants. Preserve jpackage self-relaunch and the original PATH.
+Failure retirement cannot extend acceptance. Normal OS/CLR/CPython scheduling
+is assumed; no arbitrary stalled-kernel guarantee is claimed.
+
+Accept only bounded exact output, strictly typed matching receipts, known
+descendant cleanup, completed capture tasks, original-handle closure and actual
+timely process exit. `observer.json` is explicitly a provisional candidate:
+it cannot certify its own final write/close or the external observer's exit.
+The driver's `admission.json` likewise requires an observed successful driver
+exit; any final write, close or deadline failure invalidates its candidate PASS.
+Bind the observer and helper source files separately from the installed
+application commit, package, runtime and installed inventory. Preserve every
+failed invocation and its private directory; do not retry by resetting it.
+
+Run the [offline supervisor controls](../../scripts/tests/run-windows-installed-diagnostic-test.py)
+and [receipt controls](../../scripts/tests/windows-installed-observer-test.ps1),
+plus the [admission driver controls](../../scripts/tests/run-windows-installed-admission-test.py),
+before the separately reviewed harmless Windows controls. Their model/fixture
+results establish no installed load, protected storage, JNI or Host/Client
+qualification. Actual installed admission remains a distinct, explicit step.
+
+The [Windows fixture witness](../../scripts/tests/run-windows-installed-observer-native.py)
+accepts only `Normal`, `Nonzero`, `OutputOverflow`, `BlockedWorker`,
+`BlockedOuter` and `ObserverOutputOverflow`. Supply `--case`, `--private-parent`
+and `--python`; use a fresh private output for each invocation. It duplicates
+only original process handles already admitted to its canonical job, observes
+their actual exit before its own cleanup, and refuses missing descendants.
+Its 60-second test ceiling includes PowerShell preparation and failure
+retirement; each subject still must retire before its original 30-second end.
+Negative controls preserve the observer's failure and nonzero exit while
+separately assessing whether the expected refusal and retirement occurred.
