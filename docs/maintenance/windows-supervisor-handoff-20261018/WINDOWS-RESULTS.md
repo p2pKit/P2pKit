@@ -5,6 +5,11 @@ The supervisor is implemented and its six harmless Windows controls passed.
 The first actual installed admission attempt failed. This is not profile,
 provider, durability or release qualification.
 
+The [detailed sanitized report](WINDOWS-SUPERVISOR-AND-INSTALLED-REPORT.md)
+contains the full command/result summary, source and artifact bindings,
+preserved failures, W01–W11 matrix, and the diagnostic handoff to RPC.
+Raw evidence remains private.
+
 ## Source and installation
 
 - Branch: `work/rpc470-windows-installed-20261018-004011`.
