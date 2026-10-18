@@ -100,7 +100,10 @@ def commands(component):
                    'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
                    'application-release-version-test.py', 'sample-artifact-identity-test.py',
                    'package-sample-apps-test.py', 'publish-sample-release-test.py',
-                   'release-application-set-test.py', 'run-platform-tests-test.py'),
+                   'release-application-set-test.py', 'run-platform-tests-test.py',
+                   'verify-rpc-windows-jdk21-test.py', 'check-rpc-windows-packaging-test.py',
+                   'verify-rpc-windows-app-image-test.py', 'verify-rpc-windows-msi-payload-test.py',
+                   'inspect-rpc-windows-package-test.py', 'check-rpc-windows-image-runtime-test.py'),
         ]
     if component == 'dependencies':
         return [('integrity-policy', bash + ['scripts/check-dependency-verification.sh']),
@@ -114,7 +117,11 @@ def commands(component):
             tasks.append(':p2p-rpc:jvmTest')
         if (ROOT / 'samples/p2p-sample-rpc').is_dir():
             tasks.append(':p2p-sample-rpc:jvmTest')
-        return ([supervisor] if component == 'jvm-windows' else []) + [('jvm-tests', gradle + tasks)]
+        # Explicit stock-administrator development fixture, never standard-user/installed qualification.
+        # Existing job supervision/budgets remain; a requested fixture refusal fails rather than skips.
+        options = ['-Pp2pkit.rpc.windows.protectedDevelopmentFixture=true'] if component == 'jvm-windows' and \
+            (ROOT / 'samples/p2p-sample-rpc').is_dir() else []
+        return ([supervisor] if component == 'jvm-windows' else []) + [('jvm-tests', gradle + options + tasks)]
     if component == 'android':
         tasks = [':p2p-core:testAndroidHostTest', ':p2p-transport-lan:testAndroidHostTest',
                  ':p2p-network-provisioning-android:testAndroidHostTest', ':p2p-sample-android:testDebugUnitTest',
@@ -134,7 +141,10 @@ def commands(component):
         return ([supervisor] if component == 'desktop-macos' else []) + [('desktop-tests-and-installer', gradle + options + [
             ':p2p-sample-desktop:check', ':p2p-sample-desktop:installDist', ':p2p-sample-desktop-ui:test',
             ':p2p-sample-desktop-ui:checkRuntime', ':p2p-sample-desktop-ui:hotRunArgfile',
-            ':p2p-sample-desktop-ui:createDistributable', ':p2p-sample-desktop-ui:' + packaging])]
+            ':p2p-sample-desktop-ui:createDistributable', ':p2p-sample-desktop-ui:' + packaging])] + (
+                [('rpc-windows-package-inspection', py + ['scripts/inspect-rpc-windows-package.py']),
+                 ('rpc-windows-runtime-readback', py + ['scripts/check-rpc-windows-image-runtime.py'])]
+                if options else [])
     if component.startswith('apple-'):
         return [('native-platform-tests', py + ['scripts/run-platform-tests.py',
                  'ios-arm64' if component == 'apple-arm64' else 'ios-x64'])]

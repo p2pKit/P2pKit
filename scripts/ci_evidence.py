@@ -134,7 +134,10 @@ TASK_NAMES = frozenset({
     "central-bundle-evidence-test.py", "maven-recovery-test.py",
     "application-release-version-test.py", "sample-artifact-identity-test.py",
     "package-sample-apps-test.py", "release-application-set-test.py", "publish-sample-release-test.py",
-    "run-platform-tests-test.py", "integrity-policy",
+    "inspect-rpc-windows-package-test.py", "verify-rpc-windows-app-image-test.py",
+    "verify-rpc-windows-msi-payload-test.py", "rpc-windows-package-inspection",
+    "check-rpc-windows-image-runtime-test.py", "rpc-windows-runtime-readback",
+    "run-platform-tests-test.py", "verify-rpc-windows-jdk21-test.py", "check-rpc-windows-packaging-test.py", "integrity-policy",
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
     "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "shared-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
@@ -889,8 +892,57 @@ def junit_failures(root, source_commit="HEAD"):
                        "org.opentest4j.AssertionFailedError", "java.net.NoRouteToHostException",
                        "java.net.SocketException", "java.net.BindException", "java.io.IOException",
                        "java.lang.InterruptedException", "java.util.concurrent.TimeoutException"}
-            return {"sourceDefinedCodes": sorted(codes), "exceptionClasses": sorted(cls for cls in classes
-                    if re.search(r"(?<![A-Za-z0-9_.$])" + re.escape(cls) + r"(?![A-Za-z0-9_.$])", text))}
+            result = {"sourceDefinedCodes": sorted(codes), "exceptionClasses": sorted(cls for cls in classes
+                      if re.search(r"(?<![A-Za-z0-9_.$])" + re.escape(cls) + r"(?![A-Za-z0-9_.$])", text))}
+            # Only the source-bound original child's already emitted, finite
+            # interface/route observations. No old runner import, native query,
+            # route text, interface identity, permission or readiness inference.
+            boolean, known = r"(?:true|false)", r"(?:true|false|UNKNOWN)"
+            failure_class = "(?:" + "|".join(re.escape(cls) for cls in sorted(classes)) + ")"
+            patterns = [
+                "startup firstSendFailureClass=" + failure_class + " firstSendDestinationIpv4Mdns=" + known,
+                "startup interfaceSnapshot=BEFORE_WAIT selectedKnown=" + boolean + " hostKnown=" + boolean
+                + " socketKnown=" + boolean + " selectedHostMatch=" + known + " selectedSocketMatch=" + known
+                + " hostSocketMatch=" + known,
+                "startup route (?:queryStarted=false reason=(?:FIRST_SEND_DESTINATION_NOT_MATCHED|SELECTED_INTERFACE_UNKNOWN)"
+                + "|observation=POST_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true queryCompleted=" + boolean
+                + " exitZero=" + known + ")",
+                "startup route outputWithinBound=" + boolean,
+                "startup route processReaped=" + boolean,
+                "startup route queryFailureClass=" + failure_class,
+                "startup route interfaceParsed=" + boolean + " selectedInterfaceMatch=" + known
+                + " flagsParsed=" + boolean,
+                *("startup routeFlag=" + flag + " present=" + boolean
+                  for flag in ("UP", "REJECT", "BLACKHOLE", "GATEWAY", "IFSCOPE")),
+                "startup explicitAddress=" + boolean + " linkLocal=" + boolean
+                + " virtualInterface=" + boolean + " pointToPoint=" + boolean,
+            ]
+            patterns = [re.compile(pattern) for pattern in patterns]
+            markers, observations = {}, 0
+            for failure in failures:
+                # XML may repeat the transcript in body and message. Preserve
+                # literal line boundaries; stripping arbitrary prefixes or using
+                # Unicode splitlines could manufacture an apparently safe line.
+                for value in (failure.text or "", failure.get("message", "")):
+                    if len(value) > 128 * 1024:
+                        return result
+                    for line in value.split("\n"):
+                        if line.endswith("\r"):
+                            line = line[:-1]
+                        if len(line) > 512:
+                            continue
+                        for index, pattern in enumerate(patterns):
+                            if pattern.fullmatch(line):
+                                observations += 1
+                                # Conflicting values and excessive repetitions
+                                # cannot select a favorable route observation.
+                                if observations > 32 or (index in markers and markers[index] != line):
+                                    return result
+                                markers[index] = line
+                                break
+            if markers:
+                result["startupMarkers"] = sorted(markers.values())
+            return result
         except (OSError, ValueError, UnicodeError, EvidenceError):
             return None
 
@@ -918,7 +970,10 @@ def junit_failures(root, source_commit="HEAD"):
                 method = match[1]
                 package, cls = classname.rsplit(".", 1)
                 for group in ("library", "samples"):
-                    for source in (root / group).glob("*/src/*Test/**/" + cls + ".kt"):
+                    # KMP uses commonTest/jvmTest; ordinary JVM modules use exact test.
+                    sources = (source for source_set in ("*Test", "test")
+                               for source in (root / group).glob("*/src/" + source_set + "/**/" + cls + ".kt"))
+                    for source in sources:
                         relative = source.relative_to(root).as_posix()
                         if relative not in blobs:
                             continue
@@ -948,6 +1003,52 @@ def junit_failures(root, source_commit="HEAD"):
     return rows[:32]
 
 
+# Fixed source-authored terminal errors only. These observations explain a
+# refusal, never qualify an MSI or disclose arbitrary exception text/paths.
+RPC_PACKAGE_ERRORS = {
+    "Input exceeds its bound": "RPC_MSI_INPUT_BOUND",
+    "Input changed during inspection": "RPC_MSI_INPUT_CHANGED",
+    "Expected an ordinary file": "RPC_MSI_NONORDINARY_FILE",
+    "Expected an ordinary directory": "RPC_MSI_NONORDINARY_DIRECTORY",
+    "Unsafe logical component": "RPC_MSI_UNSAFE_COMPONENT",
+    "Image has case-colliding paths": "RPC_MSI_IMAGE_CASE_COLLISION",
+    "Extraction File inventory differs from MSI table": "RPC_MSI_EXTRACTION_INVENTORY",
+    "MSI application path is outside INSTALLDIR or duplicated": "RPC_MSI_APPLICATION_PATH",
+    "Decompiler Source escapes or differs from the owned extraction": "RPC_MSI_EXTRACTION_SOURCE",
+    "Full image differs from earlier pinned components": "RPC_MSI_PINNED_IMAGE_CHANGED",
+    "MSI and completed image application paths differ": "RPC_MSI_PAYLOAD_PATHS",
+    "MSI application payload differs from completed image": "RPC_MSI_PAYLOAD_BYTES",
+    "Application payload changed during full inspection": "RPC_MSI_PAYLOAD_CHANGED",
+    "MSI package metadata differs from fixed package name": "RPC_MSI_PACKAGE_METADATA",
+    "Original image package metadata conflicts with installer": "RPC_MSI_IMAGE_PACKAGE_METADATA",
+}
+
+
+def rpc_package_path_mismatch(value):
+    """Closed finite metadata only; name digests are observations, never a passing inventory."""
+    counts = ("imageFiles", "msiFiles", "missingFiles", "extraFiles")
+    lists = ("missingNameSha256", "extraNameSha256")
+    if (type(value) is not dict or set(value) != {*counts, *lists, "caseFoldEqual"} or
+            any(type(value[key]) is not int or not 0 <= value[key] <= 50_000 for key in counts) or
+            type(value["caseFoldEqual"]) is not bool):
+        return None
+    image, msi, missing, extra = (value[key] for key in counts)
+    if (not image or not msi or not missing + extra or missing > image or extra > msi or
+            image - missing != msi - extra or
+            value["caseFoldEqual"] and (image != msi or missing != extra)):
+        return None
+    for key, count in zip(lists, (missing, extra)):
+        items = value[key]
+        if (type(items) is not list or len(items) != min(count, 16) or
+                any(type(item) is not str or re.fullmatch(r"[0-9a-f]{64}", item) is None for item in items) or
+                items != sorted(set(items))):
+            return None
+    if set(value[lists[0]]) & set(value[lists[1]]):
+        return None
+    return {**{key: value[key] for key in (*counts, "caseFoldEqual")},
+            **{key: list(value[key]) for key in lists}}
+
+
 def failure_diagnostics(root, command_directory, source_commit="HEAD", *, include_reports=True):
     """Public error identifiers only; logs/payloads/paths remain encrypted.
 
@@ -955,6 +1056,8 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     the already bounded closed captures; never copy arbitrary error messages.
     """
     categories, tasks, publication_lines, platform_lines = set(), set(), [], []
+    rpc_package_lines = []
+    rpc_path_observations = []
     dependency_exits, duplicate_dependency_steps = {}, set()
     generator_phases, duplicate_generator_phases = {}, set()
     phase_observations, duplicate_phases = {}, set()
@@ -1010,6 +1113,25 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                 # The captures themselves are bounded; cap each parsed line too.
                 if len(line) > 4096:
                     continue
+                if re.fullmatch(rb"RPC_WINDOWS_PACKAGE_REFUSAL_RECORD_FAILED\r?\n?", line):
+                    categories.add("RPC_MSI_REFUSAL_RECORD_FAILED")
+                package_error = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_FAILURE ([A-Z_]{1,64})\r?\n?", line)
+                if package_error and package_error[1].decode("ascii") in RPC_PACKAGE_ERRORS.values():
+                    categories.add(package_error[1].decode("ascii"))
+                location = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_CHECK_LINES ([1-9][0-9]{0,4}(?:,[1-9][0-9]{0,4}){0,15})\r?\n?", line)
+                if location and not rpc_package_lines:
+                    rpc_package_lines = [int(value) for value in location[1].split(b",")]
+                path_marker = re.fullmatch(rb"RPC_WINDOWS_PACKAGE_PATHS ([ -~]{1,3500})\r?\n?", line)
+                if path_marker:
+                    try:
+                        decoded = json.loads(path_marker[1])
+                        observation = rpc_package_path_mismatch(decoded)
+                        if (observation is not None and json.dumps(decoded, sort_keys=True,
+                                separators=(",", ":")).encode("ascii") == path_marker[1]):
+                            if len(rpc_path_observations) < 2:
+                                rpc_path_observations.append(observation)
+                    except (ValueError, TypeError, UnicodeError):
+                        pass
                 consumer_keys = ("index", "listeners", "added", "resolved", "other_added", "other_resolved",
                                  "remote_srv", "remote_txt", "peers", "sees_other")
                 consumer = re.fullmatch(rb"CONSUMER_DISCOVERY_SNAPSHOT " + b" ".join(
@@ -1126,6 +1248,10 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                     if len(pieces) == 3 and pieces[1] in modules and pieces[2] in task_names:
                         tasks.add(task)
     inventory_fields = {"centralInventory": inventory_observations[0]} if len(inventory_observations) == 1 else {}
+    if rpc_package_lines:
+        inventory_fields["rpcWindowsPackageCheckLines"] = rpc_package_lines
+    if len(rpc_path_observations) == 1:
+        inventory_fields["rpcWindowsPackagePathMismatch"] = rpc_path_observations[0]
     if consumer_snapshots:
         inventory_fields["consumerDiscoverySnapshots"] = [consumer_snapshots[key] for key in sorted(consumer_snapshots)
                                                          if key not in duplicate_consumers]

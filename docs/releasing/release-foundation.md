@@ -14,7 +14,7 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current development source is **`0.8.0-SNAPSHOT`** after the published
+The current candidate source is **`0.8.0-rc3`** (not yet published), after the published
 **`0.8.0-rc2`**. Combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466),
 release-admission [PR #467](https://github.com/p2pKit/P2pKit/pull/467), and the
 rc2 preflight/version repair [PR #468](https://github.com/p2pKit/P2pKit/pull/468)
@@ -41,7 +41,7 @@ The release record binds the original artifacts and public download hashes.
 Every future release still requires its own exact source/version and 14-lockfile
 graph checks, exact-head merge authorization, actual-main qualification, four
 application artifacts and separate tag/Maven/sample approvals. Neither rc1 nor
-rc2 artifacts qualify the later snapshot or a new release.
+rc2 artifacts qualify this new candidate or another release.
 
 ## Independent components
 
@@ -144,6 +144,15 @@ immediately preceding execution match exactly and the execution finished before
 the new attempt began. It never falls back merely because an artifact is absent.
 Collection uses the current run attempt; already frozen selections are revalidated
 without being silently reselected.
+
+For PR execution, GitHub's embedded run/PR association can retain an older base
+SHA after `main` advances. Qualification checks the actual tested merge's two
+ordered parents and exact PR head. If its first parent differs from that cached
+base, exact-commit API comparisons must prove recorded-base → actual-base →
+current-main ancestry. This does not replace the original job, artifact-digest,
+manifest source/workflow SHA, version and tree checks. PR evidence still cannot
+qualify a main release. A stale association is not rewritten or treated as proof
+that a different commit was tested.
 
 The plan reports reasonable external wall limits (30–180 minutes per component,
 plus 10 minutes for evidence/upload). No special CPU20, initializer120 or

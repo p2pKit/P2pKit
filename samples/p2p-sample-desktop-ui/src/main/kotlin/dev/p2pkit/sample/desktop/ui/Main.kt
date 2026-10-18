@@ -159,6 +159,17 @@ fun main(arguments: Array<String>) {
                 println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback.runPreviewAdapter())
                 return
             }
+            DesktopEntryAction.WindowsInstalledAdmission -> {
+                try {
+                    println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback.runInstalledAdmission())
+                } catch (_: Throwable) {
+                    // A sealed native attempt retains its original owners until process exit. This
+                    // bounded failure is not a before-effects/refused-provider classification.
+                    System.err.println("WINDOWS_INSTALLED_ADMISSION_REFUSED_OR_FAILED_NOT_QUALIFIED")
+                    kotlin.system.exitProcess(1)
+                }
+                return
+            }
             DesktopEntryAction.UserInterface -> Unit
         }
     } catch (_: Exception) {

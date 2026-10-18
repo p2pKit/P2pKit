@@ -2,9 +2,12 @@ package dev.p2pkit.sample.rpc.desktop
 
 import com.sun.nio.file.ExtendedOpenOption
 import dev.p2pkit.sample.rpc.RpcPhoneBuildStamp
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.nio.file.OpenOption
 
-/** Fixed runtime linkage diagnostic; no UI, files, network, profile, or P2pKit native library is opened. */
+/** Fixed runtime diagnostics plus a separately explicit installed native-admission diagnostic. */
 public object RpcDesktopWindowsRuntimeReadback {
     /** Existing launcher diagnostic only. Never discover a classpath/ambient adapter or authorize a DLL. */
     public fun runPreviewAdapter(): String {
@@ -23,6 +26,52 @@ public object RpcDesktopWindowsRuntimeReadback {
             "Unexpected adapter diagnostic"
         }
         return "{\"source\":\"${RpcPhoneBuildStamp.SOURCE_COMMIT}\",\"adapter\":$result}"
+    }
+
+    /** Explicit native diagnostic only; ordinary readback and public provider availability are unchanged. */
+    public fun runInstalledAdmission(): String {
+        var phase = InstalledAdmissionPhase.RUNTIME_PRECHECK
+        var failureReader: Method? = null
+        try {
+            run() // All original source/host/runtime checks remain, before installed acquisition.
+            phase = InstalledAdmissionPhase.MODULE_LOOKUP
+            val boot = ModuleLayer.boot()
+            val module = boot.findModule("dev.p2pkit.rpc.windows.loader").orElseThrow {
+                IllegalStateException("The isolated JDK21 adapter was not resolved")
+            }
+            phase = InstalledAdmissionPhase.MODULE_OWNER
+            val system = ClassLoader.getSystemClassLoader()
+            check(system != null && module.isNamed && module.layer === boot && !module.descriptor.isAutomatic &&
+                module.classLoader === system) { "Unexpected installed diagnostic module owner" }
+            phase = InstalledAdmissionPhase.PROBE_LOOKUP
+            val probe = checkNotNull(Class.forName(module, "dev.p2pkit.rpc.windows.loader.Probe"))
+            phase = InstalledAdmissionPhase.PROBE_OWNER
+            check(probe.module === module && probe.classLoader === system && Modifier.isPublic(probe.modifiers) &&
+                Modifier.isFinal(probe.modifiers) && !probe.isInterface) { "Unexpected installed diagnostic class" }
+            phase = InstalledAdmissionPhase.ENTRY_LOOKUP
+            val method = probe.getDeclaredMethod("installedAdmissionReadback")
+            val reader = probe.getDeclaredMethod("installedAdmissionFailureStage", Throwable::class.java)
+            phase = InstalledAdmissionPhase.ENTRY_OWNER
+            for (entry in listOf(method, reader)) {
+                check(entry.declaringClass === probe && entry.returnType === String::class.java &&
+                    Modifier.isPublic(entry.modifiers) && Modifier.isStatic(entry.modifiers) &&
+                    !entry.isBridge && !entry.isSynthetic) { "Unexpected installed diagnostic entry" }
+            }
+            failureReader = reader // Only the exact admitted module/class owns this read-only method.
+            phase = InstalledAdmissionPhase.NATIVE_ADMISSION
+            val result = try {
+                method.invoke(null)
+            } catch (failure: InvocationTargetException) {
+                throw failure.targetException // Original carrier/owners, never a retryable wrapper.
+            }
+            phase = InstalledAdmissionPhase.RESULT_VALIDATION
+            return checkedInstalledAdmissionReadback(RpcPhoneBuildStamp.SOURCE_COMMIT, result)
+        } catch (original: Throwable) {
+            val operation = if (phase == InstalledAdmissionPhase.NATIVE_ADMISSION) {
+                try { failureReader?.invoke(null, original) } catch (_: Throwable) { null }
+            } else null
+            reportInstalledAdmissionFailure(phase, operation, original) { System.err.println(it) }
+        }
     }
 
     public fun run(): String = checkedWindowsRuntimeReadback(
@@ -102,4 +151,62 @@ internal fun checkedWindowsRuntimeReadback(
         "\"javaVersion\":\"${actual.javaVersion}\",\"module\":\"jdk.unsupported\"," +
         "\"options\":[\"NOSHARE_READ\",\"NOSHARE_WRITE\",\"NOSHARE_DELETE\"]," +
         "\"nativeLoad\":\"NOT_PERFORMED\",\"profileAccess\":\"NOT_PERFORMED\"}"
+}
+
+/** Bounded result formatting only: supplied text is never installation or native-call authority. */
+internal fun checkedInstalledAdmissionReadback(source: String, result: Any?): String {
+    check(source.matches(Regex("[a-f0-9]{40}"))) { "Clean source identity is required" }
+    val expected = "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
+        "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
+        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}"
+    check(result is String && result == expected) { "Unexpected installed admission diagnostic result" }
+    return "{\"source\":\"$source\",\"admission\":$result}"
+}
+
+/** Diagnostic vocabulary only, never admission permission or private exception classification. */
+internal enum class InstalledAdmissionPhase {
+    RUNTIME_PRECHECK, MODULE_LOOKUP, MODULE_OWNER, PROBE_LOOKUP, PROBE_OWNER,
+    ENTRY_LOOKUP, ENTRY_OWNER, NATIVE_ADMISSION, RESULT_VALIDATION,
+}
+
+private val installedFailureOperations = setOf(
+    "NO_MATCHING_RETAINED_FAILURE", "UNKNOWN_RETAINED_OPERATION", "RESERVATION", "BOOTSTRAP",
+    "INSTALLATION", "PROFILE_PREPARATION", "JNI_REGISTRATION", "PUBLISH_REGISTERED",
+    "BOOTSTRAP_FRAME", "BOOTSTRAP_EXPORTS", "BOOTSTRAP_PROCESS", "BOOTSTRAP_SYSTEM_PATH",
+    "BOOTSTRAP_PROVIDER_PIN", "BOOTSTRAP_PROVIDER_PATH", "PROFILE_PRECONDITION",
+    "PROFILE_SYSTEM_MODULES",
+    "PROFILE_KNOWN_FOLDER",
+    "PROFILE_PARENT_PIN",
+    "PROFILE_JVM_IMAGE",
+    "PROFILE_JVM_FILE",
+    "PROFILE_JVM_SECURITY",
+    "PROFILE_JVM_ANCESTORS",
+    "PROFILE_FILE",
+    "PROFILE_SECURITY",
+    "PROFILE_ANCESTORS",
+    "PROFILE_BYTES",
+    "PROFILE_MANIFEST",
+    "PROFILE_PACKAGE",
+    "PROFILE_IMPORTS",
+    "PROFILE_PREPARE_LOAD",
+    "PROFILE_LOAD_IMAGE",
+    "PROFILE_VERIFY_IMAGE",
+    "PROFILE_REGISTER_JNI",
+)
+
+/** Secondary readback/output failures never replace the original retained failure. */
+internal fun reportInstalledAdmissionFailure(
+    phase: InstalledAdmissionPhase,
+    operation: Any?,
+    original: Throwable,
+    emit: (String) -> Unit,
+): Nothing {
+    try {
+        val bounded = if (phase == InstalledAdmissionPhase.NATIVE_ADMISSION && operation is String &&
+            operation.length <= 64 && operation in installedFailureOperations) operation else "DIAGNOSTIC_UNAVAILABLE"
+        emit("WINDOWS_INSTALLED_ADMISSION_FAILURE stage=${phase.name} operation=$bounded")
+    } catch (_: Throwable) {
+        // Reporting is best effort, but failure propagation and process exit remain mandatory.
+    }
+    throw original
 }

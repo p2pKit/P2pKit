@@ -3,7 +3,7 @@
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest completed release is
 [`0.8.0-rc2`](../releases/0.8.0-rc2.md); current development source is
-`0.8.0-SNAPSHOT`. Its publication evidence is not qualification of this snapshot.
+`0.8.0-rc3` (unpublished candidate). The rc2 evidence does not qualify rc3.
 
 Before selecting a version, review the unreleased behavior notes. The integrated
 audit's [#229 discovery-admission tightening](https://github.com/p2pKit/P2pKit/issues/229)

@@ -4,6 +4,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
@@ -21,6 +22,8 @@ public final class RegistrationInvocationTests {
     private static MemorySegment expectedVm;
     private static Throwable callbackFailure;
     private static int callbacks;
+    private static byte[] expectedFailureReport;
+    private static final LinkageError INVOCATION_FAILURE = new LinkageError("private inert registration return failure");
 
     public static void main(String[] arguments) throws Throwable {
         check(arguments.length == 1);
@@ -38,6 +41,19 @@ public final class RegistrationInvocationTests {
             invocation = WindowsJniRegistrationInvocation.prepare(ROOTS, entry, expectedVm, callerAddresses);
             MemorySegment entries = (MemorySegment) field("entries");
             MemorySegment output = (MemorySegment) field("output");
+            byte[] originalEntries = entries.toArray(ValueLayout.JAVA_BYTE);
+            expectedFailureReport = output.toArray(ValueLayout.JAVA_BYTE);
+            if (mode.equals("invocation-failure")) {
+                MethodHandle failed = MethodHandles.throwException(int.class, LinkageError.class)
+                    .bindTo(INVOCATION_FAILURE);
+                setField("call", MethodHandles.dropArguments(failed, 0,
+                    MemorySegment.class, MemorySegment.class, int.class, MemorySegment.class, int.class));
+            }
+            if (mode.equals("return-failure")) {
+                MethodHandle after = MethodHandles.lookup().findStatic(RegistrationInvocationTests.class,
+                    "afterNativeReturn", MethodType.methodType(int.class, int.class));
+                setField("call", MethodHandles.filterReturnValue((MethodHandle) field("call"), after));
+            }
             check(entries.byteSize() == 184 && output.byteSize() == 32);
             check(((MemorySegment) field("input")).isReadOnly());
             expect(IllegalStateException.class, invocation::invoke); // No process owner yet.
@@ -54,6 +70,8 @@ public final class RegistrationInvocationTests {
                 case "zero-report", "mismatched-result" ->
                     expectedFailure = WindowsJniRegistrationOwner.FailureKind.MalformedReport;
                 case "report-clear-failure" -> expectedFailure = WindowsJniRegistrationOwner.FailureKind.FrameRetirement;
+                case "invocation-failure", "return-failure" ->
+                    expectedFailure = WindowsJniRegistrationOwner.FailureKind.Invocation;
                 case "closed-entry" -> {
                     entryArena.close();
                     expectedFailure = WindowsJniRegistrationOwner.FailureKind.Invocation;
@@ -81,7 +99,31 @@ public final class RegistrationInvocationTests {
                     expect(WindowsJniRegistrationOwner.Failure.class,
                         () -> WindowsJniRegistrationOwner.registerOnce(ROOTS, registered));
                 check(failure.kind == expectedFailure && failure.retainedOwner.state() == WindowsJniRegistrationOwner.State.Failed);
-                if (mode.equals("report-clear-failure")) {
+                if (unknownReturn()) {
+                    check(failure.retainedOwner == WindowsJniRegistrationOwner.retainedProcessOwner() &&
+                        failure.retainedOwner.retention == ROOTS && failure.retainedOwner.ownsInvocation(invocation) &&
+                        failure.invocationFailure == INVOCATION_FAILURE && failure.reportFailure == null &&
+                        failure.retirementFailure == null && failure.controllerFailure == null &&
+                        failure.getCause() == null && failure.getSuppressed().length == 0);
+                    // Check the actual pre-existing frame before inspecting new guard fields: the prior
+                    // implementation must fail for premature retirement, not for missing test fields.
+                    check(entries.scope().isAlive() && output.scope().isAlive());
+                    check(java.util.Arrays.equals(originalEntries, entries.toArray(ValueLayout.JAVA_BYTE)) &&
+                        java.util.Arrays.equals(expectedFailureReport, output.toArray(ValueLayout.JAVA_BYTE)));
+                    check((boolean) field("nativeReturnUnconfirmed") && !(boolean) field("returned") &&
+                        !(boolean) field("retired") && (int) field("resultCode") == 0);
+                    wrongThreadRefusal();
+                    invocation.retireFrame();
+                    invocation.retireFrame();
+                    check(entries.scope().isAlive() && output.scope().isAlive() &&
+                        java.util.Arrays.equals(originalEntries, entries.toArray(ValueLayout.JAVA_BYTE)) &&
+                        java.util.Arrays.equals(expectedFailureReport, output.toArray(ValueLayout.JAVA_BYTE)));
+                    WindowsJniRegistrationInvocation other =
+                        WindowsJniRegistrationInvocation.prepare(ROOTS, entry, expectedVm, EXPECTED);
+                    expect(IllegalStateException.class, () -> WindowsJniRegistrationOwner.registerOnce(ROOTS, other));
+                    other.retireFrame();
+                    check(failure.retainedOwner == WindowsJniRegistrationOwner.retainedProcessOwner());
+                } else if (mode.equals("report-clear-failure")) {
                     WindowsJniRegistrationInvocation.RetirementFailure retirement =
                         (WindowsJniRegistrationInvocation.RetirementFailure) failure.retirementFailure;
                     check(retirement.retainedInvocation == invocation && retirement.entriesClearFailure == null &&
@@ -90,9 +132,16 @@ public final class RegistrationInvocationTests {
                 }
             }
             if (callbackFailure != null) throw new AssertionError("Inert upcall contract failed", callbackFailure);
-            int expectedCalls = mode.startsWith("closed-") || mode.equals("other-invocation") ? 0 : 1;
+            int expectedCalls = mode.startsWith("closed-") || mode.equals("other-invocation") ||
+                mode.equals("invocation-failure") ? 0 : 1;
             check(callbacks == expectedCalls);
-            check(!entries.scope().isAlive() && !output.scope().isAlive());
+            check(entries.scope().isAlive() == unknownReturn() && output.scope().isAlive() == unknownReturn());
+            check((boolean) field("nativeReturnUnconfirmed") == unknownReturn());
+            if (!unknownReturn()) {
+                check((boolean) field("returned") == (expectedCalls == 1));
+                int result = mode.equals("mismatched-result") ? 9 : mode.equals("refusal") ? 3 : 0;
+                check((int) field("resultCode") == result);
+            }
             check(!mode.equals("closed-entry") || !entry.scope().isAlive());
             if (!mode.equals("closed-entry")) check(entry.scope().isAlive());
             if (!mode.equals("closed-vm")) check(expectedVm.scope().isAlive());
@@ -101,12 +150,25 @@ public final class RegistrationInvocationTests {
             check(callbacks == expectedCalls);
             if (!mode.equals("report-clear-failure")) invocation.retireFrame();
         } finally {
-            // Only inert test scopes are retired, after no callback can still execute. No JNI was registered.
+            // Only inert original scopes retire after every callback has returned. The unknown-return
+            // private frames remain quarantined until process exit. No actual JNI was registered.
             if (entryArena.scope().isAlive()) entryArena.close();
             if (vmArena.scope().isAlive()) vmArena.close();
         }
         System.out.println("WINDOWS_JNI_FFM_INVOCATION_PASS case=" + mode +
             " scope=JDK_UPCALL_MARSHALING_NOT_WINDOWS_JNI_OR_AUTHORITY");
+    }
+
+    private static boolean unknownReturn() {
+        return mode.equals("invocation-failure") || mode.equals("return-failure");
+    }
+
+    private static int afterNativeReturn(int result) throws ReflectiveOperationException {
+        check(result == 0 && callbacks == 1);
+        // This filter runs after the actual inert downcall returned. Its report is copied before
+        // throwing so a first-finally clear, not only repeated retirement, is detected.
+        expectedFailureReport = ((MemorySegment) field("output")).toArray(ValueLayout.JAVA_BYTE);
+        throw INVOCATION_FAILURE;
     }
 
     private static MemorySegment stub(Arena arena) throws ReflectiveOperationException {
@@ -203,6 +265,12 @@ public final class RegistrationInvocationTests {
         Field field = WindowsJniRegistrationInvocation.class.getDeclaredField(name);
         field.setAccessible(true);
         return field.get(invocation);
+    }
+
+    private static void setField(String name, Object value) throws ReflectiveOperationException {
+        Field field = WindowsJniRegistrationInvocation.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(invocation, value);
     }
 
     private interface Action { void run() throws Throwable; }

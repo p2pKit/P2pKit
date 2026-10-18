@@ -5,10 +5,13 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -19,6 +22,55 @@ SPEC.loader.exec_module(CHECK)
 
 
 class StaticMsiPayloadTest(unittest.TestCase):
+    def test_path_mismatch_records_original_sets_without_raw_names_or_acceptance(self):
+        (self.image / "app/PRIVATE-not-packaged.bin").write_bytes(b"PRIVATE_BYTES")
+        (self.image / "runtime/release").unlink()
+        with self.assertRaises(CHECK.PayloadPathMismatch) as raised:
+            self.inspect()
+        error = raised.exception
+        self.assertEqual(str(error), "MSI and completed image application paths differ")
+        self.assertEqual(error.diagnostic, {
+            "imageFiles": 9, "msiFiles": 9, "missingFiles": 1, "extraFiles": 1,
+            "caseFoldEqual": False,
+            "missingNameSha256": [CHECK.digest(b"app/PRIVATE-not-packaged.bin")],
+            "extraNameSha256": [CHECK.digest(b"runtime/release")],
+        })
+        self.assertEqual(len(error.compared_files), 3)
+        self.assertEqual({item["target"] for item in error.compared_files},
+                         {"app/" + self.jar.name, "app/resources/rpc-profile/windows-x64/" + CHECK.DLL,
+                          "app/resources/rpc-profile/windows-x64/component.manifest"})
+        self.assertNotIn("PRIVATE", json.dumps(error.diagnostic))
+        self.assertNotIn(str(self.root), json.dumps(error.diagnostic))
+
+    def test_case_only_mismatch_is_diagnostic_not_an_exemption(self):
+        node = next(node for node in self.xml.iter(CHECK.NS + "File") if node.get("Id") == "runtimeRelease")
+        node.set("Name", "RELEASE")
+        self.save_xml()
+        with self.assertRaises(CHECK.PayloadPathMismatch) as raised:
+            self.inspect()
+        observed = raised.exception.diagnostic
+        self.assertTrue(observed["caseFoldEqual"])
+        self.assertEqual(observed["missingFiles"], 1)
+        self.assertEqual(observed["extraFiles"], 1)
+        self.assertEqual(observed["missingNameSha256"], [CHECK.digest(b"runtime/release")])
+        self.assertEqual(observed["extraNameSha256"], [CHECK.digest(b"runtime/RELEASE")])
+
+    def test_path_mismatch_hash_lists_are_bounded_deterministic_and_counts_complete(self):
+        image = {"app/PRIVATE-image-%d" % i: {} for i in range(35)}
+        payload = {"app/PRIVATE-msi-%d" % i: {} for i in range(23)}
+        with mock.patch.object(CHECK, "image_inventory", return_value=image), \
+                mock.patch.object(CHECK, "extracted_inventory", return_value={**payload,
+                    CHECK.INSTALLER_METADATA: {"bytes": 13, "sha256": CHECK.digest(b"P2pKit Sample")}}), \
+                self.assertRaises(CHECK.PayloadPathMismatch) as raised:
+            CHECK.full_payload([], self.extracted, self.image, [])
+        value = raised.exception.diagnostic
+        self.assertEqual((value["imageFiles"], value["msiFiles"], value["missingFiles"], value["extraFiles"]),
+                         (35, 23, 35, 23))
+        self.assertEqual(value["missingNameSha256"], sorted(CHECK.digest(s.encode()) for s in image)[:16])
+        self.assertEqual(value["extraNameSha256"], sorted(CHECK.digest(s.encode()) for s in payload)[:16])
+        self.assertLess(len("RPC_WINDOWS_PACKAGE_PATHS " + json.dumps(value, sort_keys=True, separators=(",", ":"))), 3500)
+        self.assertNotIn("PRIVATE", json.dumps(value))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -53,9 +105,15 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.save_receipt()
         self.xml = ET.Element(CHECK.NS + "Wix")
         self.product = ET.SubElement(self.xml, CHECK.NS + "Product")
+        # Exact scope representation observed in the ccb18938 hosted dark output:
+        # x64 Package and ALLUSERS=1; no authored InstallScope attribute survives.
+        ET.SubElement(self.product, CHECK.NS + "Package", Platform="x64", Compressed="yes",
+                      InstallerVersion="200", Languages="1033")
+        ET.SubElement(self.product, CHECK.NS + "Property", Id="ALLUSERS", Value="1")
         base = ET.SubElement(self.product, CHECK.NS + "Directory", Id="TARGETDIR", Name="SourceDir")
         base = ET.SubElement(base, CHECK.NS + "Directory", Id="ProgramFiles64Folder")
         install = ET.SubElement(base, CHECK.NS + "Directory", Id="INSTALLDIR", Name="P2pKit Sample")
+        self.install = install
         self.app = ET.SubElement(install, CHECK.NS + "Directory", Id="appDir", Name="app")
         self.resources = ET.SubElement(self.app, CHECK.NS + "Directory", Id="resourceDir", Name="resources")
         profile = ET.SubElement(self.resources, CHECK.NS + "Directory", Id="profileDir", Name="rpc-profile")
@@ -63,6 +121,14 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.dll_node = self.add_file(self.arch, "nativeDll", self.dll)
         self.manifest_node = self.add_file(self.arch, "manifest", self.manifest)
         self.jar_node = self.add_file(self.app, "pinJar", self.jar)
+        # JDK21 creates this only in its MSI working copy, after copying the input image.
+        self.package_metadata = self.root / ".package"
+        self.package_metadata.write_bytes(b"P2pKit Sample")
+        self.package_node = self.add_file(self.app, "packageMarker", self.package_metadata)
+        for path, identifier in (("P2pKit Sample.exe", "launcher"), ("app/P2pKit Sample.cfg", "launcherCfg"),
+                                 ("runtime/release", "runtimeRelease"), ("runtime/lib/modules", "runtimeModules"),
+                                 ("runtime/bin/server/jvm.dll", "runtimeJvm"), ("runtime/bin/jli.dll", "runtimeJli")):
+            self.add_payload(path, identifier, ("synthetic-not-executable:" + identifier).encode())
         self.save_xml()
 
     def add_file(self, parent, identifier, original):
@@ -73,6 +139,21 @@ class StaticMsiPayloadTest(unittest.TestCase):
 
     def save_xml(self):
         self.wxs.write_bytes(ET.tostring(self.xml, encoding="utf-8", xml_declaration=True))
+
+    def add_payload(self, relative, identifier, data):
+        parts = relative.split("/")
+        parent = self.install
+        for part in parts[:-1]:
+            match = next((node for node in parent if node.tag == CHECK.NS + "Directory" and
+                          node.get("Name") == part), None)
+            if match is None:
+                match = ET.SubElement(parent, CHECK.NS + "Directory",
+                                      Id="payloadDir" + str(len(list(self.xml.iter()))), Name=part)
+            parent = match
+        file = self.image.joinpath(*parts)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(data)
+        return self.add_file(parent, identifier, file)
 
     def save_receipt(self):
         self.inspection.write_text(json.dumps(self.receipt), encoding="utf-8")
@@ -96,11 +177,326 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.assertEqual({"File/nativeDll", "File/manifest", "File/pinJar"},
                          {file["extractedMember"] for file in result["comparedFiles"]})
         self.assertEqual(CHECK.digest(self.wxs.read_bytes()), result["wxsSha256"])
-        for key in ("installation", "nativeExecution", "signing", "runtimeQualification",
-                    "fullApplicationPayloadEquality"):
+        for key in ("installation", "nativeExecution", "signing", "runtimeQualification"):
             self.assertEqual("NOT_PERFORMED", result[key])
+        self.assertEqual("PASS", result["fullApplicationPayloadEquality"])
         self.assertIn("CALLER_OWNED", result["extractionInvocation"])
         self.assertNotIn(str(self.root), json.dumps(result))
+
+    def test_full_payload_binds_every_application_file_and_empty_auxiliary_bytes(self):
+        self.add_payload("runtime/legal/empty-notice", "emptyNotice", b"")
+        self.save_xml()
+        result = self.inspect()
+        files = {str(path.relative_to(self.image)).replace("\\", "/"):
+                 {"bytes": len(path.read_bytes()), "sha256": CHECK.digest(path.read_bytes())}
+                 for path in self.image.rglob("*") if path.is_file()}
+        canonical = json.dumps(files, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        self.assertEqual({"scope": "STATIC_APPLICATION_FILES_NOT_INSTALLED_OR_STARTUP_AUTHORITY",
+                          "files": 10, "bytes": sum(value["bytes"] for value in files.values()),
+                          "inventorySha256": CHECK.digest(canonical), "excludedImageMetadata": [],
+                          "installerGeneratedMetadata": [{"target": "app/.package", "bytes": 13,
+                              "sha256": CHECK.digest(b"P2pKit Sample"), "presentInOriginalImage": False}]},
+                         result["applicationPayload"])
+        with self.assertRaisesRegex(ValueError, "bound"):
+            CHECK.file_hash(self.files / "emptyNotice", CHECK.MAX_MSI)
+        self.assertEqual(3, len(result["comparedFiles"]))
+
+    def test_installer_metadata_matches_exact_jdk_package_name_without_entering_app_inventory(self):
+        result = self.inspect()["applicationPayload"]
+        self.assertEqual(result["files"], 9)
+        self.assertFalse((self.image / "app/.package").exists())
+        self.assertEqual(result["installerGeneratedMetadata"], [{"target": "app/.package", "bytes": 13,
+            "sha256": CHECK.digest(b"P2pKit Sample"), "presentInOriginalImage": False}])
+
+    def test_installer_metadata_requires_exact_bytes_including_no_newline_or_bom(self):
+        marker = self.files / "packageMarker"
+        for data in (b"", b"Other Package", b"P2pKit Sample\n", b"P2pKit Sample\x00",
+                     b"\xef\xbb\xbfP2pKit Sample", b"p2pkit sample"):
+            marker.write_bytes(data)
+            with self.subTest(data=data), self.assertRaisesRegex(ValueError, "metadata differs"):
+                self.inspect()
+
+    def test_installer_metadata_is_required_at_only_exact_path(self):
+        # Relocating/case-changing the marker is not a license for arbitrary metadata.
+        for name in (".PACKAGE", ".package-other"):
+            self.package_node.set("Name", name)
+            self.save_xml()
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "metadata differs"):
+                self.inspect()
+        self.package_node.set("Name", ".package")
+        owner = next(node for node in self.app if self.package_node in node)
+        self.app.remove(owner)
+        self.install.append(owner)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "metadata differs"):
+            self.inspect()
+        self.install.remove(owner)
+        (self.files / "packageMarker").unlink()
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "metadata differs"):
+            self.inspect()
+
+    def test_installer_metadata_cannot_be_duplicated(self):
+        duplicate = self.add_file(self.app, "anotherPackageMarker", self.package_metadata)
+        duplicate.set("Name", ".PACKAGE")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            self.inspect()
+
+    def test_original_image_metadata_is_not_silently_overwritten_or_excluded(self):
+        marker = self.image / "app/.package"
+        marker.write_bytes(b"conflicting image data")
+        with self.assertRaisesRegex(ValueError, "image package metadata conflicts"):
+            self.inspect()
+        marker.write_bytes(b"P2pKit Sample")
+        result = self.inspect()["applicationPayload"]
+        self.assertEqual(result["files"], 10)
+        self.assertTrue(result["installerGeneratedMetadata"][0]["presentInOriginalImage"])
+
+    def test_installer_metadata_is_rechecked_with_complete_extraction(self):
+        original = CHECK.extracted_inventory
+        calls = 0
+        def mutate(*args):
+            nonlocal calls
+            result = original(*args)
+            calls += 1
+            if calls == 1:
+                (self.files / "packageMarker").write_bytes(b"changed-after-inspection")
+            return result
+        with mock.patch.object(CHECK, "extracted_inventory", side_effect=mutate), \
+                self.assertRaisesRegex(ValueError, "changed during full inspection"):
+            self.inspect()
+        self.assertEqual(calls, 2)
+
+    def test_full_payload_detects_changed_launcher_configuration_and_runtime(self):
+        for identifier in ("launcher", "launcherCfg", "runtimeRelease", "runtimeModules", "runtimeJvm", "runtimeJli"):
+            path = self.files / identifier
+            original = path.read_bytes()
+            path.write_bytes(original + b"changed")
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(ValueError, "application payload differs"):
+                self.inspect()
+            path.write_bytes(original)
+
+    def test_full_payload_cannot_replace_earlier_pins_with_matching_interstage_mutations(self):
+        original = CHECK.full_payload
+        def mutate(*args):
+            self.dll.write_bytes(b"coordinated-interstage-change")
+            shutil.copyfile(self.dll, self.files / "nativeDll")
+            return original(*args)
+        with mock.patch.object(CHECK, "full_payload", side_effect=mutate), \
+                self.assertRaisesRegex(ValueError, "earlier pinned components"):
+            self.inspect()
+
+    def test_full_payload_rejects_missing_and_extra_application_paths(self):
+        extra = self.image / "app/unknown.bin"
+        extra.write_bytes(b"not-packaged")
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+        extra.unlink()
+        removed = self.image / "runtime/lib/modules"
+        original = removed.read_bytes()
+        removed.unlink()
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+        removed.write_bytes(original)
+        extra = self.root / "msi-only.bin"
+        extra.write_bytes(b"not-in-image")
+        self.add_file(self.app, "msiOnly", extra)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+
+    def test_full_payload_rejects_outside_install_directory_and_duplicate_case_paths(self):
+        node = next(node for node in self.xml.iter(CHECK.NS + "File") if node.get("Id") == "runtimeRelease")
+        owner = next(parent for parent in self.xml.iter() if node in parent)
+        directory = next(parent for parent in self.xml.iter() if owner in parent)
+        directory.remove(owner)
+        self.product.find(CHECK.NS + "Directory").append(owner)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "outside INSTALLDIR"):
+            self.inspect()
+        self.product.find(CHECK.NS + "Directory").remove(owner)
+        directory.append(owner)
+        duplicate = self.add_file(directory, "secondRelease", self.image / "runtime/release")
+        duplicate.set("Name", "RELEASE")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            self.inspect()
+
+    def test_full_payload_rejects_unreferenced_extraction_and_unsafe_general_source(self):
+        extra = self.files / "unreferenced"
+        extra.write_bytes(b"extra")
+        with self.assertRaisesRegex(ValueError, "File inventory differs"):
+            self.inspect()
+        extra.unlink()
+        node = next(node for node in self.xml.iter(CHECK.NS + "File") if node.get("Id") == "runtimeModules")
+        node.set("Source", str(self.files / ".." / "File" / "runtimeModules"))
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "Decompiler Source"):
+            self.inspect()
+
+    def test_full_payload_excludes_only_exact_jpackage_metadata_and_observes_its_bytes(self):
+        path = self.image / "app/.jpackage.xml"
+        path.write_bytes(b"synthetic-jpackage-build-metadata")
+        result = self.inspect()
+        self.assertEqual([{"target": "app/.jpackage.xml", "bytes": path.stat().st_size,
+                           "sha256": CHECK.digest(path.read_bytes())}], result["applicationPayload"]["excludedImageMetadata"])
+        self.assertEqual(9, result["applicationPayload"]["files"])
+        path.unlink()
+        wrong = self.image / "runtime/.jpackage.xml"
+        wrong.write_bytes(b"not-excluded")
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+        wrong.unlink()
+        self.add_payload("app/.jpackage.xml", "packagedMetadata", b"must-not-be-installed")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "application paths differ"):
+            self.inspect()
+
+    def test_full_payload_rejects_case_colliding_image_and_link_or_reparse_members(self):
+        # Pure filesystem observation models; no claim of real Windows reparse qualification.
+        original_iterdir, original_lstat = Path.iterdir, Path.lstat
+        runtime = self.image / "runtime"
+        def collision(path):
+            entries = list(original_iterdir(path))
+            return iter(entries + [runtime / "RELEASE"]) if path == runtime else iter(entries)
+        with mock.patch.object(Path, "iterdir", collision), self.assertRaisesRegex(ValueError, "case-colliding"):
+            self.inspect()
+        for target, mode, attributes in ((runtime / "release", stat.S_IFLNK, 0),
+                                         (runtime / "release", stat.S_IFREG, 0x400),
+                                         (runtime, stat.S_IFDIR, 0x400)):
+            def unsafe(path, *args, **kwargs):
+                return (SimpleNamespace(st_mode=mode, st_file_attributes=attributes) if path == target
+                        else original_lstat(path, *args, **kwargs))
+            with self.subTest(mode=mode, attributes=attributes), mock.patch.object(Path, "lstat", unsafe), \
+                    self.assertRaisesRegex(ValueError, "ordinary"):
+                self.inspect()
+
+    def test_full_payload_rechecks_complete_image_and_extraction_after_comparison(self):
+        for function, target in (("image_inventory", self.image / "runtime/lib/modules"),
+                                  ("extracted_inventory", self.files / "runtimeModules")):
+            original_function, original_bytes = getattr(CHECK, function), target.read_bytes()
+            calls = 0
+            def mutate(*args):
+                nonlocal calls
+                result = original_function(*args)
+                calls += 1
+                if calls == 1:
+                    target.write_bytes(original_bytes + b"changed-after-observation")
+                return result
+            with self.subTest(function=function), mock.patch.object(CHECK, function, side_effect=mutate), \
+                    self.assertRaisesRegex(ValueError, "changed during full inspection"):
+                self.inspect()
+            self.assertEqual(2, calls)
+            target.write_bytes(original_bytes)
+
+    def test_actual_dark_machine_default_is_observed_without_installed_authority(self):
+        self.assertNotIn("InstallScope", self.product.find(CHECK.NS + "Package").attrib)
+        result = self.inspect()
+        self.assertEqual({"scope": "STATIC_MSI_DEFAULTS_NOT_INSTALLED_AUTHORITY", "platform": "x64", "allUsers": "1",
+                          "directoryChain": [{"id": "TARGETDIR", "name": "SourceDir"},
+                                             {"id": "ProgramFiles64Folder", "name": None},
+                                             {"id": "INSTALLDIR", "name": "P2pKit Sample"}],
+                          "directoryChooser": "NOT_DECLARED", "administrativeOverrides": "NOT_PREVENTED"},
+                         result["installationDefaults"])
+        self.assertEqual("NOT_PERFORMED", result["installation"])
+        self.product.find(CHECK.NS + "Package").set("InstallScope", "perMachine")
+        self.save_xml()
+        self.assertEqual(result["installationDefaults"], self.inspect()["installationDefaults"])
+
+    def test_missing_duplicate_or_conflicting_package_scope_is_refused(self):
+        package = self.product.find(CHECK.NS + "Package")
+        self.product.remove(package)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "package"):
+            self.inspect()
+        self.product.append(package)
+        duplicate = ET.SubElement(self.product, CHECK.NS + "Package", Platform="x64")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "package"):
+            self.inspect()
+        self.product.remove(duplicate)
+        for name, value in (("Platform", "x86"), ("Platform", "arm64"), ("InstallScope", "perUser")):
+            original = dict(package.attrib)
+            package.set(name, value)
+            self.save_xml()
+            with self.subTest(name=name, value=value), self.assertRaisesRegex(ValueError, "package"):
+                self.inspect()
+            package.attrib.clear()
+            package.attrib.update(original)
+
+    def test_allusers_is_exact_and_per_user_or_duplicate_properties_refuse(self):
+        prop = self.product.find(CHECK.NS + "Property")
+        for value in ("", "0", "2", "[ALLUSERS]"):
+            prop.set("Value", value)
+            self.save_xml()
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "properties"):
+                self.inspect()
+        self.product.remove(prop)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "properties"):
+            self.inspect()
+        prop.set("Value", "1")
+        self.product.append(prop)
+        for identifier in ("ALLUSERS", "MSIINSTALLPERUSER"):
+            other = ET.SubElement(self.product, CHECK.NS + "Property", Id=identifier, Value="1")
+            self.save_xml()
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(ValueError, "properties"):
+                self.inspect()
+            self.product.remove(other)
+
+    def test_install_default_root_name_and_ancestry_are_exact(self):
+        directory = {node.get("Id"): node for node in self.xml.iter(CHECK.NS + "Directory")}
+        for identifier, attribute, value in (("ProgramFiles64Folder", "Id", "LocalAppDataFolder"),
+                                            ("ProgramFiles64Folder", "Id", "ProgramFilesFolder"),
+                                            ("ProgramFiles64Folder", "Name", "other-root"),
+                                            ("TARGETDIR", "Name", "other-root"),
+                                            ("INSTALLDIR", "Name", "Other Application")):
+            node = directory[identifier]
+            original = dict(node.attrib)
+            node.set(attribute, value)
+            self.save_xml()
+            with self.subTest(identifier=identifier, attribute=attribute), self.assertRaisesRegex(ValueError, "directory"):
+                self.inspect()
+            node.attrib.clear()
+            node.attrib.update(original)
+        base, install = directory["ProgramFiles64Folder"], directory["INSTALLDIR"]
+        base.remove(install)
+        extra = ET.SubElement(base, CHECK.NS + "Directory", Id="extraParent", Name="extra")
+        extra.append(install)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "directory"):
+            self.inspect()
+
+    def test_direct_install_directory_property_cannot_override_default(self):
+        for value in ("", "C:\\Other", "[LocalAppDataFolder]"):
+            node = ET.SubElement(self.product, CHECK.NS + "Property", Id="INSTALLDIR", Value=value)
+            self.save_xml()
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "overrides"):
+                self.inspect()
+            self.product.remove(node)
+
+    def test_directory_chooser_properties_dialogs_and_routing_are_refused(self):
+        cases = [("Property", {"Id": "WIXUI_INSTALLDIR", "Value": "INSTALLDIR"}),
+                 ("Dialog", {"Id": "InstallDirDlg"}), ("Dialog", {"Id": "BrowseDlg"}),
+                 ("DialogRef", {"Id": "InstallDirDlg"}),
+                 ("Publish", {"Dialog": "InstallDirDlg", "Event": "NewDialog", "Value": "VerifyReadyDlg"}),
+                 ("Publish", {"Dialog": "WelcomeDlg", "Event": "NewDialog", "Value": "BrowseDlg"}),
+                 ("Publish", {"Property": "INSTALLDIR", "Value": "[LocalAppDataFolder]"}),
+                 ("Publish", {"Event": "SetTargetPath", "Value": "[WIXUI_INSTALLDIR]"})]
+        for tag, attributes in cases:
+            node = ET.SubElement(self.product, CHECK.NS + tag, **attributes)
+            self.save_xml()
+            with self.subTest(tag=tag, attributes=attributes), self.assertRaisesRegex(ValueError, "chooser"):
+                self.inspect()
+            self.product.remove(node)
+
+    def test_generic_ui_and_arp_metadata_are_not_misclassified_as_directory_chooser(self):
+        ET.SubElement(self.product, CHECK.NS + "UIRef", Id="WixUI_InstallDir")
+        ET.SubElement(self.product, CHECK.NS + "CustomAction", Id="JpSetARPINSTALLLOCATION",
+                      Property="ARPINSTALLLOCATION", Value="[INSTALLDIR]")
+        self.save_xml()
+        self.assertEqual("PASS", self.inspect()["result"])
 
     def add_adapter(self):
         self.adapter = self.image / "app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar"

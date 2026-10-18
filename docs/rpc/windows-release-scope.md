@@ -1,6 +1,6 @@
 # Windows RPC prerelease decision and known limitations
 
-**Execution scheduling: deferred post-release by the owner. Qualification: not passed.**
+**Installed qualification: not passed. Diagnostic follow-up is authorized.**
 Track the disposable-machine setup, exact procedures, historical failures, owners and
 acceptance checklist in [Windows qualification issue #462](https://github.com/p2pKit/P2pKit/issues/462),
 assigned to the repository owner under **Post-0.8.0-rc1 Windows RPC qualification**.
@@ -23,7 +23,7 @@ carry the accepted testing risk into its existing candidate/approval records. A 
 enforced by that pipeline is not satisfied by changing its result to PASS or deleting it.
 No version, runtime, installer, availability flag or loading path changes in this record.
 
-## Current candidate preparation — 2026-10-16
+## Historical candidate preparation — 2026-10-16
 
 The owner authorized preparing **0.8.0-rc2** after rc1's Central preflight failure.
 This changes release metadata and the supported namespace-query preflight, not
@@ -34,6 +34,23 @@ The new exact candidate still needs its required checks, artifact freeze and
 separate merge/tag/signing/publication approvals. Windows sample RPC Host/Client
 remains technically unavailable, with the existing fail-closed paths preserved.
 
+## Diagnostic/development candidate — 2026-10-18
+
+The owner authorized preparing and qualifying **0.8.0-rc3**, with
+operational submissions delegated to the agent. Final source-bound checks and
+protected publication challenges still apply. This is not a claim of completed
+Windows protected-provider implementation or installed qualification.
+
+The actual installed diagnostic at `33d524e311c3a67b9447d4617d141e73b3d3ac5d`
+failed; its internal failure stage was not observable. The new diagnostic emits
+one bounded, closed-vocabulary stage/operation line and preserves the original
+failure and nonzero exit. A stage identifies the last entered operation, not a
+proven root cause, successful cleanup, or authorization to continue. See the
+[original Windows report](../maintenance/windows-supervisor-handoff-20261018/WINDOWS-SUPERVISOR-AND-INSTALLED-REPORT.md).
+The six successful supervision controls do not convert that installed failure
+into a pass. Standard-user installed admission, productive profile/JNI integration
+and W01–W11 remain unqualified; the follow-up must use the new exact release bytes.
+
 ## Experimental Windows status — implementation is not merely untested
 
 The shared JVM RPC library and the Windows sample's native protected-profile provider are
@@ -42,8 +59,11 @@ different components. The existing Windows Desktop application's other features 
 
 - `DesktopRpcProfile.open` / `openAttempt` select only `PosixProfileFiles` and refuse Windows.
 - `WindowsProfileAvailability` already has `IMPLEMENTED=false` and `QUALIFIED=false`.
-- The JDK21 adapter's `WindowsLoader.openInstalledProvider()` always refuses because trusted
-  bootstrap/loading is unimplemented. Its existing optional packaging defaults off.
+- The JDK21 adapter's public `WindowsLoader.openInstalledProvider()` still refuses.
+  A private original-owner bootstrap/load/JNI controller and explicit installed
+  diagnostic now exist, but their development-fixture results do not qualify the
+  installed path or connect the productive public provider. Optional local adapter
+  packaging defaults off; the canonical Windows packaging component explicitly includes it.
 - The real JNI custody bridge reports ABI **13 / 0x43**, while the managed full-provider
   admission requires **1 / 0x7f**. Reporting invented capabilities is not an implementation.
 
@@ -54,11 +74,11 @@ Do not advertise working Windows protected RPC, promise native execution, or rep
 storage/loading requirements with an insecure fallback. Published Java17 bytecode targets
 and the packaged JDK21 family remain unchanged.
 
-The minimum work to make this feature productive is an independently trusted installed
-root/runtime/first-OS-call boundary; original-handle ancestor/ACL/reparse verification;
-constrained loading with loaded-module/import/JNI lifetime ownership; a genuinely admitted
-full-provider adapter and production factory; and profile/UI ownership transfer into that
-provider. Foundation owns installer/runtime/bootstrap authority; RPC owns loader/provider
+The remaining work is to diagnose and qualify the actual installed root/runtime,
+first-OS-call and original-handle ancestor/ACL/reparse checks, then qualify constrained
+loading with loaded-module/import/JNI lifetime ownership. The implemented private chain
+must be connected to a genuinely admitted full-provider adapter and production factory,
+with safe profile/UI ownership transfer and original-owner reuse. Foundation owns installer/runtime/bootstrap authority; RPC owns loader/provider
 implementation. Composed native writes/deletes, synchronization and managed ownership
 already exist and must not be unnecessarily rebuilt. Flipping flags or loading a candidate
 DLL to authorize itself cannot fill the gap.

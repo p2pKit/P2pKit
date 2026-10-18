@@ -651,3 +651,85 @@ Inert regression images cover an actual address slot overlapping a referenced ex
 nonoverlapping tables, and declared IAT ranges enclosing other metadata. These checks do not resolve imports,
 execute Windows loader behavior, identify actual import providers or authorize a candidate DLL. They add no
 bootstrap authority and do not enable the partial native component or change its ABI/capabilities.
+
+## Dormant mapped-code and import comparisons
+
+`WindowsProfileMappedCode.prepare` privately snapshots and reparses the original DLL and requires its digest,
+file length and `SizeOfImage` to match the independently supplied byte authorization. Its complete inventory
+now includes original headers and every executable section, including file-alignment and executable-page
+padding. The supported mapping plan requires the maintained producer's 4KiB section alignment, and refuses
+other alignments and executable discardable sections rather than inventing their mapping/protection semantics.
+The structural-only PE reader remains unchanged in those respects.
+
+Headers preserve every original byte, including the preferred `ImageBase`, followed by zero padding to their
+page boundary. Executable regions preserve **all** original `SizeOfRawData` bytes (also when larger than
+`VirtualSize`), followed by zeros through the page-aligned maximum of those sizes. Only previously validated
+AMD64 `DIR64` writes are adjusted, using unsigned 64-bit addition. Expanding compared ranges does not authorize
+relocations into headers, raw padding, import metadata or the relocation program. No header rewriting,
+hotpatch tolerance, arbitrary masking or missing-header success is admitted.
+
+Each `Region.executable=false` is a header page requiring actual read-only, non-executable protection;
+code requires execute/read protection. The FFM reader now provides distinct `READ_ONLY` mode (exact
+`PAGE_READONLY`), in addition to unchanged executable and mutable-data policies. Do not substitute DATA
+for headers: it intentionally admits writable/copy-on-write data. These mechanics do not discover trusted
+OS entry points or activate a productive caller.
+
+Header/code requests now cover the exact complete inventory as 4KiB pages, each within any accepted Windows
+query region and below the 65,536-byte call bound. The original private layout bounds the inventory to 32,768
+pages / 128MiB. Every supplied page is copied once into its original section before comparison, preserving
+cross-page eight-byte `DIR64` semantics and rejecting missing, duplicated, misaddressed or wrong-sized pages.
+Correctly addressed observations may arrive in any order; swapping contents without addresses is rejected.
+
+Original file bytes do not establish Windows loader behavior or simultaneous/continued mapping stability.
+An unexpected actual mapped header/padding difference must fail closed, not silently create a normalization
+exception. Writable data, other metadata, native mapping identity and physical module ownership still require
+separate checks. All comparison inputs remain inert bounded readbacks, not native views. Real original-owner
+read acquisition and final productive loader/provider assembly remain dependent on bootstrap authority.
+
+`WindowsProfileImportAddresses` separately requires every original logical DLL/function pair and actual IAT
+slot exactly once. Each observed slot value must equal that import's independently resolved original export
+address, not merely an address inside some allowed library. Legitimate forwarding or linker folding may yield
+the same target for distinct names. The logical import name does not identify or authorize the physical
+forwarded provider; the productive loader must independently establish and retain its original identity.
+Its new `prepare(library, authorization)` full-IAT plan reparses a private snapshot and binds the digest,
+file size, image size and exact named-import list to that same byte authorization. It requests the entire
+declared IAT as 4KiB page-bounded ranges, snapshots every range exactly once, and applies the original
+named-slot comparison. Every other byte must match the original IAT, including null terminators and leading,
+inter-table and trailing padding. Missing/duplicate/wrong-size ranges or changed metadata fail closed.
+No caller-owned array or original expected-byte buffer escapes. These page-sized requests simplify bounded
+observation; they do not establish atomic acquisition, continued IAT immutability or system-provider identity.
+
+Neither helper performs Windows calls, establishes first-load authority, opens a profile, publishes a provider,
+or changes ABI13/`0x43`, availability, the MSI or application selector. Their tests prove bounded byte/address
+algorithms only. Trusted bootstrap/installed-root authority, productive constrained loading, actual mapping and
+provider observations, full-provider activation, and real Windows qualification remain distinct requirements.
+
+### Conditional system bootstrap implementation
+
+The isolated JDK21 module now contains a dormant, zero-argument
+[`WindowsSystemBootstrapCandidate`](../../samples/p2p-sample-rpc/native/windows-loader-jdk21/README.md#conditional-first-system-call-candidate-not-production-authority).
+It investigates constant-String kernel32 lookup through the already-running JDK,
+permanent physical-provider pins and bounded system-directory/module observations.
+This is materially different from the rejected environment-based default lookup
+or an arbitrary candidate DLL authorizing itself, but it is **not yet trusted
+production bootstrap**: Windows redirection/activation context precedes KnownDLL
+lookup. Foundation must bind the actual launcher/JDK startup authority before the
+first call, not endorse a nominal Java context or use later observations as proof
+of earlier safety. The package/runtime supplier pin remains Foundation-owned.
+
+RPC owns this candidate implementation and subsequent original-handle verification,
+constrained load, import-provider/one-VM/registrar and full session assembly. The
+existing session-transfer and composed JNI storage operations are not being
+reimplemented. Actual development-Windows system-call results, when executed,
+remain separate from installed authority and W01–W11. The productive factory,
+partial ABI13/0x43 and availability gates remain unchanged until the real contract
+is implemented and admitted; this is not merely a deferred-testing limitation.
+
+The next connected slice obtains an existing JVM module through that same dormant
+candidate, checks the fixed invocation export's physical provider, and uses the
+existing `WindowsJvmAcquisitionInvocation` to observe exactly one VM. Original
+module/export/VM ownership is retained rather than reconstructed from a supplied
+number. This is a real development-runtime call path, not JNI registration or
+proof of the independently expected installed runtime. Basename/path observations
+must not substitute for Foundation's runtime identity or resolve loaded-module
+ambiguity by assumption. Productive provider assembly and activation remain open.

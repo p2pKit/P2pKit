@@ -27,9 +27,79 @@ PUBLIC_FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_rpc_msi_path_mismatch_projection_accepts_only_original_bounded_metadata(self):
+        value = {"imageFiles": 50, "msiFiles": 45, "missingFiles": 35, "extraFiles": 30,
+                 "caseFoldEqual": False,
+                 "missingNameSha256": [format(i, "064x") for i in range(16)],
+                 "extraNameSha256": [format(i, "064x") for i in range(16, 32)]}
+        line = "RPC_WINDOWS_PACKAGE_PATHS " + json.dumps(value, sort_keys=True, separators=(",", ":")) + "\r\n"
+        self.assertLess(len(line), 4096)
+        for reports in (False, True):
+            (self.root / "stderr.log").write_bytes(line.encode())
+            result = E.failure_diagnostics(self.root, self.root, include_reports=reports)
+            self.assertEqual(result["rpcWindowsPackagePathMismatch"], value)
+            self.assertEqual(result["categories"], [])  # Observations cannot fabricate success/failure authority.
+        (self.root / "stderr.log").write_text(line + line)
+        self.assertNotIn("rpcWindowsPackagePathMismatch", E.failure_diagnostics(self.root, self.root))
+        (self.root / "stderr.log").write_text("RPC_WINDOWS_PACKAGE_REFUSAL_RECORD_FAILED\n" + line)
+        result = E.failure_diagnostics(self.root, self.root)
+        self.assertEqual(result["categories"], ["RPC_MSI_REFUSAL_RECORD_FAILED"])
+        self.assertEqual(result["rpcWindowsPackagePathMismatch"], value)
+
+    def test_rpc_msi_path_mismatch_projection_rejects_private_incoherent_or_duplicate_fields(self):
+        value = {"imageFiles": 2, "msiFiles": 2, "missingFiles": 1, "extraFiles": 1,
+                 "caseFoldEqual": False, "missingNameSha256": ["a" * 64], "extraNameSha256": ["b" * 64]}
+        mutations = (("PRIVATE", "PRIVATE_INPUT"), ("imageFiles", True), ("imageFiles", 50001),
+                     ("msiFiles", 3), ("missingFiles", -1), ("caseFoldEqual", 1),
+                     ("missingNameSha256", []), ("missingNameSha256", ["PRIVATE"]),
+                     ("extraNameSha256", ["a" * 64]), ("extraNameSha256", ["A" * 64]),
+                     ("missingNameSha256", ["a" * 64] * 17))
+        raws = [json.dumps({**value, key: other}, sort_keys=True, separators=(",", ":"))
+                for key, other in mutations]
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
+        raws.extend([canonical.replace('"imageFiles":2', '"imageFiles":1,"imageFiles":2'),
+                     " " + canonical, canonical + " PRIVATE", canonical + "x" * 4096])
+        for raw in raws:
+            with self.subTest(raw=raw[:100]):
+                (self.root / "stderr.log").write_text("RPC_WINDOWS_PACKAGE_PATHS " + raw + "\n")
+                result = E.failure_diagnostics(self.root, self.root, include_reports=False)
+                self.assertNotIn("rpcWindowsPackagePathMismatch", result)
+                self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_rpc_msi_diagnostics_parse_finite_producer_codes_and_locations(self):
+        for category in E.RPC_PACKAGE_ERRORS.values():
+            for include_reports in (False, True):
+                with self.subTest(category=category, reports=include_reports):
+                    (self.root / "stderr.log").write_bytes((
+                        "RPC_WINDOWS_PACKAGE_FAILURE " + category + "\r\n"
+                        "RPC_WINDOWS_PACKAGE_CHECK_LINES 389,257,39\r\n"
+                        "RPC_WINDOWS_PACKAGE_INSPECTION_REFUSED\r\n").encode())
+                    result = E.failure_diagnostics(self.root, self.root, include_reports=include_reports)
+                    self.assertEqual(result["categories"], [category])
+                    self.assertEqual(result["rpcWindowsPackageCheckLines"], [389, 257, 39])
+
+    def test_rpc_msi_diagnostics_reject_unknown_private_and_unbounded_fields(self):
+        rows = (
+            "RPC_WINDOWS_PACKAGE_FAILURE PRIVATE", "RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_BYTES PRIVATE",
+            " RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_BYTES", "RPC_WINDOWS_PACKAGE_FAILURE RPC_MSI_PAYLOAD_BYTES ",
+            "ValueError: MSI application payload differs from completed image", "raise ValueError('PRIVATE')",
+            '  File "PRIVATE/another.py", line 39, in main',
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES 39,0", "RPC_WINDOWS_PACKAGE_CHECK_LINES 100000",
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES -1", "RPC_WINDOWS_PACKAGE_CHECK_LINES 39 PRIVATE",
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES " + ",".join("39" for _ in range(17)),
+            "RPC_WINDOWS_PACKAGE_CHECK_LINES 39" + "x" * 4096,
+        )
+        for row in rows:
+            with self.subTest(row=row[:90]):
+                (self.root / "stderr.log").write_text(row + "\n")
+                result = E.failure_diagnostics(self.root, self.root, include_reports=False)
+                self.assertEqual(result["categories"], [])
+                self.assertNotIn("rpcWindowsPackageCheckLines", result)
+                self.assertNotIn("PRIVATE", json.dumps(result))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit-evidence-test-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -1051,6 +1121,60 @@ class EvidenceTests(unittest.TestCase):
         report.write_text('<testsuite><testcase classname="dev.p2pkit.ExampleTest" name="actualCase"/></testsuite>')
         self.assertEqual(E.junit_failures(self.root), [])
 
+    def test_junit_standard_jvm_test_sources_retain_source_binding_and_privacy(self):
+        relative_sources = (
+            "samples/p2p-sample-desktop/src/test/kotlin/dev/p2pkit/StandardTest.kt",
+            "library/p2p-network-provisioning-desktop/src/test/kotlin/dev/p2pkit/StandardTest.kt",
+        )
+        main_source = "samples/p2p-sample-desktop/src/main/kotlin/dev/p2pkit/StandardTest.kt"
+        content = "package dev.p2pkit\nclass StandardTest { fun actualCase() {} }\n"
+        for relative in (*relative_sources, main_source):
+            source = self.root / relative
+            source.parent.mkdir(parents=True)
+            source.write_text(content)
+        report = self.root / "samples/p2p-sample-desktop/build/test-results/test/TEST-standard.xml"
+        report.parent.mkdir(parents=True)
+        xml = ('<testsuite><testcase classname="dev.p2pkit.StandardTest" name="actualCase">'
+               '<failure type="kotlinx.coroutines.TimeoutCancellationException" message="PRIVATE_MESSAGE">'
+               'PRIVATE_STACK</failure></testcase></testsuite>')
+        report.write_text(xml)
+
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE)
+
+        git("init", "--quiet")
+        self.assertEqual(E.junit_failures(self.root), [])
+        git("add", *relative_sources, main_source)
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Standard JVM source-set fixture")
+        original = git("rev-parse", "HEAD").decode().strip()
+        expected = [{"source": relative, "test": "actualCase", "kinds": ["TIMEOUT"]}
+                    for relative in sorted(relative_sources)]
+        result = E.junit_failures(self.root, original)
+        self.assertEqual(sorted(result, key=lambda row: row["source"]), expected)
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        self.assertNotIn("src/main", json.dumps(result))
+        for before, after in (("actualCase", "private_case"), ("dev.p2pkit.StandardTest", "private.StandardTest"),
+                              ("StandardTest", "PrivateTest")):
+            with self.subTest(invalid=after):
+                report.write_text(xml.replace(before, after))
+                self.assertEqual(E.junit_failures(self.root, original), [])
+        untracked = self.root / relative_sources[0].replace("StandardTest", "UntrackedTest")
+        untracked.write_text(content.replace("StandardTest", "UntrackedTest"))
+        report.write_text(xml.replace("StandardTest", "UntrackedTest"))
+        self.assertEqual(E.junit_failures(self.root, original), [])
+        report.write_text(xml)
+        for relative in relative_sources:
+            (self.root / relative).write_text(content + "// modified source is not authority\n")
+        self.assertEqual(E.junit_failures(self.root, original), [])
+        for relative in relative_sources:
+            (self.root / relative).write_text(content)
+        self.assertEqual(sorted(E.junit_failures(self.root, original), key=lambda row: row["source"]), expected)
+        for relative in relative_sources:
+            (self.root / relative).unlink()
+        # A still-tracked, byte-exact src/main match is not a test-source fallback.
+        self.assertEqual(E.junit_failures(self.root, original), [])
+
     def test_jmdns_junit_details_are_finite_and_bound_to_original_fixture_source(self):
         source = self.root / "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt"
         fixture = self.root / "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java"
@@ -1098,6 +1222,142 @@ class EvidenceTests(unittest.TestCase):
                          ['jdk17_required'])
         fixture.unlink()
         self.assertNotIn('jmdnsFixture', E.junit_failures(self.root, original)[0])
+
+    def jmdns_startup_report(self):
+        import xml.etree.ElementTree as ET
+        paths = (
+            "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt",
+            "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java",
+        )
+        for relative in paths:
+            target = self.root / relative
+            target.parent.mkdir(parents=True)
+            target.write_bytes((SCRIPTS.parent / relative).read_bytes())
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE)
+        git("init", "--quiet")
+        git("add", *paths)
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "-m", "Original public JmDNS test sources")
+        original = git("rev-parse", "HEAD").decode().strip()
+        report = self.root / "library/p2p-transport-lan/build/test-results/jvmTest/TEST-close.xml"
+        report.parent.mkdir(parents=True)
+        def observe(text, *, message="", method="realResourceCloseRegressionsExitNaturally[jvm]", failed=True):
+            suite = ET.Element("testsuite")
+            case = ET.SubElement(suite, "testcase", classname="dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest",
+                                 name=method)
+            if failed:
+                ET.SubElement(case, "failure", type="java.lang.AssertionError", message=message).text = text
+            else:
+                ET.SubElement(case, "system-out").text = text
+            report.write_bytes(ET.tostring(suite))
+            return E.junit_failures(self.root, original)
+        return observe, paths
+
+    def test_jmdns_startup_markers_preserve_original_finite_observations(self):
+        observe, _paths = self.jmdns_startup_report()
+        markers = [
+            "startup firstSendFailureClass=java.net.NoRouteToHostException firstSendDestinationIpv4Mdns=true",
+            "startup interfaceSnapshot=BEFORE_WAIT selectedKnown=true hostKnown=true socketKnown=false "
+            "selectedHostMatch=true selectedSocketMatch=UNKNOWN hostSocketMatch=UNKNOWN",
+            "startup route observation=POST_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true "
+            "queryCompleted=false exitZero=UNKNOWN",
+            "startup route outputWithinBound=false",
+            "startup route processReaped=true",
+            "startup route queryFailureClass=java.io.IOException",
+            "startup route interfaceParsed=false selectedInterfaceMatch=UNKNOWN flagsParsed=true",
+            *("startup routeFlag=" + flag + " present=" + value for flag, value in (
+                ("UP", "true"), ("REJECT", "true"), ("BLACKHOLE", "false"),
+                ("GATEWAY", "false"), ("IFSCOPE", "true"))),
+            "startup explicitAddress=false linkLocal=true virtualInterface=false pointToPoint=true",
+        ]
+        for method in ("realResourceCloseRegressionsExitNaturally[jvm]",
+                       "failedSendsCannotMultiplyTheSdkCleanupBudget()"):
+            with self.subTest(method=method):
+                text = "host_not_announced\n" + "\r\n".join(markers) + "\r\n"
+                row = observe(text, message=text, method=method)[0]
+                self.assertEqual(row["kinds"], ["ASSERTION"])
+                details = row["jmdnsFixture"]
+                self.assertEqual(details["sourceDefinedCodes"], ["host_not_announced"])
+                self.assertEqual(details["exceptionClasses"],
+                                 ["java.io.IOException", "java.lang.AssertionError", "java.net.NoRouteToHostException"])
+                self.assertEqual(details["startupMarkers"], sorted(markers))  # Not duplicated by XML message.
+                self.assertEqual(set(details), {"sourceDefinedCodes", "exceptionClasses", "startupMarkers"})
+        for marker in (
+                "startup route queryStarted=false reason=FIRST_SEND_DESTINATION_NOT_MATCHED",
+                "startup route queryStarted=false reason=SELECTED_INTERFACE_UNKNOWN"):
+            self.assertEqual(observe(marker)[0]["jmdnsFixture"]["startupMarkers"], [marker])
+        for value in ("true", "false", "UNKNOWN"):
+            marker = "startup firstSendFailureClass=java.net.NoRouteToHostException firstSendDestinationIpv4Mdns=" + value
+            self.assertEqual(observe("", message=marker)[0]["jmdnsFixture"]["startupMarkers"], [marker])
+
+    def test_jmdns_startup_markers_refuse_dynamic_text_without_erasing_old_details(self):
+        observe, _paths = self.jmdns_startup_report()
+        safe = "startup route processReaped=true"
+        private = "PRIVATE_PAYLOAD_192.0.2.19"
+        invalid = [
+            private + safe, safe + private, " " + safe, safe + " ", "\t" + safe,
+            private + "\u0085" + safe, private + "\u2028" + safe,
+            safe + "\u0085" + private, safe + "\u2029" + private,
+            safe + " interface=en999", safe + " address=192.0.2.19", "startup route interface=en999",
+            "startup route processReaped=TRUE", "startup route processReaped=trueish",
+            "startup route processReaped=UNKNOWN", "startup routeFlag=PRIVATE present=true",
+            "startup routeFlag=UP present=true reason=" + private,
+            "startup route queryStarted=false reason=" + private,
+            "startup route observation=BEFORE_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true "
+            "queryCompleted=true exitZero=true",
+            "startup firstSendFailureClass=private.DynamicException firstSendDestinationIpv4Mdns=true",
+            "startup firstSendFailureClass=java.net.NoRouteToHostExceptionPrivate firstSendDestinationIpv4Mdns=true",
+            "startup diagnosticFailureClass=java.io.IOException",
+            "startup route processReaped=" + "t" * 513,
+            "startup primitive=PYTHON_IPV4 stage=SEND result=KERNEL_ACCEPTED",
+        ]
+        for line in invalid:
+            with self.subTest(line=line):
+                details = observe("host_not_announced\n" + line)[0]["jmdnsFixture"]
+                self.assertEqual(details["sourceDefinedCodes"], ["host_not_announced"])
+                self.assertNotIn("startupMarkers", details)
+                self.assertNotIn(private, json.dumps(details))
+                self.assertEqual(observe(line + "\n" + safe)[0]["jmdnsFixture"]["startupMarkers"], [safe])
+
+    def test_jmdns_startup_markers_refuse_oversize_and_conflicting_observations(self):
+        observe, _paths = self.jmdns_startup_report()
+        safe = "startup route processReaped=true"
+        for text in (
+                (safe + "\n") * 33,
+                "x" * (128 * 1024) + "\n" + safe,
+                safe + "\nstartup route processReaped=false",
+                "startup route queryStarted=false reason=SELECTED_INTERFACE_UNKNOWN\n"
+                "startup route observation=POST_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true "
+                "queryCompleted=true exitZero=true",
+                "startup routeFlag=REJECT present=false\nstartup routeFlag=REJECT present=true"):
+            with self.subTest(length=len(text)):
+                details = observe("host_not_announced\n" + text)[0]["jmdnsFixture"]
+                self.assertEqual(details["sourceDefinedCodes"], ["host_not_announced"])
+                self.assertEqual(details["exceptionClasses"], ["java.lang.AssertionError"])
+                self.assertNotIn("startupMarkers", details)
+        self.assertEqual(observe((safe + "\n") * 32)[0]["jmdnsFixture"]["startupMarkers"], [safe])
+        self.assertNotIn("startupMarkers", observe(safe, message="x" * (128 * 1024 + 1))[0]["jmdnsFixture"])
+        self.assertNotIn("startupMarkers", observe(safe, message=safe.replace("true", "false"))[0]["jmdnsFixture"])
+
+    def test_jmdns_startup_markers_require_original_source_and_actual_failed_case(self):
+        observe, paths = self.jmdns_startup_report()
+        marker = "startup route processReaped=true"
+        self.assertEqual(observe(marker, failed=False), [])
+        self.assertEqual(observe(marker, method="privateUntrackedMethod"), [])
+        self.assertEqual(observe("host_not_announced")[0]["jmdnsFixture"],
+                         {"sourceDefinedCodes": ["host_not_announced"], "exceptionClasses": ["java.lang.AssertionError"]})
+        source, fixture = (self.root / relative for relative in paths)
+        original = fixture.read_bytes()
+        fixture.write_bytes(original + b'\n// startup route processReaped=true\n')
+        self.assertNotIn("jmdnsFixture", observe(marker)[0])
+        fixture.write_bytes(original)
+        self.assertEqual(observe(marker)[0]["jmdnsFixture"]["startupMarkers"], [marker])
+        fixture.unlink()
+        self.assertNotIn("jmdnsFixture", observe(marker)[0])
+        fixture.write_bytes(original)
+        source.write_bytes(source.read_bytes() + b'\n// changed original source\n')
+        self.assertEqual(observe(marker), [])
 
     def test_junit_diagnostic_refuses_entities_malformed_and_linked_reports(self):
         directory = self.root / "library/p2p-core/build/test-results/jvmTest"
@@ -1662,7 +1922,7 @@ class EvidenceTests(unittest.TestCase):
         environment = {"GITHUB_REPOSITORY": "example/project", "GITHUB_SHA": identity["commit"],
             "GITHUB_WORKFLOW_REF": "example/project/.github/workflows/ci.yml@refs/heads/main",
             "GITHUB_WORKFLOW_SHA": identity["commit"], "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
-            "GITHUB_JOB": "test", "RUNNER_ENVIRONMENT": "github-hosted",
+            "GITHUB_JOB": "test", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_TEMP": str(self.root),
             "CI_EVIDENCE_RECIPIENT_SHA256": hashlib.sha256(key_raw).hexdigest(),
             "CI_EVIDENCE_RECIPIENT_FINGERPRINT": PUBLIC_FINGERPRINT}
         for exit_code in (0, 9):

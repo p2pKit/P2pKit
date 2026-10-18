@@ -25,6 +25,11 @@ RPC_CLASSES = (
     "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
     "dev/p2pkit/sample/rpc/desktop/DesktopRpcProfile.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileFiles.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Entry.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$CompleteAdapter.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileInstalledProvider$Unavailable$Companion.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfilePinnedImage.class",
 )
@@ -117,13 +122,48 @@ ADAPTER_JAR = "p2pkit-windows-loader-jdk21.jar"
 ADAPTER_PATH = "app/resources/rpc-loader-jdk21/" + ADAPTER_JAR
 ADAPTER_SCOPE = "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY"
 ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".class" for name in (
-    "Probe", "WindowsLoader", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
+    "Probe", "WindowsLoader", "WindowsLoader$Unavailable", "WindowsLoader$InstalledState",
+    "WindowsLoader$InstalledFailure", "WindowsLoader$InstalledAttempt", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
     "WindowsX64Frame$CloseFailure", "WindowsX64Frame$CleanupObservation", "WindowsX64Frame$1",
     "WindowsJniRegistrationOwner", "WindowsJniRegistrationOwner$Failure", "WindowsJniRegistrationOwner$FailureKind",
     "WindowsJniRegistrationOwner$Invocation", "WindowsJniRegistrationOwner$Report",
     "WindowsJniRegistrationOwner$Retention", "WindowsJniRegistrationOwner$State",
     "WindowsJniRegistrationInvocation", "WindowsJniRegistrationInvocation$AcquisitionFailure",
     "WindowsJniRegistrationInvocation$RetirementFailure",
+    "WindowsJvmAcquisitionInvocation", "WindowsJvmAcquisitionInvocation$Failure",
+    "WindowsJvmAcquisitionInvocation$Result",
+    "WindowsLibraryLoadInvocation", "WindowsLibraryLoadInvocation$Failure",
+    "WindowsLibraryLoadInvocation$Result",
+    "WindowsLoadedProfileImageVerification", "WindowsLoadedProfileImageVerification$Failure",
+    "WindowsExportLookupInvocation", "WindowsExportLookupInvocation$Failure",
+    "WindowsExportLookupInvocation$Result",
+    "WindowsImageReadInvocation", "WindowsImageReadInvocation$Failure",
+    "WindowsImageReadInvocation$Result", "WindowsImageReadInvocation$Kind",
+    "WindowsSystemBootstrapCandidate", "WindowsSystemBootstrapCandidate$Failure",
+    "WindowsOriginalInstallationCandidate", "WindowsOriginalInstallationCandidate$Failure",
+    "WindowsInstalledProfileCandidate", "WindowsInstalledProfileCandidate$Failure", "WindowsInstalledParentPin",
+    "WindowsOriginalProgramFilesCandidate", "WindowsOriginalProgramFilesCandidate$Failure",
+    "WindowsOriginalJvmCandidate", "WindowsOriginalJvmCandidate$Failure",
+    "WindowsOriginalJvmFileCandidate", "WindowsOriginalFileLease", "WindowsOriginalFileLease$Failure",
+    "WindowsOriginalProfileDllFileCandidate", "WindowsOriginalProfileDllFileCandidate$Failure",
+    "WindowsProfileDllPath",
+    "WindowsInstallationSecurity", "WindowsInstallationSecurity$Kind",
+    "WindowsOriginalJvmSecurityCandidate",
+    "WindowsOriginalFileSecurityQuery", "WindowsOriginalFileSecurityQuery$Failure",
+    "WindowsOriginalProfileDllSecurityCandidate", "WindowsOriginalProfileDllSecurityCandidate$Failure",
+    "WindowsOriginalJvmAncestorsCandidate",
+    "WindowsOriginalFileAncestorsLease", "WindowsOriginalFileAncestorsLease$Failure",
+    "WindowsOriginalProfileDllAncestorsCandidate", "WindowsOriginalProfileDllAncestorsCandidate$Failure",
+    "WindowsOriginalJvmBytesCandidate",
+    "WindowsOriginalFileBytesLease", "WindowsOriginalFileBytesLease$Failure",
+    "WindowsOriginalProfileDllBytesCandidate", "WindowsOriginalProfileDllBytesCandidate$Failure",
+    "WindowsOriginalSystemModulesCandidate", "WindowsOriginalSystemModulesCandidate$Failure",
+    "WindowsOriginalSystemModuleCandidate", "WindowsOriginalSystemModuleCandidate$Failure",
+    "WindowsSystemImportResolution", "WindowsSystemImportResolution$Failure",
+    "WindowsSystemExportPlan", "WindowsSystemExportPlan$Input", "WindowsSystemExportPlan$Target",
+    "WindowsSystemExportPlan$Forward", "WindowsSystemExportPlan$Span", "WindowsSystemExportPlan$Section",
+    "WindowsSystemExportPlan$Budget", "WindowsSystemExportPlan$Module",
+    "WindowsPackagedVerifier",
 ))))
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
@@ -253,9 +293,13 @@ def inspect_adapter(image, release):
         require(identity(os.fstat(stream.fileno())) == identity(before), "JAR changed before inspection")
         entries = archive.infolist()
         names = [entry.filename for entry in entries]
-        require(len(entries) <= 64 and len(set(names)) == len(names), "Duplicate or oversized adapter inventory")
         allowed_dirs = {"META-INF/", "dev/", "dev/p2pkit/", "dev/p2pkit/rpc/", "dev/p2pkit/rpc/windows/",
                         ADAPTER_PREFIX}
+        # Bound by the exact reviewed files plus optional named directory entries, not a stale
+        # independent class-count ceiling. Unknown files and duplicate names remain forbidden.
+        maximum_entries = len(ADAPTER_CLASSES) + 2 + len(allowed_dirs)
+        require(len(entries) <= maximum_entries and len(set(names)) == len(names),
+                "Duplicate or oversized adapter inventory")
         require(set(names) - allowed_dirs == ADAPTER_CLASSES | {"META-INF/MANIFEST.MF", "META-INF/LICENSE"},
                 "Missing, unexpected or test adapter entry")
         for entry in entries:

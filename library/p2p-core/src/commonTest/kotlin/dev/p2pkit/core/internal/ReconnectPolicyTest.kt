@@ -16,6 +16,8 @@ import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.StatefulTestFailure
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.testfixtures.withTestKit
+import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -77,6 +79,7 @@ class ReconnectPolicyTest {
         name: String,
         policy: ReconnectPolicy,
         recording: P2pLogger,
+        beforeConnect: (suspend () -> Unit)? = null,
         outgoingFactory: () -> RawConnection
     ): P2pKit = createTestKit {
         logger = recording
@@ -91,7 +94,14 @@ class ReconnectPolicyTest {
             reconnectPolicy = policy
         }
         transports {
-            register(ReconnectTestFactory(FakeDataTransport(outgoingConnection = outgoingFactory)))
+            val transport = FakeDataTransport(outgoingConnection = outgoingFactory)
+            val controlled = if (beforeConnect == null) transport else object : DataTransport by transport {
+                override suspend fun connect(peer: InternalPeer): RawConnection {
+                    beforeConnect()
+                    return transport.connect(peer)
+                }
+            }
+            register(ReconnectTestFactory(controlled))
         }
     }
 
@@ -315,6 +325,8 @@ class ReconnectPolicyTest {
             add(pair1.a); add(pair2.a)
         }
         val attempts = MutableStateFlow(0)
+        val retryConnectorEntered = CompletableDeferred<Unit>()
+        val releaseRetryConnector = CompletableDeferred<Unit>()
         val initialIncomingCommit = MutableStateFlow(false)
         val retryAtCommit = CompletableDeferred<Unit>()
         val releaseRetryCommit = CompletableDeferred<Unit>()
@@ -325,7 +337,13 @@ class ReconnectPolicyTest {
                 outgoingKit(
                     "Alice",
                     ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 20),
-                    recording = recorder
+                    recording = recorder,
+                    beforeConnect = {
+                        if (attempts.value == 1) {
+                            retryConnectorEntered.complete(Unit)
+                            releaseRetryConnector.await()
+                        }
+                    }
                 ) {
                     attempts.update { it + 1 }
                     queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
@@ -367,7 +385,16 @@ class ReconnectPolicyTest {
                         wireFailure
                     )
                     pair1.a.breakWithException(wireFailure)
-                    withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
+                    // Deliberately observe only after the retry connector has entered. StateFlow
+                    // can conflate a fast Reconnecting -> Connected transition; keep this fixture's
+                    // second connection withheld until the actual Reconnecting state is observed.
+                    withTimeout(5_000) {
+                        retryConnectorEntered.await()
+                        session.state.first { it == ConnectionState.Reconnecting }
+                    }
+                    assertEquals(1, attempts.value, "The second connection must still be withheld")
+                    assertEquals(ConnectionState.Reconnecting, session.state.value)
+                    releaseRetryConnector.complete(Unit)
 
                     val rearmed = withTimeout(5_000) {
                         session.state.first { it == ConnectionState.Connected }
@@ -398,6 +425,7 @@ class ReconnectPolicyTest {
                     }
                     assertEquals(ConnectionState.Connected, retriedBobSession.state.value)
                 } finally {
+                    releaseRetryConnector.complete(Unit)
                     releaseRetryCommit.complete(Unit)
                 }
             }
@@ -883,7 +911,7 @@ private class FirstWriteWithheldConnection(
     override suspend fun close() = delegate.close()
 }
 
-private class ReconnectTestFactory(private val transport: FakeDataTransport) : TransportFactory {
+private class ReconnectTestFactory(private val transport: DataTransport) : TransportFactory {
     override val descriptor =
         dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =

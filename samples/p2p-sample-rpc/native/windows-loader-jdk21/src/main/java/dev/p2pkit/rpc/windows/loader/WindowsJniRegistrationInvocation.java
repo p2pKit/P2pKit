@@ -67,6 +67,8 @@ final class WindowsJniRegistrationInvocation implements WindowsJniRegistrationOw
     private MethodHandle call;
     private boolean attempted;
     private boolean active;
+    private boolean nativeReturnUnconfirmed;
+    private int resultCode;
     private boolean returned;
     private boolean read;
     private boolean retired;
@@ -161,16 +163,18 @@ final class WindowsJniRegistrationInvocation implements WindowsJniRegistrationOw
         requireOriginalSegment(vm);
         active = true;
         try {
-            int result = (int) call.invokeExact(vm, input, ENTRY_COUNT, output, REPORT_BYTES);
+            nativeReturnUnconfirmed = true;
+            resultCode = (int) call.invokeExact(vm, input, ENTRY_COUNT, output, REPORT_BYTES);
             returned = true;
-            return result;
+            nativeReturnUnconfirmed = false;
+            return resultCode;
         } finally { active = false; }
     }
 
     @Override public WindowsJniRegistrationOwner.Report readReport() {
         requireThread();
         requireReservedOwner();
-        if (!returned || active || retired || read) {
+        if (!returned || nativeReturnUnconfirmed || active || retired || read) {
             throw new IllegalStateException("Windows JNI report is not a fresh completed invocation");
         }
         read = true;
@@ -184,6 +188,9 @@ final class WindowsJniRegistrationInvocation implements WindowsJniRegistrationOw
     @Override public void retireFrame() {
         requireThread();
         if (active) throw new IllegalStateException("Windows JNI invocation frame is in active native use");
+        // A thrown downcall has no observed return; Java unwinding cannot retire native arguments.
+        // Keep the complete frame and original failure owner, without clearing, closing or retrying.
+        if (nativeReturnUnconfirmed) return;
         if (retired) {
             if (retirementFailure.failed()) throw retirementFailure;
             return;

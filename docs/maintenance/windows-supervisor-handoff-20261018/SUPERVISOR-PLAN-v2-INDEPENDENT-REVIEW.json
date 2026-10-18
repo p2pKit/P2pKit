@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "reviewedAt": "2026-10-18T02:36:26.164024+00:00",
+  "planSha256": "863c8a85f50a1afc340557e2512e4de6791db5e3ec61aec16c3a2326945613ed",
+  "verdict": "APPROVE_MINIMAL_DESIGN_FOR_IMPLEMENTATION",
+  "approvedDesign": [
+    "Outside maintained PowerShell observer records QPC start/frequency before Python creation and observes actual final controller exit against that same fixed30s end.",
+    "Canonical outer WindowsScope atomically owns fixed E worker and nested installed launcher/jpackage descendants; existing E semantics retained but all allocations and final acceptance clipped to the shared end.",
+    "Independent outer watchdog stays armed through ordinary os._exit; fatal path uses original-self TerminateProcess, not borrowed Job handle. Outside process-death observation proves watchdog death; no false thread-join claim.",
+    "Separate helper/app source identities and retained account/startup/package preflight; no policy, application or provider activation change."
+  ],
+  "boundedImplementationChecks": [
+    "Keep sole outer Job handle noninheritable and alive until complete outer retirement; avoid close-versus-watchdog handle races.",
+    "Use same native QPC domain/frequency with strict typed finite range/overflow/future/expired checks; no renewed30s timer or appended cleanup budget.",
+    "Reject late exit0/receipt, overflow, unclosed captures and any uncertain cleanup; outer observer must retain original process handle and use remaining time, not PID relookup or an unbounded final ReadToEnd/wait.",
+    "Start watchdog before scope/knownfolder/worker preparation; avoid adding unowned git/helper subprocesses for provenance. Bound actual helper-file hashes with independently retained source metadata.",
+    "Trust assumption is ordinary CPython/GIL and OS progress, not a hard OS scheduling/termination guarantee. Failed hard stop cannot certify descendant cleanup.",
+    "Before installed use, source-bound inert Windows controls must exercise successful/nested-descendant ownership, blocked worker/call cutoff, failure/late observations and controller termination. No account87/1314 rerun or provider payload in these controls."
+  ],
+  "scope": "Architecture only; source implementation and actual Windows control results remain to be independently reviewed. No source edits/tests/native execution/API writes."
+}

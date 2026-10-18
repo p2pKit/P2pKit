@@ -119,6 +119,19 @@ def artifact_identity(item, run_id, source, branch, now=None):
     return {key: item[key] for key in ("id", "name", "size_in_bytes", "digest", "created_at", "expires_at")}
 
 
+def require_ancestor(api, older, newer):
+    """Bind an ancestry claim to exact server-side commits, never a mutable compare ref."""
+    need(type(older) is str and SHA.fullmatch(older) and
+         type(newer) is str and SHA.fullmatch(newer), "Invalid PR ancestry identity")
+    if older == newer:
+        return
+    comparison = api.json(f"/compare/{older}...{newer}")
+    need(comparison.get("status") == "ahead" and
+         comparison.get("base_commit", {}).get("sha") == older and
+         comparison.get("merge_base_commit", {}).get("sha") == older,
+         "PR merge base is not on the recorded protected-main history")
+
+
 def selected_job(api, source, run_id, attempt, name, *, require_main=False):
     integer(run_id); integer(attempt)
     current = api.json(f"/actions/runs/{run_id}")
@@ -149,8 +162,25 @@ def selected_job(api, source, run_id, attempt, name, *, require_main=False):
              integer(base.get("repo", {}).get("id")) == integer(run["repository"].get("id")),
              "PR original head/base/repository differs")
         merge = api.json("/git/commits/" + source)
-        need(merge.get("sha") == source and [row.get("sha") for row in merge.get("parents", [])] ==
-             [base["sha"], head["sha"]], "Selected source is not the original PR synthetic merge")
+        parents = merge.get("parents")
+        need(merge.get("sha") == source and type(parents) is list and len(parents) == 2 and
+             all(type(row) is dict and type(row.get("sha")) is str and SHA.fullmatch(row["sha"])
+                 for row in parents) and parents[1]["sha"] == head["sha"],
+             "Selected source is not the original PR synthetic merge")
+        actual_base = parents[0]["sha"]
+        if actual_base != base["sha"]:
+            # Actions' embedded PR association can retain the PR's original base
+            # after main advances. Authenticate the actual Git parents and both
+            # ancestry links instead of treating that cached association as a pin.
+            # Exact job/artifact/manifest source and workflow SHA checks below
+            # remain mandatory; ancestry alone is not execution evidence.
+            main = api.json("/git/ref/heads/main")
+            target = main.get("object", {})
+            need(main.get("ref") == "refs/heads/main" and target.get("type") == "commit" and
+                 type(target.get("sha")) is str and SHA.fullmatch(target["sha"]),
+                 "Invalid protected-main reference")
+            require_ancestor(api, base["sha"], actual_base)
+            require_ancestor(api, actual_base, target["sha"])
     else:
         need(run.get("head_sha") == source, "Component source SHA differs")
     jobs = api.pages(f"/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")

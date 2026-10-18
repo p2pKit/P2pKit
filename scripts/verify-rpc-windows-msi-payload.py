@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare three MSI components and an optional preview-adapter JAR statically. Never install, load, sign or run custom actions.
+"""Compare MSI application payloads and pinned components statically. Never install, load, sign or run custom actions.
 
 The caller owns the source-bound WiX dark invocation and its fresh extraction directory. This helper
 does not prove that arbitrary supplied XML came from an MSI, or grant authority to execute its payload.
@@ -27,6 +27,25 @@ ADAPTER_SCOPE = "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY"
 XML_LIMIT = 8 * 1024 * 1024
 MAX_ELEMENTS = 50_000
 MAX_MSI = 1024 * 1024 * 1024
+IMAGE_METADATA = "app/.jpackage.xml"
+INSTALLER_METADATA = "app/.package"
+PACKAGE_NAME_BYTES = b"P2pKit Sample"
+
+
+class PayloadPathMismatch(ValueError):
+    """A refusal with bounded observations of the original unequal sets, not path authority."""
+    def __init__(self, installed, payload, pinned):
+        super().__init__("MSI and completed image application paths differ")
+        missing, extra = set(installed) - set(payload), set(payload) - set(installed)
+        self.diagnostic = {
+            "imageFiles": len(installed), "msiFiles": len(payload),
+            "missingFiles": len(missing), "extraFiles": len(extra),
+            "caseFoldEqual": {name.casefold() for name in installed} == {name.casefold() for name in payload},
+            "missingNameSha256": sorted(digest(name.encode("utf-8")) for name in missing)[:16],
+            "extraNameSha256": sorted(digest(name.encode("utf-8")) for name in extra)[:16],
+        }
+        # Same already-completed fixed component observations as the passing receipt.
+        self.compared_files = [dict(item) for item in pinned]
 
 
 def require(condition, message):
@@ -56,9 +75,10 @@ def read(path, maximum):
     return data
 
 
-def file_hash(path, maximum, *, compose_suffix=False):
+def file_hash(path, maximum, *, compose_suffix=False, allow_empty=False):
     before = ordinary(path)
-    require(0 < before.st_size <= maximum, "Input exceeds its bound")
+    require((0 <= before.st_size if allow_empty else 0 < before.st_size) and before.st_size <= maximum,
+            "Input exceeds its bound")
     total = 0
     hasher = hashlib.sha256()
     # Compose 1.11.1 FileUtilsKt.contentHash uses MD5 only to mangle the filename. Never trust it
@@ -109,6 +129,45 @@ def beneath(root, parts):
     return current
 
 
+def installation_defaults(product, elements, parents):
+    """Validate the observed dark form, not installed ACLs or arbitrary MSI actions."""
+    packages = [node for node in elements if node.tag == NS + "Package"]
+    require(len(packages) == 1 and parents.get(packages[0]) is product and
+            packages[0].get("Platform") == "x64" and
+            packages[0].get("InstallScope") in (None, "perMachine"),
+            "MSI package must declare unambiguous x64 machine defaults")
+    properties = [node for node in elements if node.tag == NS + "Property"]
+    all_users = [node for node in properties if node.get("Id") == "ALLUSERS"]
+    require(len(all_users) == 1 and parents.get(all_users[0]) is product and
+            all_users[0].get("Value") == "1" and
+            not any(node.get("Id") in ("MSIINSTALLPERUSER", "WIXUI_INSTALLDIR") for node in properties),
+            "MSI machine default or chooser properties conflict")
+    require(not any(parents.get(node) is product and node.get("Id") == "INSTALLDIR" and
+                    node.get("Value") is not None for node in properties),
+            "MSI INSTALLDIR property overrides its directory default")
+    directories = {node.get("Id"): node for node in elements if node.tag == NS + "Directory"}
+    expected = (("INSTALLDIR", "P2pKit Sample"), ("ProgramFiles64Folder", None), ("TARGETDIR", "SourceDir"))
+    current = directories.get("INSTALLDIR")
+    for identifier, name in expected:
+        require(current is not None and current is directories.get(identifier) and
+                current.get("Name") == name, "MSI default installation directory differs")
+        current = parents.get(current)
+    require(current is product, "MSI default directory is outside the original Product")
+    chooser_dialogs = {"InstallDirDlg", "BrowseDlg"}
+    for node in elements:
+        require(not (node.tag in (NS + "Dialog", NS + "DialogRef") and node.get("Id") in chooser_dialogs),
+                "MSI declares an installation directory chooser")
+        if node.tag == NS + "Publish":
+            require(node.get("Dialog") not in chooser_dialogs and node.get("Value") not in chooser_dialogs and
+                    node.get("Property") not in ("INSTALLDIR", "WIXUI_INSTALLDIR") and
+                    not (node.get("Event") == "SetTargetPath" and node.get("Value") in
+                         ("INSTALLDIR", "WIXUI_INSTALLDIR", "[INSTALLDIR]", "[WIXUI_INSTALLDIR]")),
+                    "MSI routes an installation directory chooser")
+    return {"scope": "STATIC_MSI_DEFAULTS_NOT_INSTALLED_AUTHORITY", "platform": "x64", "allUsers": "1",
+            "directoryChain": [{"id": identifier, "name": name} for identifier, name in reversed(expected)],
+            "directoryChooser": "NOT_DECLARED", "administrativeOverrides": "NOT_PREVENTED"}
+
+
 def file_table(xml):
     text = xml.decode("utf-8-sig")
     require("<!DOCTYPE" not in text.upper() and "<!ENTITY" not in text.upper(),
@@ -150,7 +209,7 @@ def file_table(xml):
                                                owner.get("Id") == "INSTALLDIR") else None
         rows.append((name, identifier, node.get("Source", ""), logical))
     require("INSTALLDIR" in directories and rows, "Application Directory/File inventory is missing")
-    return rows
+    return rows, installation_defaults(root.find(NS + "Product"), elements, parents)
 
 
 def pin_content(jar):
@@ -164,6 +223,86 @@ def pin_content(jar):
             data = stream.read(4097)
         require(len(data) == entries[0].file_size, "Parent pin size mismatch")
         return data
+
+
+def image_inventory(image):
+    """Observe ordinary files, not handle custody or installed filesystem policy."""
+    ordinary(image, directory=True)
+    files, names, pending = {}, set(), [(image, ())]
+    while pending:
+        directory, parts = pending.pop()
+        ordinary(directory, directory=True)
+        for path in directory.iterdir():
+            relative = (*parts, component(path.name))
+            require(len(relative) <= 64 and len(names) < MAX_ELEMENTS, "Image inventory exceeds existing bounds")
+            name = "/".join(relative)
+            require(name.casefold() not in names, "Image has case-colliding paths")
+            names.add(name.casefold())
+            if stat.S_ISDIR(path.lstat().st_mode):
+                ordinary(path, directory=True)
+                pending.append((path, relative))
+            else:
+                files[name] = file_hash(beneath(image, relative), MAX_MSI, allow_empty=True)
+    return files
+
+
+def extracted_inventory(extracted, rows):
+    ordinary(extracted, directory=True)
+    folder = extracted / "File"
+    ordinary(folder, directory=True)
+    members = set()
+    for path in folder.iterdir():
+        require(len(members) < MAX_ELEMENTS, "Extraction inventory exceeds existing bound")
+        ordinary(path)
+        members.add(path.name)
+    require(members == {row[1] for row in rows}, "Extraction File inventory differs from MSI table")
+    result, folded = {}, set()
+    for _, identifier, source, target in rows:
+        require(target is not None and target.casefold() not in folded,
+                "MSI application path is outside INSTALLDIR or duplicated")
+        folded.add(target.casefold())
+        path = beneath(extracted, ["File", identifier])
+        declared = Path(source)
+        require(declared.is_absolute() and ".." not in declared.parts and declared == path,
+                "Decompiler Source escapes or differs from the owned extraction")
+        result[target] = file_hash(path, MAX_MSI, allow_empty=True)
+    return result
+
+
+def full_payload(rows, extracted, image, pinned):
+    before = image_inventory(image)
+    payload = extracted_inventory(extracted, rows)
+    # The fixed JDK21 WinMsiBundler.prepareProto copies the image, then
+    # PackageFile.save writes UTF-8 app/.package containing APP_NAME (no newline).
+    # Validate these installer-created bytes, rather than exempting an arbitrary file.
+    # Source: adoptium/jdk21u@1c417fbfc2f70ab03a565b0af0a5a3c6f5e15ad6,
+    # src/jdk.jpackage/{windows,share}/classes/jdk/jpackage/internal/.
+    metadata = {"bytes": len(PACKAGE_NAME_BYTES), "sha256": digest(PACKAGE_NAME_BYTES)}
+    require(payload.get(INSTALLER_METADATA) == metadata,
+            "MSI package metadata differs from fixed package name")
+    require(INSTALLER_METADATA not in before or before[INSTALLER_METADATA] == metadata,
+            "Original image package metadata conflicts with installer")
+    # If it already existed in the input image, keep it in the full comparison too.
+    application = {name: value for name, value in payload.items()
+                   if name != INSTALLER_METADATA or name in before}
+    # Source-pinned JDK21 WixAppImageFragmentBuilder excludes exactly AppImageFile's
+    # Windows app/.jpackage.xml. No other hidden file or metadata pattern is exempt.
+    installed = {name: value for name, value in before.items() if name != IMAGE_METADATA}
+    require(all(installed.get(item["target"]) == {"bytes": item["bytes"], "sha256": item["sha256"]}
+                for item in pinned), "Full image differs from earlier pinned components")
+    if set(application) != set(installed):
+        raise PayloadPathMismatch(installed, application, pinned)
+    require(application == installed, "MSI application payload differs from completed image")
+    require(image_inventory(image) == before and extracted_inventory(extracted, rows) == payload,
+            "Application payload changed during full inspection")
+    canonical = json.dumps(installed, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return {"scope": "STATIC_APPLICATION_FILES_NOT_INSTALLED_OR_STARTUP_AUTHORITY",
+            "files": len(installed), "bytes": sum(value["bytes"] for value in installed.values()),
+            "inventorySha256": digest(canonical),
+            "installerGeneratedMetadata": [{"target": INSTALLER_METADATA, **metadata,
+                                             "presentInOriginalImage": INSTALLER_METADATA in before}],
+            "excludedImageMetadata": ([{"target": IMAGE_METADATA, **before[IMAGE_METADATA]}]
+                                      if IMAGE_METADATA in before else [])}
 
 
 def inspect(wxs, extracted, image, inspection, msi):
@@ -186,7 +325,7 @@ def inspect(wxs, extracted, image, inspection, msi):
             "Unexpected parent-pin JAR")
     msi_observation = file_hash(msi, MAX_MSI)
     require(receipt.get("msi") == {"file": msi.name, **msi_observation}, "MSI differs from image inspection")
-    rows = file_table(xml)
+    rows, defaults = file_table(xml)
     expected = [(DLL, "app/resources/rpc-profile/windows-x64/" + DLL, 32 * 1024 * 1024,
                  receipt["dllSha256"]),
                 ("component.manifest", "app/resources/rpc-profile/windows-x64/component.manifest", 4096,
@@ -241,13 +380,16 @@ def inspect(wxs, extracted, image, inspection, msi):
         require(file_hash(extracted_file, maximum) == image_observation,
                 "MSI component payload differs from the app image")
         comparisons.append({"target": target, "extractedMember": "File/" + identifier, **image_observation})
+    application_payload = full_payload(rows, extracted, image, comparisons)
     require(file_hash(msi, MAX_MSI) == msi_observation and read(wxs, XML_LIMIT) == xml and
             read(inspection, 65_536) == receipt_bytes, "Inspection inputs changed before final observation")
     return {"scope": SCOPE, "result": "PASS", "source": receipt["source"], "tree": receipt["tree"],
             "msi": {"file": msi.name, **msi_observation}, "wxsSha256": digest(xml),
             "imageInspectionSha256": digest(receipt_bytes), "comparedFiles": comparisons,
+            "installationDefaults": defaults,
             "extractionInvocation": "CALLER_OWNED_SOURCE_BOUND_DARK_RUN_REQUIRED",
-            "fullApplicationPayloadEquality": "NOT_PERFORMED", "installation": "NOT_PERFORMED",
+            "fullApplicationPayloadEquality": "PASS", "applicationPayload": application_payload,
+            "installation": "NOT_PERFORMED",
             "nativeExecution": "NOT_PERFORMED", "runtimeQualification": "NOT_PERFORMED",
             "signing": "NOT_PERFORMED"}
 

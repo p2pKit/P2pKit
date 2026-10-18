@@ -61,9 +61,24 @@ static int watchdog_finish(watchdog *owner) {
     if (GetTickCount64()-owner->started >= owner->budget) deadline_exit();
     return thread_closed && event_closed;
 }
+/* A successful token query does not make an embedded pointer a bounded SID view. Copy the
+ * fixed SDK header/table first, then reuse the shared decoder before any Windows SID API. */
+static PSID bounded_token_sid(unsigned char *bytes, size_t capacity, DWORD returned, size_t header,
+                               PSID observed, int groups) {
+    size_t offset = 0, length = 0;
+    int valid = groups ? pwp_token_group_sid_view(bytes, capacity, returned, header,
+                                                  (uintptr_t)observed, &offset, &length) :
+                         pwp_token_sid_view(bytes, capacity, returned, header,
+                                            (uintptr_t)observed, &offset, &length);
+    if (!valid) return NULL;
+    PSID sid = bytes+offset;
+    return IsValidSid(sid) && GetLengthSid(sid) == length ? sid : NULL;
+}
 static int standard_user(void) {
     owned_handle thread = {0}, process = {0}; int result = SMOKE_PREFLIGHT;
-    _Alignas(void *) unsigned char user_bytes[4096] = {0}, owner_bytes[4096] = {0}, group_bytes[16384] = {0};
+    _Alignas(void *) unsigned char user_bytes[PWP_TOKEN_BUFFER_LIMIT] = {0};
+    _Alignas(void *) unsigned char owner_bytes[PWP_TOKEN_BUFFER_LIMIT] = {0};
+    _Alignas(void *) unsigned char group_bytes[PWP_TOKEN_GROUP_BUFFER_LIMIT] = {0};
     if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &thread.handle)) goto cleanup;
     if (GetLastError() != ERROR_NO_TOKEN) goto cleanup;
     USHORT process_machine = 0, native_machine = 0;
@@ -77,21 +92,29 @@ static int standard_user(void) {
         used != sizeof(type) || type != TokenElevationTypeDefault) goto cleanup;
     if (!GetTokenInformation(process.handle, TokenUser, user_bytes, sizeof(user_bytes), &used) ||
         used < sizeof(TOKEN_USER) || used > sizeof(user_bytes)) goto cleanup;
-    PSID user = ((TOKEN_USER *)user_bytes)->User.Sid;
+    TOKEN_USER user_header; memcpy(&user_header, user_bytes, sizeof(user_header));
+    PSID user = bounded_token_sid(user_bytes, sizeof(user_bytes), used, sizeof(user_header),
+                                   user_header.User.Sid, 0);
     if (!GetTokenInformation(process.handle, TokenOwner, owner_bytes, sizeof(owner_bytes), &used) ||
         used < sizeof(TOKEN_OWNER) || used > sizeof(owner_bytes)) goto cleanup;
-    PSID owner = ((TOKEN_OWNER *)owner_bytes)->Owner;
-    if (!IsValidSid(user) || !IsValidSid(owner) || !EqualSid(user, owner) ||
+    TOKEN_OWNER owner_header; memcpy(&owner_header, owner_bytes, sizeof(owner_header));
+    PSID owner = bounded_token_sid(owner_bytes, sizeof(owner_bytes), used, sizeof(owner_header),
+                                    owner_header.Owner, 0);
+    if (!user || !owner || !EqualSid(user, owner) ||
         IsWellKnownSid(user, WinLocalSystemSid) || IsWellKnownSid(user, WinLocalServiceSid) ||
         IsWellKnownSid(user, WinNetworkServiceSid) || IsWellKnownSid(owner, WinBuiltinAdministratorsSid)) goto cleanup;
     if (!GetTokenInformation(process.handle, TokenGroups, group_bytes, sizeof(group_bytes), &used) ||
         used < offsetof(TOKEN_GROUPS, Groups) || used > sizeof(group_bytes)) goto cleanup;
-    TOKEN_GROUPS *groups = (TOKEN_GROUPS *)group_bytes;
-    if (groups->GroupCount > (used - offsetof(TOKEN_GROUPS, Groups))/sizeof(SID_AND_ATTRIBUTES)) goto cleanup;
-    for (DWORD i = 0; i < groups->GroupCount; ++i)
-        if (!IsValidSid(groups->Groups[i].Sid) ||
-            IsWellKnownSid(groups->Groups[i].Sid, WinBuiltinAdministratorsSid) ||
-            IsWellKnownSid(groups->Groups[i].Sid, WinServiceSid)) goto cleanup;
+    DWORD count = 0; memcpy(&count, group_bytes+offsetof(TOKEN_GROUPS, GroupCount), sizeof(count));
+    if (count > (used - offsetof(TOKEN_GROUPS, Groups))/sizeof(SID_AND_ATTRIBUTES)) goto cleanup;
+    size_t table_bytes = offsetof(TOKEN_GROUPS, Groups)+(size_t)count*sizeof(SID_AND_ATTRIBUTES);
+    for (DWORD i = 0; i < count; ++i) {
+        SID_AND_ATTRIBUTES group;
+        memcpy(&group, group_bytes+offsetof(TOKEN_GROUPS, Groups)+(size_t)i*sizeof(group), sizeof(group));
+        PSID sid = bounded_token_sid(group_bytes, sizeof(group_bytes), used, table_bytes, group.Sid, 1);
+        if (!sid || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) ||
+            IsWellKnownSid(sid, WinServiceSid)) goto cleanup;
+    }
     result = SMOKE_OK; /* Reject Administrators/Service membership regardless of group attributes. */
 cleanup:
     if (!close_owned(&process)) result = SMOKE_CLEANUP_UNKNOWN;

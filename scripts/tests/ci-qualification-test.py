@@ -292,6 +292,99 @@ class QualificationTests(unittest.TestCase):
         with self.assertRaises(Q.AdmissionError):
             Q.aggregate(self.api, self.f.selection())
 
+    def stale_pr_fixture(self):
+        # Synthetic API reproduction: the embedded PR base can predate the
+        # actual merge parent. This fixture is not service qualification.
+        head, actual_base, recorded_base, main = (letter * 40 for letter in "abcd")
+        self.f.run.update(event="pull_request", head_sha=head, head_branch="topic",
+            repository={"full_name": Q.REPOSITORY, "id": 42}, head_repository={"full_name": Q.REPOSITORY, "id": 42},
+            pull_requests=[{"number": 2, "head": {"sha": head, "repo": {"id": 42}},
+                            "base": {"sha": recorded_base, "ref": "main", "repo": {"id": 42}}}])
+        self.api.data["/git/commits/" + SOURCE]["parents"] = [{"sha": actual_base}, {"sha": head}]
+        self.api.data["/git/ref/heads/main"] = {
+            "ref": "refs/heads/main", "object": {"type": "commit", "sha": main}}
+        for base, tip in ((recorded_base, actual_base), (actual_base, main)):
+            self.api.data[f"/compare/{base}...{tip}"] = {
+                "status": "ahead", "base_commit": {"sha": base}, "merge_base_commit": {"sha": base}}
+        for job in self.f.jobs:
+            job["head_sha"] = head
+        for artifact in self.f.artifacts:
+            artifact["workflow_run"].update(head_sha=head, head_branch="topic")
+        return head, actual_base, recorded_base, main
+
+    def test_stale_pr_base_admits_only_original_merge_bound_to_main_ancestry(self):
+        head, actual_base, recorded_base, main = self.stale_pr_fixture()
+        selection = self.f.selection()
+        result = Q.aggregate(self.api, selection)
+        self.assertEqual({"commit": SOURCE, "tree": TREE, "version": VERSION}, result["source"])
+        self.assertEqual(14, len(result["components"]))
+        self.assertEqual(4, len(result["applications"]))
+        for component in result["components"]:
+            self.assertEqual(SOURCE, component["manifest"]["source"]["commit"])
+            self.assertEqual(SOURCE, component["manifest"]["github"]["workflowSha"])
+            self.assertEqual(head, component["run"]["serviceHead"])
+        self.assertTrue(all(app["producer"]["serviceHead"] == head for app in result["applications"]))
+        with self.assertRaises(Q.AdmissionError):
+            Q.aggregate(self.api, selection, require_main=True)
+
+    def test_stale_pr_base_accepts_actual_base_equal_to_current_main(self):
+        head, actual_base, recorded_base, _ = self.stale_pr_fixture()
+        self.api.data["/git/ref/heads/main"]["object"]["sha"] = actual_base
+        # Equality needs no compare request; this endpoint is absent from Api.
+        result = Q.aggregate(self.api, self.f.selection())
+        self.assertEqual(SOURCE, result["source"]["commit"])
+        self.assertTrue(all(row["run"]["serviceHead"] == head for row in result["components"]))
+
+    def test_stale_pr_base_refuses_unbound_comparisons_and_originals(self):
+        head, actual_base, recorded_base, main = self.stale_pr_fixture()
+        selection = self.f.selection()
+        for base, tip in ((recorded_base, actual_base), (actual_base, main)):
+            path = f"/compare/{base}...{tip}"
+            for field, value in (("status", "diverged"), ("status", "behind"), ("status", "identical"),
+                                 ("status", None),
+                                 ("base_commit", {"sha": "e" * 40}),
+                                 ("merge_base_commit", {"sha": "e" * 40}),
+                                 ("base_commit", {}), ("merge_base_commit", {})):
+                with self.subTest(path=path, field=field, value=value), \
+                        mock.patch.dict(self.api.data[path], {field: value}), \
+                        self.assertRaises(Q.AdmissionError):
+                    Q.aggregate(self.api, selection)
+        ref = self.api.data["/git/ref/heads/main"]
+        for change in ({"ref": "refs/heads/other"},
+                       {"object": {"type": "blob", "sha": main}},
+                       {"object": {"type": "commit", "sha": "not-a-sha"}}):
+            with self.subTest(change=change), mock.patch.dict(ref, change), self.assertRaises(Q.AdmissionError):
+                Q.aggregate(self.api, selection)
+        self.api.data[f"/compare/{actual_base}...{'e' * 40}"] = {
+            "status": "diverged", "base_commit": {"sha": actual_base},
+            "merge_base_commit": {"sha": recorded_base}}
+        with mock.patch.dict(ref["object"], {"sha": "e" * 40}), self.assertRaises(Q.AdmissionError):
+            Q.aggregate(self.api, selection)
+        merge = self.api.data["/git/commits/" + SOURCE]
+        for parents in ([], [{"sha": actual_base}], [{"sha": head}, {"sha": actual_base}],
+                        [{"sha": actual_base}, {"sha": head}, {"sha": recorded_base}],
+                        [{"sha": "invalid"}, {"sha": head}], [{"sha": actual_base}, {"sha": "e" * 40}]):
+            with self.subTest(parents=parents), mock.patch.dict(merge, {"parents": parents}), \
+                    self.assertRaises(Q.AdmissionError):
+                Q.aggregate(self.api, selection)
+        for change in ({"sha": head}, {"tree": {"sha": "e" * 40}}):
+            with self.subTest(change=change), mock.patch.dict(merge, change), self.assertRaises(Q.AdmissionError):
+                Q.aggregate(self.api, selection)
+        pull = self.f.run["pull_requests"][0]
+        for original in (pull["base"], pull["head"]):
+            with mock.patch.dict(original, {"repo": {"id": 999}}), self.assertRaises(Q.AdmissionError):
+                Q.aggregate(self.api, selection)
+        with mock.patch.dict(self.f.jobs[0], {"head_sha": "e" * 40}), self.assertRaises(Q.AdmissionError):
+            Q.aggregate(self.api, selection)
+        artifact = self.api.data["/actions/artifacts/5000"]
+        with mock.patch.dict(artifact, {"digest": "sha256:" + "e" * 64}), self.assertRaises(Q.AdmissionError):
+            Q.aggregate(self.api, selection)
+        for section, key in (("source", "commit"), ("github", "workflowSha")):
+            manifests = copy.deepcopy(self.f.manifests)
+            manifests[next(iter(Q.COMPONENTS))][section][key] = head
+            with self.subTest(section=section, key=key), self.assertRaises(Q.AdmissionError):
+                Q.aggregate(self.api, selection, manifests=manifests)
+
     def test_wrong_actual_runner_environment_or_canonical_tree_refuse(self):
         self.f.jobs[0]["labels"] = ["self-hosted", "ubuntu-24.04"]
         with self.assertRaises(Q.AdmissionError):

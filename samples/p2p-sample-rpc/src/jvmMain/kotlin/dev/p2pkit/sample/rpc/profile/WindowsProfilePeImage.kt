@@ -35,12 +35,46 @@ internal object WindowsProfilePeImage {
         return Reader(image.copyOf()).verify()
     }
 
+    /** Internal byte observations for the dormant code comparator; never a native memory view. */
+    internal data class CodeSection(val rva: Long, val mappedBytes: Int, val rawBytes: ByteArray,
+        val relocations: List<Int>, val executable: Boolean)
+    internal data class CodeLayout(val sha256: String, val fileBytes: Int, val imageBytes: Long,
+        val preferredBase: Long, val headerImageBaseOffset: Int, val sections: List<CodeSection>)
+
+    internal fun codeLayout(image: ByteArray): CodeLayout {
+        require(image.size in 512..MAXIMUM_BYTES) { "Unsupported PE image size" }
+        return Reader(image.copyOf()).codeLayout()
+    }
+
+    /** Complete original IAT, including null slots and alignment bytes; not resolved provider authority. */
+    internal data class IatLayout(val sha256: String, val fileBytes: Int, val imageBytes: Long,
+        val rva: Long, val bytes: ByteArray, val namedImports: List<NamedImport>)
+
+    internal fun iatLayout(image: ByteArray): IatLayout {
+        require(image.size in 512..MAXIMUM_BYTES) { "Unsupported PE image size" }
+        return Reader(image.copyOf()).iatLayout()
+    }
+
+    /** Exact already-verified export directory bounds for the fixed non-forwarded lookup mechanism. */
+    internal data class ExportLayout(val sha256: String, val fileBytes: Int, val imageBytes: Long,
+        val directoryRva: Long, val directoryBytes: Long, val namedExports: List<NamedExport>)
+
+    internal fun exportLayout(image: ByteArray): ExportLayout {
+        require(image.size in 512..MAXIMUM_BYTES) { "Unsupported PE image size" }
+        return Reader(image.copyOf()).exportLayout()
+    }
+
     private class Reader(private val bytes: ByteArray) {
         private data class Section(val virtual: Long, val size: Long, val raw: Long, val rawSize: Long,
-            val mappedSize: Long, val executable: Boolean)
+            val mappedSize: Long, val executable: Boolean, val discardable: Boolean)
         private val sections = mutableListOf<Section>()
         private val directories = mutableListOf<Pair<Long, Long>>()
         private val immutableMetadata = mutableListOf<LongRange>()
+        private var preferredBase = 0L
+        private var headerImageBaseOffset = 0
+        private var sectionAlignment = 0L
+        private var headersSize = 0L
+        private var relocationWrites: List<Long> = emptyList()
         private fun check(value: Boolean) = require(value) { "Unsupported or malformed Windows profile PE image" }
         private fun span(at: Long, count: Long): Int {
             check(at >= 0 && count >= 0 && at <= bytes.size.toLong() && count <= bytes.size.toLong() - at)
@@ -100,12 +134,14 @@ internal object WindowsProfilePeImage {
             val optional = pe + 24
             span(optional, 240)
             check(u16(optional) == 0x20b && u64(optional + 24) > 0 && u64(optional + 24) % 65536 == 0L)
-            val sectionAlignment = u32(optional + 32)
+            preferredBase = u64(optional + 24)
+            headerImageBaseOffset = span(optional + 24, 8)
+            sectionAlignment = u32(optional + 32)
             val fileAlignment = u32(optional + 36)
             check(powerOfTwo(fileAlignment) && fileAlignment in 512..65536 &&
                 powerOfTwo(sectionAlignment) && sectionAlignment in fileAlignment..65536)
             val imageSize = u32(optional + 56)
-            val headersSize = u32(optional + 60)
+            headersSize = u32(optional + 60)
             check(imageSize in 4096..(128L * 1024 * 1024) && imageSize % sectionAlignment == 0L)
             check(headersSize >= optional + 240 + count * 40L && headersSize % fileAlignment == 0L)
             span(0, headersSize)
@@ -136,7 +172,8 @@ internal object WindowsProfilePeImage {
                 }
                 val mappedSize = align(maxOf(size, rawSize), sectionAlignment)
                 check(virtual <= imageSize && mappedSize <= imageSize - virtual)
-                sections += Section(virtual, size, raw, rawSize, mappedSize, executable)
+                sections += Section(virtual, size, raw, rawSize, mappedSize, executable,
+                    flags and 0x02000000 != 0L)
             }
             val virtual = sections.sortedBy { it.virtual }
             check(virtual.zipWithNext().all { (a, b) -> a.virtual + a.mappedSize <= b.virtual })
@@ -165,6 +202,44 @@ internal object WindowsProfilePeImage {
                 Collections.unmodifiableSet(namedExports.mapTo(linkedSetOf()) { it.name }),
                 Collections.unmodifiableList(namedExports), imageSize, certificate)
         }
+        fun codeLayout(): CodeLayout {
+            val image = verify()
+            // The maintained AMD64 producer uses separate 4KiB section pages. Do not infer sharing,
+            // commitment or protection semantics for smaller/larger alignments from a byte-only parser.
+            check(sectionAlignment == 4096L)
+            val executable = sections.filter { it.executable }
+            check(executable.isNotEmpty() && executable.none { it.discardable })
+            val code = executable.map { section ->
+                // Include every raw byte, even beyond VirtualSize, and the whole final executable page.
+                // No hotpatch, arbitrary masking or unverified executable tail is accepted.
+                val offset = span(section.raw, section.rawSize)
+                val relocations = relocationWrites.filter {
+                    it >= section.virtual && it < section.virtual + section.size
+                }.map { (it - section.virtual).toInt() }
+                CodeSection(section.virtual, section.mappedSize.toInt(),
+                    bytes.copyOfRange(offset, offset + section.rawSize.toInt()),
+                    Collections.unmodifiableList(relocations), true)
+            }
+            val header = CodeSection(0, align(headersSize, 4096).toInt(),
+                bytes.copyOfRange(0, headersSize.toInt()), emptyList(), false)
+            return CodeLayout(image.sha256, bytes.size, image.imageBytes, preferredBase, headerImageBaseOffset,
+                Collections.unmodifiableList(listOf(header) + code))
+        }
+
+        fun iatLayout(): IatLayout {
+            val image = verify()
+            val (rva, size) = directories[12]
+            val offset = mapped(rva, size).toInt()
+            return IatLayout(image.sha256, bytes.size, image.imageBytes, rva,
+                bytes.copyOfRange(offset, offset + size.toInt()), image.namedImports)
+        }
+
+        fun exportLayout(): ExportLayout {
+            val image = verify()
+            val (rva, size) = directories[0]
+            return ExportLayout(image.sha256, bytes.size, image.imageBytes, rva, size, image.namedExports)
+        }
+
         private fun certificateTable(rawEnd: Long): Boolean {
             val (offset, size) = directories[4]
             if (size == 0L) { check(rawEnd == bytes.size.toLong()); return false }
@@ -332,6 +407,7 @@ internal object WindowsProfilePeImage {
             check(cursor == size)
             writes.sort()
             for (index in 1 until writes.size) check(writes[index - 1] + 8 <= writes[index])
+            relocationWrites = writes
         }
     }
 }

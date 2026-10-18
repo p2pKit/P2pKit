@@ -25,6 +25,8 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -221,15 +223,23 @@ class ManualPeerIdentityTest {
                 },
                 verifyDiagnostics = { recorder -> assertLegacyPeerMismatchDiagnostics(recorder, alice.localPeerId) }
             ) { impostor ->
-                impostor.start()
-                val err = assertFailsWith<P2pError.HandshakeRejected> {
-                    withTimeout(5_000) { alice.connect(peer("manual-looking-advertised-id")) }
+                withTimeout(5_000) {
+                    // Subscribe before the sole inbound connection: the rejection may retire the
+                    // responder before a later StateFlow observer sees its brief committed session.
+                    val incoming = async(start = CoroutineStart.UNDISPATCHED) { impostor.incomingSessions.first() }
+                    impostor.start()
+                    val err = assertFailsWith<P2pError.HandshakeRejected> {
+                        alice.connect(peer("manual-looking-advertised-id"))
+                    }
+                    assertTrue(
+                        err.reason.contains("peerId mismatch"),
+                        "expected a peerId-mismatch rejection (provenance, not prefix, drives the " +
+                            "manual exemption), got: ${err.reason}"
+                    )
+                    // Local rejection does not join the independent responder commit. Do not race
+                    // fixture stop with that commit and manufacture an unrelated setup warning.
+                    assertEquals(alice.localPeerId, incoming.await().peer.id)
                 }
-                assertTrue(
-                    err.reason.contains("peerId mismatch"),
-                    "expected a peerId-mismatch rejection (provenance, not prefix, drives the " +
-                        "manual exemption), got: ${err.reason}"
-                )
             }
         }
     }

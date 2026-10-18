@@ -2,19 +2,23 @@ package dev.p2pkit.sample.desktop
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.FeatureState
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerDiscoveryClaim
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.PeerPairingQr
 import dev.p2pkit.core.Platform
-import dev.p2pkit.core.dsl.jvmSecureIdentityStore
+import dev.p2pkit.core.permission.P2pPermissionManager
+import dev.p2pkit.core.provisioning.NetworkProvisioningManager
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transfer.P2pFileOffer
-import dev.p2pkit.transport.lan.lan
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +29,8 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.RawSource
@@ -238,32 +244,16 @@ class CliConnectCommandsTest {
     }
 
     private fun scenario(block: suspend CoroutineScope.(Fixture) -> Unit): Unit = runBlocking {
-        withTimeout(5_000) {
-            val diagnostics = KitTestDiagnostics()
-            var primaryFailure: Throwable? = null
-            try {
-                block(Fixture(diagnostics))
-            } catch (failure: Throwable) {
-                primaryFailure = failure
-                throw failure
-            } finally {
-                diagnostics.finish(primaryFailure)
-            }
-        }
+        withTimeout(5_000) { block(Fixture()) }
     }
 
-    private class Fixture(diagnostics: KitTestDiagnostics) {
-        val base = diagnostics.create { recording ->
-            P2pKit.create {
-                logger = recording
-                appId = AppId("synthetic.cli-routing")
-                deviceName = "Synthetic CLI fixture"
-                jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
-                transports { lan() }
-            }
-        }
-        val fingerprint = assertNotNull(base.localFingerprint)
-        val qr = assertNotNull(base.localPairingQr)
+    private class Fixture {
+        // These are synthetic canonical tokens, not an SDK-derived identity or AppId binding.
+        // Real QR binding, crypto, TCP and kit shutdown remain covered by CliPairingTest.
+        // Routing's five-second bound must not include unrelated native/provider initialization.
+        private val appBinding = "p2a1-" + "a".repeat(52)
+        val fingerprint = PeerFingerprint("p2f1-" + "a".repeat(52))
+        val qr = PeerPairingQr(appBinding, fingerprint).encode()
         private val alternateFirstDigit = if (fingerprint.value[5] == 'a') 'b' else 'a'
         val wrongFingerprint = PeerFingerprint("p2f1-$alternateFirstDigit${fingerprint.value.substring(6)}")
         val wrongQr = PeerPairingQr(PeerPairingQr.parse(qr).appBinding, wrongFingerprint).encode()
@@ -294,7 +284,10 @@ class CliConnectCommandsTest {
             if (expected != fingerprint) throw P2pError.AuthenticatedIdentityMismatch("synthetic mismatch")
             session
         }
-        private val kit = object : P2pKit by base {
+        private val kit = object : P2pKit {
+            override fun parsePeerPairingQr(value: String): PeerFingerprint? =
+                PeerPairingQr.parseOrNull(value)?.takeIf { it.appBinding == appBinding }?.fingerprint
+
             override val peers = MutableStateFlow(listOf(peer))
             override val sessions = sdkSessions
             override suspend fun connect(peer: Peer): P2pSession {
@@ -307,7 +300,35 @@ class CliConnectCommandsTest {
                 calls += expectedFingerprint
                 return pinned(expectedFingerprint)
             }
+
+            // A routing change must not silently start using an unmodelled SDK/native boundary.
+            override val appId: AppId get() = unexpectedSdkCall("appId")
+            override val localDeviceName: String get() = unexpectedSdkCall("localDeviceName")
+            override val localPeerId: PeerId get() = unexpectedSdkCall("localPeerId")
+            override val localFingerprint: PeerFingerprint? get() = unexpectedSdkCall("localFingerprint")
+            override val localPairingQr: String? get() = unexpectedSdkCall("localPairingQr")
+            override val state: StateFlow<P2pState> get() = unexpectedSdkCall("state")
+            override val advertisingState: StateFlow<FeatureState> get() = unexpectedSdkCall("advertisingState")
+            override val discoveryState: StateFlow<FeatureState> get() = unexpectedSdkCall("discoveryState")
+            override val incomingSessions: SharedFlow<P2pSession> get() = unexpectedSdkCall("incomingSessions")
+            override val permissions: P2pPermissionManager get() = unexpectedSdkCall("permissions")
+            override val networkProvisioning: NetworkProvisioningManager
+                get() = unexpectedSdkCall("networkProvisioning")
+            override val networkPathStatus: StateFlow<NetworkPathStatus> get() = unexpectedSdkCall("networkPathStatus")
+            override fun discoveryClaim(peerId: PeerId): PeerDiscoveryClaim? = unexpectedSdkCall("discoveryClaim")
+            override fun lastSeen(peerId: PeerId): Long? = unexpectedSdkCall("lastSeen")
+            override fun notifyAppBackgrounded(): Unit = unexpectedSdkCall("notifyAppBackgrounded")
+            override fun notifyAppForegrounded(): Unit = unexpectedSdkCall("notifyAppForegrounded")
+            override suspend fun start(): Unit = unexpectedSdkCall("start")
+            override suspend fun startAdvertising(): Unit = unexpectedSdkCall("startAdvertising")
+            override suspend fun stopAdvertising(): Unit = unexpectedSdkCall("stopAdvertising")
+            override suspend fun startDiscovery(): Unit = unexpectedSdkCall("startDiscovery")
+            override suspend fun stopDiscovery(): Unit = unexpectedSdkCall("stopDiscovery")
+            override suspend fun stop(): Unit = unexpectedSdkCall("stop")
         }
+
+        private fun unexpectedSdkCall(operation: String): Nothing =
+            error("Unexpected SDK operation in synthetic CLI routing fixture: $operation")
 
         fun commands(scope: CoroutineScope) = CliConnectCommands(
             kit = kit, scope = scope, sessions = sessions, pendingConnects = pending,

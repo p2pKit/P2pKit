@@ -70,13 +70,30 @@ class ComponentTests(unittest.TestCase):
 
     def test_signed_original_and_recovery_regressions_are_run_offline_in_source(self):
         actual = dict(C.commands('source'))
-        for name in ('central-bundle-evidence-test.py', 'maven-recovery-test.py'):
+        for name in ('central-bundle-evidence-test.py', 'maven-recovery-test.py', 'verify-rpc-windows-jdk21-test.py', 'check-rpc-windows-packaging-test.py',
+                     'inspect-rpc-windows-package-test.py', 'verify-rpc-windows-app-image-test.py',
+                     'verify-rpc-windows-msi-payload-test.py', 'check-rpc-windows-image-runtime-test.py'):
             self.assertEqual(actual[name], [C.sys.executable, '-B', 'scripts/tests/' + name, '-v'])
         evidence_spec = importlib.util.spec_from_file_location('ci_evidence_routes', ROOT / 'scripts/ci_evidence.py')
         evidence = importlib.util.module_from_spec(evidence_spec)
         with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
             evidence_spec.loader.exec_module(evidence)
         self.assertTrue(set(actual) <= evidence.TASK_NAMES)
+
+    def test_windows_packaging_runs_real_static_rpc_inspection_after_installer(self):
+        commands = C.commands('desktop-windows')
+        self.assertEqual(commands[-2], ('rpc-windows-package-inspection',
+                         [C.sys.executable, '-B', 'scripts/inspect-rpc-windows-package.py']))
+        self.assertEqual(commands[-3][0], 'desktop-tests-and-installer')
+        self.assertEqual(commands[-1], ('rpc-windows-runtime-readback',
+                         [C.sys.executable, '-B', 'scripts/check-rpc-windows-image-runtime.py']))
+        for component in ('desktop-macos', 'desktop-linux', 'jvm-windows'):
+            self.assertNotIn('rpc-windows-package-inspection', dict(C.commands(component)))
+            self.assertNotIn('rpc-windows-runtime-readback', dict(C.commands(component)))
+        with tempfile.TemporaryDirectory(prefix='ci-no-rpc-packaging-') as temporary, \
+                patch.object(C, 'ROOT', Path(temporary)):
+            self.assertNotIn('rpc-windows-package-inspection', dict(C.commands('desktop-windows')))
+            self.assertNotIn('rpc-windows-runtime-readback', dict(C.commands('desktop-windows')))
 
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])
@@ -109,6 +126,26 @@ class ComponentTests(unittest.TestCase):
                 self.assertEqual(tasks.count(':p2p-rpc:testAndroidHostTest'), 1)
                 self.assertEqual(tasks.count(':p2p-sample-rpc:testAndroidHostTest'), 1)
                 self.assertNotIn('--tests', tasks)
+
+    def test_protected_development_fixture_is_explicit_windows_only_and_preserves_tasks(self):
+        flag = '-Pp2pkit.rpc.windows.protectedDevelopmentFixture=true'
+        with tempfile.TemporaryDirectory(prefix='ci-rpc-protected-') as temporary:
+            root = Path(temporary)
+            with patch.object(C, 'ROOT', root):
+                for present in (False, True):
+                    if present:
+                        (root / 'samples/p2p-sample-rpc').mkdir(parents=True)
+                    for component in C.COMPONENTS:
+                        commands = C.commands(component)
+                        self.assertEqual(sum(argv.count(flag) for _, argv in commands),
+                                         int(present and component == 'jvm-windows'))
+                    commands = dict(C.commands('jvm-windows'))
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-core:jvmTest'), 1)
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-transport-lan:jvmTest'), 1)
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-network-provisioning-desktop:test'), 1)
+                    self.assertEqual(commands['jvm-tests'].count(':p2p-sample-rpc:jvmTest'), int(present))
+                    self.assertNotIn('--tests', commands['jvm-tests'])
+                    self.assertIn('supervisor-controls', commands)
 
     def test_additional_host_supervisor_route_has_exact_seven_genuine_cases(self):
         import ast
@@ -375,7 +412,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_bundle_diagnostic_records_actual_selected_xcode_identity(self):
         with tempfile.TemporaryDirectory(prefix='bundle-tools-model-') as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for name in ('java', 'gpg', 'gradlew', 'xcodebuild'):
                 (root / name).write_bytes(b'public synthetic executable')
             versions = [Mock(stdout=b'openjdk version "17.0.20.1"'), Mock(stdout=b'gpg (GnuPG) 2.5.22'),
@@ -502,6 +539,57 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 class SetupBaselineTests(unittest.TestCase):
+    def test_windows_supplier_download_exports_only_after_checksum_success(self):
+        source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
+        begin = source.index('if [[ "$component" == desktop-windows ]]; then')
+        end = source.index('# Hosted images differ;', begin)
+        block = source[begin:end]
+        pin = dict(line.split('=', 1) for line in (ROOT / 'samples/p2p-sample-rpc/native/'
+                   'windows-loader-jdk21/runtime-supplier.properties').read_text().splitlines())
+        fake = r'''
+curl() {
+    printf 'curl\n' >> "$CALLS"
+    [[ $# == 12 && "$1" == --fail && "$2" == --location && "$3" == --proto && "$4" == '=https' &&
+       "$5" == --tlsv1.2 && "$6" == --connect-timeout && "$7" == 15 && "$8" == --max-time &&
+       "$9" == 600 && "${10}" == --output && "${11}" == "$RUNNER_TEMP/p2pkit-windows-runtime-supplier.zip" &&
+       "${12}" == "$EXPECTED_URL" ]] || return 91
+    [[ "$CASE" != curl-fails ]] || return 22
+    printf 'synthetic archive bytes\n' > "${11}"
+}
+sha256sum() {
+    printf 'checksum\n' >> "$CALLS"
+    local line
+    IFS= read -r line
+    [[ $# == 1 && "$1" == --check && "$line" == "$EXPECTED_SHA  $RUNNER_TEMP/p2pkit-windows-runtime-supplier.zip" ]] || return 92
+    [[ "$CASE" != checksum-fails ]]
+}
+cygpath() {
+    printf 'cygpath\n' >> "$CALLS"
+    [[ $# == 2 && "$1" == -w && "$2" == "$RUNNER_TEMP/p2pkit-windows-runtime-supplier.zip" ]] || return 93
+    printf '%s\n' 'C:\synthetic\p2pkit-windows-runtime-supplier.zip'
+}
+'''
+        for case, expected_calls in (('curl-fails', ['curl']), ('checksum-fails', ['curl', 'checksum']),
+                                     ('success', ['curl', 'checksum', 'cygpath']), ('existing', [])):
+            with self.subTest(case=case), tempfile.TemporaryDirectory(prefix='jdk supplier model-') as temporary:
+                root = Path(temporary).resolve()
+                output, calls = root / 'github-env', root / 'calls'
+                if case == 'existing':
+                    (root / 'p2pkit-windows-runtime-supplier.zip').write_bytes(b'original retained archive')
+                environment = {'PATH': C.os.environ['PATH'], 'component': 'desktop-windows',
+                               'RUNNER_TEMP': str(root), 'GITHUB_ENV': str(output), 'CALLS': str(calls),
+                               'CASE': case, 'EXPECTED_SHA': pin['sha256'], 'EXPECTED_URL': pin['url']}
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', fake + block], cwd=ROOT,
+                                        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                self.assertEqual(result.returncode == 0, case == 'success')
+                self.assertEqual(calls.read_text().splitlines() if calls.exists() else [], expected_calls)
+                self.assertEqual(output.read_text() if output.exists() else '',
+                                 'P2PKIT_RPC_WINDOWS_JDK21_ARCHIVE=C:\\synthetic\\p2pkit-windows-runtime-supplier.zip\n'
+                                 if case == 'success' else '')
+                if case == 'existing':
+                    self.assertEqual((root / 'p2pkit-windows-runtime-supplier.zip').read_bytes(),
+                                     b'original retained archive')
+
     def selected(self, component, *, os_name='macOS', arch='X64', release='15.7', xcode='26.3', present=True):
         source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
         begin = source.index('if [[ "$component" == macos-shared || "$component" == consumers || "$component" == published-consumers-diagnostic || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then')

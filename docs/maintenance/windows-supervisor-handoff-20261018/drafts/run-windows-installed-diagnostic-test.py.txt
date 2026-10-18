@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""Offline models by default; --native is an explicit harmless Windows controller.
+
+Native controls use fixed Python fixtures, never the installed launcher. A separate
+PowerShell observer must provide QPC start/frequency and observe final process exit.
+Their receipts have a distinct NOT_INSTALLED scope; timeout may have no receipt.
+"""
+from __future__ import annotations
+
+import argparse
+import ctypes
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import threading
+import time
+import types
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location("installed_supervisor", ROOT / "scripts/run-windows-installed-diagnostic.py")
+H = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(H)
+SOURCE = "0" * 40
+
+
+class Clock:
+    frequency = 1000
+    def __init__(self, now=1000):
+        self.value = now
+    def now(self):
+        return self.value
+
+
+def outcome(**changes):
+    return dict(code="PASS", exitCode=0, timedOut=False, cleanupKnown=True,
+                capturesClosed=True, cleanupReasons=[], **changes)
+
+
+class FinishedThread:
+    ident = 1
+    def start(self):
+        pass
+    def join(self, timeout=None):
+        pass
+    def is_alive(self):
+        return False
+
+
+class Fixture:
+    def __init__(self, root, clock):
+        self.root, self.clock, self.operations = root, clock, []
+        self.args = types.SimpleNamespace(private_parent=str(root), expected_source=SOURCE,
+            start_counter=1000, counter_frequency=1000, worker=False)
+        self.value = {"schema": 1, "appSource": SOURCE, "outcome": outcome(), "admissionMatched": True}
+        self.child = types.SimpleNamespace(stdout=io.BytesIO(), stderr=io.BytesIO(),
+            poll=lambda: 0, wait=lambda timeout: 0)
+        fixture = self
+        class Owner:
+            def create_directory(self, name, deadline):
+                (root / name).mkdir()
+                return self
+            def verify(self):
+                fixture.operations.append("verify")
+            def close(self):
+                fixture.operations.append("owner-close")
+        class Scope:
+            discovery_errors = set()
+            def __init__(self, *args):
+                self.leaders = []
+                fixture.scope = self
+            def spawn(self, argv, cwd, env):
+                fixture.argv = argv
+                fixture.operations.append("spawn")
+                self.leaders.append(fixture.child)
+                (root / "run/worker.json").write_text(json.dumps(fixture.value))
+                return fixture.child
+            def discover(self):
+                fixture.operations.append("discover")
+                return []
+            def drain(self, **kwargs):
+                fixture.operations.append("drain")
+                fixture.drain_options = kwargs
+                return []
+            def close(self):
+                fixture.operations.append("scope-close")
+        class Capture:
+            def __init__(self, pipe, path, limit):
+                self.pipe, self.thread = pipe, FinishedThread()
+                self.eof, self.closed, self.error = True, True, None
+                path.write_bytes(b"")
+        self.A = types.SimpleNamespace(WindowsScope=Scope, ownership_environment=lambda env, *a, **kw: env)
+        self.E = types.SimpleNamespace(Capture=Capture, encoded=lambda v: (json.dumps(v)+"\n").encode(),
+                                      write_private=lambda p, raw: p.write_bytes(raw))
+        self.F = types.SimpleNamespace(open_private_directory=lambda path: Owner())
+
+    def run(self):
+        with patch.object(H, "source_identity", return_value={"fixture": "a" * 64}):
+            result = H.supervise(self.args, H.Deadline(self.clock, 1000, 1000), self.A, self.E, self.F)
+        return result, json.loads((self.root / "run/supervisor.json").read_text())
+
+
+class SupervisorTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_qpc_admission_refuses_epoch_frequency_future_and_expired_values(self):
+        for start, frequency, now in ((-1,1000,1000),(1001,1000,1000),(1000,999,1000),
+                                      (1000,1000,31000),(True,1000,1000),(1000,True,1000)):
+            with self.subTest(start=start, frequency=frequency, now=now), self.assertRaises(ValueError):
+                H.Deadline(Clock(now), start, frequency)
+        d = H.Deadline(Clock(), 1000, 1000)
+        self.assertEqual(d.end, 31000)
+        self.assertEqual(d.check(), 30)
+
+    def test_worker_budgets_never_reset_outer_end(self):
+        clock = Clock(); d = H.Deadline(clock, 1000, 1000)
+        self.assertEqual(d.worker_budgets(), (15, 5))
+        clock.value = 21000
+        work, cleanup = d.worker_budgets()
+        self.assertLessEqual(work + cleanup, 5)
+        self.assertEqual(d.end, 31000)
+        clock.value = 26000
+        with self.assertRaises(ValueError): d.worker_budgets()
+
+    def test_fixed_worker_has_no_caller_command_or_timeout(self):
+        args = H.arguments(["--start-counter","1000","--counter-frequency","1000",
+                            "--expected-source",SOURCE,"--private-parent",str(self.root)])
+        argv = H.worker_argv(args, self.root / "run")
+        self.assertEqual(argv[:4], [sys.executable,"-I","-B","-S"])
+        self.assertIn("--worker", argv)
+        self.assertNotIn("--timeout", argv)
+        for extra in (["--command", "PRIVATE"], ["--start-c", "4"], ["--help"]):
+            with self.assertRaises(ValueError):
+                H.arguments(argv[5:] + extra)
+
+    def test_exact_admission_and_duplicate_or_excess_json_refused(self):
+        value = H.expected_admission(SOURCE)
+        self.assertEqual(value["admission"]["publicProvider"], "DISABLED")
+        self.assertEqual(H.decode(json.dumps(value).encode(), H.LOG_LIMIT), value)
+        for raw in (b'{"a":1,"a":2}', b'x' * (H.LOG_LIMIT + 1), b''):
+            with self.assertRaises(ValueError): H.decode(raw, H.LOG_LIMIT)
+        line=json.dumps(value,separators=(",",":")).encode()
+        self.assertTrue(H.admission_matches(line+b"\n",SOURCE))
+        self.assertTrue(H.admission_matches(line+b"\r\n",SOURCE))
+        for raw in (line, line+b"\nPRIVATE", line.replace(b'"schema":1',b'"schema":true')+b"\n",
+                    line.replace(b'"schema":1',b'"schema":1.0')+b"\n"):
+            self.assertFalse(H.admission_matches(raw,SOURCE))
+
+    def test_outcome_and_worker_record_require_all_original_success_fields(self):
+        self.assertTrue(H.command_pass(outcome()))
+        for key, bad in (("exitCode",True),("exitCode",1),("timedOut",True),
+                         ("cleanupKnown",False),("capturesClosed",False),("cleanupReasons",["UNKNOWN"]),
+                         ("code","CLEANUP")):
+            self.assertFalse(H.command_pass({**outcome(),key:bad}))
+        value = {"schema":1,"appSource":SOURCE,"outcome":outcome(),"admissionMatched":True}
+        self.assertTrue(H.validate_worker(value, SOURCE))
+        for key, bad in (("schema",True),("appSource","a"*40),("admissionMatched",1)):
+            with self.assertRaises(ValueError): H.validate_worker({**value,key:bad},SOURCE)
+
+    def test_outer_success_retains_exact_counter_scope_and_source_distinction(self):
+        f = Fixture(self.root, Clock()); code, record = f.run()
+        self.assertEqual(code, 0)
+        self.assertEqual(record["status"], "PASS")
+        self.assertEqual(record["deadlineCounter"], 31000)
+        self.assertEqual(record["watchdogCounter"], 30000)
+        self.assertEqual(record["appSource"], SOURCE)
+        self.assertEqual(record["supervisorSource"], {"fixture":"a"*64})
+        self.assertLess(f.operations.index("drain"), f.operations.index("scope-close"))
+        self.assertLess(f.operations.index("scope-close"), f.operations.index("owner-close"))
+
+    def test_outer_refuses_failed_worker_but_preserves_actual_outcome(self):
+        f = Fixture(self.root, Clock()); f.child.poll = lambda: 1
+        f.value.update(admissionMatched=False, outcome={**outcome(),"code":"COMMAND_FAILED","exitCode":1})
+        code, record = f.run()
+        self.assertEqual(code, 1)
+        self.assertEqual(record["workerOutcome"], f.value)
+        self.assertEqual(record["status"], "FAIL")
+
+    def test_outer_refuses_live_scope_or_uncertain_close_without_raw_errors(self):
+        for operation in ("drain", "close"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
+                f = Fixture(Path(tmp), Clock())
+                if operation == "drain":
+                    f.A.WindowsScope.drain = lambda self, **kw: [{"pid":1}]
+                else:
+                    def bad(self): raise OSError("PRIVATE_PATH_PRIVATE_CREDENTIAL")
+                    f.A.WindowsScope.close = bad
+                code, record = f.run()
+                self.assertEqual(code, 1)
+                self.assertFalse(record["outerCleanupKnown"])
+                self.assertNotIn("PRIVATE", json.dumps(record))
+
+    def test_late_native_returns_cannot_become_pass(self):
+        for operation in ("spawn", "discover", "drain", "close"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
+                clock = Clock(); f = Fixture(Path(tmp), clock)
+                original = getattr(f.A.WindowsScope, operation)
+                def late(instance, *args, _original=original, **kwargs):
+                    result = _original(instance, *args, **kwargs)
+                    clock.value = 31500
+                    return result
+                setattr(f.A.WindowsScope, operation, late)
+                with self.assertRaises(ValueError): f.run()
+                self.assertFalse((Path(tmp)/"run/supervisor.json").exists())
+
+    def test_watchdog_is_armed_before_owned_scope_and_never_disarmed(self):
+        events = []
+        args = types.SimpleNamespace(worker=False,start_counter=1000,counter_frequency=1000)
+        with patch.object(H,"arguments",return_value=args), patch.object(H,"Counter",return_value=Clock()), \
+             patch.object(H,"arm_watchdog",side_effect=lambda d:events.append("armed")), \
+             patch.object(H,"modules",side_effect=lambda:(events.append("imports") or (None,None,None))), \
+             patch.object(H,"supervise",side_effect=lambda *a:(events.append("scope") or 0)), \
+             patch.object(H.sys,"stdout",io.StringIO()), patch.object(H.os,"_exit",side_effect=lambda c:events.append(("exit",c))):
+            H.main([])
+        self.assertEqual(events,["armed","imports","scope",("exit",0)])
+
+    def test_worker_fixed_launcher_and_clipped_original_e_budgets(self):
+        directory = self.root / "run"; directory.mkdir()
+        args = types.SimpleNamespace(private_parent=str(self.root),expected_source=SOURCE)
+        calls = []
+        def command(argv, **kw):
+            calls.append((argv,kw)); kw["private"].mkdir()
+            (kw["private"]/"stdout.log").write_bytes(json.dumps(H.expected_admission(SOURCE),separators=(",",":")).encode()+b"\n")
+            (kw["private"]/"stderr.log").write_bytes(b"")
+            return outcome()
+        E = types.SimpleNamespace(run_command=command,encoded=lambda x:json.dumps(x).encode(),
+                                  write_private=lambda p,b:p.write_bytes(b))
+        with patch.object(H,"installed_launcher",return_value=Path("/ProgramFiles/P2pKit Sample/P2pKit Sample.exe")):
+            self.assertEqual(H.worker(args,H.Deadline(Clock(),1000,1000),E),0)
+        self.assertEqual(calls[0][0][1:],["--rpc-windows-installed-admission"])
+        self.assertEqual((calls[0][1]["timeout"],calls[0][1]["cleanup_seconds"]),(15,5))
+        self.assertEqual(calls[0][1]["log_limit"],4096)
+
+    def test_bounded_reader_refuses_oversized_result(self):
+        path=self.root/"large";path.write_bytes(b'x'*(H.RECORD_LIMIT+1))
+        with self.assertRaises(ValueError):H.read_bounded(path,H.RECORD_LIMIT)
+
+    def test_failed_final_record_or_late_capture_never_returns_success(self):
+        f=Fixture(self.root,Clock())
+        def blocked_write(path,raw): raise OSError("PRIVATE")
+        f.E.write_private=blocked_write
+        with self.assertRaises(OSError): f.run()
+        self.assertFalse((self.root/"run/supervisor.json").exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            f=Fixture(Path(tmp),Clock())
+            with patch.object(FinishedThread,"is_alive",return_value=True):
+                code,record=f.run()
+            self.assertEqual(code,1)
+            self.assertFalse(record["capturesClosed"])
+
+
+def native_worker(case, directory):
+    """Fixed harmless fixture only; no installed file, provider or app invocation."""
+    A,E,F=H.modules()
+    if case == "blocked-worker":
+        # A synchronous call that never returns before the outer owner's cutoff.
+        time.sleep(120)
+        return 1
+    code = "import time; time.sleep(120)" if case == "blocked-outer" else "import subprocess,sys; p=subprocess.Popen([sys.executable,'-I','-B','-S','-c','import time; time.sleep(.2)']); p.wait(); print('HARMLESS_NESTED_CHILD_PASS')"
+    # The inner E Job + outer controller Job exercise actual nested inheritance.
+    actual=E.run_command([sys.executable,"-I","-B","-S","-c",code],cwd=ROOT,
+        environment=dict(os.environ),private=directory/"command",timeout=120 if case=="blocked-outer" else 5,
+        cleanup_seconds=2,log_limit=H.LOG_LIMIT)
+    H.write_new(E,directory/"worker.json",{"schema":1,"appSource":SOURCE,
+        "outcome":actual,"admissionMatched":H.command_pass(actual)})
+    return 0 if H.command_pass(actual) else 1
+
+
+def native_controller(argv):
+    parser=argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument("--native",choices=("normal","blocked-worker","blocked-outer"),required=True)
+    parser.add_argument("--start-counter",required=True)
+    parser.add_argument("--counter-frequency",required=True)
+    parser.add_argument("--private-parent",required=True)
+    args=parser.parse_args(argv)
+    H.SCOPE="SUPERVISOR_NATIVE_CONTROL_NOT_INSTALLED"
+    original_modules=H.modules
+    def native_modules():
+        A,E,F=original_modules()
+        if args.native=="blocked-outer":
+            original=A.WindowsScope.discover
+            def blocked(self):
+                original(self)
+                time.sleep(120)
+                return []
+            A.WindowsScope.discover=blocked
+        return A,E,F
+    H.modules=native_modules
+    H.worker_argv=lambda options,directory:[sys.executable,"-I","-B","-S",str(Path(__file__).resolve()),
+        "--fixture-worker",args.native,str(directory)]
+    H.main(["--start-counter",args.start_counter,"--counter-frequency",args.counter_frequency,
+            "--expected-source",SOURCE,"--private-parent",args.private_parent])
+
+
+if __name__ == "__main__":
+    if len(sys.argv)>1 and sys.argv[1]=="--fixture-worker":
+        require = H.require
+        require(len(sys.argv)==4 and sys.argv[2] in ("normal","blocked-worker","blocked-outer"))
+        os._exit(native_worker(sys.argv[2],Path(sys.argv[3])))
+    elif "--native" in sys.argv:
+        native_controller(sys.argv[1:])
+    else:
+        unittest.main(failfast=True)
