@@ -1240,3 +1240,13 @@ failures thrown before the profile receives its collection reference; they do no
 query failed native owners or disclose exception text, paths, SIDs or addresses.
 A last-entered step is not proof of the underlying cause. A missing already-loaded
 module still refuses admission; these diagnostics add no loading fallback.
+
+Copied system export graphs also recognize variables in a readable, non-executable
+section's declared zero-filled tail. These RVAs are data entries only: resolving
+them by name, ordinal or forwarder as callable targets still refuses. Export
+metadata and strings still require real file bytes, and callable terminal RVAs
+still require original raw-backed, readable/executable, non-writable sections
+outside verified metadata. Section-alignment padding is not declared data.
+This permits unrelated code exports to be inspected in Windows system images
+that also export zero-filled variables; it supplies no API-set routing, module
+loading or installed authority.

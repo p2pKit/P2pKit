@@ -372,7 +372,8 @@ def main():
             r" scope=INERT_TYPED_OWNER_AND_REFUSAL_NOT_NATIVE_ANCESTORS_OR_AUTHORITY\n", "")
     export_cases = ["direct", "ordinal", "aliases", "forward-name", "forward-extension", "forward-ordinal",
                     "snapshot", "holes", "unavailable", "cycle", "depth", "headers", "sections", "tables",
-                    "strings", "targets", "bounds", "work", "inventory", "aggregate"]
+                    "strings", "targets", "zero-fill-data", "zero-fill-only", "zero-fill-bounds",
+                    "zero-fill-forwarders", "bounds", "work", "inventory", "aggregate"]
     for case in export_cases:
         run("system-export-plan-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
             "--module", MODULE + "/" + PACKAGE + ".SystemExportPlanTests", case], 0,

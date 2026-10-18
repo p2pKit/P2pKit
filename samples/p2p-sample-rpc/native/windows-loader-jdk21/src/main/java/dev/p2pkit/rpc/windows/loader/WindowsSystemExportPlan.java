@@ -42,7 +42,7 @@ final class WindowsSystemExportPlan {
         boolean contains(long value) { return value >= start && value < end(); }
         boolean overlaps(Span other) { return start < other.end() && other.start < end(); }
     }
-    private record Section(long rva, long mapped, int raw, int rawBytes, long flags) {}
+    private record Section(long rva, long mapped, long virtualBytes, int raw, int rawBytes, long flags) {}
 
     private static final class Budget {
         private long remaining = MAXIMUM_WORK;
@@ -166,7 +166,7 @@ final class WindowsSystemExportPlan {
                     rva > imageSize || mapped > imageSize - rva || rawBytes % fileAlignment != 0 ||
                     (rawBytes == 0 ? raw != 0 : raw < headers || raw % fileAlignment != 0)) throw refused();
                 fileSpan(raw, rawBytes);
-                Section section = new Section(rva, mapped, (int) raw, (int) rawBytes, flags);
+                Section section = new Section(rva, mapped, virtualBytes, (int) raw, (int) rawBytes, flags);
                 for (Section previous : sections) {
                     if (new Span(rva, mapped).overlaps(new Span(previous.rva, previous.mapped)) ||
                         rawBytes != 0 && previous.rawBytes != 0 &&
@@ -203,7 +203,7 @@ final class WindowsSystemExportPlan {
                 long rva = u32(functionOffset + 4L * index);
                 functions[index] = rva;
                 if (rva != 0) {
-                    mapped(rva, 1);
+                    requireExportRva(rva);
                     if (directory.contains(rva)) forwarders[index] = forward(text(rva, directory.end()));
                 }
             }
@@ -242,6 +242,20 @@ final class WindowsSystemExportPlan {
         int ordinalIndex(long ordinal) {
             if (ordinal < ordinalBase || ordinal - ordinalBase >= functions.length) throw refused();
             return (int) (ordinal - ordinalBase);
+        }
+
+        private void requireExportRva(long rva) {
+            for (Section section : sections) {
+                budget.consume(1);
+                long offset = rva - section.rva;
+                if (offset >= 0 && offset < section.rawBytes) return;
+                // OS images can export variables in a data section's declared zero-filled tail.
+                // Admit only their RVA as copied graph data, never synthesized file bytes or a
+                // callable target. Alignment padding and executable/unreadable tails still refuse.
+                if (offset >= section.rawBytes && offset < section.virtualBytes &&
+                    (section.flags & 0x60000000L) == 0x40000000L) return;
+            }
+            throw refused();
         }
 
         void requireTerminal(long rva) {
