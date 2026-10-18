@@ -145,6 +145,15 @@ the new attempt began. It never falls back merely because an artifact is absent.
 Collection uses the current run attempt; already frozen selections are revalidated
 without being silently reselected.
 
+For PR execution, GitHub's embedded run/PR association can retain an older base
+SHA after `main` advances. Qualification checks the actual tested merge's two
+ordered parents and exact PR head. If its first parent differs from that cached
+base, exact-commit API comparisons must prove recorded-base → actual-base →
+current-main ancestry. This does not replace the original job, artifact-digest,
+manifest source/workflow SHA, version and tree checks. PR evidence still cannot
+qualify a main release. A stale association is not rewritten or treated as proof
+that a different commit was tested.
+
 The plan reports reasonable external wall limits (30–180 minutes per component,
 plus 10 minutes for evidence/upload). No special CPU20, initializer120 or
 before-upload handshakes apply. Real timeouts, test failures, unknown owned-process
