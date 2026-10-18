@@ -17,9 +17,12 @@ class RpcDesktopWindowsRuntimeReadbackTest {
     @Test fun installedAdmissionResultIsExactBoundedFormattingNotCallerAuthority() {
         val result = "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
             "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
-            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}"
+            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"NOT_ENTERED\"}"
         assertEquals("{\"source\":\"$source\",\"admission\":$result}", checkedInstalledAdmissionReadback(source, result))
-        for (invalid in listOf(null, 1, "", result + "\n", result + "extra", result.replace("DISABLED", "ENABLED"),
+        val publicEntry = "\"publicProvider\":\"NOT_ENTERED\""
+        for (invalid in listOf(null, 1, "", result + "\n", result + "extra",
+            result.replace(publicEntry, "\"publicProvider\":\"ENABLED\""),
+            result.replace(publicEntry, "\"publicProvider\":\"DISABLED\""),
             result.replace("REUSED", "NEW"), result.replace("NOT_ENTERED", "ENTERED"))) {
             assertFailsWith<IllegalStateException> { checkedInstalledAdmissionReadback(source, invalid) }
         }

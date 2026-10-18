@@ -59,7 +59,8 @@ different components. The existing Windows Desktop application's other features 
 
 - `DesktopRpcProfile.open` / `openAttempt` select only `PosixProfileFiles` and refuse Windows.
 - `WindowsProfileAvailability` already has `IMPLEMENTED=false` and `QUALIFIED=false`.
-- The JDK21 adapter's public `WindowsLoader.openInstalledProvider()` still refuses.
+- The JDK21 adapter's public `WindowsLoader.openInstalledProvider()` now uses the
+  original installed controller. Its productive storage and UI integration remain unqualified.
   A private original-owner bootstrap/load/JNI controller and explicit installed
   diagnostic now exist, but their development-fixture results do not qualify the
   installed path or connect the productive public provider. Optional local adapter

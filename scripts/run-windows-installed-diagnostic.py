@@ -178,7 +178,7 @@ def expected_admission(source):
     return {"source": source, "admission": {"schema": 1,
         "scope": "INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION",
         "admission": "REGISTERED", "repeat": "REUSED", "profileStorage": "NOT_ENTERED",
-        "network": "NOT_ENTERED", "publicProvider": "DISABLED"}}
+        "network": "NOT_ENTERED", "publicProvider": "NOT_ENTERED"}}
 
 
 def admission_matches(raw, source):

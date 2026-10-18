@@ -160,7 +160,7 @@ internal fun checkedInstalledAdmissionReadback(source: String, result: Any?): St
     check(source.matches(Regex("[a-f0-9]{40}"))) { "Clean source identity is required" }
     val expected = "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
         "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
-        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}"
+        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"NOT_ENTERED\"}"
     check(result is String && result == expected) { "Unexpected installed admission diagnostic result" }
     return "{\"source\":\"$source\",\"admission\":$result}"
 }

@@ -1,12 +1,15 @@
 package dev.p2pkit.rpc.windows.loader;
 
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Path;
+
 /**
- * Public fail-closed implementation boundary. The internal original installed composition below
- * remains unreachable from the public provider entry. The separately explicit installed diagnostic
- * may exercise it; implementation alone is not installed Windows/provider qualification.
+ * Public installed entry into the original process-owned admission chain. A normal return retains
+ * the actual verified image and JNI registration; it does not establish profile/runtime qualification.
  */
 public final class WindowsLoader {
-    public static final String REFUSAL = "WINDOWS_LOADER_DISABLED_TRUSTED_BOOTSTRAP_NOT_IMPLEMENTED";
+    public static final String REFUSAL = "WINDOWS_LOADER_INSTALLED_ENTRY_REQUIRED";
 
     private WindowsLoader() {}
 
@@ -118,7 +121,7 @@ public final class WindowsLoader {
         return installedAttempt;
     }
 
-    /** Closed original composition; only the explicit diagnostic, not the public provider, calls it. */
+    /** Closed original composition shared by the public provider and explicit admission diagnostic. */
     static void completeOriginalInstalledProvider() {
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         InstalledAttempt attempt = claimOriginalInstalledProvider();
@@ -155,12 +158,39 @@ public final class WindowsLoader {
     }
 
     /**
-     * No caller may supply a path, boolean, manifest or context to bypass the missing trust boundary.
-     * A future normal return must retain the actual installed production image/runtime and registered
-     * JNI owner for the process lifetime. A development/test DLL registration cannot satisfy this entry.
+     * No caller-supplied path, boolean, manifest or context grants admission. The early layout check
+     * only refuses development/classpath use; it cannot authorize a load. Every fresh accepted layout
+     * must still complete the original native installation, image/import and JNI admission chain.
+     * Existing reservations/failures/registered owners take precedence over mutable layout hints:
+     * a later property change must never turn a retained native failure into no-effects Unavailable.
      */
     public static void openInstalledProvider() {
         WindowsLoaderRuntime.requireDiagnosticRuntime();
-        throw new Unavailable();
+        synchronized (WindowsLoader.class) {
+            if (installedAttempt == null && !hasInstalledEntryLayout()) throw new Unavailable();
+        }
+        completeOriginalInstalledProvider();
+    }
+
+    /** Pure negative precondition, not filesystem identity, startup integrity or Program Files authority. */
+    private static boolean hasInstalledEntryLayout() {
+        try {
+            String home = System.getProperty("java.home");
+            if (home == null || home.length() > 32767) return false;
+            Path runtime = Path.of(home);
+            if (!runtime.isAbsolute() || !runtime.equals(runtime.normalize()) ||
+                runtime.getFileName() == null || !runtime.getFileName().toString().equals("runtime")) return false;
+            Path root = runtime.getParent();
+            if (root == null || root.getFileName() == null ||
+                !root.getFileName().toString().equals("P2pKit Sample")) return false;
+            Path expected = root.resolve("app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar");
+            URI module = ModuleLayer.boot().configuration().findModule(WindowsLoaderRuntime.MODULE).orElseThrow()
+                .reference().location().orElseThrow();
+            var source = WindowsLoader.class.getProtectionDomain().getCodeSource();
+            return source != null && "file".equals(module.getScheme()) &&
+                expected.equals(Path.of(module)) && expected.equals(Path.of(source.getLocation().toURI()));
+        } catch (RuntimeException | URISyntaxException refused) {
+            return false;
+        }
     }
 }

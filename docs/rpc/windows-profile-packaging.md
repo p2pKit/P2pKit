@@ -185,7 +185,10 @@ The exact installed Desktop argument `--rpc-windows-installed-admission` invokes
 only the original boot-module admission chain and same-owner reuse, then exits
 without UI, profile-storage or network entry. Unlike the two build-image
 readbacks, this explicitly performs DLL load/image verification/JNI registration;
-operator selection of this native diagnostic does not enable the public provider.
+operator selection of this native diagnostic does not enter the public provider.
+Its `publicProvider=NOT_ENTERED` result describes this invocation; the public entry
+separately uses the same original admission controller. The older `DISABLED` result
+remains part of the historical installed evidence, not the current result schema.
 After source/runtime and named-entry checks, the diagnostic initializes the
 original `java.desktop` Windows toolkit, as ordinary Desktop startup does.
 It accepts only the boot-image `java.awt.Toolkit` and `sun.awt.windows.WToolkit`

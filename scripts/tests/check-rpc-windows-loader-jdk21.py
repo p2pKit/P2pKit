@@ -328,7 +328,7 @@ def main():
             r" scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION\n", "")
     controller_cases = ["diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress",
                         "diagnostic-stages", "diagnostic-child-stages", "diagnostic-system-stages",
-                        "contract", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
+                        "contract", "public-layout-refusal", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
                         "missing-registration", "unfinished-registration", "wrong-thread", "wrong-owner"]
     for case in controller_cases:
         run("installed-process-controller-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),

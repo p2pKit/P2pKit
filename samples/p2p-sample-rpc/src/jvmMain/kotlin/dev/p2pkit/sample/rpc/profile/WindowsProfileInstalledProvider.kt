@@ -7,7 +7,7 @@ import java.lang.reflect.Modifier
 /**
  * Fixed Java-17 application connection to the separately packaged, original boot-module loader.
  * No supplied path, native calls, classloader, owner token or capability flag grants admission here.
- * The current loader always refuses. Its future normal return must own the genuine installed production
+ * The loader's normal return owns the genuine installed production
  * image and original JNI registration permanently; the development deny-storage DLL is not a provider.
  */
 internal object WindowsProfileInstalledProvider {
@@ -81,7 +81,7 @@ internal object WindowsProfileInstalledProvider {
      * Separately versioned managed composition, not a change to the actual native ABI/capabilities.
      * Root/metadata/locks/atomic create/replace/durable namespace/cleanup use the original custody bridge.
      * Native ABI13/0x43 is rechecked before reporting this contract and before every storage entry.
-     * Qualification is not a capability bit; the production loader still provides no normal-return path.
+     * Qualification is not a capability bit; real productive storage still requires its own evidence.
      */
     private class CompleteAdapter private constructor(
         private val custody: WindowsProfileCustodyBridge,

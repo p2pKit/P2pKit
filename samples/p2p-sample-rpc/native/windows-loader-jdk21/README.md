@@ -1,11 +1,17 @@
 # Isolated JDK21 preview Windows loader boundary
 
-**PUBLIC PROVIDER DISABLED.** This named module contains JDK21 preview FFM
-mechanics and the closed original installed-admission chain. Only the separately
-explicit installed-admission diagnostic may invoke that native load/JNI chain;
-ordinary readback and the public provider entry do not. Implementation and model
-results are not installed Windows/provider qualification. The documented trusted
+**PRODUCTIVE STORAGE AND HOST/CLIENT NOT_QUALIFIED.** This named module contains
+JDK21 preview FFM mechanics and the original installed-admission chain. The public
+provider now uses that same retained controller. Ordinary readback remains inert;
+the explicit installed diagnostic does not enter storage or the public provider.
+Implementation and model results are not Windows/provider qualification. The documented trusted
 OS/JVM/application/startup premise is still required before its first OS call.
+
+Real installed registration and same-owner reuse passed at `b82645bce7f96430d731edfa1a06af46e89898ee`
+under the canonical 30-second supervisor. That result precedes the public-entry connection;
+it does not qualify productive storage, UI availability or later changed source.
+Earlier implementation checkpoints below retain their original scopes and failures;
+the current entry description supersedes their historical unconditional-refusal statements.
 
 It does not replace the existing Desktop application, installer, version encoding,
 Foundation custody or publication pipeline. The ordinary Java17 compilation and
@@ -25,8 +31,12 @@ Module: `dev.p2pkit.rpc.windows.loader`.
   the exact original retained carrier. See the installed diagnostic scope below.
 - `WindowsLoaderRuntime.requireDiagnosticRuntime()`: checks the real JDK feature,
   module/layer and preview native-access arrangement. It does not authorize loading.
-- `WindowsLoader.openInstalledProvider()`: **always refuses** with
-  `WINDOWS_LOADER_DISABLED_TRUSTED_BOOTSTRAP_NOT_IMPLEMENTED` after runtime checks.
+- `WindowsLoader.openInstalledProvider()`: completes original installed admission,
+  then reuses its permanent image/JNI owner. A fresh development layout refuses
+  before reservation with `WINDOWS_LOADER_INSTALLED_ENTRY_REQUIRED`. Layout is
+  a negative precondition only; original Program Files, installed-file, runtime,
+  import-provider and loaded-image checks still precede candidate execution.
+  Existing reservations and failures cannot be downgraded by changing layout hints.
   There is no caller-supplied path, context, trusted Boolean, environment bypass or
   fallback provider.
 
@@ -766,12 +776,12 @@ bytes, process address, path or arbitrary message; it cannot authorize loading.
 The Java17 application now has a zero-argument installed-provider entry. It
 resolves only the exact original boot-layer loader module and invokes its fixed
 zero-argument API. There is no supplied path, backend, classloader, owner token
-or permission flag. The current loader **still always refuses**. Its private-
+or permission flag. The loader uses its original installed controller. Its private-
 constructor typed `Unavailable` result denotes refusal before installed/native
 acquisition; generic loader exceptions remain uncertain, not retryable success.
 Windows profile selection occurs before any POSIX home-directory resolution.
 
-Only a future successful production-loader return may construct the private
+Only a successful production-loader return may construct the private
 managed composition. Its distinct adapter contract is ABI1/`0x7f`; the underlying
 native ABI remains **13/`0x43`**, checked before every storage operation. Existing
 composed writes/deletes, namespace synchronization and ownership are reused.
@@ -779,7 +789,7 @@ Normal loader return must first establish the independently authorized productio
 artifact, runtime and original JNI owner, retained for process lifetime. The
 development deny-storage DLL deliberately has the same raw ABI and is **not**
 sufficient. Profile Stop cannot unload that owner. Availability/UI gates remain
-unchanged until productive admission exists; neither these model tests nor the
+closed until productive storage and application integration are demonstrated; neither model tests nor the
 actual cross-module typed-refusal test qualifies installed Windows operation.
 
 ### Exact ASLR header comparison

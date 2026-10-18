@@ -56,7 +56,7 @@ public final class InstalledProviderTests {
         check(mode.equals("diagnostic-runtime-module-absent") || mode.equals("diagnostic-runtime-module-present"));
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         requireNoInstalledAttempt();
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         Class<?> readback = PackagedVerifierTests.actualApplicationClass(
             "dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback", Path.of(args[1]).toRealPath(), args[2]);
         // Internal Kotlin method names include the actual compiler module suffix. Constrain the original
@@ -104,7 +104,7 @@ public final class InstalledProviderTests {
                 List.of("NOSHARE_READ", "NOSHARE_WRITE", "NOSHARE_DELETE")));
         }
         requireNoInstalledAttempt();
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         System.out.println("WINDOWS_RUNTIME_MODULE_CONNECTION_PASS case=" + mode +
             " scope=ACTUAL_JVM_MODULE_RESOLUTION_NOT_WINDOWS_OR_INSTALLED_NATIVE");
     }
@@ -125,7 +125,7 @@ public final class InstalledProviderTests {
             mode.equals("diagnostic-connected-system-absent") || mode.equals("diagnostic-connected-system-unknown") ||
             mode.equals("diagnostic-connected-in-progress") || mode.equals("diagnostic-connected-source-or-host-refusal"));
         WindowsLoaderRuntime.requireDiagnosticRuntime();
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         Path main = Path.of(args[1]).toRealPath();
         Class<?> readback = PackagedVerifierTests.actualApplicationClass(
             "dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback", main, args[2]);
@@ -183,7 +183,7 @@ public final class InstalledProviderTests {
                 else check(original instanceof IllegalStateException);
                 check(!(original instanceof WindowsLoader.Unavailable));
                 check(value(attempt, "bootstrap") == null && value(attempt, "installation") == null && value(attempt, "profile") == null);
-                OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+                InstalledProcessControllerTests.publicState();
                 System.out.println("WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + mode +
                     " scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION");
                 return;
@@ -191,7 +191,7 @@ public final class InstalledProviderTests {
             throw new AssertionError("Installed diagnostic refusal model unexpectedly succeeded");
         }
         check(value(attempt, "bootstrap") == null && value(attempt, "installation") == null && value(attempt, "profile") == null);
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         System.out.println("WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + mode +
             " scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION");
     }

@@ -23,7 +23,7 @@ public final class Probe {
         WindowsLoader.completeOriginalInstalledProvider();
         return "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
             "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
-            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}";
+            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"NOT_ENTERED\"}";
     }
 
     /** Read only an exact retained failure; this method grants no runtime or installation authority. */

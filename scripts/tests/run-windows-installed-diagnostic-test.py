@@ -227,7 +227,7 @@ class SupervisorTests(unittest.TestCase):
 
     def test_exact_admission_and_duplicate_or_excess_json_refused(self):
         value = H.expected_admission(SOURCE)
-        self.assertEqual(value["admission"]["publicProvider"], "DISABLED")
+        self.assertEqual(value["admission"]["publicProvider"], "NOT_ENTERED")
         self.assertEqual(H.decode(json.dumps(value).encode(), H.LOG_LIMIT), value)
         for raw in (b'{"a":1,"a":2}', b'x' * (H.LOG_LIMIT + 1), b'', b'{"a":NaN}',
                     b'{"a":Infinity}', b'{"a":-Infinity}', b'{"a":1e400}'):
@@ -236,7 +236,8 @@ class SupervisorTests(unittest.TestCase):
         self.assertTrue(H.admission_matches(line+b"\n",SOURCE))
         self.assertTrue(H.admission_matches(line+b"\r\n",SOURCE))
         for raw in (line, line+b"\nPRIVATE", line.replace(b'"schema":1',b'"schema":true')+b"\n",
-                    line.replace(b'"schema":1',b'"schema":1.0')+b"\n"):
+                    line.replace(b'"schema":1',b'"schema":1.0')+b"\n",
+                    line.replace(b'"publicProvider":"NOT_ENTERED"', b'"publicProvider":"DISABLED"')+b"\n"):
             self.assertFalse(H.admission_matches(raw,SOURCE))
 
     def test_outcome_and_worker_record_require_all_original_success_fields(self):

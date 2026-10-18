@@ -19,7 +19,7 @@ public final class InstalledProcessControllerTests {
     static final String INSTALLED_DIAGNOSTIC_RESULT =
         "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
         "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
-        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}";
+        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"NOT_ENTERED\"}";
 
     private InstalledProcessControllerTests() {}
 
@@ -27,7 +27,7 @@ public final class InstalledProcessControllerTests {
         check(arguments.length == 1);
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         check(root() == null);
-        publicRefusal();
+        publicState();
         switch (arguments[0]) {
             case "diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress" ->
                 diagnostic(arguments[0]);
@@ -35,6 +35,7 @@ public final class InstalledProcessControllerTests {
             case "diagnostic-child-stages" -> diagnosticChildStages();
             case "diagnostic-system-stages" -> diagnosticSystemStages();
             case "contract" -> contract();
+            case "public-layout-refusal" -> publicLayoutRefusal();
             case "claim" -> firstClaim();
             case "in-progress" -> inProgress();
             case "virtual-first" -> virtualFirst();
@@ -47,7 +48,7 @@ public final class InstalledProcessControllerTests {
             case "wrong-owner" -> wrongOwner();
             default -> throw new AssertionError("Unknown installed controller model");
         }
-        publicRefusal();
+        publicState();
         // Neither private claim nor any modeled terminal reuse enters the actual bootstrap.
         Field bootstrapRoot = WindowsSystemBootstrapCandidate.class.getDeclaredField("processOwner");
         bootstrapRoot.setAccessible(true);
@@ -56,9 +57,45 @@ public final class InstalledProcessControllerTests {
             " scope=INERT_ONCE_REUSE_NOT_INSTALLED_NATIVE_OR_PROVIDER_EXECUTION");
     }
 
-    private static void publicRefusal() {
-        Throwable failure = expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
-        check(failure.getClass() == WindowsLoader.Unavailable.class && failure.getMessage().equals(WindowsLoader.REFUSAL));
+    static void publicState() throws Throwable {
+        Object original = root();
+        if (original == null) {
+            Throwable failure = expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+            check(failure.getClass() == WindowsLoader.Unavailable.class && failure.getMessage().equals(WindowsLoader.REFUSAL));
+            check(root() == null);
+        } else if (value(original, "state").toString().equals("Failed")) {
+            check(expect(RuntimeException.class, WindowsLoader::openInstalledProvider) == value(original, "failure"));
+        } else if (value(original, "state").toString().equals("Registered")) {
+            Object registration = value(original, "registration");
+            // Incomplete seeded terminal state must also be rejected by the actual public entry.
+            if (registration == null || ((WindowsJniRegistrationOwner) registration).state() !=
+                WindowsJniRegistrationOwner.State.Registered) {
+                expect(IllegalStateException.class, WindowsLoader::openInstalledProvider);
+            } else {
+                WindowsLoader.openInstalledProvider();
+                WindowsLoader.openInstalledProvider();
+                check(value(original, "registration") == registration);
+            }
+        } else {
+            check(!(expect(IllegalStateException.class, WindowsLoader::openInstalledProvider) instanceof WindowsLoader.Unavailable));
+        }
+        check(root() == original);
+    }
+
+    private static void publicLayoutRefusal() throws Throwable {
+        String original = System.getProperty("java.home");
+        String fake = java.nio.file.Path.of(original).toAbsolutePath().getRoot()
+            .resolve("not-an-installation/P2pKit Sample/runtime").toString();
+        try {
+            for (String hint : new String[] {"", "runtime", original + "/../runtime", fake, "x".repeat(32768)}) {
+                System.setProperty("java.home", hint);
+                publicState(); // No native reservation, even with a nominal installed directory shape.
+            }
+            System.clearProperty("java.home");
+            publicState();
+        } finally {
+            System.setProperty("java.home", original);
+        }
     }
 
     private static Object root() throws ReflectiveOperationException {
