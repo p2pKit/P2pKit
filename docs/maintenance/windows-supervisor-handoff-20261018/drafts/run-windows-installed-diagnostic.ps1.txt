@@ -1,0 +1,208 @@
+# The caller must independently admit the Standard-user session, installation
+# and startup inputs. This observes the supervisor, not installation authority.
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSource,
+    [Parameter(Mandatory = $true)][string]$PrivateParent,
+    [string]$Python = ''
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$status = 'FAIL'
+$stage = 'PREPARATION'
+$process = $null
+$handle = $null
+$capsule = $null
+$start = 0L
+$finished = 0L
+$frequency = 0L
+$deadline = 0L
+$exitCode = $null
+$terminationAttempted = $false
+$terminationReturned = $false
+$processClosed = $false
+$receipt = $null
+$utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+
+function Require([bool]$Condition) {
+    if (-not $Condition) { throw 'INSTALLED_SUPERVISOR_REFUSED' }
+}
+
+function Quote-Native([string]$Value) {
+    # All inputs are paths, decimal counters or hex source identities. Embedded
+    # quotes/control characters are refused, not interpreted by a shell.
+    Require (-not [string]::IsNullOrEmpty($Value) -and $Value -notmatch '["\x00-\x1f]')
+    return '"' + ($Value -replace '(\\+)$', '$1$1') + '"'
+}
+
+function Read-Closed([string]$Path, [long]$Limit) {
+    # Exclusive open after observed process exit verifies redirect handles have
+    # closed; never use an unbounded ReadToEnd or asynchronous line accumulator.
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+    try {
+        Require ($stream.Length -le $Limit)
+        $bytes = New-Object byte[] ([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $count = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            Require ($count -gt 0)
+            $offset += $count
+        }
+        Require ($stream.ReadByte() -eq -1)
+        return ,$bytes
+    } finally { $stream.Dispose() }
+}
+
+try {
+    Require ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and [IntPtr]::Size -eq 8)
+    Require ([Diagnostics.Stopwatch]::IsHighResolution)
+    $frequency = [Diagnostics.Stopwatch]::Frequency
+    Require ($frequency -gt 0 -and $frequency -le 1000000000)
+    $parent = Get-Item -LiteralPath $PrivateParent
+    Require ($parent.PSIsContainer -and (($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0))
+    $entry = Join-Path $PSScriptRoot 'run-windows-installed-diagnostic.py'
+    Require ([IO.File]::Exists($entry))
+    if ($Python -eq '') {
+        $command = Get-Command python.exe -CommandType Application -ErrorAction Stop
+        $Python = $command.Source
+    }
+    $Python = (Get-Item -LiteralPath $Python).FullName
+    Require ([IO.Path]::IsPathRooted($Python) -and [IO.File]::Exists($Python))
+
+    # Atomic creation with the existing private-file user+SYSTEM policy; never
+    # create a permissive directory and repair it afterwards. No existing ACL
+    # or account is changed. The token's default owner may differ on CI hosts.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class P2pKitInstalledObserverNative {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SecurityAttributes {
+        public int Length;
+        public IntPtr Descriptor;
+        [MarshalAs(UnmanagedType.Bool)] public bool Inherit;
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CreateDirectoryW(string path, ref SecurityAttributes security);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool TerminateProcess(IntPtr process, uint exitCode);
+}
+'@
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.SetOwner($identity.Owner)
+        $system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+        foreach ($sid in @($identity.User, $system)) {
+            $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+                $sid, [Security.AccessControl.FileSystemRights]::FullControl,
+                ([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit),
+                [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
+            $acl.AddAccessRule($rule)
+        }
+        $descriptor = $acl.GetSecurityDescriptorBinaryForm()
+    } finally { $identity.Dispose() }
+    $memory = [Runtime.InteropServices.Marshal]::AllocHGlobal($descriptor.Length)
+    try {
+        [Runtime.InteropServices.Marshal]::Copy($descriptor, 0, $memory, $descriptor.Length)
+        $security = New-Object P2pKitInstalledObserverNative+SecurityAttributes
+        $security.Length = [Runtime.InteropServices.Marshal]::SizeOf($security)
+        $security.Descriptor = $memory
+        $security.Inherit = $false
+        $capsule = Join-Path $parent.FullName ('installed-' + [Guid]::NewGuid().ToString('N'))
+        Require ([P2pKitInstalledObserverNative]::CreateDirectoryW($capsule, [ref]$security))
+    } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($memory) }
+
+    $stdout = Join-Path $capsule 'observer-stdout.log'
+    $stderr = Join-Path $capsule 'observer-stderr.log'
+    # The shared raw Windows QPC clock starts BEFORE helper process creation.
+    # Preparation above runs no application, worker, or candidate native DLL.
+    $stage = 'PROCESS_START'
+    $start = [Diagnostics.Stopwatch]::GetTimestamp()
+    Require ($start -gt 0 -and $start -lt ([long]::MaxValue - 30L * $frequency))
+    $deadline = $start + 30L * $frequency
+    $arguments = @('-I', '-B', $entry, '--start-counter', [string]$start,
+        '--counter-frequency', [string]$frequency, '--expected-source', $ExpectedSource,
+        '--private-parent', $capsule)
+    $line = ($arguments | ForEach-Object { Quote-Native $_ }) -join ' '
+    $process = Start-Process -FilePath $Python -ArgumentList $line -WorkingDirectory $PSScriptRoot `
+        -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    # Retain the original process object's handle. No PID/name lookup or Kill()
+    # fallback is used if observation or termination becomes uncertain.
+    $handle = $process.SafeHandle
+    Require (-not $handle.IsInvalid -and -not $handle.IsClosed)
+    $stage = 'PROCESS_WAIT'
+    while (-not $process.HasExited) {
+        $now = [Diagnostics.Stopwatch]::GetTimestamp()
+        Require ($now -lt $deadline)
+        foreach ($path in @($stdout, $stderr)) {
+            if ([IO.File]::Exists($path)) { Require ((Get-Item -LiteralPath $path).Length -le 65536) }
+        }
+        $milliseconds = [Math]::Min(50, [Math]::Max(1, [Math]::Floor(($deadline - $now) * 1000.0 / $frequency)))
+        [void]$process.WaitForExit([int]$milliseconds)
+    }
+    $exitCode = $process.ExitCode
+    Require ([Diagnostics.Stopwatch]::GetTimestamp() -lt $deadline -and $exitCode -eq 0)
+    $stage = 'OUTPUT_AND_RECEIPT'
+    $out = Read-Closed $stdout 65536
+    $err = Read-Closed $stderr 65536
+    Require ($err.Length -eq 0 -and $utf8.GetString($out).Replace("`r`n", "`n") -ceq "WINDOWS_INSTALLED_SUPERVISOR PASS`n")
+    $raw = Read-Closed (Join-Path $capsule 'run/supervisor.json') 65536
+    $receipt = $utf8.GetString($raw) | ConvertFrom-Json
+    Require ($receipt.schema -eq 1 -and $receipt.scope -ceq 'INSTALLED_ADMISSION_SUPERVISION_NOT_PROFILE_QUALIFICATION' `
+        -and $receipt.status -ceq 'PASS' -and $receipt.appSource -ceq $ExpectedSource `
+        -and $receipt.startCounter -eq $start -and $receipt.counterFrequency -eq $frequency `
+        -and $receipt.deadlineCounter -eq $deadline -and $receipt.completedCounter -ge $start `
+        -and $receipt.completedCounter -lt $deadline -and $receipt.outerCleanupKnown -eq $true `
+        -and $receipt.capturesClosed -eq $true)
+    $status = 'PASS'
+} catch {
+    # Finite phase only. Raw process output and original evidence stay private.
+    $status = 'FAIL'
+} finally {
+    if ($null -ne $process) {
+        try {
+            if (-not $process.HasExited) {
+                $status = 'FAIL'
+                $terminationAttempted = $true
+                Require ($null -ne $handle -and -not $handle.IsClosed -and -not $handle.IsInvalid)
+                $terminationReturned = [P2pKitInstalledObserverNative]::TerminateProcess($handle.DangerousGetHandle(), 125)
+                # Failure-only retirement observation, never extra acceptance time.
+                if ($terminationReturned) { [void]$process.WaitForExit(2000) }
+            }
+            if ($process.HasExited) { $exitCode = $process.ExitCode }
+            else { $status = 'FAIL' }
+        } catch { $status = 'FAIL' }
+        try { $process.Dispose(); $processClosed = $true } catch { $status = 'FAIL' }
+    }
+    $finished = [Diagnostics.Stopwatch]::GetTimestamp()
+    if ($start -le 0 -or $finished -ge $deadline -or -not $processClosed -or $terminationAttempted) { $status = 'FAIL' }
+}
+
+$record = [ordered]@{
+    schema = 1; scope = 'EXTERNAL_PROCESS_EXIT_OBSERVER_NOT_PROFILE_QUALIFICATION'; status = $status
+    stage = $stage; appSource = $ExpectedSource; startCounter = $start; counterFrequency = $frequency
+    deadlineCounter = $deadline; completedCounter = $finished; budgetMilliseconds = 30000
+    elapsedMilliseconds = $(if ($start -gt 0 -and $frequency -gt 0) { ($finished - $start) * 1000.0 / $frequency } else { $null })
+    exitCode = $exitCode; originalProcessHandleClosed = $processClosed
+    terminationAttempted = $terminationAttempted; terminationReturned = $terminationReturned
+}
+try {
+    Require ($null -ne $capsule -and [IO.Directory]::Exists($capsule))
+    $recordPath = Join-Path $capsule 'observer.json'
+    $stream = [IO.File]::Open($recordPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $bytes = $utf8.GetBytes(($record | ConvertTo-Json -Depth 5) + "`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    } finally { $stream.Dispose() }
+} catch { $status = 'FAIL' }
+
+Write-Output ('WINDOWS_INSTALLED_DIAGNOSTIC_OBSERVER ' + $status)
+if ($status -ne 'PASS') { exit 125 }
+exit 0

@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "reviewedAt": "2026-10-18T02:49:52.421676+00:00",
+  "verdict": "APPROVE_PYTHON_SOURCE_AND_13_OFFLINE_CONTROLS_FOR_EXECUTION",
+  "patchSha256": "d8bfb3a2df8143f2f42248045980df38b2c486ac3916239ecb895d3fe2de507d",
+  "files": {
+    "scripts/run-windows-installed-diagnostic.py": "b73e42b4ebf2e5e0eda10c4f8c9b8d93beef51bee0a4cf616064b6fd5c444f8b",
+    "scripts/tests/run-windows-installed-diagnostic-test.py": "7dc5e4fa912aa21e506c4f842944297c4d4e806866ffacdd12d1dc2794e38bde"
+  },
+  "findings": [],
+  "reviewed": [
+    "ExactsharedQPC/frequency admission and immutable30send;29shardwatch/reserves do not append time.",
+    "Outercontrollerarms fatal selfTerminateProcess watchdog before imports/scope/spawn; soleouterJob handle never borrowedbywatchdog or inherited; worker getsnormal nestedE scope.",
+    "Actual fixedPF resolution+exactinstalledflag; sourcehashesboundexternallyseparatefromappcommit; no git/unownedprovenancechild.",
+    "All timelysuccesspredicates/latepostchecks, firstworkeroutcome preservation, knowninner+outer cleanup and closedlogs. All exceptionpathsnonpassing; timeoutkillnotcleanupcertificate.",
+    "13offline methods cover typeddeadline/worker/output, known originalcontrols, lateoperations and finalizationrefusal. Native testonly threechoices hardwired harmlessPython fixtures; no nativeinstalledoption or claimedinstalledauthority."
+  ],
+  "pending": [
+    "ExternalPowerShell originalprocesshandle/strictreceipt/capture implementation underrootrepair and independentreview.",
+    "Execute13offlinecontrols once, then actualWindowsnormalnesteddescendants/blockedworker/blockedouter controls viareviewedoutsideobserver beforeinstalledinvocation."
+  ],
+  "limits": "No realWindows or installedexecution by reviewer; trustordinaryCPython/WinDLLGILrelease+OSprogress, nothardphysical30stermination. Watchdogretirement observedthroughprocessdeath, notthreadjoin."
+}
