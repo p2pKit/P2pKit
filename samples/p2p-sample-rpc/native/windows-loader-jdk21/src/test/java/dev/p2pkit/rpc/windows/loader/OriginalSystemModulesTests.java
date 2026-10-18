@@ -371,7 +371,7 @@ public final class OriginalSystemModulesTests {
         return (byte[]) method.invoke(null, name);
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final Arena bootstrapScope = Arena.ofConfined(), moduleScope = Arena.ofConfined(), handleScope = Arena.ofConfined();
         final Arena queryScope = Arena.ofConfined(), ancestorScope = Arena.ofConfined(), backing = Arena.ofConfined();
         final Arena frame = Arena.ofConfined();
@@ -476,7 +476,10 @@ public final class OriginalSystemModulesTests {
             return file;
         }
         void attachSecurity(boolean policy) throws Throwable {
-            WindowsOriginalSystemModuleCandidate owner = modules[0];
+            attachSecurity(0, policy);
+        }
+        void attachSecurity(int slot, boolean policy) throws Throwable {
+            WindowsOriginalSystemModuleCandidate owner = modules[slot];
             field(owner, "securityAttempted").setBoolean(owner, true);
             query = file.newSystemModuleSecurity(owner);
             field(owner, "security").set(owner, query);
@@ -491,7 +494,10 @@ public final class OriginalSystemModulesTests {
             field(owner, "leafPolicyRefused").setBoolean(owner, !policy);
         }
         void attachAncestors(boolean policy) throws Throwable {
-            WindowsOriginalSystemModuleCandidate owner = modules[0];
+            attachAncestors(0, policy);
+        }
+        void attachAncestors(int slot, boolean policy) throws Throwable {
+            WindowsOriginalSystemModuleCandidate owner = modules[slot];
             field(owner, "ancestorsAttempted").setBoolean(owner, true);
             ancestors = query.newSystemModuleAncestors(owner);
             field(owner, "ancestors").set(owner, ancestors);
@@ -561,7 +567,9 @@ public final class OriginalSystemModulesTests {
                 if (byteFrame != null && byteFrame.scope().isAlive()) byteFrame.close();
             }
             if (frame.scope().isAlive()) frame.close();
-            backing.close(); ancestorScope.close(); queryScope.close(); handleScope.close(); moduleScope.close(); bootstrapScope.close();
+            backing.close(); ancestorScope.close(); queryScope.close(); handleScope.close();
+            if (moduleScope.scope().isAlive()) moduleScope.close();
+            bootstrapScope.close();
         }
     }
 

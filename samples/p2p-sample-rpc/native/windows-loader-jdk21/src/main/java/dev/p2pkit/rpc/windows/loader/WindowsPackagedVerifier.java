@@ -183,7 +183,7 @@ final class WindowsPackagedVerifier {
         originalSystemModules.requireOriginalExportGraph();
     }
 
-    /** Bind every original import to copied export DATA. No GPA, native call or loading authority. */
+    /** Bind imports to the original graph; installed API-set routes also require actual already-loaded PINs. */
     void prepareOriginalSystemImports() {
         requirePrepared();
         if (originalBytes == null) throw new IllegalStateException("Unowned comparison cannot acquire original system imports");

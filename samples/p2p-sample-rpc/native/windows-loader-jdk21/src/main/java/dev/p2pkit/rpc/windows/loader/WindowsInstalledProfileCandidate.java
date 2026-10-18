@@ -100,8 +100,12 @@ final class WindowsInstalledProfileCandidate {
             }
             diagnosticPhase = 13;
             packaged = bytes.inspectPackagedBytes(manifest, parentPin.manifestSha256(), parentPin.source(), parentPin.tree());
+            diagnosticPhase = 19;
+            systems.prepareApiSetNamespace();
             diagnosticPhase = 14;
             packaged.prepareOriginalSystemImports();
+            diagnosticPhase = 20;
+            systems.finishApiSetRoutes();
             diagnosticPhase = 15;
             inputsReady = true;
             WindowsLibraryLoadInvocation.prepareInstalled(this); // Attaches load before its private frame effects.
@@ -157,11 +161,12 @@ final class WindowsInstalledProfileCandidate {
             case 11 -> "PROFILE_BYTES";
             case 12 -> "PROFILE_MANIFEST";
             case 13 -> "PROFILE_PACKAGE";
-            case 14 -> "PROFILE_IMPORTS";
+            case 14 -> systems == null ? "PROFILE_IMPORTS" : systems.importFailureOperation();
             case 15 -> "PROFILE_PREPARE_LOAD";
             case 16 -> "PROFILE_LOAD_IMAGE";
             case 17 -> "PROFILE_VERIFY_IMAGE";
             case 18 -> "PROFILE_REGISTER_JNI";
+            case 19, 20 -> systems == null ? "API_SET_PRECONDITION" : systems.apiSetFailureOperation();
             default -> "PROFILE_PRECONDITION";
         };
     }
@@ -259,6 +264,7 @@ final class WindowsInstalledProfileCandidate {
         profile.requireOriginalBytes(bytes);
         profileAncestors.requireInstallationRoot(this);
         packaged.requireInstalledPreparation(bytes);
+        systems.requireSealedApiSetRoutes();
     }
     void requireOriginalPackagedPlan(WindowsPackagedVerifier candidate) {
         requirePreparedInputs();

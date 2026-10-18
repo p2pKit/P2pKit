@@ -36,6 +36,20 @@ class RpcDesktopWindowsRuntimeReadbackTest {
         assertEquals(good.optionNames, actual.optionNames)
     }
 
+    @Test fun desktopPreparationRequiresExactOriginalBootClassesWithoutInitializingAToolkit() {
+        requireOriginalDesktopClass(java.awt.Toolkit::class.java, "java.awt.Toolkit")
+        assertFailsWith<IllegalStateException> {
+            requireOriginalDesktopClass(String::class.java, "java.lang.String")
+        }
+        assertFailsWith<IllegalStateException> {
+            requireOriginalDesktopClass(java.awt.Toolkit::class.java, "sun.awt.windows.WToolkit")
+        }
+        assertFailsWith<IllegalStateException> {
+            requireOriginalDesktopClass(RpcDesktopWindowsRuntimeReadbackTest::class.java,
+                RpcDesktopWindowsRuntimeReadbackTest::class.java.name)
+        }
+    }
+
     @Test fun reviewedFeaturesEmitTheirActualVersionWithoutClaimingProfileOrInstallation() {
         for (actual in listOf(good, good.copy(javaFeature = 21, javaVersion = "21.0.9+10-LTS"))) {
             val result = read(actual)

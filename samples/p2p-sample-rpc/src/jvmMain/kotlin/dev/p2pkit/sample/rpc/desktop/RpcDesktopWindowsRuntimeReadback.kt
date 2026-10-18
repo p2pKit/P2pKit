@@ -58,6 +58,8 @@ public object RpcDesktopWindowsRuntimeReadback {
                     !entry.isBridge && !entry.isSynthetic) { "Unexpected installed diagnostic entry" }
             }
             failureReader = reader // Only the exact admitted module/class owns this read-only method.
+            phase = InstalledAdmissionPhase.DESKTOP_RUNTIME_PREPARATION
+            WindowsDesktopRuntimePreparation.prepare()
             phase = InstalledAdmissionPhase.NATIVE_ADMISSION
             val result = try {
                 method.invoke(null)
@@ -166,7 +168,7 @@ internal fun checkedInstalledAdmissionReadback(source: String, result: Any?): St
 /** Diagnostic vocabulary only, never admission permission or private exception classification. */
 internal enum class InstalledAdmissionPhase {
     RUNTIME_PRECHECK, MODULE_LOOKUP, MODULE_OWNER, PROBE_LOOKUP, PROBE_OWNER,
-    ENTRY_LOOKUP, ENTRY_OWNER, NATIVE_ADMISSION, RESULT_VALIDATION,
+    ENTRY_LOOKUP, ENTRY_OWNER, DESKTOP_RUNTIME_PREPARATION, NATIVE_ADMISSION, RESULT_VALIDATION,
 }
 
 private val installedFailureOperations = setOf(
@@ -192,6 +194,10 @@ private val installedFailureOperations = setOf(
     "PROFILE_LOAD_IMAGE",
     "PROFILE_VERIFY_IMAGE",
     "PROFILE_REGISTER_JNI",
+    "API_SET_PRECONDITION", "API_SET_FRAME", "API_SET_QUERY_EXPORT", "API_SET_PROCESS_QUERY",
+    "API_SET_NAMESPACE_POINTER", "API_SET_NAMESPACE_REGION", "API_SET_NAMESPACE_HEADER",
+    "API_SET_NAMESPACE_DATA", "API_SET_NAMESPACE_RECHECK", "API_SET_ROUTE_PIN",
+    "API_SET_RETURN_UNKNOWN", "API_SET_RETIREMENT",
 ) + buildSet {
     // Fixed diagnostic vocabulary shared with the retained JDK21 cohort. No arbitrary suffix/text
     // is accepted, and none of these labels changes the original failure or grants admission.

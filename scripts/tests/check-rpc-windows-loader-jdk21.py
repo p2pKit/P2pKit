@@ -76,6 +76,8 @@ def main():
                         "BootstrapReturnTests" in name or
                         "SystemImportResolutionTests" in name or
                         "SystemExportPlanTests" in name or
+                        "ApiSetPlanTests" in name or
+                        "OriginalApiSetTests" in name or
                         "OriginalSystemModulesTests" in name or
                         "OriginalFileLeaseTests" in name or
                         "ProfileDllFileCandidateTests" in name or
@@ -269,7 +271,7 @@ def main():
                       bindings[5]["sha256"], bindings[6]["sha256"]],
             "WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + re.escape(case) +
             r" scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION\n",
-            flags=("--add-modules=jdk.unsupported",), expected_stderr=expected_stderr)
+            flags=("--add-modules=jdk.unsupported,java.desktop",), expected_stderr=expected_stderr)
     loaded_image_cases = ["unattached", "once", "thread", "unprepared", "owned-required", "order",
                           "wrong-order", "substituted-view", "missing-name", "duplicate-name", "closed-scope",
                           "declaration", "registration-before-verification", "registration-after-failure",
@@ -379,6 +381,19 @@ def main():
             "--module", MODULE + "/" + PACKAGE + ".SystemExportPlanTests", case], 0,
             "WINDOWS_SYSTEM_EXPORT_PLAN_PASS case=" + re.escape(case) +
             r" scope=INERT_COPIED_PE_GRAPH_NOT_SYSTEM_IDENTITY_OR_LOADING_AUTHORITY\n", "")
+    for case in ("default-host", "snapshot", "headers", "ranges", "hashes", "metadata-alias", "contracts",
+                 "revisions", "values", "strings", "bounds", "collisions", "graph"):
+        run("api-set-plan-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".ApiSetPlanTests", case], 0, "API_SET_PLAN_MODEL_PASS\n", "")
+    for case in ("owner-refusal", "owner-substitution", "owner-scope", "thread", "header-bounds", "region-bounds",
+                 "query-export-success", "query-export-wrong", "query-export-unknown",
+                 "query-export-provider", "query-export-pin-unknown",
+                 "process-success", "process-short", "process-pid", "process-status", "process-unknown",
+                 "read-success", "read-short", "read-zero", "read-unknown", "route-success", "route-wrong",
+                 "route-absent", "route-unknown", "route-outside", "finish-pointer", "finish-region",
+                 "finish-data", "sealed-required"):
+        run("original-api-set-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".OriginalApiSetTests", case], 0, "ORIGINAL_API_SET_MODEL_PASS\n", "")
     system_module_cases = ["owner-refusal", "names", "bootstrap-substitution", "slot-substitution", "thread",
                            "paths", "path-embedded-nul", "pin-success", "module-absent", "pin-false",
                            "pin-contradictory", "pin-duplicate", "path-mismatch", "system-path-unknown",

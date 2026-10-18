@@ -14,8 +14,9 @@ import java.lang.invoke.MethodHandle;
  * The original conditional bootstrap calls, ntdll GPA/query and startup still need independent authority.
  * The general graph API yields copied export DATA, not callable authority. The fixed original Program
  * Files child additionally uses the retained shell32 PIN with actual GPA/provider checks under trusted
- * startup. No LoadLibrary fallback, API-set routing, profile loading, JNI registration or productive
- * activation exists. Full OS transitive load closure is not modeled.
+ * startup. Installed preparation can attach the separate original process API-set reader and route
+ * PINs. No LoadLibrary fallback, profile loading or JNI registration occurs in this collection.
+ * Full OS transitive load closure is not modeled.
  */
 final class WindowsOriginalSystemModulesCandidate {
     private static final int COUNT = 8;
@@ -78,6 +79,8 @@ final class WindowsOriginalSystemModulesCandidate {
     private WindowsSystemExportPlan.Input[] inputs;
     private WindowsSystemExportPlan graph;
     private int diagnosticPhase; // Stored readback only; never participates in admission or ownership.
+    private boolean apiSetAttempted;
+    private WindowsOriginalApiSetCandidate apiSets;
 
     WindowsOriginalSystemModulesCandidate(WindowsSystemBootstrapCandidate bootstrap) { this.bootstrap = bootstrap; }
 
@@ -520,8 +523,45 @@ final class WindowsOriginalSystemModulesCandidate {
     }
     WindowsSystemExportPlan.Target resolve(String module, String symbol) {
         requireOriginalExportGraph();
-        try { return graph.resolve(module, symbol); }
+        try { return apiSets == null ? graph.resolve(module, symbol) : apiSets.resolve(module, symbol); }
         catch (Throwable caught) { throw fail(caught); }
+    }
+
+    void prepareApiSetNamespace() {
+        requireOriginalExportGraph();
+        if (apiSetAttempted) throw new IllegalStateException("Original API-set namespace was already attempted");
+        apiSetAttempted = true;
+        try {
+            apiSets = new WindowsOriginalApiSetCandidate(this); // Permanent attachment before any query/PIN.
+            apiSets.observe();
+        } catch (Throwable caught) { throw fail(caught); }
+    }
+    void finishApiSetRoutes() {
+        requireOriginalExportGraph();
+        if (apiSets == null) throw new IllegalStateException("Missing original API-set namespace");
+        try { apiSets.finishRoutes(); }
+        catch (Throwable caught) { throw fail(caught); }
+    }
+    void requireSealedApiSetRoutes() {
+        requireOriginalExportGraph();
+        if (apiSets == null) throw new IllegalStateException("Missing original API-set route ownership");
+        apiSets.requireSealed();
+    }
+    void requireOriginalApiSet(WindowsOriginalApiSetCandidate candidate) {
+        requireOriginalExportGraph();
+        if (!apiSetAttempted || candidate == null || candidate != apiSets) {
+            throw new IllegalStateException("API-set namespace is not the original retained child");
+        }
+    }
+    Linker apiSetLinker(WindowsOriginalApiSetCandidate candidate) { requireOriginalApiSet(candidate); return linker; }
+    Arena apiSetArena(WindowsOriginalApiSetCandidate candidate) { requireOriginalApiSet(candidate); return bootstrapArena; }
+    WindowsSystemExportPlan apiSetGraph(WindowsOriginalApiSetCandidate candidate) { requireOriginalApiSet(candidate); return graph; }
+    MemorySegment apiSetEntry(WindowsOriginalApiSetCandidate candidate, int index) {
+        requireOriginalApiSet(candidate); return bootstrap.originalApiSetEntry(this, index);
+    }
+    String apiSetFailureOperation() { return apiSets == null ? "API_SET_PRECONDITION" : apiSets.failureOperation(); }
+    String importFailureOperation() {
+        return apiSets != null && apiSets.hasFailed() ? apiSets.failureOperation() : "PROFILE_IMPORTS";
     }
     WindowsSystemExportPlan.Target resolveOrdinal(String module, long ordinal) {
         requireOriginalExportGraph();

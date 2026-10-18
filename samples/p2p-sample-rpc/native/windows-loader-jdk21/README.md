@@ -1250,3 +1250,35 @@ outside verified metadata. Section-alignment padding is not declared data.
 This permits unrelated code exports to be inspected in Windows system images
 that also export zero-filled variables; it supplies no API-set routing, module
 loading or installed authority.
+
+### Original process API-set routing
+
+Installed preparation now attaches a distinct `WindowsOriginalApiSetCandidate`
+after package-byte verification and before import planning or profile loading.
+It uses the original retained ntdll query export, checks the actual process ID,
+and reads the native AMD64 PEB namespace pointer through the original
+`ReadProcessMemory` entry. The supported subset is a version-6 namespace entirely
+inside one committed, read-only `MEM_MAPPED` allocation. Namespace pointer,
+allocation/protection and complete copied bytes must remain stable through
+observation and the final pre-load recheck. Unknown returns retain private frames;
+no failed attempt can be reset or reclassified as an effects-free refusal.
+
+`WindowsApiSetPlan` validates bounded tables, strings, structural non-overlap,
+hashes and unique contract prefixes. The revision omitted by the OS hash is
+handled conservatively: future revisions refuse. Only sealed contracts with one
+unnamed DLL host resolve; importer-specific overrides, empty hosts, other file
+types and namespace extensions remain unsupported. Each virtual hop consumes
+the existing export-walk budget. A parsed map is data, not authority.
+
+For every used contract, its selected physical host must already belong to the
+original verified system cohort. Actual `GetModuleHandleExW(PIN, contract)` must
+return that exact retained module. These lookups cannot load a missing provider;
+there is no API-set `GetProcAddress` or `LoadLibrary` fallback. Contract PINs live
+until process exit. The namespace and private-frame retirement must be sealed
+before the installed load can be prepared. The existing actual image/import
+verification and same-image JNI ownership remain required afterward.
+
+The first OS/JVM/startup authority remains an independent prerequisite. These
+changes do not enable the public provider, change native ABI13/`0x43`, qualify
+protected storage, or establish W01–W11. New parser and owner controls are
+synthetic; real installed results must be bound to the exact new MSI and runtime.

@@ -415,7 +415,7 @@ public final class SystemExportPlanTests {
             new WindowsSystemExportPlan.Input("kernel32.dll", first), new WindowsSystemExportPlan.Input("kernelbase.dll", second)});
     }
 
-    private static byte[] image(String module, long ordinalBase, long[] functions, String[] names, int[] indexes,
+    static byte[] image(String module, long ordinalBase, long[] functions, String[] names, int[] indexes,
                                 Map<Integer, String> forwarders) {
         check(names.length == indexes.length);
         int functionTable = 0x2040;

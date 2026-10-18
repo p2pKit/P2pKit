@@ -580,6 +580,15 @@ final class WindowsSystemBootstrapCandidate {
         requireOriginalSystemModules(candidate); candidate.requireOriginalNativeInputs(); return entries[13];
     }
 
+    MemorySegment originalApiSetEntry(WindowsOriginalSystemModulesCandidate candidate, int index) {
+        requireOriginalSystemModules(candidate);
+        candidate.requireOriginalExportGraph();
+        if (index != 1 && index != 4 && index != 6 && index != 7) {
+            throw new IllegalArgumentException("Unknown fixed API-set observation entry");
+        }
+        return entries[index]; // PIN, GPA for fixed ntdll query, VirtualQuery and ReadProcessMemory only.
+    }
+
     WindowsSystemImportResolution resolveSystemImports(WindowsPackagedVerifier plan) {
         requireCompleted();
         if (importsAttempted) throw new IllegalStateException("System imports were already attempted");

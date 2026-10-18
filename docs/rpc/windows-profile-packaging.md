@@ -186,6 +186,15 @@ only the original boot-module admission chain and same-owner reuse, then exits
 without UI, profile-storage or network entry. Unlike the two build-image
 readbacks, this explicitly performs DLL load/image verification/JNI registration;
 operator selection of this native diagnostic does not enable the public provider.
+After source/runtime and named-entry checks, the diagnostic initializes the
+original `java.desktop` Windows toolkit, as ordinary Desktop startup does.
+It accepts only the boot-image `java.awt.Toolkit` and `sun.awt.windows.WToolkit`
+classes. The independently admitted installed JDK and original OS/startup must
+already cover this runtime initialization; the toolkit is not new installation
+authority. It creates no application window. Toolkit initialization failure is
+retained and reported as `DESKTOP_RUNTIME_PREPARATION`; no profile admission is
+attempted afterward. The outer subject deadline and final-exit requirements
+also cover toolkit threads and failure cleanup.
 Its bounded result and retained failures are described in the
 [adapter contract](../../samples/p2p-sample-rpc/native/windows-loader-jdk21/README.md#explicit-installed-admission-diagnostic-not-provider-availability).
 Actual standard-user installed execution of the independently checked exact
