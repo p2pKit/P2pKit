@@ -3,6 +3,10 @@
 **NOT_READY. Host startup now works on the tested Windows machine; complete
 Windows Host/Client and lifecycle qualification remain unfinished.**
 
+See the later [Windows/Android handoff](windows-android-rpc-handoff-20261019.md)
+for installed source `643988b2`, the Android Host repair and the owner's successful
+manual testing. The exact-source results and failures below remain preserved.
+
 This continuation was limited by the owner to Windows implementation and local
 checks, followed by manual application testing. No GitHub Actions or other-platform
 checks were run. Earlier failures and evidence remain preserved.

@@ -6,6 +6,11 @@ This report distinguishes source implementation, portable/model controls, actual
 productive storage failures and unexecuted acceptance work. Installation alone is not acceptance.
 Raw profiles, account/device identities, payloads and logs remain private.
 
+The current [Windows/Android handoff](windows-android-rpc-handoff-20261019.md)
+records the Android Host repair, actual phone JNI controls and the owner's later
+confirmation that their manual tests work. Full W01–W11 qualification is still
+incomplete; the checkpoints and failures below remain historical evidence.
+
 The later [Windows LAN and native checkpoint](windows-local-network-and-native-20261019.md)
 records successful real native custody/cross-process controls, productive encrypted
 profile creation/reopen and working Host startup. Its complete UI cycle still fails
