@@ -34,6 +34,8 @@ Host Ready, Host Stopping and Host Failed; 0 means no recognized rendered state.
 report original-window activity, the generic profile-refusal message and Host/Stop enablement.
 The optional rendered failure category distinguishes discovery scope, missing/ambiguous LAN,
 cancellation, an RPC failure and other failure without copying any arbitrary UI text.
+Startup errors remain classified after the original owner retires to Stopped; retirement
+does not turn a failed start into a successful lifecycle result.
 These observations identify a stalled stage; they do not substitute for native failure evidence.
 The controller publishes its original worker before start, invalidates queued actions during
 terminal concealment and is joined by the original application's retirement worker. Unknown

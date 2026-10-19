@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -12,6 +13,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WindowsInstalledUiWorkerTest {
+    @Test fun startupFailureRemainsClassifiedAfterTheActualOwnerRetiresToStopped() {
+        val reason = "Discovery is blocked by the current JVM adapter with 12 other active non-loopback interfaces."
+        for (state in listOf("Host: Failed", "No role: Stopped")) {
+            assertEquals("DISCOVERY_SCOPE", installedUiFailureCategory(listOf("$state — $reason")))
+        }
+        assertEquals("UNCLASSIFIED", installedUiFailureCategory(listOf("No role: Stopped — synthetic private text")))
+        assertEquals("UNCLASSIFIED", installedUiFailureCategory(listOf("No role: Stopped")))
+    }
+
     @Test fun liveWorkerRefusesRetirementWithoutInterruptingOrReplacingItsOwner() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
