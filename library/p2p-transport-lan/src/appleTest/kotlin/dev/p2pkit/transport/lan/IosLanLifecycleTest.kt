@@ -440,8 +440,33 @@ class IosLanLifecycleTest {
 
             // The underlying session must still be Connected — cancellation
             // is per-transfer, not per-session. Round-trip a sanity message
-            // to prove the NWConnection wasn't collateral damage.
-            outgoing.send(P2pMessage.Text("post-cancel-ok"))
+            // to prove the NWConnection wasn't collateral damage. Observe both
+            // receipts before teardown; a completed send alone is not delivery.
+            lanTimeouts.withTimeout(Phase.MESSAGE_RECEIVE, HANDSHAKE_TIMEOUT_MS) {
+                assertEquals(ConnectionState.Connected, outgoing.state.value)
+                assertEquals(ConnectionState.Connected, incomingSession.state.value)
+
+                val receiverReady = CompletableDeferred<Unit>()
+                val senderReady = CompletableDeferred<Unit>()
+                val received = async {
+                    incomingSession.incoming.onSubscription { receiverReady.complete(Unit) }.first()
+                }
+                val replied = async {
+                    outgoing.incoming.onSubscription { senderReady.complete(Unit) }.first()
+                }
+                receiverReady.await()
+                senderReady.await()
+
+                val request = P2pMessage.Text("post-cancel-ok")
+                outgoing.send(request)
+                assertEquals(request, received.await())
+
+                val reply = P2pMessage.Text("post-cancel-ack")
+                incomingSession.send(reply)
+                assertEquals(reply, replied.await())
+                assertEquals(ConnectionState.Connected, outgoing.state.value)
+                assertEquals(ConnectionState.Connected, incomingSession.state.value)
+            }
         }
     }
 
