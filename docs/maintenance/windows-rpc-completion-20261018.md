@@ -6,6 +6,86 @@ This report distinguishes source implementation, portable/model controls, actual
 productive storage failures and unexecuted acceptance work. Installation alone is not acceptance.
 Raw profiles, account/device identities, payloads and logs remain private.
 
+## Latest installed checkpoint: c2f58b59
+
+Tested implementation: **`c2f58b592af9a534d5e6d1b4f957e0f0f8c75bdb`**, tree
+**`0fbfb72215a9831b0bee0f17f2dc3bea2ee27a74`**, qualification branch
+`work/windows-rpc-completion-20261018`. A later report-only commit does not change the tested binary's source.
+The preceding diagnostic repair is `ded8c33b594311b5f2a36a7fa0d2edadf012fa6c`, tree
+`adf4886cb99d2359e4019ace581300252efb2337`. Main was last observed unchanged at `db5d6c01`.
+
+The fixed [password control](windows-installed-password-control.md) now has a genuine installed PASS.
+It uses three actual provider acquisitions: valid unlock, wrong-password authentication refusal, valid
+reopen. Both valid opens verified the existing synthetic encrypted marker. The wrong attempt produced
+the actual AEAD authentication-tag failure, returned no profile, cleared the password array and reported
+no uncertain cleanup or retained session. Header and encrypted-record membership/hashes matched before
+and after. The existing application profile contained its synthetic marker/proof, not a qualified RPC
+peer identity/trust history. No reset, tamper mutation or recovery was performed.
+
+| Exact-source object | Binding |
+| --- | --- |
+| Canonical scoped Desktop producer | [39191071821/1](https://github.com/p2pKit/P2pKit/actions/runs/39191071821), PASS; complete-gate not run |
+| Original application archive | Artifact 12159864240, 243402756 bytes; SHA-256 `fa944fcdcee557d53f56c5c9d8eeb7a14a6f92e6c8a99f47a3395f1fb2972d63` |
+| MSI | 114270208 bytes; SHA-256 `4ecc08cd2a04593c591cc7e9997737e73faad5b3cba225935f16fe3124a5dc25` |
+| Package manifest | SHA-256 `4837f516633e395304a5055e74b1c257a23d464f6933cb9ef8c57556ccea46ee` |
+| All 224 installed files | SHA-256 inventory `cb8cfd0649312bcf8acb879177e5b1eeb36e2ccfdc43cfe3d11a92ed2a75b34f` |
+| Actual installed native DLL | 188416 bytes; SHA-256 `c3137e759a569b49d2d57ae8b3bce8d53d1cc6e3e9410b81dc18dda7c1a4fbd9` |
+| Unchanged Temurin supplier | 21.0.12.1+1, 205073461 bytes; SHA-256 `f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e`; 68 runtime DLLs matched |
+
+Both normal MSI transitions exited0 without restart. Actual tool/assistant Standard-user primary tokens,
+matching owner, no administrator/service/impersonation context, native AMD64 local interactive session,
+fixed NTFS, startup inputs and installed metadata passed fresh checks. The platform remains Windows11
+Home Single Language 25H2, build 26200.9168. Installed MainKt, version `0.8.0-rc3` / MSI `1.8.203`,
+Java17 application bytecode, JDK21 runtime, `jdk.unsupported`, named preview/native-access scope, raw
+ABI13/`0x43`, qualification flags and original deadlines remain unchanged. No network policy changed.
+
+| Maintained installed operation | Actual result / receipt SHA-256 |
+| --- | --- |
+| `admission` | PASS, app/driver0, 2.031s; `8a611a9ae35fcf3815715f6f8c8f7f2d302b9605b54f97146f468d1d22e733cb` |
+| `password-refusal` | PASS, app/driver0, 2.547s; `94125e369d78f84f4be781fbf720d6f23d6e7180de4fdaada96c69471330a965` |
+| `ui-host-cycle` | FAIL, app0 via normal close / driver1, 12.953s; `568a3c6c0b81fe9362da7c47aa138d9c453994e58bf2f352d4eb7c22521ff5a6` |
+
+All three observed six retired/closed process witnesses, closed captures, known enclosing cleanup and
+no timeout. The entire seven-entry profile inventory was identical before installation, after password
+refusal and after UI failure: `4c82900672fdc7b7fab90686102aa26d82e3608842e2905b903c3937ad9f252f`.
+UI failure remained HOST_START / Stopped, now correctly classified **DISCOVERY_SCOPE**. The actual
+installed runtime observes twelve competing interfaces. This is a real transport refusal; neither
+successful profile controls nor normal exit turns it into a Host lifecycle pass.
+
+Complete local `check`, loader JAR and native-byte verification used the checked-in wrapper, strict
+dependency verification, rerun-tasks and no build cache: **2,950 tests, zero failures/errors/skips**.
+All four contribution shell gates passed. Full command exit1 remains solely Apple ABI unavailable on
+Windows; the baseline is unchanged. Gradle stopped0. XML manifest:
+`6f3ed5f602b2285624d44aa2e3785cd6176332fc2c5c00707a05b726c8e77fb8`.
+Adapter-output manifest: `cfd59a6d9531602059003e46bf1091ecdd8ffd7d847b90fcc0a16c0fd6cb7243`.
+All six harmless supervisor controls passed separately; 28 Python supervisor tests, 8 driver tests and
+C# 6 valid/50 refusal controls passed. They do not qualify protected storage. Earlier development runs
+failed first from missing Python on PATH, then from the unchanged clean-source requirement on an
+uncommitted build. Both remain preserved; the clean committed full run passed those checks.
+
+### Current W01–W11 status
+
+| Case | Status | Remaining work beyond the positive observations |
+| --- | --- | --- |
+| W01 | BLOCKED / partial | Positive actual account admission; distinct negative token contexts and separate native-smoke context unexecuted |
+| W02 | BLOCKED / partial | Positive installed load/import/JNI admission; complete before-execution refusal matrix unexecuted |
+| W03 | BLOCKED / partial | Productive JNI and repeated original-provider acquisitions pass; bounds, races and actual successful role lifecycle incomplete |
+| W04 | BLOCKED / partial | Protected marker/proof reads/writes observed; unsafe-path/ACL/reparse controls need isolated fixtures and maintained execution controls |
+| W05 | BLOCKED / partial | Earlier composed replace/delete/sync PASS; cross-process and fault-control engineering/execution incomplete |
+| W06 | BLOCKED / partial | Encrypted reopen and wrong-password refusal PASS; fresh-create still retains its earlier FAIL; tamper/interruption/recovery matrix incomplete |
+| W07 | BLOCKED / partial | Observed normal/failed-open retirement; cancellation, races and uncertainty controls incomplete |
+| W08 | FAIL | Installed discovery refuses twelve competing interfaces; Windows scoped transport engineering and real two-device operations required |
+| W09 | BLOCKED | No Windows peer selection, restart, revocation or reconnect qualification |
+| W10 | BLOCKED | Zero successful installed UI cycles; twenty cycles and full resource/interruption matrix outstanding |
+| W11 | BLOCKED / partial | Exact bindings PASS for each result above; no complete qualified artifact/platform matrix |
+
+Missing engineering includes the Windows transport interface and a maintained, separately reviewed
+native-smoke execution adapter using the canonical supervisor. Native smoke and destructive/fault
+fixtures require their separately admitted disposable contexts. Neither is merely a deferred test.
+Independent review and macOS Apple ABI verification remain required. The Android APK/navigation/Host
+observations below are preserved; no pairing or typed RPC result has occurred. **Windows Host/Client
+is not genuinely functional on this tested configuration; verdict remains NOT_READY.**
+
 ## Installed discovery refusal at 9916b836
 
 Source `9916b836b1619516d6590b8cb35edb9999cda6fa`, tree
