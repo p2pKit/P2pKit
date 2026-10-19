@@ -28,6 +28,7 @@ OPERATIONS = {
     "admission": "--rpc-windows-installed-admission",
     "profile-create": "--rpc-windows-disposable-profile-create",
     "profile-reopen": "--rpc-windows-disposable-profile-reopen",
+    "password-refusal": "--rpc-windows-disposable-password-refusal",
     "ui-host-cycle": "--rpc-windows-disposable-ui-host-cycle",
 }
 LIMIT_SECONDS = 30
@@ -198,6 +199,12 @@ def expected_result(source, operation):
             "navigation": "VERIFIED", "unlock": "ADMITTED", "hostStarts": 2,
             "identityAcrossStop": "UNCHANGED", "back": "ACKNOWLEDGED",
             "terminalClose": "REQUESTED", "peerOperations": "NOT_ENTERED"}}
+    if operation == "password-refusal":
+        return {"source": source, "password": {"schema": 1,
+            "scope": "INSTALLED_PASSWORD_REFUSAL_NOT_TAMPER_OR_FULL_QUALIFICATION",
+            "existingMarker": "VERIFIED", "wrongPassword": "AUTHENTICATION_REFUSED",
+            "encryptedContents": "UNCHANGED", "validReopen": "VERIFIED",
+            "close": "ACKNOWLEDGED", "network": "NOT_ENTERED"}}
     return {"source": source, "profile": {"schema": 1,
         "scope": "INSTALLED_PRODUCTIVE_PROFILE_CONTROL_NOT_HOST_CLIENT_QUALIFICATION",
         "operation": operation, "publicProvider": "ADMITTED", "encryptedRecord": "VERIFIED",

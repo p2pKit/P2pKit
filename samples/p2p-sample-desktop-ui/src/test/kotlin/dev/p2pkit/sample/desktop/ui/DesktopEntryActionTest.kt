@@ -9,6 +9,7 @@ class DesktopEntryActionTest {
         for ((flag, action) in mapOf(
             "--rpc-windows-disposable-profile-create" to DesktopEntryAction.WindowsProfileCreate,
             "--rpc-windows-disposable-profile-reopen" to DesktopEntryAction.WindowsProfileReopen,
+            "--rpc-windows-disposable-password-refusal" to DesktopEntryAction.WindowsPasswordRefusal,
             "--rpc-windows-disposable-ui-host-cycle" to DesktopEntryAction.WindowsUiHostCycle,
         )) {
             assertEquals(action, desktopEntryAction(arrayOf(flag)))

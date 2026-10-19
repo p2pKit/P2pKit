@@ -181,6 +181,15 @@ fun main(arguments: Array<String>) {
                 }
                 return
             }
+            DesktopEntryAction.WindowsPasswordRefusal -> {
+                try {
+                    println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsPasswordControl.run())
+                } catch (_: Throwable) {
+                    System.err.println("WINDOWS_INSTALLED_PASSWORD_REFUSED_OR_FAILED_NOT_QUALIFIED")
+                    kotlin.system.exitProcess(1)
+                }
+                return
+            }
             DesktopEntryAction.WindowsUiHostCycle -> installedUiControl = WindowsInstalledUiControl.prepare()
             DesktopEntryAction.UserInterface -> Unit
         }

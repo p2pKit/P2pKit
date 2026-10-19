@@ -6,6 +6,39 @@ This report distinguishes source implementation, portable/model controls, actual
 productive storage failures and unexecuted acceptance work. Installation alone is not acceptance.
 Raw profiles, account/device identities, payloads and logs remain private.
 
+## Installed discovery refusal at 9916b836
+
+Source `9916b836b1619516d6590b8cb35edb9999cda6fa`, tree
+`998a197e5abe4fd4085f92e836310011827da460`, was built by canonical Desktop producer
+[39188626066/1](https://github.com/p2pKit/P2pKit/actions/runs/39188626066).
+The MSI SHA-256 is `c91c03fe8a9ba82be4f63d05f33893d29512bdfad0247eff6e947ff1b547c751`.
+All 224 installed files matched inventory `8b7cd6f6c3e39113bb9f0500cda250f9ee8a3013b767273cd0e36bdd273affd5`;
+68 runtime DLLs matched the unchanged supplier. Fresh actual Standard-user/session/startup checks and
+installed admission passed. The complete local gate ran 2,949 tests without failures/errors/skips;
+only Apple ABI failed, baseline unchanged. XML manifest:
+`642ddd81a2145498ff124d685b7ba2eceb1d7fe994ce21b1b6929771adfe4753`.
+
+The real UI control failed at HOST_START: Stopped, window active, profile-refusal message absent,
+Host enabled, Stop disabled. App exit0 followed ordinary terminal cleanup; driver exit1 correctly
+preserved the missing UI result. Receipt `6cb7dad1fd05c173993a95aa407a0e540516b042031994eb3e6cd7d689386c14`:
+12.797s, no timeout, six witnesses closed, captures and enclosing cleanup known. Profile contents did
+not change. A separately supervised repeat captured only the original foreground application's client
+area. Its actual error reported **12 other active non-loopback interfaces**, preventing discovery.
+Raw screenshots and topology remain private. Both UI attempts remain failures, not lifecycle passes.
+
+The diagnostic originally categorized Host Failed text only. The run owner preserves a startup error
+after retiring successfully to Stopped; the follow-up recognizes that rendered state as well. Read-only
+JDK17/JDK21 observations differ (1 versus 13 active non-loopback interfaces), which does not establish
+a JDK defect or authorize filtering. The UI and library's fresh socket checks both refuse this topology.
+The existing scoped TCP/Bonjour adapter is macOS-specific; Windows needs a reviewed transport interface,
+not removal of a UI guard, changed runtime pin, disabled adapter or security-policy relaxation. See the
+[RPC/Foundation interface request](https://github.com/p2pKit/P2pKit/issues/462#issuecomment-6258419851).
+
+Independent provider qualification can continue with the fixed
+[password-refusal control](windows-installed-password-control.md). Source availability is not a pass;
+exact-source installed execution and original supervision remain required. W01–W11 and Host/Client
+remain incomplete.
+
 ## Installed UI attempt at 54e5bf59
 
 Source `54e5bf59bb0b082f5994a41eb79af42e7b629ad5`, tree
