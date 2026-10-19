@@ -1,10 +1,34 @@
 # Windows RPC prerelease decision and known limitations
 
-**Installed qualification: not passed. Diagnostic follow-up is authorized.**
+**Full installed qualification: not passed. Incoming manual Windows/Android use succeeded.**
 Track the disposable-machine setup, exact procedures, historical failures, owners and
 acceptance checklist in [Windows qualification issue #462](https://github.com/p2pKit/P2pKit/issues/462),
 assigned to the repository owner under **Post-0.8.0-rc1 Windows RPC qualification**.
 No test runs against the owner's daily Windows profile are authorized by this document.
+
+## Current integration candidate — 2026-10-19
+
+The owner authorized integrating the incoming Windows/Android work and pursuing
+**0.8.0-rc4** through the existing merge/publication pipeline after its required
+checks, with operational submissions delegated to the agent. This records the
+instruction, not a fabricated personal review, completed CI, tag or publication.
+Exact-source approval records, protected-environment challenges, artifact freezing
+and all release gates still apply. Published `0.8.0-rc3` bytes remain unchanged.
+
+Productive Windows provider/LAN and Android socket repairs are now implemented
+in this candidate. The owner confirmed successful manual use of the functionality
+they tested on the installed Windows `643988b2` / Android `a2d8593f` pair. Those
+artifacts have distinct identities from published rc3 and the forthcoming rc4
+builds. The [handoff](../maintenance/windows-android-rpc-handoff-20261019.md)
+records their full source/artifact bindings, Android API29 arm64 runtime controls,
+positive installed admission and encrypted-profile controls, and retained failures.
+
+This is **not complete W01–W11 qualification**. The recorded Back-stage deadline
+failure remains a failure; there are **zero fully accepted automated UI cycles**,
+not the required twenty. Full negative-token/loading/JNI/ACL/lifetime matrices,
+typed errors, revocation, interruption, persistence/recovery and recorded
+Windows Host/Client integration remain incomplete. Successful manual use must not
+be described as completion of those cases or as evidence for older rc3 binaries.
 
 ## Owner decision — 2026-10-13
 
@@ -34,7 +58,7 @@ The new exact candidate still needs its required checks, artifact freeze and
 separate merge/tag/signing/publication approvals. Windows sample RPC Host/Client
 remains technically unavailable, with the existing fail-closed paths preserved.
 
-## Diagnostic/development candidate — 2026-10-18
+## Historical diagnostic/development candidate — 2026-10-18
 
 The owner authorized preparing and qualifying **0.8.0-rc3**, with
 operational submissions delegated to the agent. Final source-bound checks and
@@ -51,7 +75,7 @@ The six successful supervision controls do not convert that installed failure
 into a pass. Standard-user installed admission, productive profile/JNI integration
 and W01–W11 remain unqualified; the follow-up must use the new exact release bytes.
 
-## Experimental Windows status — implementation is not merely untested
+## Current implementation and qualification boundaries
 
 The shared JVM RPC library and the Windows sample's native protected-profile provider are
 different components. The existing Windows Desktop application's other features remain;
@@ -67,10 +91,12 @@ different components. The existing Windows Desktop application's other features 
   The original-owner bootstrap/load/JNI controller has passed narrow installed admission. After the
   directory-index and delete-pending link-count repairs, an exact-source installed control reopened
   an encrypted marker and completed protected read/write/replace/delete/sync and acknowledged close.
-  Earlier create/reopen failures remain failures; the original failed fixture was archived intact
-  with explicit owner approval. Successful reopening does not establish fresh creation, fault recovery,
-  power-loss durability, installed UI behavior or the full qualification matrix.
-  See the [source/package-bound Windows checkpoint](../maintenance/windows-rpc-completion-20261018.md).
+  Later source-bound controls also exercised fresh encrypted creation, cold reopen, wrong-password
+  refusal and cross-process contention. Earlier failures remain failures; the original failed fixture
+  was archived intact with explicit owner approval. These controls do not establish fault recovery,
+  power-loss durability, complete installed UI behavior or the full qualification matrix.
+  See the [latest source/package-bound handoff](../maintenance/windows-android-rpc-handoff-20261019.md)
+  and [earlier Windows checkpoint](../maintenance/windows-rpc-completion-20261018.md).
   Optional local adapter
   packaging defaults off; the canonical Windows packaging component explicitly includes it.
 - The real JNI custody bridge reports ABI **13 / 0x43**, while the managed full-provider
@@ -79,9 +105,9 @@ different components. The existing Windows Desktop application's other features 
 These are existing technical boundaries, **not functionality disabled by the owner's new
 release decision**. Preserve the staged DLL/manifest/parent-pin resources, explicit
 `jdk.unsupported`, MainKt, application identities and the single Foundation pipeline.
-Do not advertise working Windows protected RPC, promise native execution, or replace its
-storage/loading requirements with an insecure fallback. Published Java17 bytecode targets
-and the packaged JDK21 family remain unchanged.
+Report successful manual use only against its recorded artifacts; do not advertise complete
+Windows qualification or replace storage/loading requirements with an insecure fallback.
+Published Java17 bytecode targets and the packaged JDK21 family remain unchanged.
 
 The remaining work includes the complete installed root/runtime, first-OS-call, ancestor/ACL/reparse,
 constrained-loading and loaded-module/import/JNI negative/lifetime matrices. The original chain is
@@ -97,14 +123,16 @@ DLL to authorize itself cannot fill the gap.
 The RPC contribution currently changes terminal shutdown for **every Windows application
 window**, including non-RPC sample holders and workers. The
 [terminal application-exit prerequisite](windows-profile-integration.md#terminal-application-exit-prerequisite)
-is therefore affected even without productive protected RPC. Its actual Windows/installed-MSI
-lifetime validation is among the owner's deferred, **NOT_EXECUTED / NOT_QUALIFIED** risks;
-the earlier prerequisite is not being falsely recorded as satisfied. Foundation must reconcile
+is therefore affected even without productive protected RPC. Its complete Windows/installed-MSI
+lifetime validation remains **NOT_QUALIFIED**: narrow installed controls and manual use do not
+satisfy the twenty-cycle gate, and the Back deadline failure is preserved.
+The earlier prerequisite is not being falsely recorded as satisfied. Foundation must reconcile
 this explicit risk acceptance with its maintained release contract. A build-image module probe
 or static MSI extraction is not installed-app lifetime acceptance.
 
-Keep the unperformed ordinary MSI install/launch/navigation/shutdown cases in issue #462,
-along with protected-profile/JNI/peer-operation cases; none becomes a success through deferral.
+Keep all remaining MSI install/launch/navigation/shutdown cases and their preserved failures
+in issue #462, along with protected-profile/JNI/peer-operation cases; none becomes a success
+through deferral.
 Retain included-runtime/byte checks, all Foundation custody/provenance/freeze requirements,
 required GitHub checks and the [release checklist](../releasing/checklist.md). The owner has
 not requested a Maven-only release, MSI omission or replacement publication workflow.
@@ -112,8 +140,9 @@ not requested a Maven-only release, MSI omission or replacement publication work
 Do not claim trusted first-load, protected NTFS, JNI/provider, durability/recovery,
 authorization/revocation or installed lifetime qualification until the real tests pass.
 Testing-risk acceptance cannot enable a known-unsafe path or supply missing executable code.
-The owner will provide a disposable Windows session for follow-up; rollback or a superseding
-version cannot guarantee erasure of published Maven bytes or reversal of downstream effects.
+Further execution still requires the admitted disposable Windows context and exact artifacts;
+rollback or a superseding version cannot guarantee erasure of published Maven bytes or reversal
+of downstream effects.
 
 ## JVM test applicability is not a runtime waiver
 

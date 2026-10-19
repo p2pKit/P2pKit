@@ -8,7 +8,7 @@ P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
 messaging, and durable file transfer over a reachable local network. It
 supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
-**Current source version:** `0.8.0-rc3` (published development release candidate).
+**Current source version:** `0.8.0-rc4` (unpublished development release candidate).
 **Latest published version:** `0.8.0-rc3`.
 
 `0.8.0-rc3` is available from Maven Central under `io.github.apdelrahman1911`.
@@ -49,14 +49,25 @@ bounded recovery, administrator pairing and best-effort notifications. It
 reuses core/LAN rather than changing ordinary P2P defaults.
 
 RPC is included in the `0.8.0-rc3` Maven publication and integrated as a section
-in the existing samples. **Windows sample RPC Host/Client remains unavailable**
-because the public installed-provider entry and Windows RPC start gate still
-refuse. The native/controller components are present, but productive admission
-and real installed qualification are unfinished; other sample features and the
-MSI are preserved. See the
-[Windows prerelease limitations](docs/rpc/windows-release-scope.md) and
-[RPC qualification requirements](docs/rpc/qualification.md). Publication and
-hosted checks do not imply completed physical-network or installed-app testing.
+in the existing samples. **Published rc3 Windows RPC Host/Client remains
+unavailable**; its public-provider and start-gate refusals are part of those
+immutable binaries.
+
+The **unpublished rc4 source** integrates the productive Windows installed
+provider and LAN fixes plus the Android accepted-socket repair. On 2026-10-19,
+the owner reported that the Windows/Android functionality they tested works,
+using the separately identified incoming artifacts—not the published rc3 samples.
+This is successful manual testing, not complete installed qualification: the
+recorded Back deadline failure remains, with **zero fully accepted automated UI
+cycles** and partial W01–W11 coverage. See the
+[source/artifact-bound handoff](docs/maintenance/windows-android-rpc-handoff-20261019.md),
+[Windows prerelease limitations](docs/rpc/windows-release-scope.md), and
+[RPC qualification requirements](docs/rpc/qualification.md).
+
+The library's JVM 17 bytecode contract is unchanged. The canonical Windows
+native sample path uses its pinned JDK 21 runtime and original admission checks;
+there is no JDK 17 fallback for that native provider. Publication and hosted
+checks do not imply completed physical-network or installed-app testing.
 
 ## Install
 
@@ -173,6 +184,14 @@ your application requires them.
 ## Platform setup
 
 ### Android
+
+Building Android AARs or APKs from the **current rc4 source** requires NDK
+`29.0.14206865` alongside the Android SDK; see the
+[canonical SDK setup](docs/testing/local.md#android-sdk-setup). Its JNI socket
+helper atomically establishes nonblocking/close-on-exec flags at the existing
+API 24 minimum and builds all four Android ABIs. The recorded kernel/JNI runtime
+controls passed on Android 10/API29 arm64; this is not coverage of every Android
+version or ABI. The published rc3 dependencies above retain their original bytes.
 
 Initialize secure identity storage once from `Application.onCreate()` before
 constructing a kit:

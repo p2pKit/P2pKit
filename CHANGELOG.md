@@ -3,6 +3,33 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc4 — unpublished development release candidate
+
+Prepared from the incoming Windows/Android integration. Latest published library
+and sample artifacts remain `0.8.0-rc3`; no rc4 publication or final-source CI pass
+is claimed. Historical rc3/rc2 results below are not evidence for this candidate.
+
+- Connect the productive Windows installed-provider path and retain original
+  runtime/module/JNI ownership, protected storage, cleanup and admission checks.
+  Windows LAN selection uses verified native IP-interface observations without
+  weakening competing-interface or unknown-ownership refusal.
+- Repair Android API24–29 accepted-socket setup without hidden APIs: a small
+  NDK JNI helper creates/accepts nonblocking, close-on-exec sockets atomically,
+  retaining the existing Network binding and descriptor leases. Android AAR/APK
+  source builds require NDK `29.0.14206865`; the producer targets API24 and all
+  four Android ABIs. Actual kernel/JNI controls cover Android10/API29 arm64 only.
+- Preserve JVM17 library bytecode, the Windows sample's pinned JDK21 native
+  runtime contract, application/MSI identity, protocol and persisted-data formats.
+- The owner reported successful manual Windows/Android use on 2026-10-19 against
+  the incoming installed pair. The Back deadline failure and zero fully accepted
+  automated UI cycles remain; W01–W11, typed errors, revocation, interruption and
+  full installed lifecycle qualification are incomplete. See the
+  [exact-source handoff](docs/maintenance/windows-android-rpc-handoff-20261019.md)
+  and [current Windows scope](docs/rpc/windows-release-scope.md).
+- Required exact-source CI, Apple ABI/native checks, immutable artifact freezing
+  and protected publication controls remain mandatory. No ABI baseline is changed
+  to turn the earlier unavailable Apple-toolchain result into a pass.
+
 ## 0.8.0-rc3 — development release candidate (2026-10-18)
 
 Published and verified on Maven Central from immutable `v0.8.0-rc3`, source
