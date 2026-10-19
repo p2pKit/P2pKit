@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSource,
-    [ValidateSet('admission', 'profile-create', 'profile-reopen')][string]$Operation = 'admission',
+    [ValidateSet('admission', 'profile-create', 'profile-reopen', 'ui-host-cycle')][string]$Operation = 'admission',
     [Parameter(Mandatory = $true)][string]$PrivateParent,
     [Parameter(Mandatory = $true)][string]$Python
 )

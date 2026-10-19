@@ -179,7 +179,8 @@ namespace P2pKit.WindowsQualification {
         // Evidence parser only; these values never authorize process creation or installation.
         public static void ValidateReceipt(byte[] bytes, string source, string scope, long start, long frequency,
             Dictionary<string, string> hashes, string operation = "admission") {
-            Require(operation == "admission" || operation == "profile-create" || operation == "profile-reopen");
+            Require(operation == "admission" || operation == "profile-create" || operation == "profile-reopen" ||
+                operation == "ui-host-cycle");
             Require(bytes != null && bytes.Length > 0 && bytes.Length <= ReceiptLimit);
             using (var document = JsonDocument.Parse(Utf8.GetString(bytes), new JsonDocumentOptions { MaxDepth = 16 })) {
                 var root = document.RootElement; NoDuplicates(root);
@@ -207,7 +208,8 @@ namespace P2pKit.WindowsQualification {
         }
         public static Observation RunInstalled(string scripts, string python, string parent, string source,
             string operation = "admission") {
-            Require(operation == "admission" || operation == "profile-create" || operation == "profile-reopen");
+            Require(operation == "admission" || operation == "profile-create" || operation == "profile-reopen" ||
+                operation == "ui-host-cycle");
             return Run(scripts, python, parent, source, null, operation);
         }
         public static Observation RunControl(string scripts, string python, string parent, Control control) {

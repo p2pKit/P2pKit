@@ -44,7 +44,12 @@ The subsequent UI change connects Host/Client to the fixed installed provider th
 task. It verifies the original module/runtime before Desktop preparation, and permits a role only when
 unlock succeeds without cleanup uncertainty or a retained session. New coroutine regressions exercise
 those ownership refusals. This source change still needs its own affected checks, exact-source installer
-and actual UI execution; the `ba40c6cc` results above do not qualify it.
+and actual UI execution; the `ba40c6cc` results above do not qualify it. At
+`4106bd6e64fd5b894a39ef2f677cc9bff1a93ad3` (tree `32b9111e07e00c659736dde5f0525ec4c2222b16`),
+the subsequent complete local gate ran 2,946 passing managed tests with zero failures/errors/skips;
+its sole failing task remained Apple ABI verification. No baseline was changed. The fixed
+[installed UI control](windows-installed-ui-control.md) supplies the next actual navigation/Host lifecycle
+invocation under the existing supervisor; its implementation alone is not a UI result.
 
 The approved Android endpoint now has the verified debug APK from `506d3bda`, version `0.8.0-rc3`.
 Its installed SHA-256 is `6d360be38403f8c2a2e678b86e41dadbd8a083f508d95f716a0c1efd9ee5cf18`.

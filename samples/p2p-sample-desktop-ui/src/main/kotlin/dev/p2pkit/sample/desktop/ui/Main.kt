@@ -145,6 +145,7 @@ import kotlinx.coroutines.runBlocking
 // =====================================================================
 
 fun main(arguments: Array<String>) {
+    var installedUiControl: WindowsInstalledUiControl? = null
     try {
         when (val action = desktopEntryAction(arguments)) {
             DesktopEntryAction.NativeReadback -> {
@@ -180,6 +181,7 @@ fun main(arguments: Array<String>) {
                 }
                 return
             }
+            DesktopEntryAction.WindowsUiHostCycle -> installedUiControl = WindowsInstalledUiControl.prepare()
             DesktopEntryAction.UserInterface -> Unit
         }
     } catch (_: Exception) {
@@ -210,6 +212,10 @@ fun main(arguments: Array<String>) {
             state = rememberWindowState(width = 980.dp, height = 760.dp),
             title = "P2pKit Test Harness (Desktop)"
         ) {
+        DisposableEffect(window) {
+            installedUiControl?.start(window)
+            onDispose { }
+        }
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
                 P2pKitSampleApp(window, closeRequested, binding) { closed ->

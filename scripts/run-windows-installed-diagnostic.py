@@ -28,6 +28,7 @@ OPERATIONS = {
     "admission": "--rpc-windows-installed-admission",
     "profile-create": "--rpc-windows-disposable-profile-create",
     "profile-reopen": "--rpc-windows-disposable-profile-reopen",
+    "ui-host-cycle": "--rpc-windows-disposable-ui-host-cycle",
 }
 LIMIT_SECONDS = 30
 LOG_LIMIT = 4096
@@ -191,6 +192,12 @@ def expected_result(source, operation):
     require(operation in OPERATIONS)
     if operation == "admission":
         return expected_admission(source)
+    if operation == "ui-host-cycle":
+        return {"source": source, "ui": {"schema": 1,
+            "scope": "INSTALLED_UI_HOST_CYCLE_NOT_PEER_OR_FULL_QUALIFICATION",
+            "navigation": "VERIFIED", "unlock": "ADMITTED", "hostStarts": 2,
+            "identityAcrossStop": "UNCHANGED", "back": "ACKNOWLEDGED",
+            "terminalClose": "REQUESTED", "peerOperations": "NOT_ENTERED"}}
     return {"source": source, "profile": {"schema": 1,
         "scope": "INSTALLED_PRODUCTIVE_PROFILE_CONTROL_NOT_HOST_CLIENT_QUALIFICATION",
         "operation": operation, "publicProvider": "ADMITTED", "encryptedRecord": "VERIFIED",

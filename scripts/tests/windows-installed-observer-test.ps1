@@ -75,7 +75,7 @@ foreach ($bad in @('', ((' ' * 16385) + $valid), ($valid + $valid))) {
     if (-not $refused) { throw 'Unbounded or repeated receipt accepted' }
     $refusals++
 }
-foreach ($operation in @('profile-create', 'profile-reopen')) {
+foreach ($operation in @('profile-create', 'profile-reopen', 'ui-host-cycle')) {
     $matching = $valid.Replace('"operation":"admission"', '"operation":"' + $operation + '"')
     Accept $matching $operation
     foreach ($bad in @($valid, $matching.Replace('"operation":"' + $operation + '","outcome"',
@@ -86,4 +86,4 @@ foreach ($operation in @('profile-create', 'profile-reopen')) {
         $refusals++
     }
 }
-Write-Output ("OBSERVER_RECEIPT_CONTROLS PASS: 4 valid, $refusals refusals; no native process launched")
+Write-Output ("OBSERVER_RECEIPT_CONTROLS PASS: 5 valid, $refusals refusals; no native process launched")
