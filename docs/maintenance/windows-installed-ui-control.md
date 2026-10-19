@@ -28,7 +28,16 @@ The worker requests the real window-close event on both success and failure. It 
 declare cleanup successful or force a zero exit. Its bounded JSON describes provisional
 UI observations and `terminalClose=REQUESTED`; acceptance also requires the original
 supervisor's timely exit0, closed captures, known cleanup and retired process witnesses.
-Failure output is a fixed stage label, not exception text, passphrases or fingerprints.
+Failure output includes a fixed stage and closed-vocabulary rendered-state observations, never
+exception text, passphrases or fingerprints. State numbers 1–6 mean Idle, Stopped, Host Starting,
+Host Ready, Host Stopping and Host Failed; 0 means no recognized rendered state. Boolean fields
+report original-window activity, the generic profile-refusal message and Host/Stop enablement.
+The optional rendered failure category distinguishes discovery scope, missing/ambiguous LAN,
+cancellation, an RPC failure and other failure without copying any arbitrary UI text.
+These observations identify a stalled stage; they do not substitute for native failure evidence.
+The controller publishes its original worker before start, invalidates queued actions during
+terminal concealment and is joined by the original application's retirement worker. Unknown
+retirement fails within the unchanged terminal/outer budgets.
 
 The normal empty-argument application path never creates this controller. MainKt, window
 ownership, section reservations, terminal watchdog, JNI retention and packaging remain

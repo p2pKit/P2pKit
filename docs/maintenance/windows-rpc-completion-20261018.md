@@ -6,6 +6,33 @@ This report distinguishes source implementation, portable/model controls, actual
 productive storage failures and unexecuted acceptance work. Installation alone is not acceptance.
 Raw profiles, account/device identities, payloads and logs remain private.
 
+## Installed UI attempt at 54e5bf59
+
+Source `54e5bf59bb0b082f5994a41eb79af42e7b629ad5`, tree
+`9fb5e6f0e91c6e80d91ed6f3570c2d2aecf51c21`, was built by the canonical scoped Desktop producer
+[39185940802/1](https://github.com/p2pKit/P2pKit/actions/runs/39185940802). This is not a complete CI pass.
+The MSI SHA-256 is `bf5097c3217170fc6574b60aa1274e4e5c3a23effcc303f8794a885e28864676`;
+all 224 installed files matched, inventory `cf45f3fadb56e726f70c7e0b48165f9f58664f4d18482da02c5d4092b35cc7d7`.
+All 68 runtime DLLs matched the unchanged pinned Temurin supplier. Actual assistant/tool Standard-user
+tokens, interactive session and startup observations passed again; profile contents were preserved.
+
+- Installed admission: PASS, app/driver exit0, 2.047s; receipt
+  `84b2d12075342eff8d65fbb8f931d8f32489ac2999460035cd290cd588b14a39`.
+- Installed `ui-host-cycle`: FAIL at `HOST_START`, app exit0 after normal terminal close, driver exit1
+  because the required UI result was absent. Command elapsed 12.796s, no outer timeout. Receipt
+  `2e76c60ccde1ad4df76c9414b0f9203e42d561793126114269a8deb19022ec74`.
+  Actual RPC navigation and the passphrase dialog were reached; Host Ready was not established.
+  The stage alone does not identify profile, network or UI failure. Zero installed UI cycles are passed.
+- Both runs observed six retired/closed process witnesses, closed captures and known enclosing cleanup.
+  The existing profile inventory was unchanged after installation and the failed UI attempt.
+- Complete local managed gate: 2,946 tests, zero failures/errors/skips; full command exit1 solely for
+  Apple ABI unavailable on Windows. Four shell gates, loader controls and byte inspection passed.
+  The Apple baseline and earlier failures are preserved. All six harmless supervisor controls also passed.
+
+The follow-up adds bounded rendered-state diagnostics and original test-worker retirement observation.
+It does not weaken profile admission, network selection, focus checks, JNI lifetime or any deadline.
+Actual installed Host/Client, peer operations, independent review and W01–W11 remain incomplete.
+
 ## Latest continuation: productive profile and UI integration
 
 The exact-source installed candidate at `ba40c6cc1a9662ac06ccfa15eb4c9a832a40caca`, tree

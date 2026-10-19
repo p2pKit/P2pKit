@@ -21,6 +21,7 @@ import javax.swing.JButton
 import javax.swing.JDialog
 import javax.swing.JLabel
 import javax.swing.JPasswordField
+import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.SwingUtilities
 
@@ -35,13 +36,15 @@ internal class WindowsInstalledUiControl private constructor() {
     private val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
     @Volatile private var stage = "WINDOW"
     @Volatile private var window: Window? = null
-    private var worker: Thread? = null
+    @Volatile private var worker: Thread? = null
+    @Volatile private var lastObservation = "UNOBSERVED"
+    private var panel: RpcDesktopPanel? = null // Accessed only on the EDT.
 
     fun start(actualWindow: Window) {
         check(SwingUtilities.isEventDispatchThread())
         check(started.compareAndSet(false, true))
         window = actualWindow
-        worker = Thread({
+        val ownedWorker = Thread({
             try {
                 await { actualWindow.isShowing && actualWindow.isActive }
                 stage = "NAVIGATION"
@@ -54,6 +57,7 @@ internal class WindowsInstalledUiControl private constructor() {
                 }
                 val panel = awaitValue { components(actualWindow).filterIsInstance<RpcDesktopPanel>()
                     .singleOrNull()?.takeIf { it.isShowing } }
+                edt { this.panel = panel }
                 stage = "UNLOCK"
                 click(panel, "Start host")
                 val dialog = awaitValue {
@@ -93,7 +97,7 @@ internal class WindowsInstalledUiControl private constructor() {
                     "\"identityAcrossStop\":\"UNCHANGED\",\"back\":\"ACKNOWLEDGED\"," +
                     "\"terminalClose\":\"REQUESTED\",\"peerOperations\":\"NOT_ENTERED\"}}")
             } catch (_: Throwable) {
-                System.err.println("WINDOWS_INSTALLED_UI_CONTROL_FAILED stage=$stage")
+                System.err.println("WINDOWS_INSTALLED_UI_CONTROL_FAILED stage=$stage view=$lastObservation")
             } finally {
                 active.set(false)
                 // Use the real application's original close listener and terminal owner. A blocked EDT
@@ -102,14 +106,24 @@ internal class WindowsInstalledUiControl private constructor() {
                     actualWindow.dispatchEvent(WindowEvent(actualWindow, WindowEvent.WINDOW_CLOSING))
                 }
             }
-        }, "p2pkit-installed-ui-control").apply { isDaemon = true; start() }
+        }, "p2pkit-installed-ui-control").apply { isDaemon = true }
+        worker = ownedWorker // Publish the actual worker before it can run or queue an EDT action.
+        ownedWorker.start()
     }
+
+    fun concealForApplicationExit() { active.set(false) }
+
+    /** Called by the original terminal retirement worker, never the EDT or this controller's worker. */
+    fun awaitRetirement() { awaitInstalledUiWorker(worker) }
 
     private fun checkTime() { check(active.get() && System.nanoTime() < end) }
 
     private fun <T> edt(action: () -> T): T {
         checkTime()
-        val task = FutureTask { checkTime(); action() }
+        val task = FutureTask {
+            checkTime()
+            try { action() } finally { observePanel() }
+        }
         SwingUtilities.invokeLater(task)
         return try { task.get(maxOf(1, end - System.nanoTime()), TimeUnit.NANOSECONDS).also { checkTime() } }
         finally { task.cancel(false) } // Never interrupt the EDT or discard an already running owner.
@@ -151,6 +165,37 @@ internal class WindowsInstalledUiControl private constructor() {
     private fun fingerprint(parent: Container): String = components(parent).filterIsInstance<JTextField>()
         .filter { !it.isEditable && PeerFingerprint.parseOrNull(it.text) != null }.single().text
 
+    /** Closed-vocabulary rendered UI observations only; no exception text, identity or user input. */
+    private fun observePanel() {
+        val current = panel ?: return
+        val children = components(current)
+        val labels = children.filterIsInstance<JLabel>().map { it.text }
+        val state = listOf("No role: Idle", "No role: Stopped", "Host: Starting", "Host: Ready",
+            "Host: Stopping", "Host: Failed").indexOfFirst { expected ->
+                labels.any { it == expected || it.startsWith("$expected — ") }
+            }
+        val outcome = children.filterIsInstance<JTextArea>().singleOrNull {
+            it.accessibleContext.accessibleName == "RPC outcome and network setup guidance"
+        }?.text.orEmpty()
+        val profileRefused = outcome.startsWith("Profile could not be unlocked ")
+        val failureText = labels.firstOrNull { it.startsWith("Host: Failed — ") }
+            ?.removePrefix("Host: Failed — ").orEmpty()
+        val reason = when {
+            failureText.startsWith("Discovery is blocked by the current JVM adapter with ") -> "DISCOVERY_SCOPE"
+            failureText.startsWith("More than one eligible private IPv4 LAN was found;") -> "AMBIGUOUS_LAN"
+            failureText.startsWith("No eligible private IPv4 LAN was found.") -> "NO_LAN"
+            failureText.startsWith("Cancelled;") -> "CANCELLED"
+            failureText.startsWith("RPC ") -> "RPC_FAILURE"
+            failureText.startsWith("Operation failed.") -> "OTHER_FAILURE"
+            else -> "UNCLASSIFIED"
+        }
+        val controls = children.filterIsInstance<JButton>()
+        val hostEnabled = controls.singleOrNull { it.text == "Start host" }?.isEnabled == true
+        val stopEnabled = controls.singleOrNull { it.text == "Stop" }?.isEnabled == true
+        lastObservation = "STATE_${state + 1}_ACTIVE_${window?.isActive == true}" +
+            "_PROFILE_REFUSED_${profileRefused}_HOST_ENABLED_${hostEnabled}_STOP_ENABLED_${stopEnabled}_REASON_$reason"
+    }
+
     companion object {
         fun prepare(): WindowsInstalledUiControl {
             // Admits the original installed provider and this fixed synthetic encrypted fixture.
@@ -190,5 +235,15 @@ internal class WindowsInstalledUiControl private constructor() {
             check(matches.size <= 1)
             return matches.singleOrNull()?.also { check(it.accessibleAction?.accessibleActionCount == 1) }
         }
+    }
+}
+
+/** Actual original-thread observation only; no interrupt, replacement worker or inferred successful cleanup. */
+internal fun awaitInstalledUiWorker(worker: Thread?) {
+    check(!SwingUtilities.isEventDispatchThread())
+    worker?.let {
+        check(it !== Thread.currentThread())
+        it.join(1000)
+        check(!it.isAlive) { "Installed UI control worker retirement is unknown" }
     }
 }

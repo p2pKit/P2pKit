@@ -200,8 +200,24 @@ fun main(arguments: Array<String>) {
         val windowsTerminal = remember { usesWindowsTerminalExit(System.getProperty("os.name")) }
         val terminal = remember {
             DesktopRpcTerminalExit(
-                conceal = { terminalRequested = true; binding.get()?.conceal?.invoke() },
-                retireAllOwners = { checkNotNull(binding.get()) { "Application owners were not admitted" }.retire() },
+                conceal = {
+                    installedUiControl?.concealForApplicationExit()
+                    terminalRequested = true
+                    binding.get()?.conceal?.invoke()
+                },
+                retireAllOwners = {
+                    val retired = runCatching {
+                        checkNotNull(binding.get()) { "Application owners were not admitted" }.retire()
+                    }
+                    try { installedUiControl?.awaitRetirement() } catch (failure: Throwable) {
+                        retired.exceptionOrNull()?.let { original ->
+                            if (original !== failure) original.addSuppressed(failure)
+                            throw original
+                        }
+                        throw failure
+                    }
+                    retired.getOrThrow()
+                },
             )
         }
         Window(
