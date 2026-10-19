@@ -1,6 +1,33 @@
 # Real-Windows custody smoke test source
 
-**BUILD-ONLY WINDOWS EVIDENCE EXISTS. NATIVE SMOKE NOT EXECUTED. NOT RUNTIME QUALIFICATION.**
+**SCOPED STANDARD-USER NATIVE SMOKE EVIDENCE EXISTS. WINDOWS REMAINS NOT_READY.**
+
+On 2026-10-19, both maintained selections passed under the canonical 30-second
+supervisor on the approved native AMD64 Standard-user Windows account. The
+supervisor source was `89b12b26ecdec0f23184a4b5bf972bf6cb632838`; all native build
+inputs were independently rebound unchanged to that source. The existing smoke
+EXE SHA-256 was `ad57f8c430868f706fb8e532c8636096679311fd2f7f93196ed298e32c450da3`.
+Its original build used a dirty tree; that history remains recorded. The owner
+explicitly authorized archiving synthetic P2pKit data and reusing this account.
+The application profile and both smoke fixtures were archived intact separately,
+with unchanged file identities, contents and ACLs. Private receipts retain actual
+process/descendant retirement and the original source/build bindings.
+
+These results cover the then-maintained custody and orderly cold-session reopen
+controls. They do not qualify later source changes, interrupted recovery,
+cross-process contention, encrypted profiles, JNI, installed Host/Client or
+power-loss durability. Historical build-only and unexecuted statements below
+describe their named earlier checkpoints.
+
+The current source additionally tests cross-process contention using two fixed
+descendants of the already job-contained smoke. A held-file contender requires
+an actual sharing violation and production root refusal; a later contender
+requires successful root/profile acquisition after original retirement. The
+parent observes the original child handles and checks unchanged root/profile
+identity after reacquiring them. No shell, credentialed launch, breakaway, new
+job or arbitrary child command is accepted. Five-second child work bounds do
+not extend the original outer budget. These added controls need their own
+exact-source execution result.
 
 The owner-authorized Windows2022 run
 [38243224029](https://github.com/p2pKit/P2pKit/actions/runs/38243224029), at exact source
