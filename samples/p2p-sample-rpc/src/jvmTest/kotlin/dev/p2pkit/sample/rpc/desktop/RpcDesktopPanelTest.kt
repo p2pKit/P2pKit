@@ -11,39 +11,10 @@ import javax.swing.JButton
 import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RpcDesktopPanelTest {
-    /** Explicit UI-policy inputs only; never alters os.name or claims native Windows execution. */
-    @Test fun windowsUiAdmissionRefusesEveryCaseBeforeAnyUnlockOrRoleAction() {
-        for (osName in listOf("Windows 11", "windows Server", "WINDOWS 10", "WiNdOwS", "Windows")) {
-            assertTrue(desktopRpcWindowsUnavailable(osName))
-            var entered = false
-            desktopRpcStartWhenPlatformPermits(osName) {
-                entered = true
-                error("Unavailable Windows UI must not prompt or start a role")
-            }
-            assertFalse(entered)
-        }
-    }
-
-    @Test fun nonWindowsUiAdmissionLeavesExistingProfileAndRoleFailuresAuthoritative() {
-        for (osName in listOf("Mac OS X", "Linux")) {
-            assertFalse(desktopRpcWindowsUnavailable(osName))
-            var entries = 0
-            desktopRpcStartWhenPlatformPermits(osName) { entries++ }
-            assertEquals(1, entries)
-            val failure = IllegalStateException("synthetic independent profile admission failure")
-            assertSame(failure, assertFails {
-                desktopRpcStartWhenPlatformPermits(osName) { throw failure }
-            })
-        }
-    }
-
     @Test fun embeddedWorkspaceUsesHostBackPolicyWithoutCreatingAWindowOrStartingARole() {
         val windows = Window.getWindows().toSet()
         var backRequests = 0

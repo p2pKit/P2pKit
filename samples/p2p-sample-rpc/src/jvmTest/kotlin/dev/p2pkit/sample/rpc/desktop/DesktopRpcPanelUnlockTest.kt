@@ -154,6 +154,52 @@ class DesktopRpcPanelUnlockTest {
         }
     }
 
+    @Test fun returnedProfileWithCleanupUncertaintyNeverStartsARoleAndKeepsItsOwner() = runTest {
+        val model = WindowsProfileModel()
+        val produced = open(model)
+        val original = IOException("synthetic retained acquisition cleanup")
+        val attempt = DesktopRpcProfileOpenAttempt(produced.result, original)
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        var accepted: DesktopRpcProfileOpenAttempt? = null
+        var readyCalls = 0
+        val task = createDesktopRpcProfileUnlock(scope, StandardTestDispatcher(testScheduler),
+            open = { attempt }, isClosing = { false }, accept = { accepted = it }, ready = { readyCalls++ })
+        task.start()
+        try {
+            runCurrent()
+            task.join()
+            assertSame(attempt, accepted)
+            assertSame(original, task.attempt?.cleanupFailure)
+            assertFalse(attempt.readyForRole)
+            assertEquals(0, readyCalls)
+            assertTrue(model.remaining > 0)
+        } finally { produced.result.getOrThrow().close(); scope.cancel(); runCurrent() }
+        assertEquals(0, model.remaining)
+    }
+
+    @Test fun retainedSessionPreventsReadyEvenIfAnInconsistentAttemptReportsSuccess() = runTest {
+        val model = WindowsProfileModel()
+        val retainedModel = WindowsProfileModel()
+        val retained = WindowsProfileFiles.openForValidation(retainedModel)
+        val produced = open(model)
+        val attempt = DesktopRpcProfileOpenAttempt(produced.result, null, retained)
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        var readyCalls = 0
+        val task = createDesktopRpcProfileUnlock(scope, StandardTestDispatcher(testScheduler),
+            open = { attempt }, isClosing = { false }, accept = { assertSame(attempt, it) }, ready = { readyCalls++ })
+        task.start()
+        try {
+            runCurrent()
+            task.join()
+            assertSame(retained, task.attempt?.retainedSession)
+            assertFalse(attempt.readyForRole)
+            assertEquals(0, readyCalls)
+            assertTrue(model.remaining > 0 && retainedModel.remaining > 0)
+        } finally { produced.result.getOrThrow().close(); retained.close(); scope.cancel(); runCurrent() }
+        assertEquals(0, model.remaining)
+        assertEquals(0, retainedModel.remaining)
+    }
+
     @Test fun rejectedDispatchOrFailedPublicationRetainsTheActualProfileAndJobFailure() = runTest {
         for (rejectDispatch in listOf(true, false)) {
             val original = IOException("synthetic profile delivery failure")

@@ -155,10 +155,6 @@ public class RpcDesktopPanel(
                 border = BorderFactory.createEmptyBorder(4, 8, 20, 8)
                 add(JButton("Back to samples").apply { addActionListener { requestBack() } })
                 add(DesktopRpcAppearance.hero())
-                if (desktopRpcWindowsUnavailable(System.getProperty("os.name"))) {
-                    add(DesktopRpcWrappedLabel("RPC is unavailable on Windows: protected persistent profiles are " +
-                        "not implemented on Windows. Host and Client are unavailable; no insecure fallback is used."))
-                }
                 add(DesktopRpcAppearance.heading("Connect"))
                 add(DesktopRpcWrappedLabel("Choose Host on one device and Client on the other. " +
                     "Network selection is automatic; first connections need your approval."))
@@ -289,22 +285,22 @@ public class RpcDesktopPanel(
     }
 
     private fun startRole(host: Boolean) {
-        desktopRpcStartWhenPlatformPermits(System.getProperty("os.name")) {
-            if (closing || unlocking || unlockCleanupFailure != null || !windowActive ||
-                owner.snapshot().stage !in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
-            val unlocked = profile
-            if (unlocked == null) { unlockProfile { startRole(host) }; return }
-            clearSensitive()
-            outcome.text = "Starting selected role on the freshly observed eligible private LAN."
-            owner.start(if (host) "Host" else "Client", {
-                DesktopRpcRuntime.create(application = applicationSession, profile = unlocked)
-            }) { runtime ->
-                // Fresh scan on the owned worker, not the earlier advisory UI scan. Never force an interface.
-                val settings = desktopRpcDiscoverySettings(desktopRpcNetworks())
-                runtime.start(host, settings)
-            }
-            render()
+        if (closing || unlocking || unlockCleanupFailure != null || !windowActive ||
+            owner.snapshot().stage !in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
+        val unlocked = profile
+        // On Windows this is the fixed installed provider, not an OS-name permission or a POSIX fallback.
+        // The owned unlock task publishes only a profile with no unresolved acquisition cleanup.
+        if (unlocked == null) { unlockProfile { startRole(host) }; return }
+        clearSensitive()
+        outcome.text = "Starting selected role on the freshly observed eligible private LAN."
+        owner.start(if (host) "Host" else "Client", {
+            DesktopRpcRuntime.create(application = applicationSession, profile = unlocked)
+        }) { runtime ->
+            // Fresh scan on the owned worker, not the earlier advisory UI scan. Never force an interface.
+            val settings = desktopRpcDiscoverySettings(desktopRpcNetworks())
+            runtime.start(host, settings)
         }
+        render()
     }
 
     private fun unlockProfile(ready: () -> Unit) {
@@ -312,7 +308,7 @@ public class RpcDesktopPanel(
         input.accessibleContext.accessibleName = "RPC profile passphrase; not your computer login password"
         val answer = showOptions(arrayOf(
             "Unlock or create your local encrypted RPC profile (12–128 characters).",
-            "Use a separate strong passphrase, NOT your Mac login password. No recovery or reset is automatic.", input,
+            "Use a separate strong passphrase, NOT your computer login password. No recovery or reset is automatic.", input,
         ), "RPC profile", arrayOf("Unlock profile", "Cancel"), JOptionPane.PLAIN_MESSAGE)
         val password = input.password
         input.text = ""
@@ -324,9 +320,10 @@ public class RpcDesktopPanel(
             isClosing = { closing }, accept = { attempt ->
                 val result = attempt.result
                 unlocking = false
-                profile = result.getOrNull()
-                if (unlockCleanupFailure == null) unlockCleanupFailure = attempt.cleanupFailure
-                if (!closing && result.isFailure) {
+                profile = if (attempt.readyForRole) result.getOrNull() else null
+                if (unlockCleanupFailure == null) unlockCleanupFailure = attempt.cleanupFailure ?:
+                    attempt.retainedSession?.let { IllegalStateException("Profile acquisition ownership is retained") }
+                if (!closing && !attempt.readyForRole) {
                     outcome.text = "Profile could not be unlocked " +
                         "(passphrase, ownership, corruption or another app instance). " +
                         "Existing files were preserved. No network role started."
@@ -474,10 +471,6 @@ public class RpcDesktopPanel(
         val ready = snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing
         listOf(networks, subnets, port, host, client, refresh).forEach {
             it.isEnabled = idle && !closing && !refreshing && !unlocking && unlockCleanupFailure == null
-        }
-        if (desktopRpcWindowsUnavailable(System.getProperty("os.name"))) {
-            host.isEnabled = false
-            client.isEnabled = false
         }
         stop.isEnabled = !idle && !closing && snapshot.stage != DesktopRpcRunOwner.Stage.Stopping
         cancel.isEnabled = !closing && snapshot.stage in setOf(
@@ -660,11 +653,3 @@ private fun bound(field: JTextField, maximum: Int) {
 /** The EDT invalidates the token on focus loss, Stop and close, even if focus subsequently returns. */
 internal fun desktopRpcInvitationVisible(expected: Any, current: Any, active: Boolean): Boolean =
     active && expected === current
-
-/** UI refusal only. The production profile and native provider keep their independent admission checks. */
-internal fun desktopRpcWindowsUnavailable(osName: String): Boolean = osName.startsWith("Windows", ignoreCase = true)
-
-/** Runs before any passphrase prompt, profile access or role creation, including direct action-listener delivery. */
-internal inline fun desktopRpcStartWhenPlatformPermits(osName: String, start: () -> Unit) {
-    if (!desktopRpcWindowsUnavailable(osName)) start()
-}

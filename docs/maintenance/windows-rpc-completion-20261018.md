@@ -1,10 +1,60 @@
 # Windows RPC implementation and qualification checkpoint
 
-**NOT_READY — Windows Host/Client is not functional or qualified.**
+**NOT_READY — Windows Host/Client has not completed actual qualification.**
 
 This report distinguishes source implementation, portable/model controls, actual installed admission,
 productive storage failures and unexecuted acceptance work. Installation alone is not acceptance.
 Raw profiles, account/device identities, payloads and logs remain private.
+
+## Latest continuation: productive profile and UI integration
+
+The exact-source installed candidate at `ba40c6cc1a9662ac06ccfa15eb4c9a832a40caca`, tree
+`07860a9ef655f16341195d4f8b0a7a31857813ec`, passed installed admission and productive profile reopening.
+The raw ABI13/`0x43` bridge and private managed composition remain unchanged. The source adds a distinct
+delete-pending inspection: zero links are accepted only after this operation's acknowledged disposition,
+with the original file identity and pending state. Ordinary files still require one link.
+
+- All 16 portable native programs passed, including 13 deletion groups. Native DLL/smoke compilation passed.
+- The checked-in wrapper's complete `check` invocation ran 2,946 managed tests with zero failures,
+  errors or skips. The gate exited1 solely at Apple ABI verification, which requires macOS; the baseline
+  remains intact. Four contribution shell gates, loader adapter controls and DLL byte inspection passed.
+- Canonical Desktop producer: [39182289177/1](https://github.com/p2pKit/P2pKit/actions/runs/39182289177).
+  The initial older-workflow dispatch 39182077105 was cancelled and supplies no evidence.
+- MSI SHA-256: `f046b1396f6d213241f0715e6a6f43fa7f5412e5301be759615c15009b76bc00`.
+  Package manifest: `87155b7d7844d3ff91ee2048033a1d74ff499b7276122187cc760700d6d77c99`.
+  All 224 installed files and 68 runtime DLLs matched the package and original pinned supplier.
+- Installed DLL SHA-256: `b33d65d19fc0181d190d6ef96d562782208b04521d3c5887f5a3cffcb68b7c39`.
+- `run-windows-installed-admission.py --operation admission`: PASS, app/driver exit0, 2.031s.
+  Receipt: `9f98f3a3f8c8017a0656c89ae857466b96e02d47e50a984238856da1ea5f57f6`.
+- The same maintained driver with `--operation profile-reopen`: PASS, app/driver exit0, 2.750s.
+  Receipt: `d7e8300c0383e9706800b1c5847fdc5a0e50518b33c2c7d67d6d80ddff0c7a5e`.
+  It read the existing encrypted marker, exercised scratch create/replace/read/expected-identity delete,
+  absence readback and namespace sync, then acknowledged profile close with no remaining managed leases.
+  Two sessions reused registration without unloading cached JNI addresses. Both invocations observed
+  all six process witnesses exited/closed, bounded captures and known enclosing cleanup within 30000ms.
+
+The owner approved archiving the original failed profile intact and reusing the disposable account.
+All eight archived entries retained their original identities, content and ACLs. The later fresh-create
+attempt at `64d4a84d` failed at `READ_REPLACE_DELETE / CleanupUnknown`; receipt
+`259ef5e69742186caf4306a7a0934ed29e26c5d366ae1595ad66807751b39567` remains FAIL. The zero-link
+repair enabled subsequent normal reopening of its complete visible state, not a retrospective create pass.
+No successful fresh-create, interrupted-state recovery or power-loss durability is claimed.
+
+The subsequent UI change connects Host/Client to the fixed installed provider through the owned unlock
+task. It verifies the original module/runtime before Desktop preparation, and permits a role only when
+unlock succeeds without cleanup uncertainty or a retained session. New coroutine regressions exercise
+those ownership refusals. This source change still needs its own affected checks, exact-source installer
+and actual UI execution; the `ba40c6cc` results above do not qualify it.
+
+The approved Android endpoint now has the verified debug APK from `506d3bda`, version `0.8.0-rc3`.
+Its installed SHA-256 is `6d360be38403f8c2a2e678b86e41dadbd8a083f508d95f716a0c1efd9ee5cf18`.
+The owner explicitly approved removal of the previous differently signed test app and its app data.
+No pairing, peer approval or device RPC result is inferred from installation.
+
+W01–W11 remain incomplete: admission and productive JNI/storage have positive observations, while
+negative contexts, hostile paths/ACLs, cross-process/fault controls, cancellation/races, actual UI/LAN,
+revocation/reconnect and 20 installed lifecycle cycles remain outstanding. Independent Foundation review
+and actual Apple ABI verification are also pending. The remaining sections preserve earlier checkpoints.
 
 ## Source and ownership
 

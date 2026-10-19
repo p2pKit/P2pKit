@@ -22,6 +22,9 @@ internal object WindowsProfileInstalledProvider {
 
     private class Entry(val method: Method, val unavailable: Class<*>)
 
+    /** Before-effects consistency check only; no method invocation, provider or native-load authority. */
+    fun requireInstalledEntry() { fixedEntry() }
+
     /** Only WindowsProfileFiles' zero-argument production factory uses this entry. No validation overload. */
     fun acquireNative(): WindowsProfileNativeApi {
         val entry = fixedEntry()

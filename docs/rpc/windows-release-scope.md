@@ -55,18 +55,21 @@ and W01–W11 remain unqualified; the follow-up must use the new exact release b
 
 The shared JVM RPC library and the Windows sample's native protected-profile provider are
 different components. The existing Windows Desktop application's other features remain;
-**its RPC section is present, but Windows RPC Host/Client is technically unavailable**:
+**its RPC section now acquires the installed provider, but Windows Host/Client remains unqualified**:
 
-- The installed application acquisition and `DesktopRpcProfile.openAttempt` can use the admitted
-  `WindowsProfileFiles` provider. The Desktop UI's Windows unlock/Host/Client gate still refuses;
-  successful productive persistence and lifecycle qualification are not established.
+- The Desktop UI's unlock path checks the original named module/runtime, prepares the actual
+  Desktop runtime and acquires the fixed `WindowsProfileFiles` installed provider. Role creation
+  requires a successful profile with no retained acquisition cleanup. It cannot authorize native
+  loading through an OS-name check or an availability flag. Installed UI execution is still required.
 - `WindowsProfileAvailability` already has `IMPLEMENTED=false` and `QUALIFIED=false`.
 - The JDK21 adapter's public `WindowsLoader.openInstalledProvider()` now uses the
   original installed controller. Its productive storage and UI integration remain unqualified.
-  The original-owner bootstrap/load/JNI controller has passed narrow installed admission, and
-  the public provider has entered real protected storage. The first encrypted-marker write failed;
-  the subsequent directory-index repair passes portable regressions and installed initial inventory,
-  but the retained failed profile still refuses later. This is not successful persistence or UI qualification.
+  The original-owner bootstrap/load/JNI controller has passed narrow installed admission. After the
+  directory-index and delete-pending link-count repairs, an exact-source installed control reopened
+  an encrypted marker and completed protected read/write/replace/delete/sync and acknowledged close.
+  Earlier create/reopen failures remain failures; the original failed fixture was archived intact
+  with explicit owner approval. Successful reopening does not establish fresh creation, fault recovery,
+  power-loss durability, installed UI behavior or the full qualification matrix.
   See the [source/package-bound Windows checkpoint](../maintenance/windows-rpc-completion-20261018.md).
   Optional local adapter
   packaging defaults off; the canonical Windows packaging component explicitly includes it.
@@ -82,8 +85,8 @@ and the packaged JDK21 family remain unchanged.
 
 The remaining work includes the complete installed root/runtime, first-OS-call, ancestor/ACL/reparse,
 constrained-loading and loaded-module/import/JNI negative/lifetime matrices. The original chain is
-connected to the public provider; successful encrypted persistence, safe application ownership transfer
-and actual UI Host/Client still require completion and qualification. Foundation retains installer/runtime/
+connected to the public provider; broader persistence/recovery, safe application ownership transfer
+and actual UI Host/Client still require qualification. Foundation retains installer/runtime/
 bootstrap authority; its October18 handoff delegates the necessary loader/provider/native/UI repairs
 to the isolated Windows branch. Composed native writes/deletes, synchronization and managed ownership
 already exist and must not be unnecessarily rebuilt. Flipping flags or loading a candidate
