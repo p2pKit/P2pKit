@@ -37,6 +37,9 @@ cancellation, an RPC failure and other failure without copying any arbitrary UI 
 Startup errors remain classified after the original owner retires to Stopped; retirement
 does not turn a failed start into a successful lifecycle result.
 These observations identify a stalled stage; they do not substitute for native failure evidence.
+Failure output also records elapsed monotonic milliseconds at each fixed stage and whether the
+original ten-second deadline expired. It contains no exception message, identity or user input;
+the timing observation neither extends a budget nor turns partial UI progress into a pass.
 The controller publishes its original worker before start, invalidates queued actions during
 terminal concealment and is joined by the original application's retirement worker. Unknown
 retirement fails within the unchanged terminal/outer budgets.

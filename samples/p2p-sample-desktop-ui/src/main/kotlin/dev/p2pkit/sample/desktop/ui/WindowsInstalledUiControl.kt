@@ -33,7 +33,9 @@ import javax.swing.SwingUtilities
 internal class WindowsInstalledUiControl private constructor() {
     private val started = AtomicBoolean()
     private val active = AtomicBoolean(true)
-    private val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+    private val beginning = System.nanoTime()
+    private val end = beginning + TimeUnit.SECONDS.toNanos(10)
+    private val stages = mutableListOf("WINDOW:0") // Original controller worker only; fixed stage vocabulary.
     @Volatile private var stage = "WINDOW"
     @Volatile private var window: Window? = null
     @Volatile private var worker: Thread? = null
@@ -47,7 +49,7 @@ internal class WindowsInstalledUiControl private constructor() {
         val ownedWorker = Thread({
             try {
                 await { actualWindow.isShowing && actualWindow.isActive }
-                stage = "NAVIGATION"
+                enter("NAVIGATION")
                 val entry = awaitValue { accessibleButton(actualWindow, "RPC") }
                 later {
                     check(actualWindow.isShowing && actualWindow.isActive)
@@ -58,7 +60,7 @@ internal class WindowsInstalledUiControl private constructor() {
                 val panel = awaitValue { components(actualWindow).filterIsInstance<RpcDesktopPanel>()
                     .singleOrNull()?.takeIf { it.isShowing } }
                 edt { this.panel = panel }
-                stage = "UNLOCK"
+                enter("UNLOCK")
                 click(panel, "Start host")
                 val dialog = awaitValue {
                     actualWindow.ownedWindows.filterIsInstance<JDialog>()
@@ -72,24 +74,24 @@ internal class WindowsInstalledUiControl private constructor() {
                     input.text = "P2pKit installed synthetic control v1"
                 }
                 click(dialog, "Unlock profile")
-                stage = "HOST_START"
+                enter("HOST_START")
                 await { hasText(panel, "Host: Ready") && hasText(panel,
                     "Live Host: Running — updates automatically every 500 ms.") }
                 val identity = edt { fingerprint(panel) }
-                stage = "HOST_STOP"
+                enter("HOST_STOP")
                 click(panel, "Stop")
                 await { hasText(panel, "No role: Stopped") }
-                stage = "HOST_RESTART"
+                enter("HOST_RESTART")
                 click(panel, "Start host")
                 await { hasText(panel, "Host: Ready") && hasText(panel,
                     "Live Host: Running — updates automatically every 500 ms.") }
                 edt { check(fingerprint(panel) == identity) }
-                stage = "BACK"
+                enter("BACK")
                 click(panel, "Back to samples")
                 await { !panel.isShowing && accessibleButton(actualWindow, "RPC") != null }
                 // This is provisional UI evidence. Normal terminal cleanup and independently observed
                 // process exit remain mandatory; a printed line cannot qualify retirement.
-                stage = "TERMINAL_REQUEST"
+                enter("TERMINAL_REQUEST")
                 checkTime()
                 println("{\"source\":\"${BuildInfo.COMMIT}\",\"ui\":{\"schema\":1," +
                     "\"scope\":\"INSTALLED_UI_HOST_CYCLE_NOT_PEER_OR_FULL_QUALIFICATION\"," +
@@ -97,7 +99,10 @@ internal class WindowsInstalledUiControl private constructor() {
                     "\"identityAcrossStop\":\"UNCHANGED\",\"back\":\"ACKNOWLEDGED\"," +
                     "\"terminalClose\":\"REQUESTED\",\"peerOperations\":\"NOT_ENTERED\"}}")
             } catch (_: Throwable) {
-                System.err.println("WINDOWS_INSTALLED_UI_CONTROL_FAILED stage=$stage view=$lastObservation")
+                val now = System.nanoTime()
+                System.err.println("WINDOWS_INSTALLED_UI_CONTROL_FAILED stage=$stage view=$lastObservation" +
+                    " deadlineExpired=${now >= end} elapsedMs=${TimeUnit.NANOSECONDS.toMillis(now - beginning)}" +
+                    " stages=${stages.joinToString(",")}")
             } finally {
                 active.set(false)
                 // Use the real application's original close listener and terminal owner. A blocked EDT
@@ -117,6 +122,11 @@ internal class WindowsInstalledUiControl private constructor() {
     fun awaitRetirement() { awaitInstalledUiWorker(worker) }
 
     private fun checkTime() { check(active.get() && System.nanoTime() < end) }
+
+    private fun enter(value: String) {
+        stage = value
+        stages.add("$value:${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - beginning)}")
+    }
 
     private fun <T> edt(action: () -> T): T {
         checkTime()
