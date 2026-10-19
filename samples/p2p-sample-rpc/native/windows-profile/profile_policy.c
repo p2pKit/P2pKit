@@ -806,6 +806,14 @@ int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volum
     return words && count == PWP_IDENTITY_WORDS && words[0] == 1 && parent_volume != 0 &&
         words[1] == parent_volume && (words[2] != 0 || words[3] != 0) && words[4] == 0x2ff && words[5] == 1;
 }
+
+int pwp_delete_observation(const uint64_t *expected, const uint64_t *observed, size_t count, int pending) {
+    if (!expected || !observed || count != PWP_IDENTITY_WORDS || (pending != 0 && pending != 1) ||
+        !pwp_expected_file(expected, count, expected[1])) return 0;
+    for (size_t i = 0; i < count; ++i)
+        if (observed[i] != (pending && i >= 4 ? 0 : expected[i])) return 0;
+    return 1;
+}
 typedef struct {
     pwp_owner *owner;
     pwp_lock_action verify, mark, pending_verify;

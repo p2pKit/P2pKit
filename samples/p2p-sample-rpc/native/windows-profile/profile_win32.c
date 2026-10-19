@@ -221,18 +221,23 @@ static int private_security(HANDLE handle, int directory) {
     if (LocalFree(sd)) { state.failed_security_descriptor = sd; state.failed = 1; return 0; }
     return ok;
 }
+enum { PWP_INSPECT_NORMAL, PWP_INSPECT_STAGE, PWP_INSPECT_DELETE_PENDING };
 static int inspect_mode(HANDLE handle, const WCHAR *path, int directory, int private_file,
-                         int disposable_stage, uint64_t words[6]) {
+                         int mode, uint64_t words[6]) {
+    if (mode < PWP_INSPECT_NORMAL || mode > PWP_INSPECT_DELETE_PENDING ||
+        (mode == PWP_INSPECT_DELETE_PENDING && (directory || !private_file))) return 0;
     FILE_ID_INFO id; FILE_BASIC_INFO basic; FILE_STANDARD_INFO standard; DWORD flags = 0;
     if (GetFileType(handle) != FILE_TYPE_DISK || !GetHandleInformation(handle, &flags) ||
         (flags & HANDLE_FLAG_INHERIT) ||
         !GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id)) ||
         !GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) ||
         !GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) ||
-        (standard.DeletePending && !disposable_stage) || !!standard.Directory != directory ||
+        (standard.DeletePending && mode == PWP_INSPECT_NORMAL) ||
+        (mode == PWP_INSPECT_DELETE_PENDING && !standard.DeletePending) || !!standard.Directory != directory ||
         !!(basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory ||
         (basic.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_OFFLINE)) ||
-        standard.EndOfFile.QuadPart < 0 || (private_file && standard.NumberOfLinks != 1) ||
+        standard.EndOfFile.QuadPart < 0 ||
+        (private_file && standard.NumberOfLinks != (mode == PWP_INSPECT_DELETE_PENDING ? 0u : 1u)) ||
         !id.VolumeSerialNumber || (private_file && !directory &&
             (uint64_t)standard.EndOfFile.QuadPart > PWP_RECORD_LIMIT)) return 0;
     if (directory) {
@@ -265,11 +270,11 @@ static int inspect_mode(HANDLE handle, const WCHAR *path, int directory, int pri
     if (!low && !high) return 0;
     words[0] = 1; words[1] = id.VolumeSerialNumber; words[2] = high; words[3] = low;
     /* Disposable-stage/deletion-pending inspection has no normal-record claims. Zero flags are internal only. */
-    words[4] = disposable_stage ? 0 : directory ? 0x1ff : 0x2ff; words[5] = standard.NumberOfLinks;
+    words[4] = mode != PWP_INSPECT_NORMAL ? 0 : directory ? 0x1ff : 0x2ff; words[5] = standard.NumberOfLinks;
     return 1;
 }
 static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_file, uint64_t words[6]) {
-    return inspect_mode(handle, path, directory, private_file, 0, words);
+    return inspect_mode(handle, path, directory, private_file, PWP_INSPECT_NORMAL, words);
 }
 static int directory_sync_access(HANDLE handle) {
     pwp_file_access_information access = {0}; IO_STATUS_BLOCK io = {0};
@@ -501,7 +506,7 @@ static int stage_check(size_t expected_size, void *context) {
     pwp_entry *parent = entry(c->entry->parent);
     return c->entry->stage_created && c->entry->stage_validated && mutation_verify(c->grant) &&
         verify(parent) && no_impersonation() &&
-        inspect_mode(c->handle, c->entry->path, 0, 1, 1, observed) &&
+        inspect_mode(c->handle, c->entry->path, 0, 1, PWP_INSPECT_STAGE, observed) &&
         memcmp(observed, c->entry->identity, sizeof(observed)) == 0 &&
         GetFileInformationByHandleEx(c->handle, FileStandardInfo, &size, sizeof(size)) &&
         size.EndOfFile.QuadPart >= 0 && (uint64_t)size.EndOfFile.QuadPart == expected_size &&
@@ -525,7 +530,7 @@ static int stage_mark_delete(void *context) {
     if (!c->entry->stage_created || state.failed || state.owner.poisoned) return 0;
     if (c->entry->stage_validated) {
         uint64_t observed[6];
-        if (!no_impersonation() || !inspect_mode(c->handle, c->entry->path, 0, 1, 1, observed) ||
+        if (!no_impersonation() || !inspect_mode(c->handle, c->entry->path, 0, 1, PWP_INSPECT_STAGE, observed) ||
             memcmp(observed, c->entry->identity, sizeof(observed)) != 0) return 0;
     }
     FILE_DISPOSITION_INFO disposition = {TRUE}; FILE_STANDARD_INFO after;
@@ -699,7 +704,7 @@ static pwp_result stage_bytes(uint64_t directory, const uint16_t *name, size_t l
     pwp_entry *e = entry(token);
     (void)pwp_stage_init(&e->stage);
     e->stage_created = 1;
-    if (!inspect_mode(handle, path, 0, 1, 1, e->identity)) {
+    if (!inspect_mode(handle, path, 0, 1, PWP_INSPECT_STAGE, e->identity)) {
         r = retire(token); return r == PWP_OK ? PWP_POLICY : r;
     }
     e->stage_validated = 1;
@@ -1736,14 +1741,16 @@ static int deletion_verify_mode(pwp_delete_native *c, int pending) {
         !verify(parent) || c->file->directory || c->file->public_handle ||
         !regular_entry(c->file) ||
         !pwp_expected_file(c->expected, PWP_IDENTITY_WORDS, parent->identity[1]) ||
-        !no_impersonation() || !inspect_mode(c->handle, c->file->path, 0, 1, pending, observed) ||
+        !no_impersonation() || !inspect_mode(c->handle, c->file->path, 0, 1,
+            pending ? PWP_INSPECT_DELETE_PENDING : PWP_INSPECT_NORMAL, observed) ||
         !GetFileInformationByHandleEx(c->handle, FileStandardInfo, &standard, sizeof(standard)) ||
-        !!standard.DeletePending != pending || standard.Directory || standard.NumberOfLinks != 1)
+        !!standard.DeletePending != pending || standard.Directory || standard.NumberOfLinks != (pending ? 0u : 1u))
         return 0;
-    /* Pending-mode inspection deliberately has flags0, never the normal !DeletePending assertion. */
-    for (size_t i = 0; i < PWP_IDENTITY_WORDS; ++i)
-        if (observed[i] != (pending && i == 4 ? 0 : c->expected[i])) return 0;
-    return mutation_verify(&c->grant) && !state.failed && !state.owner.poisoned;
+    /* NTFS marks the sole link deleted before the original handle closes. Reprove the unchanged
+     * volume/file ID, ACL and path, with exactly zero links/normal flags only after our own mark.
+     * Ordinary opens and disposable staging still require one link; no hard-link exception is added. */
+    return pwp_delete_observation(c->expected, observed, PWP_IDENTITY_WORDS, pending) &&
+        mutation_verify(&c->grant) && !state.failed && !state.owner.poisoned;
 }
 static int deletion_verify(void *context) { return deletion_verify_mode(context, 0); }
 static int deletion_pending_verify(void *context) { return deletion_verify_mode(context, 1); }

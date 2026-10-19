@@ -241,6 +241,10 @@ pwp_result pwp_child_finish(pwp_owner *owner, uint64_t token, pwp_lock_action ve
                             pwp_close_callback close, void *context);
 /* Expected normal FILE tuple. Volume is unsigned/raw bits, not a positive signed Java Long. */
 int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volume);
+/* Same original file before/after acknowledged delete disposition. Pending NTFS readback has
+ * zero normal-record flags and zero links, never authority to admit an already unlinked file.
+ * Caller separately proves DeletePending, original-handle custody, ACL, parent and role grants. */
+int pwp_delete_observation(const uint64_t *expected, const uint64_t *observed, size_t count, int pending);
 /* Caller serializes and owns one freshly opened, unpublished, exclusive file handle.
  * Success means deletion intent/readback + exact-handle retirement, NOT name absence or durability.
  * Preverification rejection only closes. Any uncertainty after mark starts quarantines, even if

@@ -234,6 +234,14 @@ the original-handle deletion-intent and pending-readback callbacks. No callback 
 gate or infers authority by reopening a path. A later lease with the same filename or reused OS handle
 cannot validate an older grant.
 
+Expected-ID deletion verifies a normal one-link file before setting disposition. On NTFS, the
+same held file then reports `DeletePending=true` and zero links. A distinct internal inspection
+mode requires that exact transition while rechecking the unchanged volume/file ID, path, ACL,
+streams and role grants. Its tuple has zero normal-record flags and cannot authorize an ordinary
+open or a new deletion. Ordinary records and disposable stages still require one link. Thirteen
+portable delete-intent groups cover the identity transition, invalid input and existing uncertainty
+rules; they do not establish real JNI deletion, directory durability or installed qualification.
+
 Independent close refuses a profile while a vault or any of its stages remains; vault/identity close
 refuses dependent stages or the live vault as applicable. Successful close clears only that exact role
 after the original resource really retires. Failed/quarantined close keeps the association and prohibits
