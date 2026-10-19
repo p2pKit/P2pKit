@@ -7,6 +7,7 @@ ROOT = File.expand_path("../..", __dir__)
 CATALOG = "gradle/libs.versions.toml"
 LOCAL = "docs/testing/local.md"
 CI = "scripts/setup-ci-component.sh"
+NDK_PRODUCER = "buildSrc/src/main/java/dev/p2pkit/build/BuildAndroidLanSocketsTask.java"
 ENTRY_POINTS = {
     "CONTRIBUTING.md" => ["## Development setup", "docs/testing/local.md#android-sdk-setup"],
     "docs/validation/test-catalog.md" => ["### 1.1 Required tools and accounts", "../testing/local.md#android-sdk-setup"],
@@ -44,6 +45,9 @@ def check_setup(files)
         require_setup(entries.size == 1 && match, "missing/invalid catalog #{key}")
         [key, match[1]]
     end
+    ndk_pins = files.fetch(NDK_PRODUCER).scan(/public static final String NDK_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)";/).flatten
+    require_setup(ndk_pins.size == 1, "missing/duplicate native producer NDK pin")
+    ndk_package = "ndk;#{ndk_pins.first}"
     setup = section(files.fetch(LOCAL), "## Android SDK setup")
     packages = %w[android-compileSdk android-sample-compileSdk].map do |key|
         rows = setup.lines.grep(/^\|/).map { |line| line.strip.split("|").drop(1).map(&:strip) }
@@ -64,8 +68,8 @@ def check_setup(files)
     manager = "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
     installers = commands.select { |cmd| cmd.first == manager }
     require_setup(installers == [[manager, "--sdk_root=$ANDROID_HOME", "--licenses"],
-                                [manager, "--sdk_root=$ANDROID_HOME", *packages, "platform-tools"]],
-                  "installation commands must accept licenses and install both catalog platforms")
+                                [manager, "--sdk_root=$ANDROID_HOME", *packages, "platform-tools", ndk_package]],
+                  "installation commands must accept licenses and install both catalog platforms and the pinned NDK")
     # Match a real installer line, not an example/comment elsewhere in the workflow.
     ci_packages = files.fetch(CI).lines.select do |line|
         line.include?("/cmdline-tools/latest/bin/sdkmanager") && !line.lstrip.start_with?("#")
@@ -73,7 +77,7 @@ def check_setup(files)
         cmd = Shellwords.split(line.strip)
         cmd.drop(1) if ["$sdk/cmdline-tools/latest/bin/sdkmanager", "$sdk/cmdline-tools/latest/bin/sdkmanager.bat"].include?(cmd.first)
     end.compact
-    require_setup(ci_packages.size == 2 && ci_packages.all? { |items| (packages - items).empty? },
+    require_setup(ci_packages.size == 2 && ci_packages.all? { |items| ([*packages, ndk_package] - items).empty? },
                   "documented platform packages differ from the CI installer")
     ENTRY_POINTS.each do |path, (heading, target)|
         text = section(files.fetch(path), heading)
@@ -82,7 +86,7 @@ def check_setup(files)
     end
 end
 
-files = ([CATALOG, LOCAL, CI] + ENTRY_POINTS.keys).to_h { |path| [path, File.read(File.join(ROOT, path))] }
+files = ([CATALOG, LOCAL, CI, NDK_PRODUCER] + ENTRY_POINTS.keys).to_h { |path| [path, File.read(File.join(ROOT, path))] }
 check_setup(files)
 
 def reject_mutation(files, name, expected)
@@ -134,7 +138,16 @@ end
 reject_mutation(files, "CI misses sample package", "differ from the CI installer") do |f|
     f[CI].sub!(/ 'platforms;android-[0-9]+\.0'/, "")
 end
-count += 5
+reject_mutation(files, "CI misses NDK", "differ from the CI installer") do |f|
+    f[CI].sub!(/ 'ndk;[0-9.]+'/, "")
+end
+reject_mutation(files, "documented installation misses NDK", "installation commands") do |f|
+    f[LOCAL].sub!(/ "ndk;[0-9.]+"/, "")
+end
+reject_mutation(files, "native producer NDK drift", "installation commands") do |f|
+    f[NDK_PRODUCER].sub!(/(NDK_VERSION = )"[0-9.]+"/, '\1"99.0.1"')
+end
+count += 8
 
 # A coherent future input change passes this consistency test (but still requires
 # independent dependency/toolchain approval). Do not pin today's SDKs in this gate.

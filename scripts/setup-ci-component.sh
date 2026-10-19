@@ -31,13 +31,15 @@ if [[ "${RUNNER_OS:-}" == macOS ]]; then
   xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
   echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
 fi
+# Android AARs are also built by compatibility, consumers, and signed Maven
+# publication/recovery. Install the producer pin on every Gradle-capable lane.
 if [[ "$component" != source && "$component" != security ]]; then
   sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
   if [[ "${RUNNER_OS:-}" == Windows ]]; then
     sdk="$(cygpath -u "$sdk")"
-    "$sdk/cmdline-tools/latest/bin/sdkmanager.bat" 'platforms;android-36' 'platforms;android-37.0'
+    "$sdk/cmdline-tools/latest/bin/sdkmanager.bat" 'platforms;android-36' 'platforms;android-37.0' 'ndk;29.0.14206865'
   else
-    "$sdk/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'platforms;android-37.0'
+    "$sdk/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'platforms;android-37.0' 'ndk;29.0.14206865'
   fi
 fi
 if [[ "$component" == security ]]; then

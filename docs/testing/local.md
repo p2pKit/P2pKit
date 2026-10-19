@@ -168,13 +168,15 @@ tools distribution. Set `ANDROID_HOME` to that SDK directory, then review/accept
 export ANDROID_HOME="/absolute/path/to/Android/sdk"
 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses
 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
-    "platforms;android-36" "platforms;android-37.0" "platform-tools"
+    "platforms;android-36" "platforms;android-37.0" "platform-tools" "ndk;29.0.14206865"
 ```
 
 In Windows PowerShell, set `$env:ANDROID_HOME` and invoke `sdkmanager.bat` with `&`; do not paste Bash continuations.
 
 Android LAN application/AAR builds also require NDK `29.0.14206865` in this SDK:
-`sdkmanager "ndk;29.0.14206865"`. The pinned native socket producer keeps the
+the installation command above includes it. Shared CI setup also installs it for
+Android, compatibility, consumers, dependency generation and Maven publication/recovery.
+The pinned native socket producer keeps the
 API 24 minimum and packages all four Android ABIs; see the
 [socket helper and device controls](../../library/p2p-transport-lan/src/nativeInterop/androidSockets/README.md).
 AGP selects the Build Tools version and can install it with accepted licenses and network access. Preinstall those
