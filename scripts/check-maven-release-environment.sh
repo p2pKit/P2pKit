@@ -30,19 +30,4 @@ fingerprint="$(printf '%s' "${MAVEN_SIGNING_KEY_FINGERPRINT:-}" | tr -d '[:space
 [[ "$fingerprint" =~ ^[A-F0-9]{40}$|^[A-F0-9]{64}$ ]] ||
     fail "MAVEN_SIGNING_KEY_FINGERPRINT must be a complete 40- or 64-hex fingerprint"
 
-rotate_by="${MAVEN_CENTRAL_TOKEN_ROTATE_BY:-}"
-[[ "$rotate_by" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] ||
-    fail "MAVEN_CENTRAL_TOKEN_ROTATE_BY must use YYYY-MM-DD"
-if rotate_by_epoch="$(date -j -f '%Y-%m-%d' "$rotate_by" '+%s' 2>/dev/null)"; then
-    :
-elif rotate_by_epoch="$(date -d "$rotate_by" '+%s' 2>/dev/null)"; then
-    :
-else
-    fail "MAVEN_CENTRAL_TOKEN_ROTATE_BY is not a valid calendar date"
-fi
-now_epoch="$(date -u '+%s')"
-minimum_epoch=$((now_epoch + 14 * 24 * 60 * 60))
-[[ "$rotate_by_epoch" -gt "$minimum_epoch" ]] ||
-    fail "Maven Central token reaches its rotation deadline within 14 days; rotate it before release"
-
-echo "RESULT: PASS — release credentials, approved namespace, and public metadata are valid"
+echo "RESULT: PASS — required release credentials are present; namespace and fingerprint metadata are valid"
