@@ -156,7 +156,7 @@ public final class WindowsLoader {
             case 3 -> "PROFILE_PREPARATION";
             case 4 -> "JNI_REGISTRATION";
             case 5 -> "PUBLISH_REGISTERED";
-            case 6 -> "IP_INTERFACE_OBSERVER";
+            case 6 -> attempt.profile == null ? "IP_INTERFACE_OBSERVER" : attempt.profile.ipFailureOperation();
             default -> "UNKNOWN_RETAINED_OPERATION";
         };
     }

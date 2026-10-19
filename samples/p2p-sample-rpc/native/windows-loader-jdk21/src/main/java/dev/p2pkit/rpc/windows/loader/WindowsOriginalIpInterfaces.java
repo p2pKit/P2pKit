@@ -21,17 +21,22 @@ final class WindowsOriginalIpInterfaces {
     private boolean attempted, completed, unknownReturn;
     private Throwable failure;
     private Query retainedQuery;
+    private int preparationPhase;
 
     WindowsOriginalIpInterfaces(WindowsInstalledProfileCandidate parent) { this.parent = parent; }
 
     void prepare() {
+        preparationPhase = 1;
         parent.requireOriginalIpInterfaces(this);
         if (attempted || Thread.currentThread() != originalThread) throw refused();
         attempted = true;
         try {
+            preparationPhase = 2;
             systems = parent.originalIpSystems(this);
             ip = systems.module(8);
+            preparationPhase = 3;
             MemorySegment originalModule = ip.originalIpModule(this);
+            preparationPhase = 4;
             var linker = parent.originalLinker();
             var resolve = linker.downcallHandle(parent.resolverEntry(1),
                 FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
@@ -46,6 +51,7 @@ final class WindowsOriginalIpInterfaces {
             output = preparation.allocate(ValueLayout.JAVA_LONG);
             MethodHandle[] calls = new MethodHandle[2];
             for (int n = 0; n < NAMES.length; n++) {
+                preparationPhase = 5 + n * 5;
                 var target = systems.resolveIpExport(this, NAMES[n]);
                 if (!target.module().equals("iphlpapi.dll") || target.rva() <= 0 ||
                     target.rva() >= 256L * 1024 * 1024) throw refused();
@@ -53,20 +59,25 @@ final class WindowsOriginalIpInterfaces {
                 if (base > Long.MAX_VALUE - target.rva()) throw refused();
                 name.fill((byte) 0); output.fill((byte) 0);
                 for (int j = 0; j < NAMES[n].length(); j++) name.set(ValueLayout.JAVA_BYTE, j, (byte) NAMES[n].charAt(j));
+                preparationPhase = 6 + n * 5;
                 unknownReturn = true;
                 MemorySegment entry = (MemorySegment) resolve.invokeExact(originalModule, name);
                 unknownReturn = false;
                 if (entry.address() != base + target.rva()) throw refused();
+                preparationPhase = 7 + n * 5;
                 unknownReturn = true;
                 int status = (int) pin.invokeExact(5, entry, output); // PIN | FROM_ADDRESS.
                 unknownReturn = false;
                 if (status == 0 || output.get(ValueLayout.JAVA_LONG, 0) != base) throw refused();
+                preparationPhase = 8 + n * 5;
                 MemorySegment retained = entry.reinterpret(permanentEntries, null);
+                preparationPhase = 9 + n * 5;
                 calls[n] = linker.downcallHandle(retained, n == 0
                     ? FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_SHORT, ValueLayout.ADDRESS)
                     : FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
             }
             query = calls[0]; free = calls[1];
+            preparationPhase = 15;
             name.fill((byte) 0); output.fill((byte) 0);
             preparation.close();
             preparation = null;
@@ -76,6 +87,28 @@ final class WindowsOriginalIpInterfaces {
             // Parent was attached before entry; partial frames/PINs remain rooted, never retried/unloaded.
             throw refused();
         }
+    }
+
+    /** Fixed retained metadata only; no owner guard, exception text, address or native retry. */
+    String failureOperation() {
+        return switch (preparationPhase) {
+            case 1 -> "IP_OBSERVER_PARENT";
+            case 2 -> "IP_OBSERVER_SYSTEMS";
+            case 3 -> "IP_OBSERVER_MODULE";
+            case 4 -> "IP_OBSERVER_RESOLVERS";
+            case 5 -> "IP_QUERY_EXPORT";
+            case 6 -> "IP_QUERY_ADDRESS";
+            case 7 -> "IP_QUERY_PROVIDER";
+            case 8 -> "IP_QUERY_SCOPE";
+            case 9 -> "IP_QUERY_HANDLE";
+            case 10 -> "IP_FREE_EXPORT";
+            case 11 -> "IP_FREE_ADDRESS";
+            case 12 -> "IP_FREE_PROVIDER";
+            case 13 -> "IP_FREE_SCOPE";
+            case 14 -> "IP_FREE_HANDLE";
+            case 15 -> "IP_OBSERVER_RETIREMENT";
+            default -> "IP_INTERFACE_OBSERVER";
+        };
     }
 
     void requireOriginalModule(WindowsOriginalSystemModuleCandidate candidate) {

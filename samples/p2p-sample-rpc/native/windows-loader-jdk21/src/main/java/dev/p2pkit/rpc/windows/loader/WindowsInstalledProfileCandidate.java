@@ -224,6 +224,9 @@ final class WindowsInstalledProfileCandidate {
         ipInterfaces.prepare();
         return ipInterfaces;
     }
+    String ipFailureOperation() {
+        return ipInterfaces == null ? "IP_INTERFACE_OBSERVER" : ipInterfaces.failureOperation();
+    }
     void requireOriginalIpInterfaces(WindowsOriginalIpInterfaces candidate) {
         requireOriginal();
         if (candidate == null || candidate != ipInterfaces || systems == null) {

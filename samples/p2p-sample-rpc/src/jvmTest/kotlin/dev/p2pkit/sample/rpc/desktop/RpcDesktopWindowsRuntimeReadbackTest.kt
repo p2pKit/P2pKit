@@ -132,6 +132,11 @@ class RpcDesktopWindowsRuntimeReadbackTest {
             "SYSTEM_MODULE_ABSENT_SLOT_FOUR", "SYSTEM_LEAF_POLICY_SLOT_ZERO",
             "SYSTEM_ANCESTOR_POLICY_SLOT_THREE", "SYSTEM_RETURN_UNKNOWN_SLOT_ONE",
             "SYSTEM_RETIREMENT_NO_SLOT", "SYSTEM_FILE_SLOT_SIX", "SYSTEM_BYTES_SLOT_SEVEN",
+            "SYSTEM_MODULE_ABSENT_SLOT_EIGHT", "SYSTEM_BYTES_SLOT_EIGHT", "IP_INTERFACE_OBSERVER",
+            "IP_OBSERVER_PARENT", "IP_OBSERVER_SYSTEMS", "IP_OBSERVER_MODULE", "IP_OBSERVER_RESOLVERS",
+            "IP_QUERY_EXPORT", "IP_QUERY_ADDRESS", "IP_QUERY_PROVIDER", "IP_QUERY_SCOPE", "IP_QUERY_HANDLE",
+            "IP_FREE_EXPORT", "IP_FREE_ADDRESS", "IP_FREE_PROVIDER", "IP_FREE_SCOPE", "IP_FREE_HANDLE",
+            "IP_OBSERVER_RETIREMENT",
             "SYSTEM_EXPORT_GRAPH_NO_SLOT", "SYSTEM_UNKNOWN_OPERATION_UNKNOWN_SLOT",
         )) {
             val lines = mutableListOf<String>()
@@ -148,7 +153,7 @@ class RpcDesktopWindowsRuntimeReadbackTest {
         val badObject = object { override fun toString(): String = error("Private object stringified") }
         for (operation in listOf(
             null, badObject, 1, "", "PRIVATE", "BOOTSTRAP\nPASS", "X".repeat(10000),
-            "SYSTEM_MODULE_ABSENT_SLOT_EIGHT", "SYSTEM_MODULE_ABSENT_SLOT_FOUR\nPRIVATE",
+            "SYSTEM_MODULE_ABSENT_SLOT_NINE", "SYSTEM_MODULE_ABSENT_SLOT_FOUR\nPRIVATE",
             "SYSTEM_FILE_C:\\PRIVATE", "SYSTEM_FILE_SLOT_ZERO ", "SYSTEM_FILE_SLOT_ZERO\u0000",
         )) {
             val lines = mutableListOf<String>()

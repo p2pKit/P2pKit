@@ -308,6 +308,22 @@ public final class InstalledProcessControllerTests {
         }
         check(value(profile, "attempted").equals(false) && value(profile, "registrationAttempted").equals(false));
         emptyChildren(attempt);
+        WindowsOriginalIpInterfaces ip = new WindowsOriginalIpInterfaces(profile);
+        field(profile, "ipInterfaces").set(profile, ip);
+        field(attempt, "profile").set(attempt, profile);
+        field(attempt, "diagnosticPhase").setInt(attempt, 6);
+        String[] ipOperations = {"IP_INTERFACE_OBSERVER", "IP_OBSERVER_PARENT", "IP_OBSERVER_SYSTEMS",
+            "IP_OBSERVER_MODULE", "IP_OBSERVER_RESOLVERS", "IP_QUERY_EXPORT", "IP_QUERY_ADDRESS",
+            "IP_QUERY_PROVIDER", "IP_QUERY_SCOPE", "IP_QUERY_HANDLE", "IP_FREE_EXPORT", "IP_FREE_ADDRESS",
+            "IP_FREE_PROVIDER", "IP_FREE_SCOPE", "IP_FREE_HANDLE", "IP_OBSERVER_RETIREMENT"};
+        for (int phase = 0; phase < ipOperations.length; phase++) {
+            field(ip, "preparationPhase").setInt(ip, phase);
+            diagnosticLabel(carrier, ipOperations[phase]); // Includes another thread; no confined owner access.
+        }
+        check(value(ip, "attempted").equals(false) && value(ip, "permanentEntries") == null &&
+            value(ip, "preparation") == null && value(ip, "retainedQuery") == null);
+        field(attempt, "profile").set(attempt, null);
+        emptyChildren(attempt);
     }
 
     private static void diagnosticSystemStages() throws Throwable {
