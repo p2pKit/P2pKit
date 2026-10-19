@@ -43,10 +43,13 @@ This is not Developer ID, notarization, or an installed-app/peer pass. Exact
 packaged-process loading and Foundation's application identity/freeze checks
 remain required.
 
-Windows protected RPC storage is **NATIVE_NOT_IMPLEMENTED / NOT_QUALIFIED**.
-Its managed filesystem seam and bounded native-contract adapter have synthetic
-regression coverage; there is still no production JNI provider or secure DLL
-loader. Host/Client must remain unavailable without a qualified secure backend. See the
+Windows protected RPC remains **NOT_READY / NOT_QUALIFIED**. The fixed installed
+loader now supplies the productive provider, and an exact-source installed control
+has reopened an encrypted profile and exercised read/write/replace/delete/sync.
+The Desktop UI acquires that same provider before starting a role; absent or refused
+admission, a failed unlock, or retained acquisition cleanup prevents role creation.
+There is no POSIX-on-Windows or in-memory identity fallback. Actual installed UI,
+two-device Host/Client and the complete negative/lifetime matrices remain unqualified. See the
 [Windows profile contract](windows-profile-integration.md) and
 [owner-accepted prerelease testing risk and implementation limitations](windows-release-scope.md). UI rendering or a
 Mac-hosted policy test is not Windows filesystem or RPC evidence.

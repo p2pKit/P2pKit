@@ -58,6 +58,8 @@ public object RpcDesktopWindowsRuntimeReadback {
                     !entry.isBridge && !entry.isSynthetic) { "Unexpected installed diagnostic entry" }
             }
             failureReader = reader // Only the exact admitted module/class owns this read-only method.
+            phase = InstalledAdmissionPhase.DESKTOP_RUNTIME_PREPARATION
+            WindowsDesktopRuntimePreparation.prepare()
             phase = InstalledAdmissionPhase.NATIVE_ADMISSION
             val result = try {
                 method.invoke(null)
@@ -158,7 +160,7 @@ internal fun checkedInstalledAdmissionReadback(source: String, result: Any?): St
     check(source.matches(Regex("[a-f0-9]{40}"))) { "Clean source identity is required" }
     val expected = "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
         "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
-        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}"
+        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"NOT_ENTERED\"}"
     check(result is String && result == expected) { "Unexpected installed admission diagnostic result" }
     return "{\"source\":\"$source\",\"admission\":$result}"
 }
@@ -166,12 +168,16 @@ internal fun checkedInstalledAdmissionReadback(source: String, result: Any?): St
 /** Diagnostic vocabulary only, never admission permission or private exception classification. */
 internal enum class InstalledAdmissionPhase {
     RUNTIME_PRECHECK, MODULE_LOOKUP, MODULE_OWNER, PROBE_LOOKUP, PROBE_OWNER,
-    ENTRY_LOOKUP, ENTRY_OWNER, NATIVE_ADMISSION, RESULT_VALIDATION,
+    ENTRY_LOOKUP, ENTRY_OWNER, DESKTOP_RUNTIME_PREPARATION, NATIVE_ADMISSION, RESULT_VALIDATION,
 }
 
 private val installedFailureOperations = setOf(
     "NO_MATCHING_RETAINED_FAILURE", "UNKNOWN_RETAINED_OPERATION", "RESERVATION", "BOOTSTRAP",
     "INSTALLATION", "PROFILE_PREPARATION", "JNI_REGISTRATION", "PUBLISH_REGISTERED",
+    "IP_INTERFACE_OBSERVER", "IP_OBSERVER_PARENT", "IP_OBSERVER_SYSTEMS", "IP_OBSERVER_MODULE",
+    "IP_OBSERVER_RESOLVERS", "IP_QUERY_EXPORT", "IP_QUERY_ADDRESS", "IP_QUERY_PROVIDER", "IP_QUERY_SCOPE",
+    "IP_QUERY_HANDLE", "IP_FREE_EXPORT", "IP_FREE_ADDRESS", "IP_FREE_PROVIDER", "IP_FREE_SCOPE",
+    "IP_FREE_HANDLE", "IP_OBSERVER_RETIREMENT",
     "BOOTSTRAP_FRAME", "BOOTSTRAP_EXPORTS", "BOOTSTRAP_PROCESS", "BOOTSTRAP_SYSTEM_PATH",
     "BOOTSTRAP_PROVIDER_PIN", "BOOTSTRAP_PROVIDER_PATH", "PROFILE_PRECONDITION",
     "PROFILE_SYSTEM_MODULES",
@@ -192,7 +198,26 @@ private val installedFailureOperations = setOf(
     "PROFILE_LOAD_IMAGE",
     "PROFILE_VERIFY_IMAGE",
     "PROFILE_REGISTER_JNI",
-)
+    "API_SET_PRECONDITION", "API_SET_FRAME", "API_SET_QUERY_EXPORT", "API_SET_PROCESS_QUERY",
+    "API_SET_NAMESPACE_POINTER", "API_SET_NAMESPACE_REGION", "API_SET_NAMESPACE_HEADER",
+    "API_SET_NAMESPACE_DATA", "API_SET_NAMESPACE_RECHECK", "API_SET_ROUTE_PIN",
+    "API_SET_RETURN_UNKNOWN", "API_SET_RETIREMENT",
+) + buildSet {
+    // Fixed diagnostic vocabulary shared with the retained JDK21 cohort. No arbitrary suffix/text
+    // is accepted, and none of these labels changes the original failure or grants admission.
+    val operations = listOf(
+        "SYSTEM_MODULE_ABSENT", "SYSTEM_LEAF_POLICY", "SYSTEM_ANCESTOR_POLICY", "SYSTEM_GRAPH_RECHECK",
+        "SYSTEM_UNKNOWN_OUTCOME", "SYSTEM_RETURN_UNKNOWN", "SYSTEM_RETIREMENT", "SYSTEM_PRECONDITION",
+        "SYSTEM_FRAME", "SYSTEM_DIRECTORY", "SYSTEM_MODULE_PIN", "SYSTEM_MODULE_PATH", "SYSTEM_FILE",
+        "SYSTEM_SECURITY", "SYSTEM_ANCESTORS", "SYSTEM_BYTE_BOUND", "SYSTEM_BYTES", "SYSTEM_EXPORT_INPUT",
+        "SYSTEM_EXPORT_GRAPH", "SYSTEM_UNKNOWN_OPERATION",
+    )
+    val slots = listOf(
+        "NO_SLOT", "SLOT_ZERO", "SLOT_ONE", "SLOT_TWO", "SLOT_THREE", "SLOT_FOUR",
+        "SLOT_FIVE", "SLOT_SIX", "SLOT_SEVEN", "SLOT_EIGHT", "UNKNOWN_SLOT",
+    )
+    for (operation in operations) for (slot in slots) add("${operation}_$slot")
+}
 
 /** Secondary readback/output failures never replace the original retained failure. */
 internal fun reportInstalledAdmissionFailure(

@@ -18,7 +18,7 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
 /**
- * Persistent POSIX sample profile: a user-supplied passphrase unlocks an AES-GCM identity/trust vault.
+ * Persistent sample profile: a user-supplied passphrase unlocks an AES-GCM identity/trust vault.
  * Not an OS keystore or password-recovery mechanism. No passphrase/key is saved, logged or put in argv.
  * One process holds the profile lock until all roles close; Stop does not erase identity or trust.
  */
@@ -69,7 +69,7 @@ internal class DesktopRpcProfile private constructor(
 
         /**
          * Application entry: own the password before platform/default-path resolution. Windows must never
-         * evaluate a POSIX home path; its fixed native root remains unavailable until trusted loading exists.
+         * evaluate a POSIX home path. Its fixed native root requires original installed-provider admission.
          * Pre-acquisition refusal is not uncertain provider cleanup and must not poison a later valid attempt.
          */
         internal fun openApplicationAttempt(password: CharArray): DesktopRpcProfileOpenAttempt {
@@ -77,8 +77,15 @@ internal class DesktopRpcProfile private constructor(
             try {
                 require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
                 if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                    // Refuse missing boot-module/runtime inputs before native Desktop preparation. These
+                    // observations never authorize the DLL: openInstalled still runs the original loader.
+                    WindowsProfileInstalledProvider.requireInstalledEntry()
+                    RpcDesktopWindowsRuntimeReadback.run()
                     acquisitionStarted = true
-                    return openAttempt(password) { WindowsProfileFiles.openInstalled() }
+                    return openAttempt(password) {
+                        WindowsDesktopRuntimePreparation.prepare()
+                        WindowsProfileFiles.openInstalled()
+                    }
                 }
                 val directory = Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop")
                 acquisitionStarted = true
@@ -239,4 +246,7 @@ internal class DesktopRpcProfileOpenAttempt(
     val result: Result<DesktopRpcProfile>,
     val cleanupFailure: Throwable?,
     val retainedSession: ProtectedProfileSession? = null,
-)
+) {
+    /** A returned profile cannot start a role while any acquisition cleanup remains unresolved. */
+    val readyForRole: Boolean get() = result.isSuccess && cleanupFailure == null && retainedSession == null
+}

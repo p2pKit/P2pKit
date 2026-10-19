@@ -11,10 +11,11 @@ $template = @'
 {"schema":1,"scope":"SUPERVISOR_NATIVE_CONTROL_NOT_INSTALLED","status":"PASS","appSource":"SOURCE","supervisorSource":{"fixture.py":"DIGEST"},"startCounter":1000,"counterFrequency":1000,"deadlineCounter":31000,"watchdogCounter":30000,"completedCounter":2000,"workerOutcome":{"schema":1,"appSource":"SOURCE","outcome":{"stage":"COMMAND","code":"PASS","exitCode":0,"timedOut":false,"cleanupKnown":true,"capturesClosed":true,"cleanupReasons":[],"nativeError":null,"pendingContext":null,"elapsedSeconds":0.1},"admissionMatched":true},"outerCleanupKnown":true,"capturesClosed":true}
 '@
 $valid = $template.Replace('SOURCE', $source).Replace('DIGEST', $digest)
+$valid = $valid.Replace('"appSource":"' + $source + '"', '"appSource":"' + $source + '","operation":"admission"')
 $utf8 = [Text.UTF8Encoding]::new($false, $true)
-function Accept([string]$Json) {
+function Accept([string]$Json, [string]$Operation = 'admission') {
     [P2pKit.WindowsQualification.InstalledObserver]::ValidateReceipt(
-        $utf8.GetBytes($Json), $source, $scope, 1000L, 1000L, $hashes)
+        $utf8.GetBytes($Json), $source, $scope, 1000L, 1000L, $hashes, $Operation)
 }
 Accept $valid
 Accept (" `n" + $valid + "`r`n")
@@ -52,6 +53,9 @@ $mutations = @(
     @('"stage":"COMMAND"', '"stage":"OTHER"'),
     @('"stage":"COMMAND"', '"stage":"COMMAND","extra":null'),
     @('"status":"PASS"', '"status":"FAIL"'),
+    @('"operation":"admission"', '"operation":"profile-create"'),
+    @('"operation":"admission"', '"operation":null'),
+    @('"operation":"admission",', ''),
     @('"scope":"SUPERVISOR_NATIVE_CONTROL_NOT_INSTALLED"', '"scope":"OTHER"'),
     @($digest, ('b' * 64)),
     @($source, ('1' * 40))
@@ -71,4 +75,15 @@ foreach ($bad in @('', ((' ' * 16385) + $valid), ($valid + $valid))) {
     if (-not $refused) { throw 'Unbounded or repeated receipt accepted' }
     $refusals++
 }
-Write-Output ("OBSERVER_RECEIPT_CONTROLS PASS: 2 valid, $refusals refusals; no native process launched")
+foreach ($operation in @('profile-create', 'profile-reopen', 'password-refusal', 'ui-host-cycle', 'native-custody', 'native-restart')) {
+    $matching = $valid.Replace('"operation":"admission"', '"operation":"' + $operation + '"')
+    Accept $matching $operation
+    foreach ($bad in @($valid, $matching.Replace('"operation":"' + $operation + '","outcome"',
+        '"operation":"admission","outcome"'))) {
+        $refused = $false
+        try { Accept $bad $operation } catch { $refused = $true }
+        if (-not $refused) { throw 'Cross-operation receipt was accepted' }
+        $refusals++
+    }
+}
+Write-Output ("OBSERVER_RECEIPT_CONTROLS PASS: 8 valid, $refusals refusals; no native process launched")

@@ -5,7 +5,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * Managed contract implementation. The fixed production entry still refuses at the unavailable loader.
+ * Managed contract implementation. The fixed production entry requires original installed admission.
  * One active operation, no queue; close seals admission and joins the actual native return before retiring handles.
  * Native OS hangs still require the separately reviewed terminal watchdog, not an invented coroutine deadline.
  */

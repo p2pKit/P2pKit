@@ -159,9 +159,12 @@ failed:
 }
 int pwp_stream_record(const unsigned char *p, size_t n, uint64_t size, int directory) {
     static const unsigned char name[] = {':',0,':',0,'$',0,'D',0,'A',0,'T',0,'A',0};
-    if (!p) return n == 0 && directory && size == 0;
+    if (size > INT64_MAX) return 0;
+    /* A directory's standard EOF describes its index, not an unnamed data stream.
+     * Index growth must not relax the absence/empty-only directory stream policy. */
+    if (!p) return n == 0 && directory;
     if (n < 24+sizeof(name) || u32(p) != 0 || u32(p+4) != sizeof(name) ||
-        u64(p+8) != size || u64(p+16) > INT64_MAX || (directory && size != 0)) return 0;
+        u64(p+8) != (directory ? 0 : size) || u64(p+16) > INT64_MAX) return 0;
     return memcmp(p+24, name, sizeof(name)) == 0;
 }
 int pwp_acl_shape(uint16_t control, uint32_t revision, uint32_t count,
@@ -802,6 +805,14 @@ failed:
 int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volume) {
     return words && count == PWP_IDENTITY_WORDS && words[0] == 1 && parent_volume != 0 &&
         words[1] == parent_volume && (words[2] != 0 || words[3] != 0) && words[4] == 0x2ff && words[5] == 1;
+}
+
+int pwp_delete_observation(const uint64_t *expected, const uint64_t *observed, size_t count, int pending) {
+    if (!expected || !observed || count != PWP_IDENTITY_WORDS || (pending != 0 && pending != 1) ||
+        !pwp_expected_file(expected, count, expected[1])) return 0;
+    for (size_t i = 0; i < count; ++i)
+        if (observed[i] != (pending && i >= 4 ? 0 : expected[i])) return 0;
+    return 1;
 }
 typedef struct {
     pwp_owner *owner;

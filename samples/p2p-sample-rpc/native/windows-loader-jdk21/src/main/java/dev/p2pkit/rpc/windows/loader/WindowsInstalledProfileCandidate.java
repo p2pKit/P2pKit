@@ -46,6 +46,7 @@ final class WindowsInstalledProfileCandidate {
     private WindowsLibraryLoadInvocation.Result loadResult;
     private WindowsLoadedProfileImageVerification imageVerification;
     private WindowsJniRegistrationOwner registrationOwner;
+    private WindowsOriginalIpInterfaces ipInterfaces;
     private boolean attempted;
     private boolean profileAttempted;
     private boolean inputsReady;
@@ -100,8 +101,12 @@ final class WindowsInstalledProfileCandidate {
             }
             diagnosticPhase = 13;
             packaged = bytes.inspectPackagedBytes(manifest, parentPin.manifestSha256(), parentPin.source(), parentPin.tree());
+            diagnosticPhase = 19;
+            systems.prepareApiSetNamespace();
             diagnosticPhase = 14;
             packaged.prepareOriginalSystemImports();
+            diagnosticPhase = 20;
+            systems.finishApiSetRoutes();
             diagnosticPhase = 15;
             inputsReady = true;
             WindowsLibraryLoadInvocation.prepareInstalled(this); // Attaches load before its private frame effects.
@@ -144,7 +149,7 @@ final class WindowsInstalledProfileCandidate {
     /** Read stored stage only; failed confined/native owners are never dereferenced by this diagnostic. */
     String failureOperation() {
         return switch (diagnosticPhase) {
-            case 1 -> "PROFILE_SYSTEM_MODULES";
+            case 1 -> systemFailureOperation();
             case 2 -> "PROFILE_KNOWN_FOLDER";
             case 3 -> "PROFILE_PARENT_PIN";
             case 4 -> "PROFILE_JVM_IMAGE";
@@ -157,13 +162,23 @@ final class WindowsInstalledProfileCandidate {
             case 11 -> "PROFILE_BYTES";
             case 12 -> "PROFILE_MANIFEST";
             case 13 -> "PROFILE_PACKAGE";
-            case 14 -> "PROFILE_IMPORTS";
+            case 14 -> systems == null ? "PROFILE_IMPORTS" : systems.importFailureOperation();
             case 15 -> "PROFILE_PREPARE_LOAD";
             case 16 -> "PROFILE_LOAD_IMAGE";
             case 17 -> "PROFILE_VERIFY_IMAGE";
             case 18 -> "PROFILE_REGISTER_JNI";
+            case 19, 20 -> systems == null ? "API_SET_PRECONDITION" : systems.apiSetFailureOperation();
             default -> "PROFILE_PRECONDITION";
         };
+    }
+
+    private String systemFailureOperation() {
+        // inspectOriginalSystemModules() can throw before assigning systems. Its exact typed carrier
+        // already retains the original collection; never re-enter the bootstrap to find or retry it.
+        if (failure.operationFailure instanceof WindowsOriginalSystemModulesCandidate.Failure original) {
+            return original.retainedCandidate.failureOperation();
+        }
+        return systems == null ? "PROFILE_SYSTEM_MODULES" : systems.failureOperation();
     }
 
     private static byte[] readManifest(Path path) throws Exception {
@@ -198,6 +213,30 @@ final class WindowsInstalledProfileCandidate {
     }
     WindowsOriginalSystemModulesCandidate originalSystems(WindowsOriginalProgramFilesCandidate candidate) {
         requireOriginalKnownFolder(candidate); return systems;
+    }
+    WindowsOriginalIpInterfaces prepareIpInterfaces() {
+        requireOriginal();
+        if (ipInterfaces != null || registrationOwner == null ||
+            registrationOwner.state() != WindowsJniRegistrationOwner.State.Registered) {
+            throw new IllegalStateException("IP observation requires original installed registration");
+        }
+        ipInterfaces = new WindowsOriginalIpInterfaces(this);
+        ipInterfaces.prepare();
+        return ipInterfaces;
+    }
+    String ipFailureOperation() {
+        return ipInterfaces == null ? "IP_INTERFACE_OBSERVER" : ipInterfaces.failureOperation();
+    }
+    void requireOriginalIpInterfaces(WindowsOriginalIpInterfaces candidate) {
+        requireOriginal();
+        if (candidate == null || candidate != ipInterfaces || systems == null) {
+            throw new IllegalStateException("IP observation lacks its original installation parent");
+        }
+        systems.requireOriginalBootstrap(originalBootstrap());
+        systems.requireOriginalExportGraph();
+    }
+    WindowsOriginalSystemModulesCandidate originalIpSystems(WindowsOriginalIpInterfaces candidate) {
+        requireOriginalIpInterfaces(candidate); return systems;
     }
     void requireOriginalJvmFile(WindowsOriginalJvmFileCandidate candidate) {
         requireOriginal();
@@ -250,6 +289,7 @@ final class WindowsInstalledProfileCandidate {
         profile.requireOriginalBytes(bytes);
         profileAncestors.requireInstallationRoot(this);
         packaged.requireInstalledPreparation(bytes);
+        systems.requireSealedApiSetRoutes();
     }
     void requireOriginalPackagedPlan(WindowsPackagedVerifier candidate) {
         requirePreparedInputs();

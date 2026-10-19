@@ -23,12 +23,24 @@ import uuid
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-SCOPE = "INSTALLED_ADMISSION_SUPERVISION_NOT_PROFILE_QUALIFICATION"
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import windows_native_smoke_payload as N
+SCOPE = "INSTALLED_OPERATION_SUPERVISION_NOT_HOST_CLIENT_QUALIFICATION"
+OPERATIONS = {
+    "admission": "--rpc-windows-installed-admission",
+    "profile-create": "--rpc-windows-disposable-profile-create",
+    "profile-reopen": "--rpc-windows-disposable-profile-reopen",
+    "password-refusal": "--rpc-windows-disposable-password-refusal",
+    "ui-host-cycle": "--rpc-windows-disposable-ui-host-cycle",
+}
+ALL_OPERATIONS = {**OPERATIONS, **N.OPERATIONS}
 LIMIT_SECONDS = 30
 LOG_LIMIT = 4096
 RECORD_LIMIT = 16384
 SOURCE_FILES = ("run-windows-installed-diagnostic.py", "ci_evidence.py", "audit_processes.py",
-                "hosted_evidence.py", "hosted_evidence_primitives.py", "hosted_windows_files.py")
+                "hosted_evidence.py", "hosted_evidence_primitives.py", "hosted_windows_files.py",
+                "windows_native_smoke_payload.py")
 COMMAND_FIELDS = {"exitCode", "timedOut", "cleanupKnown", "capturesClosed", "stage", "code",
                   "nativeError", "cleanupReasons", "pendingContext", "elapsedSeconds"}
 
@@ -48,11 +60,15 @@ def arguments(argv):
     parser.add_argument("--start-counter", type=int, required=True)
     parser.add_argument("--counter-frequency", type=int, required=True)
     parser.add_argument("--expected-source", required=True)
+    parser.add_argument("--operation", choices=tuple(ALL_OPERATIONS), default="admission")
     parser.add_argument("--private-parent", required=True)
+    parser.add_argument("--native-directory")
+    parser.add_argument("--native-sha256")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     require(re.fullmatch(r"[0-9a-f]{40}", args.expected_source) is not None)
     require(Path(args.private_parent).is_absolute())
+    N.validate_arguments(args)
     return args
 
 
@@ -178,11 +194,35 @@ def expected_admission(source):
     return {"source": source, "admission": {"schema": 1,
         "scope": "INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION",
         "admission": "REGISTERED", "repeat": "REUSED", "profileStorage": "NOT_ENTERED",
-        "network": "NOT_ENTERED", "publicProvider": "DISABLED"}}
+        "network": "NOT_ENTERED", "publicProvider": "NOT_ENTERED"}}
 
 
-def admission_matches(raw, source):
-    line = json.dumps(expected_admission(source), separators=(",", ":")).encode("ascii")
+def expected_result(source, operation):
+    require(operation in OPERATIONS)
+    if operation == "admission":
+        return expected_admission(source)
+    if operation == "ui-host-cycle":
+        return {"source": source, "ui": {"schema": 1,
+            "scope": "INSTALLED_UI_HOST_CYCLE_NOT_PEER_OR_FULL_QUALIFICATION",
+            "navigation": "VERIFIED", "unlock": "ADMITTED", "hostStarts": 2,
+            "identityAcrossStop": "UNCHANGED", "back": "ACKNOWLEDGED",
+            "terminalClose": "REQUESTED", "peerOperations": "NOT_ENTERED"}}
+    if operation == "password-refusal":
+        return {"source": source, "password": {"schema": 1,
+            "scope": "INSTALLED_PASSWORD_REFUSAL_NOT_TAMPER_OR_FULL_QUALIFICATION",
+            "existingMarker": "VERIFIED", "wrongPassword": "AUTHENTICATION_REFUSED",
+            "encryptedContents": "UNCHANGED", "validReopen": "VERIFIED",
+            "close": "ACKNOWLEDGED", "network": "NOT_ENTERED"}}
+    return {"source": source, "profile": {"schema": 1,
+        "scope": "INSTALLED_PRODUCTIVE_PROFILE_CONTROL_NOT_HOST_CLIENT_QUALIFICATION",
+        "operation": operation, "publicProvider": "ADMITTED", "encryptedRecord": "VERIFIED",
+        "readReplaceDelete": "VERIFIED", "reopen": "VERIFIED", "close": "ACKNOWLEDGED", "network": "NOT_ENTERED"}}
+
+
+def admission_matches(raw, source, operation="admission"):
+    if operation in N.OPERATIONS:
+        return N.matches(raw, operation)
+    line = json.dumps(expected_result(source, operation), separators=(",", ":")).encode("ascii")
     return raw in (line + b"\n", line + b"\r\n")
 
 
@@ -232,31 +272,39 @@ def worker_argv(args, directory):
     return [sys.executable, "-I", "-B", "-S", str(HERE / "run-windows-installed-diagnostic.py"),
         "--worker", "--start-counter", str(args.start_counter),
         "--counter-frequency", str(args.counter_frequency), "--expected-source", args.expected_source,
-        "--private-parent", str(directory.parent)]
+        "--operation", args.operation,
+        "--private-parent", str(directory.parent), *N.extra_arguments(args)]
 
 
 def worker(args, deadline, E):
     directory = Path(args.private_parent) / "run"
-    launcher = installed_launcher()
-    work, cleanup = deadline.worker_budgets()
-    outcome = E.run_command([str(launcher), "--rpc-windows-installed-admission"], cwd=launcher.parent,
-        environment=dict(os.environ), private=directory / "command", timeout=work,
-        cleanup_seconds=cleanup, log_limit=LOG_LIMIT)
+    if args.operation in N.OPERATIONS:
+        _, _, F = modules()
+        outcome = N.run(args, deadline, E, F, directory / "command")
+    else:
+        launcher = installed_launcher()
+        work, cleanup = deadline.worker_budgets()
+        outcome = E.run_command([str(launcher), OPERATIONS[args.operation]], cwd=launcher.parent,
+            environment=dict(os.environ), private=directory / "command", timeout=work,
+            cleanup_seconds=cleanup, log_limit=LOG_LIMIT)
     deadline.check(2)
     accepted = False
     if command_pass(outcome):
-        raw = read_bounded(directory / "command" / "stdout.log", LOG_LIMIT)
-        stderr = read_bounded(directory / "command" / "stderr.log", LOG_LIMIT)
-        accepted = not stderr and admission_matches(raw, args.expected_source)
-    value = {"schema": 1, "appSource": args.expected_source, "outcome": outcome,
+        limit = N.LOG_LIMIT if args.operation in N.OPERATIONS else LOG_LIMIT
+        raw = read_bounded(directory / "command" / "stdout.log", limit)
+        stderr = read_bounded(directory / "command" / "stderr.log", limit)
+        accepted = not stderr and admission_matches(raw, args.expected_source, args.operation)
+    value = {"schema": 1, "appSource": args.expected_source, "operation": args.operation, "outcome": outcome,
              "admissionMatched": accepted}
     write_new(E, directory / "worker.json", value)
     deadline.check(2)
     return 0 if accepted else 1
 
 
-def validate_worker(value, source):
-    require(type(value) is dict and set(value) == {"schema", "appSource", "outcome", "admissionMatched"})
+def validate_worker(value, source, operation="admission"):
+    require(operation in ALL_OPERATIONS)
+    require(type(value) is dict and set(value) == {"schema", "appSource", "operation", "outcome", "admissionMatched"})
+    require(value["operation"] == operation)
     require(type(value["schema"]) is int and value["schema"] == 1 and value["appSource"] == source)
     require(type(value["admissionMatched"]) is bool and type(value["outcome"]) is dict)
     return value["admissionMatched"] and command_pass(value["outcome"])
@@ -349,7 +397,7 @@ def supervise(args, deadline, A, E, F):
                 require(not any(read_bounded(directory / ("worker-" + label + ".log"), LOG_LIMIT)
                                 for label in ("stdout", "stderr")))
                 worker_value = decode(read_bounded(directory / "worker.json", RECORD_LIMIT), RECORD_LIMIT)
-                accepted = validate_worker(worker_value, args.expected_source)
+                accepted = validate_worker(worker_value, args.expected_source, args.operation)
             require(source_identity() == before)
             if run is not None:
                 run.verify()
@@ -360,8 +408,9 @@ def supervise(args, deadline, A, E, F):
             failure, accepted = True, False
         try:
             accepted = accepted and not failure and cleanup and closed
-            record = {"schema": 1, "scope": SCOPE, "status": "PASS" if accepted else "FAIL",
-                "appSource": args.expected_source, "supervisorSource": before,
+            record = {"schema": 1, "scope": N.SCOPE if args.operation in N.OPERATIONS else SCOPE,
+                "status": "PASS" if accepted else "FAIL",
+                "appSource": args.expected_source, "operation": args.operation, "supervisorSource": before,
                 "startCounter": deadline.start, "counterFrequency": deadline.frequency,
                 "deadlineCounter": deadline.end, "watchdogCounter": deadline.end - deadline.frequency,
                 "completedCounter": deadline.now(),

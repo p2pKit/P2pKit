@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 
+import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.field;
 import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.invoke;
 import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.value;
 
@@ -55,7 +56,7 @@ public final class InstalledProviderTests {
         check(mode.equals("diagnostic-runtime-module-absent") || mode.equals("diagnostic-runtime-module-present"));
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         requireNoInstalledAttempt();
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         Class<?> readback = PackagedVerifierTests.actualApplicationClass(
             "dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback", Path.of(args[1]).toRealPath(), args[2]);
         // Internal Kotlin method names include the actual compiler module suffix. Constrain the original
@@ -103,7 +104,7 @@ public final class InstalledProviderTests {
                 List.of("NOSHARE_READ", "NOSHARE_WRITE", "NOSHARE_DELETE")));
         }
         requireNoInstalledAttempt();
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         System.out.println("WINDOWS_RUNTIME_MODULE_CONNECTION_PASS case=" + mode +
             " scope=ACTUAL_JVM_MODULE_RESOLUTION_NOT_WINDOWS_OR_INSTALLED_NATIVE");
     }
@@ -121,9 +122,10 @@ public final class InstalledProviderTests {
     private static void installedDiagnostic(String[] args) throws Throwable {
         String mode = args[0];
         check(mode.equals("diagnostic-connected-reuse") || mode.equals("diagnostic-connected-failure") ||
+            mode.equals("diagnostic-connected-system-absent") || mode.equals("diagnostic-connected-system-unknown") ||
             mode.equals("diagnostic-connected-in-progress") || mode.equals("diagnostic-connected-source-or-host-refusal"));
         WindowsLoaderRuntime.requireDiagnosticRuntime();
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         Path main = Path.of(args[1]).toRealPath();
         Class<?> readback = PackagedVerifierTests.actualApplicationClass(
             "dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback", main, args[2]);
@@ -147,6 +149,24 @@ public final class InstalledProviderTests {
             if (mode.equals("diagnostic-connected-failure")) {
                 expectedFailure = invoke(attempt, "seal", new Class<?>[] {Throwable.class},
                     new LinkageError("inert original admitted failure"));
+            } else if (mode.startsWith("diagnostic-connected-system-")) {
+                WindowsInstalledProfileCandidate profile = new WindowsInstalledProfileCandidate(null);
+                field(profile, "failed").setBoolean(profile, true);
+                field(profile, "diagnosticPhase").setInt(profile, 1);
+                WindowsOriginalSystemModulesCandidate systems = new WindowsOriginalSystemModulesCandidate(null);
+                field(systems, "failed").setBoolean(systems, true);
+                if (mode.equals("diagnostic-connected-system-absent")) {
+                    field(systems, "outcome").set(systems, "MODULE_ABSENT");
+                    field(systems, "stoppedSlot").setInt(systems, 4);
+                    field(profile, "systems").set(profile, systems);
+                } else {
+                    field(systems, "activeSlot").setInt(systems, 1);
+                    field(systems, "nativeReturnUnconfirmed").setBoolean(systems, true);
+                    Object profileFailure = value(profile, "failure");
+                    field(profileFailure, "operationFailure").set(profileFailure, value(systems, "failure"));
+                }
+                field(attempt, "diagnosticPhase").setInt(attempt, 4);
+                expectedFailure = invoke(attempt, "seal", new Class<?>[] {Throwable.class}, value(profile, "failure"));
             }
         }
         if (mode.equals("diagnostic-connected-reuse")) {
@@ -163,7 +183,7 @@ public final class InstalledProviderTests {
                 else check(original instanceof IllegalStateException);
                 check(!(original instanceof WindowsLoader.Unavailable));
                 check(value(attempt, "bootstrap") == null && value(attempt, "installation") == null && value(attempt, "profile") == null);
-                OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+                InstalledProcessControllerTests.publicState();
                 System.out.println("WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + mode +
                     " scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION");
                 return;
@@ -171,7 +191,7 @@ public final class InstalledProviderTests {
             throw new AssertionError("Installed diagnostic refusal model unexpectedly succeeded");
         }
         check(value(attempt, "bootstrap") == null && value(attempt, "installation") == null && value(attempt, "profile") == null);
-        OriginalFileBytesLeaseTests.expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+        InstalledProcessControllerTests.publicState();
         System.out.println("WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + mode +
             " scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION");
     }

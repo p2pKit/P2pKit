@@ -76,7 +76,11 @@ def main():
                         "BootstrapReturnTests" in name or
                         "SystemImportResolutionTests" in name or
                         "SystemExportPlanTests" in name or
+                        "ApiSetPlanTests" in name or
+                        "OriginalApiSetTests" in name or
                         "OriginalSystemModulesTests" in name or
+                        "WindowsIpInterfaceTableTests" in name or
+                        "OriginalIpInterfacesTests" in name or
                         "OriginalFileLeaseTests" in name or
                         "ProfileDllFileCandidateTests" in name or
                         "OriginalFileSecurityQueryTests" in name or
@@ -251,10 +255,13 @@ def main():
             "WINDOWS_RUNTIME_MODULE_CONNECTION_PASS case=" + re.escape(case) +
             r" scope=ACTUAL_JVM_MODULE_RESOLUTION_NOT_WINDOWS_OR_INSTALLED_NATIVE\n", flags=flags)
     diagnostic_connection_cases = (["diagnostic-connected-reuse", "diagnostic-connected-failure",
+                                    "diagnostic-connected-system-absent", "diagnostic-connected-system-unknown",
                                     "diagnostic-connected-in-progress"] if os.name == "nt" else
                                    ["diagnostic-connected-source-or-host-refusal"])
     diagnostic_failure_lines = {
         "diagnostic-connected-failure": "NATIVE_ADMISSION operation=RESERVATION",
+        "diagnostic-connected-system-absent": "NATIVE_ADMISSION operation=SYSTEM_MODULE_ABSENT_SLOT_FOUR",
+        "diagnostic-connected-system-unknown": "NATIVE_ADMISSION operation=SYSTEM_RETURN_UNKNOWN_SLOT_ONE",
         "diagnostic-connected-in-progress": "NATIVE_ADMISSION operation=NO_MATCHING_RETAINED_FAILURE",
         "diagnostic-connected-source-or-host-refusal": "RUNTIME_PRECHECK operation=DIAGNOSTIC_UNAVAILABLE",
     }
@@ -266,7 +273,7 @@ def main():
                       bindings[5]["sha256"], bindings[6]["sha256"]],
             "WINDOWS_INSTALLED_DIAGNOSTIC_CONNECTION_PASS case=" + re.escape(case) +
             r" scope=ACTUAL_APPLICATION_BINDING_TO_INERT_STATE_NOT_INSTALLED_NATIVE_EXECUTION\n",
-            flags=("--add-modules=jdk.unsupported",), expected_stderr=expected_stderr)
+            flags=("--add-modules=jdk.unsupported,java.desktop",), expected_stderr=expected_stderr)
     loaded_image_cases = ["unattached", "once", "thread", "unprepared", "owned-required", "order",
                           "wrong-order", "substituted-view", "missing-name", "duplicate-name", "closed-scope",
                           "declaration", "registration-before-verification", "registration-after-failure",
@@ -287,6 +294,12 @@ def main():
         "--module", MODULE + "/" + PACKAGE + ".InstallationSecurityTests"], 0,
         r"WINDOWS_INSTALLATION_SECURITY_PASS tests=259 "
         r"scope=INERT_DESCRIPTOR_POLICY_NOT_NATIVE_READBACK_OR_AUTHORITY\n", "")
+    run("windows-ip-table", base + access + ["--patch-module", MODULE + "=" + str(classes),
+        "--module", MODULE + "/" + PACKAGE + ".WindowsIpInterfaceTableTests"], 0,
+        r"WINDOWS_IP_TABLE_CONTROLS_PASS controls=24 scope=COPIED_DATA_NOT_NATIVE_NETWORK_QUALIFICATION\n", "")
+    run("windows-ip-owner", base + access + ["--patch-module", MODULE + "=" + str(classes),
+        "--module", MODULE + "/" + PACKAGE + ".OriginalIpInterfacesTests"], 0,
+        r"WINDOWS_IP_OWNER_CONTROLS_PASS cases=8 scope=INERT_ALLOCATOR_LIFETIME_NOT_NATIVE_AUTHORITY\n", "")
     run("ancestor-frame-retirement", base + access + ["--patch-module", MODULE + "=" + str(classes),
         "--module", MODULE + "/" + PACKAGE + ".AncestorRetirementTests"], 0,
         r"WINDOWS_ANCESTOR_RETIREMENT_PASS tests=2 "
@@ -322,8 +335,8 @@ def main():
             "WINDOWS_INSTALLED_PRELOAD_PASS case=" + re.escape(case) +
             r" scope=INERT_BINDINGS_AND_FIXED_FRAMES_NOT_INSTALLED_NATIVE_OR_PROVIDER_QUALIFICATION\n", "")
     controller_cases = ["diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress",
-                        "diagnostic-stages", "diagnostic-child-stages",
-                        "contract", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
+                        "diagnostic-stages", "diagnostic-child-stages", "diagnostic-system-stages",
+                        "contract", "public-layout-refusal", "claim", "in-progress", "virtual-first", "failure", "reuse", "reuse-virtual",
                         "missing-registration", "unfinished-registration", "wrong-thread", "wrong-owner"]
     for case in controller_cases:
         run("installed-process-controller-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
@@ -369,12 +382,26 @@ def main():
             r" scope=INERT_TYPED_OWNER_AND_REFUSAL_NOT_NATIVE_ANCESTORS_OR_AUTHORITY\n", "")
     export_cases = ["direct", "ordinal", "aliases", "forward-name", "forward-extension", "forward-ordinal",
                     "snapshot", "holes", "unavailable", "cycle", "depth", "headers", "sections", "tables",
-                    "strings", "targets", "bounds", "work", "inventory", "aggregate"]
+                    "strings", "targets", "zero-fill-data", "zero-fill-only", "zero-fill-bounds",
+                    "zero-fill-forwarders", "bounds", "work", "inventory", "aggregate"]
     for case in export_cases:
         run("system-export-plan-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
             "--module", MODULE + "/" + PACKAGE + ".SystemExportPlanTests", case], 0,
             "WINDOWS_SYSTEM_EXPORT_PLAN_PASS case=" + re.escape(case) +
             r" scope=INERT_COPIED_PE_GRAPH_NOT_SYSTEM_IDENTITY_OR_LOADING_AUTHORITY\n", "")
+    for case in ("default-host", "snapshot", "headers", "ranges", "hashes", "metadata-alias", "contracts",
+                 "revisions", "values", "strings", "bounds", "collisions", "graph"):
+        run("api-set-plan-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".ApiSetPlanTests", case], 0, "API_SET_PLAN_MODEL_PASS\n", "")
+    for case in ("owner-refusal", "owner-substitution", "owner-scope", "thread", "header-bounds", "region-bounds",
+                 "query-export-success", "query-export-wrong", "query-export-unknown",
+                 "query-export-provider", "query-export-pin-unknown",
+                 "process-success", "process-short", "process-pid", "process-status", "process-unknown",
+                 "read-success", "read-short", "read-zero", "read-unknown", "route-success", "route-wrong",
+                 "route-absent", "route-unknown", "route-outside", "finish-pointer", "finish-region",
+                 "finish-data", "sealed-required"):
+        run("original-api-set-" + case, base + access + ["--patch-module", MODULE + "=" + str(classes),
+            "--module", MODULE + "/" + PACKAGE + ".OriginalApiSetTests", case], 0, "ORIGINAL_API_SET_MODEL_PASS\n", "")
     system_module_cases = ["owner-refusal", "names", "bootstrap-substitution", "slot-substitution", "thread",
                            "paths", "path-embedded-nul", "pin-success", "module-absent", "pin-false",
                            "pin-contradictory", "pin-duplicate", "path-mismatch", "system-path-unknown",
@@ -535,11 +562,11 @@ def main():
             r"WINDOWS_NATIVE_ORIGINAL_SYSTEM_MODULES_PASS case=actual "
             r"scope=DEVELOPMENT_SYSTEM_MODULE_DISK_GRAPH_NOT_MAPPED_IDENTITY_OR_OS_AUTHORITY "
             r"outcome=(MODULE_ABSENT|LEAF_POLICY_REFUSED|ANCESTOR_POLICY_REFUSED|COMPLETE) "
-            r"stoppedSlot=(-1|[0-7]) pinned=[0-8] files=[0-8] bytes=[0-8] graphQueries=(0|5)\n", "")
+            r"stoppedSlot=(-1|[0-8]) pinned=[0-9] files=[0-9] bytes=[0-9] graphQueries=(0|5)\n", "")
         values = dict(value.split("=", 1) for value in system_modules.strip().split()[1:])
         if values["outcome"] == "COMPLETE":
             require(all(values[key] == expected for key, expected in
-                        (("stoppedSlot", "-1"), ("pinned", "8"), ("files", "8"), ("bytes", "8"),
+                        (("stoppedSlot", "-1"), ("pinned", "9"), ("files", "9"), ("bytes", "9"),
                          ("graphQueries", "5"))), "Complete system graph lacks its original full cohort")
         else:
             require(values["stoppedSlot"] != "-1" and values["bytes"] == "0" and values["graphQueries"] == "0",

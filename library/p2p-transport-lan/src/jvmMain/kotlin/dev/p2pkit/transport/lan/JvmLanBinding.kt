@@ -81,6 +81,7 @@ internal fun selectJvmLanBindTarget(
 }
 
 internal fun readJvmLanInterfaceSnapshots(): List<JvmLanInterfaceSnapshot> = runCatching {
+    readWindowsIpSocketSnapshot()?.let { return@runCatching it.interfaces }
     NetworkInterface.getNetworkInterfaces().toList().mapNotNull { network ->
         runCatching {
             JvmLanInterfaceSnapshot(

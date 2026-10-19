@@ -31,6 +31,10 @@ public final class SystemExportPlanTests {
             case "tables" -> tables();
             case "strings" -> strings();
             case "targets" -> targets();
+            case "zero-fill-data" -> zeroFillData(false);
+            case "zero-fill-only" -> zeroFillData(true);
+            case "zero-fill-bounds" -> zeroFillBounds();
+            case "zero-fill-forwarders" -> zeroFillForwarders();
             case "bounds" -> bounds();
             case "work" -> work();
             case "inventory" -> inventory();
@@ -266,6 +270,68 @@ public final class SystemExportPlanTests {
         }
     }
 
+    private static byte[] zeroFillImage(String module, long target, boolean entirelyZero) {
+        byte[] image = image(module, 41, new long[] {target, 0x1000}, new String[] {"Data", "Target"},
+            new int[] {0, 1}, Map.of());
+        int rawBytes = entirelyZero ? 0 : 512;
+        int raw = entirelyZero ? 0 : image.length;
+        image = Arrays.copyOf(image, image.length + rawBytes);
+        put16(image, 0x86, 3);
+        put32(image, OPTIONAL + 56, 0x4000);
+        section(image, SECTION_TABLE + 80, ".data", 0x3000, rawBytes, raw, 0xc0000040L);
+        put32(image, SECTION_TABLE + 80 + 8, 0x301); // Deliberately not page aligned.
+        return image;
+    }
+
+    private static void zeroFillData(boolean entirelyZero) {
+        for (long target : new long[] {entirelyZero ? 0x3000 : 0x3200, 0x3300}) {
+            WindowsSystemExportPlan plan = one("kernel32.dll", zeroFillImage("kernel32.dll", target, entirelyZero));
+            check(plan.resolve("kernel32.dll", "Target").rva() == 0x1000);
+            check(plan.resolveOrdinal("kernel32.dll", 42).rva() == 0x1000);
+            refuses(() -> plan.resolve("kernel32.dll", "Data"));
+            refuses(() -> plan.resolveOrdinal("kernel32.dll", 41));
+        }
+    }
+
+    private static void zeroFillBounds() {
+        // Rounded mapping padding, image end, gaps and invalid RVAs do not become valid data exports.
+        for (long target : new long[] {0x100, 0x2fff, 0x3301, 0x3fff, 0x4000, 0xffffffffL}) {
+            byte[] image = zeroFillImage("kernel32.dll", target, false);
+            refuses(() -> one("kernel32.dll", image));
+        }
+        // Executable/unreadable zero-fill cannot enter even a copied data graph.
+        for (long flags : new long[] {0x60000020L, 0xe0000020L, 0x20000020L, 0x80000080L, 0}) {
+            byte[] image = zeroFillImage("kernel32.dll", 0x3200, false);
+            put32(image, SECTION_TABLE + 80 + 36, flags);
+            refuses(() -> one("kernel32.dll", image));
+        }
+        for (int field : new int[] {8, 12, 16, 20}) {
+            byte[] image = zeroFillImage("kernel32.dll", 0x3200, false);
+            put32(image, SECTION_TABLE + 80 + field, 0xffffffffL);
+            refuses(() -> one("kernel32.dll", image));
+        }
+        // Export tables and names must still be present in the file, never read from synthesized zeros.
+        for (int field : new int[] {12, 28, 32, 36}) {
+            byte[] image = zeroFillImage("kernel32.dll", 0x3200, false);
+            put32(image, EXPORT + field, 0x3200);
+            refuses(() -> one("kernel32.dll", image));
+        }
+    }
+
+    private static void zeroFillForwarders() {
+        byte[] second = zeroFillImage("kernelbase.dll", 0x3200, false);
+        for (String symbol : new String[] {"Data", "#41"}) {
+            byte[] first = image("kernel32.dll", 1, new long[] {0}, new String[] {"Start"}, new int[] {0},
+                Map.of(0, "kernelbase." + symbol));
+            WindowsSystemExportPlan plan = pair(first, second);
+            check(plan.resolve("kernelbase.dll", "Target").rva() == 0x1000);
+            refuses(() -> plan.resolve("kernel32.dll", "Start"));
+        }
+        byte[] forwardInZeroFill = zeroFillImage("kernel32.dll", 0x3200, false);
+        put32(forwardInZeroFill, OPTIONAL + 116, 0x1300);
+        refuses(() -> one("kernel32.dll", forwardInZeroFill));
+    }
+
     private static void bounds() {
         WindowsSystemExportPlan plan = one("kernel32.dll", simple("kernel32.dll"));
         for (long ordinal : new long[] {Long.MIN_VALUE, -1, 0, 65_536, Long.MAX_VALUE}) {
@@ -349,7 +415,7 @@ public final class SystemExportPlanTests {
             new WindowsSystemExportPlan.Input("kernel32.dll", first), new WindowsSystemExportPlan.Input("kernelbase.dll", second)});
     }
 
-    private static byte[] image(String module, long ordinalBase, long[] functions, String[] names, int[] indexes,
+    static byte[] image(String module, long ordinalBase, long[] functions, String[] names, int[] indexes,
                                 Map<Integer, String> forwarders) {
         check(names.length == indexes.length);
         int functionTable = 0x2040;

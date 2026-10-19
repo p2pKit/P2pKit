@@ -1,11 +1,17 @@
 # Isolated JDK21 preview Windows loader boundary
 
-**PUBLIC PROVIDER DISABLED.** This named module contains JDK21 preview FFM
-mechanics and the closed original installed-admission chain. Only the separately
-explicit installed-admission diagnostic may invoke that native load/JNI chain;
-ordinary readback and the public provider entry do not. Implementation and model
-results are not installed Windows/provider qualification. The documented trusted
+**PRODUCTIVE STORAGE AND HOST/CLIENT NOT_QUALIFIED.** This named module contains
+JDK21 preview FFM mechanics and the original installed-admission chain. The public
+provider now uses that same retained controller. Ordinary readback remains inert;
+the explicit installed diagnostic does not enter storage or the public provider.
+Implementation and model results are not Windows/provider qualification. The documented trusted
 OS/JVM/application/startup premise is still required before its first OS call.
+
+Real installed registration and same-owner reuse passed at `b82645bce7f96430d731edfa1a06af46e89898ee`
+under the canonical 30-second supervisor. That result precedes the public-entry connection;
+it does not qualify productive storage, UI availability or later changed source.
+Earlier implementation checkpoints below retain their original scopes and failures;
+the current entry description supersedes their historical unconditional-refusal statements.
 
 It does not replace the existing Desktop application, installer, version encoding,
 Foundation custody or publication pipeline. The ordinary Java17 compilation and
@@ -25,8 +31,12 @@ Module: `dev.p2pkit.rpc.windows.loader`.
   the exact original retained carrier. See the installed diagnostic scope below.
 - `WindowsLoaderRuntime.requireDiagnosticRuntime()`: checks the real JDK feature,
   module/layer and preview native-access arrangement. It does not authorize loading.
-- `WindowsLoader.openInstalledProvider()`: **always refuses** with
-  `WINDOWS_LOADER_DISABLED_TRUSTED_BOOTSTRAP_NOT_IMPLEMENTED` after runtime checks.
+- `WindowsLoader.openInstalledProvider()`: completes original installed admission,
+  then reuses its permanent image/JNI owner. A fresh development layout refuses
+  before reservation with `WINDOWS_LOADER_INSTALLED_ENTRY_REQUIRED`. Layout is
+  a negative precondition only; original Program Files, installed-file, runtime,
+  import-provider and loaded-image checks still precede candidate execution.
+  Existing reservations and failures cannot be downgraded by changing layout hints.
   There is no caller-supplied path, context, trusted Boolean, environment bypass or
   fallback provider.
 
@@ -766,12 +776,12 @@ bytes, process address, path or arbitrary message; it cannot authorize loading.
 The Java17 application now has a zero-argument installed-provider entry. It
 resolves only the exact original boot-layer loader module and invokes its fixed
 zero-argument API. There is no supplied path, backend, classloader, owner token
-or permission flag. The current loader **still always refuses**. Its private-
+or permission flag. The loader uses its original installed controller. Its private-
 constructor typed `Unavailable` result denotes refusal before installed/native
 acquisition; generic loader exceptions remain uncertain, not retryable success.
 Windows profile selection occurs before any POSIX home-directory resolution.
 
-Only a future successful production-loader return may construct the private
+Only a successful production-loader return may construct the private
 managed composition. Its distinct adapter contract is ABI1/`0x7f`; the underlying
 native ABI remains **13/`0x43`**, checked before every storage operation. Existing
 composed writes/deletes, namespace synchronization and ownership are reused.
@@ -779,7 +789,7 @@ Normal loader return must first establish the independently authorized productio
 artifact, runtime and original JNI owner, retained for process lifetime. The
 development deny-storage DLL deliberately has the same raw ABI and is **not**
 sufficient. Profile Stop cannot unload that owner. Availability/UI gates remain
-unchanged until productive admission exists; neither these model tests nor the
+closed until productive storage and application integration are demonstrated; neither model tests nor the
 actual cross-module typed-refusal test qualifies installed Windows operation.
 
 ### Exact ASLR header comparison
@@ -1229,3 +1239,56 @@ later public-provider qualification/connection remain pending. Supervise that
 future installed executable with the existing bounded Windows Job Object runner;
 this diagnostic does not widen the GHA build-image readback wrapper or replace
 its two no-native-load probes.
+
+The failure line includes bounded `stage` and `operation` labels. For system-module
+inspection, the operation distinguishes confirmed absence, descriptor-policy
+refusal, the last entered file/export step, unknown native return and frame
+retirement failure. `SLOT_ZERO` through `SLOT_SEVEN` refer, in order, to kernel32,
+advapi32, ntdll, shell32, ole32, kernelbase, sechost and combase. `NO_SLOT` identifies
+a collection-wide step. Labels are read only from retained Java state, including
+failures thrown before the profile receives its collection reference; they do not
+query failed native owners or disclose exception text, paths, SIDs or addresses.
+A last-entered step is not proof of the underlying cause. A missing already-loaded
+module still refuses admission; these diagnostics add no loading fallback.
+
+Copied system export graphs also recognize variables in a readable, non-executable
+section's declared zero-filled tail. These RVAs are data entries only: resolving
+them by name, ordinal or forwarder as callable targets still refuses. Export
+metadata and strings still require real file bytes, and callable terminal RVAs
+still require original raw-backed, readable/executable, non-writable sections
+outside verified metadata. Section-alignment padding is not declared data.
+This permits unrelated code exports to be inspected in Windows system images
+that also export zero-filled variables; it supplies no API-set routing, module
+loading or installed authority.
+
+### Original process API-set routing
+
+Installed preparation now attaches a distinct `WindowsOriginalApiSetCandidate`
+after package-byte verification and before import planning or profile loading.
+It uses the original retained ntdll query export, checks the actual process ID,
+and reads the native AMD64 PEB namespace pointer through the original
+`ReadProcessMemory` entry. The supported subset is a version-6 namespace entirely
+inside one committed, read-only `MEM_MAPPED` allocation. Namespace pointer,
+allocation/protection and complete copied bytes must remain stable through
+observation and the final pre-load recheck. Unknown returns retain private frames;
+no failed attempt can be reset or reclassified as an effects-free refusal.
+
+`WindowsApiSetPlan` validates bounded tables, strings, structural non-overlap,
+hashes and unique contract prefixes. The revision omitted by the OS hash is
+handled conservatively: future revisions refuse. Only sealed contracts with one
+unnamed DLL host resolve; importer-specific overrides, empty hosts, other file
+types and namespace extensions remain unsupported. Each virtual hop consumes
+the existing export-walk budget. A parsed map is data, not authority.
+
+For every used contract, its selected physical host must already belong to the
+original verified system cohort. Actual `GetModuleHandleExW(PIN, contract)` must
+return that exact retained module. These lookups cannot load a missing provider;
+there is no API-set `GetProcAddress` or `LoadLibrary` fallback. Contract PINs live
+until process exit. The namespace and private-frame retirement must be sealed
+before the installed load can be prepared. The existing actual image/import
+verification and same-image JNI ownership remain required afterward.
+
+The first OS/JVM/startup authority remains an independent prerequisite. These
+changes do not enable the public provider, change native ABI13/`0x43`, qualify
+protected storage, or establish W01–W11. New parser and owner controls are
+synthetic; real installed results must be bound to the exact new MSI and runtime.

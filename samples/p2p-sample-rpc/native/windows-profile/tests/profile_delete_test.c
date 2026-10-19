@@ -56,6 +56,43 @@ static void success_is_exact_intent_readback_and_retirement(void) {
     assert(pwp_public_count(&o) == 0);
     assert(pwp_retire_all(&o, close_handle, &f) == PWP_OK && f.count == 4);
 }
+static void pending_readback_preserves_identity_without_normal_record_claims(void) {
+    const uint64_t expected[] = {1, UINT64_C(0x8000000000000001), UINT64_MAX, 8, 0x2ff, 1};
+    uint64_t observed[6]; memcpy(observed, expected, sizeof(observed));
+    assert(pwp_delete_observation(expected, observed, 6, 0));
+    assert(!pwp_delete_observation(expected, observed, 6, 1));
+    observed[4] = 0; observed[5] = 0;
+    assert(pwp_delete_observation(expected, observed, 6, 1));
+    assert(!pwp_delete_observation(expected, observed, 6, 0));
+    assert(!pwp_expected_file(observed, 6, expected[1]));
+    for (size_t i = 0; i < 6; ++i) {
+        uint64_t saved = observed[i]; observed[i] ^= 1;
+        assert(!pwp_delete_observation(expected, observed, 6, 1)); observed[i] = saved;
+    }
+    const uint64_t forbidden_links[] = {1, 2, UINT32_MAX, UINT64_MAX};
+    for (size_t i = 0; i < sizeof(forbidden_links)/sizeof(forbidden_links[0]); ++i) {
+        observed[5] = forbidden_links[i];
+        assert(!pwp_delete_observation(expected, observed, 6, 1));
+    }
+}
+static void deletion_readback_requires_a_previously_admitted_single_link_file(void) {
+    const uint64_t expected[] = {1, 9, 0, 8, 0x2ff, 1};
+    const uint64_t observed[] = {1, 9, 0, 8, 0, 0};
+    uint64_t malformed[6];
+    for (size_t i = 0; i < 6; ++i) {
+        memcpy(malformed, expected, sizeof(malformed)); malformed[i] ^= 1;
+        assert(!pwp_delete_observation(malformed, observed, 6, 1));
+    }
+    assert(!pwp_delete_observation(observed, observed, 6, 1));
+    assert(!pwp_delete_observation(NULL, observed, 6, 1));
+    assert(!pwp_delete_observation(expected, NULL, 6, 1));
+    for (size_t count = 0; count < 10; ++count)
+        assert(pwp_delete_observation(expected, observed, count, 1) == (count == 6));
+    assert(!pwp_delete_observation(expected, observed, SIZE_MAX, 1));
+    const int bad_pending[] = {-1, 2, 255};
+    for (size_t i = 0; i < sizeof(bad_pending)/sizeof(bad_pending[0]); ++i)
+        assert(!pwp_delete_observation(expected, observed, 6, bad_pending[i]));
+}
 static void invalid_arguments_never_take_ownership(void) {
     pwp_owner o; fake f = allocated(&o);
     assert(pwp_delete_intent_finish(NULL, f.token, verify, mark, pending, close_handle, &f) == PWP_ARGUMENT);
@@ -137,5 +174,7 @@ int main(void) {
     uncertain_close_retains_original_resource(); poison_before_mutation_prevents_mark();
     poison_after_mutation_quarantines_even_when_closed(); stale_token_cannot_mutate_new_resource();
     every_callback_reentry_is_rejected_without_nested_actions();
-    puts("11 portable delete-intent groups PASS; NOT Windows deletion or namespace durability qualification"); return 0;
+    pending_readback_preserves_identity_without_normal_record_claims();
+    deletion_readback_requires_a_previously_admitted_single_link_file();
+    puts("13 portable delete-intent groups PASS; NOT Windows deletion or namespace durability qualification"); return 0;
 }

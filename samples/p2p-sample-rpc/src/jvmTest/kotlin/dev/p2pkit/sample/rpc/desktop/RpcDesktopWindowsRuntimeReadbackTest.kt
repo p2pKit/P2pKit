@@ -17,9 +17,12 @@ class RpcDesktopWindowsRuntimeReadbackTest {
     @Test fun installedAdmissionResultIsExactBoundedFormattingNotCallerAuthority() {
         val result = "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
             "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
-            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}"
+            "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"NOT_ENTERED\"}"
         assertEquals("{\"source\":\"$source\",\"admission\":$result}", checkedInstalledAdmissionReadback(source, result))
-        for (invalid in listOf(null, 1, "", result + "\n", result + "extra", result.replace("DISABLED", "ENABLED"),
+        val publicEntry = "\"publicProvider\":\"NOT_ENTERED\""
+        for (invalid in listOf(null, 1, "", result + "\n", result + "extra",
+            result.replace(publicEntry, "\"publicProvider\":\"ENABLED\""),
+            result.replace(publicEntry, "\"publicProvider\":\"DISABLED\""),
             result.replace("REUSED", "NEW"), result.replace("NOT_ENTERED", "ENTERED"))) {
             assertFailsWith<IllegalStateException> { checkedInstalledAdmissionReadback(source, invalid) }
         }
@@ -34,6 +37,20 @@ class RpcDesktopWindowsRuntimeReadbackTest {
         assertEquals("jdk.unsupported", actual.moduleName)
         assertTrue(actual.bootModule && actual.runtimeImageModule && actual.exported && actual.optionType)
         assertEquals(good.optionNames, actual.optionNames)
+    }
+
+    @Test fun desktopPreparationRequiresExactOriginalBootClassesWithoutInitializingAToolkit() {
+        requireOriginalDesktopClass(java.awt.Toolkit::class.java, "java.awt.Toolkit")
+        assertFailsWith<IllegalStateException> {
+            requireOriginalDesktopClass(String::class.java, "java.lang.String")
+        }
+        assertFailsWith<IllegalStateException> {
+            requireOriginalDesktopClass(java.awt.Toolkit::class.java, "sun.awt.windows.WToolkit")
+        }
+        assertFailsWith<IllegalStateException> {
+            requireOriginalDesktopClass(RpcDesktopWindowsRuntimeReadbackTest::class.java,
+                RpcDesktopWindowsRuntimeReadbackTest::class.java.name)
+        }
     }
 
     @Test fun reviewedFeaturesEmitTheirActualVersionWithoutClaimingProfileOrInstallation() {
@@ -109,10 +126,36 @@ class RpcDesktopWindowsRuntimeReadbackTest {
         }
     }
 
+    @Test fun systemCohortFailureLabelsSurviveApplicationReportingWithoutReplacingTheCarrier() {
+        val original = LinkageError("PRIVATE_PATH_SID_ADDRESS_PAYLOAD")
+        for (operation in listOf(
+            "SYSTEM_MODULE_ABSENT_SLOT_FOUR", "SYSTEM_LEAF_POLICY_SLOT_ZERO",
+            "SYSTEM_ANCESTOR_POLICY_SLOT_THREE", "SYSTEM_RETURN_UNKNOWN_SLOT_ONE",
+            "SYSTEM_RETIREMENT_NO_SLOT", "SYSTEM_FILE_SLOT_SIX", "SYSTEM_BYTES_SLOT_SEVEN",
+            "SYSTEM_MODULE_ABSENT_SLOT_EIGHT", "SYSTEM_BYTES_SLOT_EIGHT", "IP_INTERFACE_OBSERVER",
+            "IP_OBSERVER_PARENT", "IP_OBSERVER_SYSTEMS", "IP_OBSERVER_MODULE", "IP_OBSERVER_RESOLVERS",
+            "IP_QUERY_EXPORT", "IP_QUERY_ADDRESS", "IP_QUERY_PROVIDER", "IP_QUERY_SCOPE", "IP_QUERY_HANDLE",
+            "IP_FREE_EXPORT", "IP_FREE_ADDRESS", "IP_FREE_PROVIDER", "IP_FREE_SCOPE", "IP_FREE_HANDLE",
+            "IP_OBSERVER_RETIREMENT",
+            "SYSTEM_EXPORT_GRAPH_NO_SLOT", "SYSTEM_UNKNOWN_OPERATION_UNKNOWN_SLOT",
+        )) {
+            val lines = mutableListOf<String>()
+            assertSame(original, assertFailsWith<LinkageError> {
+                reportInstalledAdmissionFailure(InstalledAdmissionPhase.NATIVE_ADMISSION, operation, original, lines::add)
+            })
+            assertEquals(listOf("WINDOWS_INSTALLED_ADMISSION_FAILURE stage=NATIVE_ADMISSION operation=$operation"), lines)
+            assertTrue(lines.single().length < 192)
+        }
+    }
+
     @Test fun untrustedOrMissingOperationCannotEscapeTheClosedVocabulary() {
         val original = IllegalStateException("PRIVATE")
         val badObject = object { override fun toString(): String = error("Private object stringified") }
-        for (operation in listOf(null, badObject, 1, "", "PRIVATE", "BOOTSTRAP\nPASS", "X".repeat(10000))) {
+        for (operation in listOf(
+            null, badObject, 1, "", "PRIVATE", "BOOTSTRAP\nPASS", "X".repeat(10000),
+            "SYSTEM_MODULE_ABSENT_SLOT_NINE", "SYSTEM_MODULE_ABSENT_SLOT_FOUR\nPRIVATE",
+            "SYSTEM_FILE_C:\\PRIVATE", "SYSTEM_FILE_SLOT_ZERO ", "SYSTEM_FILE_SLOT_ZERO\u0000",
+        )) {
             val lines = mutableListOf<String>()
             assertSame(original, assertFailsWith<IllegalStateException> {
                 reportInstalledAdmissionFailure(InstalledAdmissionPhase.NATIVE_ADMISSION, operation, original, lines::add)

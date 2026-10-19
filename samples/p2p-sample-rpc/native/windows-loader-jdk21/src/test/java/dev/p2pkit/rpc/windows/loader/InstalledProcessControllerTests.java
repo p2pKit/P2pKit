@@ -19,7 +19,7 @@ public final class InstalledProcessControllerTests {
     static final String INSTALLED_DIAGNOSTIC_RESULT =
         "{\"schema\":1,\"scope\":\"INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION\"," +
         "\"admission\":\"REGISTERED\",\"repeat\":\"REUSED\",\"profileStorage\":\"NOT_ENTERED\"," +
-        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"DISABLED\"}";
+        "\"network\":\"NOT_ENTERED\",\"publicProvider\":\"NOT_ENTERED\"}";
 
     private InstalledProcessControllerTests() {}
 
@@ -27,13 +27,15 @@ public final class InstalledProcessControllerTests {
         check(arguments.length == 1);
         WindowsLoaderRuntime.requireDiagnosticRuntime();
         check(root() == null);
-        publicRefusal();
+        publicState();
         switch (arguments[0]) {
             case "diagnostic-contract", "diagnostic-reuse", "diagnostic-failure", "diagnostic-in-progress" ->
                 diagnostic(arguments[0]);
             case "diagnostic-stages" -> diagnosticStages();
             case "diagnostic-child-stages" -> diagnosticChildStages();
+            case "diagnostic-system-stages" -> diagnosticSystemStages();
             case "contract" -> contract();
+            case "public-layout-refusal" -> publicLayoutRefusal();
             case "claim" -> firstClaim();
             case "in-progress" -> inProgress();
             case "virtual-first" -> virtualFirst();
@@ -46,7 +48,7 @@ public final class InstalledProcessControllerTests {
             case "wrong-owner" -> wrongOwner();
             default -> throw new AssertionError("Unknown installed controller model");
         }
-        publicRefusal();
+        publicState();
         // Neither private claim nor any modeled terminal reuse enters the actual bootstrap.
         Field bootstrapRoot = WindowsSystemBootstrapCandidate.class.getDeclaredField("processOwner");
         bootstrapRoot.setAccessible(true);
@@ -55,9 +57,45 @@ public final class InstalledProcessControllerTests {
             " scope=INERT_ONCE_REUSE_NOT_INSTALLED_NATIVE_OR_PROVIDER_EXECUTION");
     }
 
-    private static void publicRefusal() {
-        Throwable failure = expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
-        check(failure.getClass() == WindowsLoader.Unavailable.class && failure.getMessage().equals(WindowsLoader.REFUSAL));
+    static void publicState() throws Throwable {
+        Object original = root();
+        if (original == null) {
+            Throwable failure = expect(WindowsLoader.Unavailable.class, WindowsLoader::openInstalledProvider);
+            check(failure.getClass() == WindowsLoader.Unavailable.class && failure.getMessage().equals(WindowsLoader.REFUSAL));
+            check(root() == null);
+        } else if (value(original, "state").toString().equals("Failed")) {
+            check(expect(RuntimeException.class, WindowsLoader::openInstalledProvider) == value(original, "failure"));
+        } else if (value(original, "state").toString().equals("Registered")) {
+            Object registration = value(original, "registration");
+            // Incomplete seeded terminal state must also be rejected by the actual public entry.
+            if (registration == null || ((WindowsJniRegistrationOwner) registration).state() !=
+                WindowsJniRegistrationOwner.State.Registered) {
+                expect(IllegalStateException.class, WindowsLoader::openInstalledProvider);
+            } else {
+                WindowsLoader.openInstalledProvider();
+                WindowsLoader.openInstalledProvider();
+                check(value(original, "registration") == registration);
+            }
+        } else {
+            check(!(expect(IllegalStateException.class, WindowsLoader::openInstalledProvider) instanceof WindowsLoader.Unavailable));
+        }
+        check(root() == original);
+    }
+
+    private static void publicLayoutRefusal() throws Throwable {
+        String original = System.getProperty("java.home");
+        String fake = java.nio.file.Path.of(original).toAbsolutePath().getRoot()
+            .resolve("not-an-installation/P2pKit Sample/runtime").toString();
+        try {
+            for (String hint : new String[] {"", "runtime", original + "/../runtime", fake, "x".repeat(32768)}) {
+                System.setProperty("java.home", hint);
+                publicState(); // No native reservation, even with a nominal installed directory shape.
+            }
+            System.clearProperty("java.home");
+            publicState();
+        } finally {
+            System.setProperty("java.home", original);
+        }
     }
 
     private static Object root() throws ReflectiveOperationException {
@@ -222,7 +260,7 @@ public final class InstalledProcessControllerTests {
             .equals("NO_MATCHING_RETAINED_FAILURE")); // Reserved is not a sealed failure.
         Throwable carrier = (Throwable) invoke(attempt, "seal", new Class<?>[] {Throwable.class}, privateFailure);
         String[] expected = {"RESERVATION", "BOOTSTRAP", "INSTALLATION", "PROFILE_PREPARATION",
-            "JNI_REGISTRATION", "PUBLISH_REGISTERED", "UNKNOWN_RETAINED_OPERATION"};
+            "JNI_REGISTRATION", "PUBLISH_REGISTERED", "IP_INTERFACE_OBSERVER", "UNKNOWN_RETAINED_OPERATION"};
         for (int phase = 0; phase < expected.length; phase++) {
             field(attempt, "diagnosticPhase").setInt(attempt, phase);
             check(Probe.installedAdmissionFailureStage(carrier).equals(expected[phase]));
@@ -270,6 +308,89 @@ public final class InstalledProcessControllerTests {
         }
         check(value(profile, "attempted").equals(false) && value(profile, "registrationAttempted").equals(false));
         emptyChildren(attempt);
+        WindowsOriginalIpInterfaces ip = new WindowsOriginalIpInterfaces(profile);
+        field(profile, "ipInterfaces").set(profile, ip);
+        field(attempt, "profile").set(attempt, profile);
+        field(attempt, "diagnosticPhase").setInt(attempt, 6);
+        String[] ipOperations = {"IP_INTERFACE_OBSERVER", "IP_OBSERVER_PARENT", "IP_OBSERVER_SYSTEMS",
+            "IP_OBSERVER_MODULE", "IP_OBSERVER_RESOLVERS", "IP_QUERY_EXPORT", "IP_QUERY_ADDRESS",
+            "IP_QUERY_PROVIDER", "IP_QUERY_SCOPE", "IP_QUERY_HANDLE", "IP_FREE_EXPORT", "IP_FREE_ADDRESS",
+            "IP_FREE_PROVIDER", "IP_FREE_SCOPE", "IP_FREE_HANDLE", "IP_OBSERVER_RETIREMENT"};
+        for (int phase = 0; phase < ipOperations.length; phase++) {
+            field(ip, "preparationPhase").setInt(ip, phase);
+            diagnosticLabel(carrier, ipOperations[phase]); // Includes another thread; no confined owner access.
+        }
+        check(value(ip, "attempted").equals(false) && value(ip, "permanentEntries") == null &&
+            value(ip, "preparation") == null && value(ip, "retainedQuery") == null);
+        field(attempt, "profile").set(attempt, null);
+        emptyChildren(attempt);
+    }
+
+    private static void diagnosticSystemStages() throws Throwable {
+        Object attempt = firstClaim();
+        Throwable privateFailure = new Error("PRIVATE_PATH_SID_ADDRESS_PAYLOAD") {
+            @Override public String getMessage() { throw new AssertionError("Private message accessed"); }
+            @Override public synchronized Throwable getCause() { throw new AssertionError("Arbitrary cause traversed"); }
+        };
+        Throwable carrier = (Throwable) invoke(attempt, "seal", new Class<?>[] {Throwable.class}, privateFailure);
+        field(attempt, "diagnosticPhase").setInt(attempt, 4);
+        WindowsInstalledProfileCandidate profile = new WindowsInstalledProfileCandidate(null);
+        field(profile, "failed").setBoolean(profile, true);
+        field(profile, "diagnosticPhase").setInt(profile, 1);
+        Object profileFailure = value(profile, "failure");
+        field(carrier, "operationFailure").set(carrier, profileFailure);
+        WindowsOriginalSystemModulesCandidate systems = new WindowsOriginalSystemModulesCandidate(null);
+        field(systems, "failed").setBoolean(systems, true); // All ordinary completion/native guards refuse.
+        Object systemFailure = value(systems, "failure");
+        field(systemFailure, "operationFailure").set(systemFailure, privateFailure);
+        String[] slots = {"NO_SLOT", "SLOT_ZERO", "SLOT_ONE", "SLOT_TWO", "SLOT_THREE", "SLOT_FOUR",
+            "SLOT_FIVE", "SLOT_SIX", "SLOT_SEVEN", "SLOT_EIGHT", "UNKNOWN_SLOT"};
+        // Both a completed negative cohort and a throw before the assignment to profile.systems must
+        // survive the exact original failure chain. Neither path can query or recreate a native owner.
+        for (boolean assigned : new boolean[] {false, true}) {
+            field(profile, "systems").set(profile, assigned ? systems : null);
+            field(profileFailure, "operationFailure").set(profileFailure, assigned ? privateFailure : systemFailure);
+            for (int slot = -1; slot <= 9; slot++) {
+                field(systems, "activeSlot").setInt(systems, slot);
+                field(systems, "stoppedSlot").setInt(systems, slot);
+                for (String[] outcome : new String[][] {
+                    {"MODULE_ABSENT", "SYSTEM_MODULE_ABSENT_"}, {"LEAF_POLICY_REFUSED", "SYSTEM_LEAF_POLICY_"},
+                    {"ANCESTOR_POLICY_REFUSED", "SYSTEM_ANCESTOR_POLICY_"}, {"COMPLETE", "SYSTEM_GRAPH_RECHECK_"},
+                    {"PRIVATE_PATH_SID_ADDRESS_PAYLOAD", "SYSTEM_UNKNOWN_OUTCOME_"},
+                }) {
+                    field(systems, "outcome").set(systems, outcome[0]);
+                    diagnosticLabel(carrier, outcome[1] + slots[slot + 1]);
+                }
+            }
+            field(systems, "outcome").set(systems, null);
+            field(systems, "activeSlot").setInt(systems, 4);
+            String[] operations = {"PRECONDITION", "FRAME", "DIRECTORY", "MODULE_PIN", "MODULE_PATH",
+                "FILE", "SECURITY", "ANCESTORS", "BYTE_BOUND", "BYTES", "EXPORT_INPUT", "EXPORT_GRAPH",
+                "UNKNOWN_OPERATION"};
+            for (int phase = 0; phase < operations.length; phase++) {
+                field(systems, "diagnosticPhase").setInt(systems, phase);
+                diagnosticLabel(carrier, "SYSTEM_" + operations[phase] + (phase == 11 ? "_NO_SLOT" : "_SLOT_FOUR"));
+            }
+            field(systems, "nativeReturnUnconfirmed").setBoolean(systems, true);
+            diagnosticLabel(carrier, "SYSTEM_RETURN_UNKNOWN_SLOT_FOUR");
+            field(systems, "nativeReturnUnconfirmed").setBoolean(systems, false);
+            field(systemFailure, "arenaCloseFailure").set(systemFailure, privateFailure);
+            diagnosticLabel(carrier, "SYSTEM_RETIREMENT_SLOT_FOUR");
+            field(systemFailure, "arenaCloseFailure").set(systemFailure, null);
+            check(value(systemFailure, "operationFailure") == privateFailure);
+        }
+        check(!(boolean) value(systems, "attempted") && !(boolean) value(systems, "frameRetired") &&
+            value(systems, "frameArena") == null && value(systems, "moduleArena") == null &&
+            Arrays.stream((Object[]) value(systems, "modules")).allMatch(element -> element == null));
+        check(!(boolean) value(profile, "attempted") && !(boolean) value(profile, "registrationAttempted"));
+        check(expect(RuntimeException.class, Probe::installedAdmissionReadback) == carrier);
+        emptyChildren(attempt);
+    }
+
+    private static void diagnosticLabel(Throwable carrier, String expected) throws Throwable {
+        check(Probe.installedAdmissionFailureStage(carrier).equals(expected));
+        check(expected.matches("[A-Z_]{1,64}"));
+        onThread(true, () -> check(Probe.installedAdmissionFailureStage(carrier).equals(expected)));
     }
 
     private static void incomplete(boolean unfinished) throws Throwable {

@@ -13,4 +13,8 @@
       android:name="dev.p2pkit.sample.android.rpclab.RpcLabRuntimeInstrumentation"
       android:targetPackage="dev.p2pkit.sample.android"
       android:functionalTest="true" />
+  <instrumentation
+      android:name="dev.p2pkit.sample.android.runtime.LanSocketRuntimeInstrumentation"
+      android:targetPackage="dev.p2pkit.sample.android"
+      android:functionalTest="true" />
 </manifest>

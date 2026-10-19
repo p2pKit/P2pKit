@@ -145,8 +145,9 @@ import kotlinx.coroutines.runBlocking
 // =====================================================================
 
 fun main(arguments: Array<String>) {
+    var installedUiControl: WindowsInstalledUiControl? = null
     try {
-        when (desktopEntryAction(arguments)) {
+        when (val action = desktopEntryAction(arguments)) {
             DesktopEntryAction.NativeReadback -> {
                 println(dev.p2pkit.sample.rpc.desktop.RpcDesktopNativeReadback.run())
                 return
@@ -170,6 +171,26 @@ fun main(arguments: Array<String>) {
                 }
                 return
             }
+            DesktopEntryAction.WindowsProfileCreate, DesktopEntryAction.WindowsProfileReopen -> {
+                try {
+                    val control = dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsProfileControl
+                    println(if (action == DesktopEntryAction.WindowsProfileCreate) control.create() else control.reopen())
+                } catch (_: Throwable) {
+                    System.err.println("WINDOWS_INSTALLED_PROFILE_REFUSED_OR_FAILED_NOT_QUALIFIED")
+                    kotlin.system.exitProcess(1)
+                }
+                return
+            }
+            DesktopEntryAction.WindowsPasswordRefusal -> {
+                try {
+                    println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsPasswordControl.run())
+                } catch (_: Throwable) {
+                    System.err.println("WINDOWS_INSTALLED_PASSWORD_REFUSED_OR_FAILED_NOT_QUALIFIED")
+                    kotlin.system.exitProcess(1)
+                }
+                return
+            }
+            DesktopEntryAction.WindowsUiHostCycle -> installedUiControl = WindowsInstalledUiControl.prepare()
             DesktopEntryAction.UserInterface -> Unit
         }
     } catch (_: Exception) {
@@ -188,8 +209,24 @@ fun main(arguments: Array<String>) {
         val windowsTerminal = remember { usesWindowsTerminalExit(System.getProperty("os.name")) }
         val terminal = remember {
             DesktopRpcTerminalExit(
-                conceal = { terminalRequested = true; binding.get()?.conceal?.invoke() },
-                retireAllOwners = { checkNotNull(binding.get()) { "Application owners were not admitted" }.retire() },
+                conceal = {
+                    installedUiControl?.concealForApplicationExit()
+                    terminalRequested = true
+                    binding.get()?.conceal?.invoke()
+                },
+                retireAllOwners = {
+                    val retired = runCatching {
+                        checkNotNull(binding.get()) { "Application owners were not admitted" }.retire()
+                    }
+                    try { installedUiControl?.awaitRetirement() } catch (failure: Throwable) {
+                        retired.exceptionOrNull()?.let { original ->
+                            if (original !== failure) original.addSuppressed(failure)
+                            throw original
+                        }
+                        throw failure
+                    }
+                    retired.getOrThrow()
+                },
             )
         }
         Window(
@@ -200,6 +237,10 @@ fun main(arguments: Array<String>) {
             state = rememberWindowState(width = 980.dp, height = 760.dp),
             title = "P2pKit Test Harness (Desktop)"
         ) {
+        DisposableEffect(window) {
+            installedUiControl?.start(window)
+            onDispose { }
+        }
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
                 P2pKitSampleApp(window, closeRequested, binding) { closed ->

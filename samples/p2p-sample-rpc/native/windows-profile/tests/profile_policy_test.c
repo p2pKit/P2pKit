@@ -103,6 +103,41 @@ static void streams_policy(void) {
     assert(!pwp_stream_record(raw, sizeof(raw), 6, 0)); assert(!pwp_stream_record(raw, sizeof(raw), 5, 1));
     assert(pwp_stream_record(NULL, 0, 0, 1)); assert(!pwp_stream_record(NULL, 0, 0, 0));
 }
+static void directory_index_size_policy(void) {
+    const uint64_t sizes[] = {0, 4096, 32768, (uint64_t)PWP_RECORD_LIMIT+1, INT64_MAX};
+    unsigned char raw[64] = {0}; raw[4] = 14;
+    const unsigned char name[] = {':',0,':',0,'$',0,'D',0,'A',0,'T',0,'A',0};
+    memcpy(raw+24, name, sizeof(name));
+    for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+        /* NTFS index growth changes directory EOF without adding a data stream. */
+        assert(pwp_stream_record(NULL, 0, sizes[i], 1));
+        assert(!pwp_stream_record(NULL, 1, sizes[i], 1));
+        assert(!pwp_stream_record(NULL, 0, sizes[i], 0));
+        /* A reported unnamed directory data stream must still be empty. */
+        assert(pwp_stream_record(raw, sizeof(raw), sizes[i], 1));
+        assert(pwp_stream_record(raw, sizeof(raw), sizes[i], 0) == (sizes[i] == 0));
+        for (size_t n = 0; n < 38; ++n) assert(!pwp_stream_record(raw, n, sizes[i], 1));
+    }
+    assert(!pwp_stream_record(NULL, 0, (uint64_t)INT64_MAX+1, 1));
+    assert(!pwp_stream_record(NULL, 0, UINT64_MAX, 1));
+    assert(!pwp_stream_record(raw, sizeof(raw), (uint64_t)INT64_MAX+1, 1));
+    assert(!pwp_stream_record(raw, sizeof(raw), UINT64_MAX, 1));
+}
+static void directory_streams_refuse_payload_or_aliases(void) {
+    unsigned char raw[64] = {0}; raw[4] = 14;
+    const unsigned char name[] = {':',0,':',0,'$',0,'D',0,'A',0,'T',0,'A',0};
+    memcpy(raw+24, name, sizeof(name));
+    raw[8] = 1; assert(!pwp_stream_record(raw, sizeof(raw), 4096, 1)); raw[8] = 0;
+    raw[9] = 16; /* Matching a 4096-byte index does not authorize directory data. */
+    assert(!pwp_stream_record(raw, sizeof(raw), 4096, 1));
+    assert(pwp_stream_record(raw, sizeof(raw), 4096, 0)); raw[9] = 0;
+    raw[15] = 0x80; assert(!pwp_stream_record(raw, sizeof(raw), 4096, 1)); raw[15] = 0;
+    raw[23] = 0x80; assert(!pwp_stream_record(raw, sizeof(raw), 4096, 1)); raw[23] = 0;
+    raw[0] = 40; assert(!pwp_stream_record(raw, sizeof(raw), 4096, 1)); raw[0] = 0;
+    raw[26] = 's'; assert(!pwp_stream_record(raw, sizeof(raw), 4096, 1)); raw[26] = ':';
+    raw[4] = 12; assert(!pwp_stream_record(raw, sizeof(raw), 4096, 1)); raw[4] = 14;
+    assert(pwp_stream_record(raw, sizeof(raw), 4096, 1));
+}
 typedef struct { unsigned calls; uintptr_t fail; uintptr_t order[128]; } close_context;
 static int close_count(uintptr_t raw, void *opaque) {
     close_context *c = opaque; c->order[c->calls++] = raw; return raw != c->fail;
@@ -272,8 +307,9 @@ static void clear_bytes(void) {
 int main(void) {
     cleanup_result_precedence();
     component_policy(); absolute_policy(); final_path_policy(); acl_policy(); streams_policy();
+    directory_index_size_policy(); directory_streams_refuse_payload_or_aliases();
     directory_case_query_policy(); case_sensitive_directory_rejects_folded_alias();
     exact_close(); failed_close(); bounds_and_reverse_order(); public_bound_and_inert_retirement(); raw_token_and_append_bounds(); directory_valid_records(); directory_offsets_and_truncation();
     directory_names_and_metadata_policy(); directory_aggregate_limits_and_aliases(); clear_bytes();
-    puts("18 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
+    puts("20 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
 }

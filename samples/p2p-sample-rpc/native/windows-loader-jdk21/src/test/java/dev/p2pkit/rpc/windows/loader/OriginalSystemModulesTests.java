@@ -22,7 +22,7 @@ import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.value;
 public final class OriginalSystemModulesTests {
     private static final String SYSTEM = "C:\\Windows\\System32";
     private static final String[] NAMES = {"kernel32.dll", "advapi32.dll", "ntdll.dll", "shell32.dll",
-        "ole32.dll", "kernelbase.dll", "sechost.dll", "combase.dll"};
+        "ole32.dll", "kernelbase.dll", "sechost.dll", "combase.dll", "iphlpapi.dll"};
     private static final long BASE = 0x180000000L;
     private static final LinkageError MISSING_RETURN = new LinkageError("inert system call has no primitive return");
     private OriginalSystemModulesTests() {}
@@ -71,7 +71,7 @@ public final class OriginalSystemModulesTests {
                 check(fixture.modules[index].name().equals(NAMES[index]));
                 check(!fixture.modules[index].pinned() && !fixture.modules[index].fileObserved());
             }
-            for (int slot : new int[] {-1, 8, Integer.MIN_VALUE, Integer.MAX_VALUE}) {
+            for (int slot : new int[] {-1, 9, Integer.MIN_VALUE, Integer.MAX_VALUE}) {
                 expect(IllegalArgumentException.class, () -> WindowsOriginalSystemModulesCandidate.fixedName(slot));
                 expect(IllegalArgumentException.class, () -> new WindowsOriginalSystemModuleCandidate(fixture.collection, slot));
             }
@@ -118,7 +118,7 @@ public final class OriginalSystemModulesTests {
             check(unexpected.get() == null && fixture.calls() == 0 && !(boolean) value(fixture.collection, "frameRetired"));
             fixture.unchanged(before);
             fixture.pinAll();
-            check(fixture.systemCalls == 1 && fixture.pinCalls == 8 && fixture.pathCalls == 8);
+            check(fixture.systemCalls == 1 && fixture.pinCalls == 9 && fixture.pathCalls == 9);
         }
     }
 
@@ -170,9 +170,9 @@ public final class OriginalSystemModulesTests {
             else expect(IllegalStateException.class, () -> invoke(fixture.collection, "observeLoadedModules"));
             check((boolean) value(fixture.collection, "nativeReturnUnconfirmed") == unknown);
             if (success) {
-                check(fixture.systemCalls == 1 && fixture.pinCalls == 8 && fixture.pathCalls == 8);
+                check(fixture.systemCalls == 1 && fixture.pinCalls == 9 && fixture.pathCalls == 9);
                 check((boolean) value(fixture.collection, "pinsComplete"));
-                for (int index = 0; index < 8; index++) {
+                for (int index = 0; index < 9; index++) {
                     check(fixture.modules[index].pinned() && fixture.modules[index].originalModuleBits() == base(index));
                     check(((long[]) value(fixture.collection, "rawModules"))[index] == base(index));
                     char[] path = (char[]) value(fixture.modules[index], "originalPath");
@@ -184,6 +184,7 @@ public final class OriginalSystemModulesTests {
             } else if (absent) {
                 check(fixture.pinCalls == 3 && fixture.pathCalls == 2 && !(boolean) value(fixture.collection, "pinsComplete"));
                 check(value(fixture.collection, "outcome").equals("MODULE_ABSENT") && (int) value(fixture.collection, "stoppedSlot") == 2);
+                check(fixture.collection.failureOperation().equals("SYSTEM_MODULE_ABSENT_SLOT_TWO"));
                 check(fixture.modules[0].pinned() && fixture.modules[1].pinned() && !fixture.modules[2].pinned());
             } else if (mode.equals("pin-unknown")) {
                 check(fixture.pinCalls == 1 && fixture.pathCalls == 0);
@@ -202,6 +203,10 @@ public final class OriginalSystemModulesTests {
                 check((long) value(fixture.modules[0], "rawModule") == (mode.equals("pin-contradictory") ? base(0) : 0));
             }
             check(Arrays.stream(fixture.modules).noneMatch(module -> module.fileObserved()));
+            if (unknown) check(fixture.collection.failureOperation().equals("SYSTEM_RETURN_UNKNOWN_" +
+                (mode.equals("system-path-unknown") ? "NO_SLOT" : "SLOT_ZERO")));
+            if (mode.equals("path-mismatch")) check(fixture.collection.failureOperation().equals("SYSTEM_MODULE_PATH_SLOT_ONE"));
+            if (mode.equals("pin-false")) check(fixture.collection.failureOperation().equals("SYSTEM_MODULE_PIN_SLOT_ZERO"));
             byte[][] observed = fixture.bufferCopy();
             int calls = fixture.calls();
             expect(IllegalStateException.class, () -> invoke(fixture.collection, "observeLoadedModules"));
@@ -214,7 +219,7 @@ public final class OriginalSystemModulesTests {
             check(value(value(fixture.collection, "failure"), "retainedCandidate") == fixture.collection);
             if (absent) {
                 field(fixture.collection, "completed").setBoolean(fixture.collection, true); // Driver's completed negative diagnostic only.
-                check(fixture.collection.completed() && fixture.collection.moduleCount() == 8 && fixture.collection.stoppedSlot() == 2);
+                check(fixture.collection.completed() && fixture.collection.moduleCount() == 9 && fixture.collection.stoppedSlot() == 2);
                 expect(IllegalStateException.class, fixture.modules[0]::observeFile);
                 expect(IllegalStateException.class, () -> fixture.collection.resolve("kernel32.dll", "Target"));
             }
@@ -289,7 +294,7 @@ public final class OriginalSystemModulesTests {
                 check(!(boolean) value(foreign, "attempted") && value(foreign, "frameArena") == null);
             }
             check(value(fixture.query, "fileHandle") == value(fixture.file, "handle"));
-            check(value(fixture.query, "fileArena") == fixture.handleScope && fixture.calls() == 17);
+            check(value(fixture.query, "fileArena") == fixture.handleScope && fixture.calls() == 19);
         }
     }
 
@@ -355,7 +360,7 @@ public final class OriginalSystemModulesTests {
             check(expect(WindowsOriginalSystemModulesCandidate.Failure.class, fixture.collection::completed) == root);
             check(expect(WindowsOriginalSystemModulesCandidate.Failure.class, fixture.modules[1]::observeFile) == root);
             Object second = invoke(fixture.modules[0], "fail", new Class<?>[] {Throwable.class}, new LinkageError("later inert failure"));
-            check(second == root && child.operationFailure == operation && fixture.calls() == 17);
+            check(second == root && child.operationFailure == operation && fixture.calls() == 19);
             check(fixture.handleScope.scope().isAlive() && fixture.moduleScope.scope().isAlive());
         }
     }
@@ -366,7 +371,7 @@ public final class OriginalSystemModulesTests {
         return (byte[]) method.invoke(null, name);
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final Arena bootstrapScope = Arena.ofConfined(), moduleScope = Arena.ofConfined(), handleScope = Arena.ofConfined();
         final Arena queryScope = Arena.ofConfined(), ancestorScope = Arena.ofConfined(), backing = Arena.ofConfined();
         final Arena frame = Arena.ofConfined();
@@ -428,7 +433,7 @@ public final class OriginalSystemModulesTests {
         }
         private int pin(MemorySegment error, int flags, MemorySegment name, MemorySegment output) throws Throwable {
             int slot = pinCalls++;
-            check(slot < 8 && flags == 1 && output == buffers[0]);
+            check(slot < 9 && flags == 1 && output == buffers[0]);
             check(text(name).equals(NAMES[slot])); // No caller-selected names/addresses/extra module probe.
             expect(IllegalStateException.class, collection::requireOriginalNativeInputs);
             long raw = mode.equals("pin-duplicate") && slot == 1 ? base(0) : base(slot);
@@ -471,7 +476,10 @@ public final class OriginalSystemModulesTests {
             return file;
         }
         void attachSecurity(boolean policy) throws Throwable {
-            WindowsOriginalSystemModuleCandidate owner = modules[0];
+            attachSecurity(0, policy);
+        }
+        void attachSecurity(int slot, boolean policy) throws Throwable {
+            WindowsOriginalSystemModuleCandidate owner = modules[slot];
             field(owner, "securityAttempted").setBoolean(owner, true);
             query = file.newSystemModuleSecurity(owner);
             field(owner, "security").set(owner, query);
@@ -486,7 +494,10 @@ public final class OriginalSystemModulesTests {
             field(owner, "leafPolicyRefused").setBoolean(owner, !policy);
         }
         void attachAncestors(boolean policy) throws Throwable {
-            WindowsOriginalSystemModuleCandidate owner = modules[0];
+            attachAncestors(0, policy);
+        }
+        void attachAncestors(int slot, boolean policy) throws Throwable {
+            WindowsOriginalSystemModuleCandidate owner = modules[slot];
             field(owner, "ancestorsAttempted").setBoolean(owner, true);
             ancestors = query.newSystemModuleAncestors(owner);
             field(owner, "ancestors").set(owner, ancestors);
@@ -556,7 +567,9 @@ public final class OriginalSystemModulesTests {
                 if (byteFrame != null && byteFrame.scope().isAlive()) byteFrame.close();
             }
             if (frame.scope().isAlive()) frame.close();
-            backing.close(); ancestorScope.close(); queryScope.close(); handleScope.close(); moduleScope.close(); bootstrapScope.close();
+            backing.close(); ancestorScope.close(); queryScope.close(); handleScope.close();
+            if (moduleScope.scope().isAlive()) moduleScope.close();
+            bootstrapScope.close();
         }
     }
 

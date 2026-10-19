@@ -12,7 +12,8 @@ import java.util.Set;
 /**
  * Bounded, copied system-PE export DATA only. No native call, library lookup, loading or authority.
  * A future caller must bind every input to its original independently admitted file/mapping owner.
- * This reader neither admits those owners nor models API-set routing, loader search, or DllMain.
+ * This reader neither admits those owners nor models loader search or DllMain. An optional copied
+ * namespace supplies only bounded API-set routing data, never original-process routing authority.
  */
 final class WindowsSystemExportPlan {
     private static final int MAXIMUM_MODULES = 16;
@@ -35,6 +36,10 @@ final class WindowsSystemExportPlan {
 
     /** Immutable resolution data, NOT permission to call or load this address. No address is supplied here. */
     record Target(String module, long rva, long ordinal) {}
+    record ApiRoute(String contract, String host) {}
+    record Resolution(Target target, List<ApiRoute> routes) {
+        Resolution { routes = List.copyOf(routes); }
+    }
 
     private record Forward(String module, String name, long ordinal) {}
     private record Span(long start, long bytes) {
@@ -42,7 +47,7 @@ final class WindowsSystemExportPlan {
         boolean contains(long value) { return value >= start && value < end(); }
         boolean overlaps(Span other) { return start < other.end() && other.start < end(); }
     }
-    private record Section(long rva, long mapped, int raw, int rawBytes, long flags) {}
+    private record Section(long rva, long mapped, long virtualBytes, int raw, int rawBytes, long flags) {}
 
     private static final class Budget {
         private long remaining = MAXIMUM_WORK;
@@ -80,19 +85,34 @@ final class WindowsSystemExportPlan {
     }
 
     Target resolve(String module, String name) {
+        return resolve(module, name, null);
+    }
+
+    Target resolve(String module, String name, WindowsApiSetPlan namespace) {
+        return resolvePlan(module, name, namespace).target;
+    }
+
+    Resolution resolvePlan(String module, String name, WindowsApiSetPlan namespace) {
         if (!symbol(name)) throw refused();
-        return resolveReference(moduleName(module, false), name, 0);
+        return resolveReference(moduleName(module, false), name, 0, namespace);
     }
 
     Target resolveOrdinal(String module, long ordinal) {
         if (ordinal < 1 || ordinal > 65_535) throw refused();
-        return resolveReference(moduleName(module, false), null, ordinal);
+        return resolveReference(moduleName(module, false), null, ordinal, null).target;
     }
 
-    private Target resolveReference(String module, String name, long ordinal) {
+    private Resolution resolveReference(String module, String name, long ordinal, WindowsApiSetPlan namespace) {
         Set<String> visited = new HashSet<>();
+        List<ApiRoute> routes = new ArrayList<>();
         for (int hop = 0; hop < MAXIMUM_STEPS; hop++) {
-            if (apiSet(module)) throw refused(); // A contract name is not an ordinary DLL mapping.
+            if (apiSet(module)) {
+                if (namespace == null) throw refused(); // No inferred alias or physical DLL fallback.
+                String host = moduleName(namespace.defaultHost(module), false);
+                routes.add(new ApiRoute(module, host));
+                module = host;
+                continue; // A virtual-contract hop consumes the same bounded walk budget.
+            }
             Module image = modules.get(module);
             if (image == null) throw refused();
             int index = name == null ? image.ordinalIndex(ordinal) : image.nameIndex(name);
@@ -101,7 +121,7 @@ final class WindowsSystemExportPlan {
             Forward forward = image.forwarders[index];
             if (forward == null) {
                 image.requireTerminal(image.functions[index]);
-                return new Target(module, image.functions[index], image.ordinalBase + index);
+                return new Resolution(new Target(module, image.functions[index], image.ordinalBase + index), routes);
             }
             module = forward.module;
             name = forward.name;
@@ -166,7 +186,7 @@ final class WindowsSystemExportPlan {
                     rva > imageSize || mapped > imageSize - rva || rawBytes % fileAlignment != 0 ||
                     (rawBytes == 0 ? raw != 0 : raw < headers || raw % fileAlignment != 0)) throw refused();
                 fileSpan(raw, rawBytes);
-                Section section = new Section(rva, mapped, (int) raw, (int) rawBytes, flags);
+                Section section = new Section(rva, mapped, virtualBytes, (int) raw, (int) rawBytes, flags);
                 for (Section previous : sections) {
                     if (new Span(rva, mapped).overlaps(new Span(previous.rva, previous.mapped)) ||
                         rawBytes != 0 && previous.rawBytes != 0 &&
@@ -203,7 +223,7 @@ final class WindowsSystemExportPlan {
                 long rva = u32(functionOffset + 4L * index);
                 functions[index] = rva;
                 if (rva != 0) {
-                    mapped(rva, 1);
+                    requireExportRva(rva);
                     if (directory.contains(rva)) forwarders[index] = forward(text(rva, directory.end()));
                 }
             }
@@ -242,6 +262,20 @@ final class WindowsSystemExportPlan {
         int ordinalIndex(long ordinal) {
             if (ordinal < ordinalBase || ordinal - ordinalBase >= functions.length) throw refused();
             return (int) (ordinal - ordinalBase);
+        }
+
+        private void requireExportRva(long rva) {
+            for (Section section : sections) {
+                budget.consume(1);
+                long offset = rva - section.rva;
+                if (offset >= 0 && offset < section.rawBytes) return;
+                // OS images can export variables in a data section's declared zero-filled tail.
+                // Admit only their RVA as copied graph data, never synthesized file bytes or a
+                // callable target. Alignment padding and executable/unreadable tails still refuse.
+                if (offset >= section.rawBytes && offset < section.virtualBytes &&
+                    (section.flags & 0x60000000L) == 0x40000000L) return;
+            }
+            throw refused();
         }
 
         void requireTerminal(long rva) {

@@ -70,7 +70,7 @@ final class WindowsOriginalProgramFilesCandidate {
             shell = systems.module(3);
             WindowsSystemExportPlan.Target target = systems.resolve("shell32.dll", EXPORT);
             int slot = -1;
-            for (int index = 0; index < 8; index++) {
+            for (int index = 0; index < systems.moduleCount(); index++) {
                 if (WindowsOriginalSystemModulesCandidate.fixedName(index).equals(target.module())) slot = index;
             }
             if (slot < 0) throw new IllegalStateException("Known-folder export leaves the original fixed system cohort");

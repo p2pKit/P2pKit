@@ -9,16 +9,17 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
 /**
- * Fixed already-loaded eight-module observation cohort, never an OS-provider admission allowlist.
+ * Fixed already-loaded nine-module observation cohort, never an OS-provider admission allowlist.
  * PIN/path observations do NOT associate the later disk HANDLE with the original mapped image section.
  * The original conditional bootstrap calls, ntdll GPA/query and startup still need independent authority.
  * The general graph API yields copied export DATA, not callable authority. The fixed original Program
  * Files child additionally uses the retained shell32 PIN with actual GPA/provider checks under trusted
- * startup. No LoadLibrary fallback, API-set routing, profile loading, JNI registration or productive
- * activation exists. Full OS transitive load closure is not modeled.
+ * startup. Installed preparation can attach the separate original process API-set reader and route
+ * PINs. No LoadLibrary fallback, profile loading or JNI registration occurs in this collection.
+ * Full OS transitive load closure is not modeled.
  */
 final class WindowsOriginalSystemModulesCandidate {
-    private static final int COUNT = 8;
+    private static final int COUNT = 9;
     private static final int PATH_CHARS = 1024;
     private static final MemoryLayout PATH = MemoryLayout.sequenceLayout(PATH_CHARS, ValueLayout.JAVA_SHORT);
     private static final MemoryLayout NAME = MemoryLayout.sequenceLayout(32, ValueLayout.JAVA_SHORT);
@@ -77,6 +78,9 @@ final class WindowsOriginalSystemModulesCandidate {
     private int stoppedSlot = -1;
     private WindowsSystemExportPlan.Input[] inputs;
     private WindowsSystemExportPlan graph;
+    private int diagnosticPhase; // Stored readback only; never participates in admission or ownership.
+    private boolean apiSetAttempted;
+    private WindowsOriginalApiSetCandidate apiSets;
 
     WindowsOriginalSystemModulesCandidate(WindowsSystemBootstrapCandidate bootstrap) { this.bootstrap = bootstrap; }
 
@@ -90,6 +94,7 @@ final class WindowsOriginalSystemModulesCandidate {
             case 5 -> "kernelbase.dll";
             case 6 -> "sechost.dll";
             case 7 -> "combase.dll";
+            case 8 -> "iphlpapi.dll";
             default -> throw new IllegalArgumentException("Unknown fixed system module slot");
         };
     }
@@ -100,7 +105,8 @@ final class WindowsOriginalSystemModulesCandidate {
         attempted = true;
         boolean observed = false;
         try {
-            // All eight concrete owners/failure carriers are attached before any PIN or native effect.
+            diagnosticPhase = 1;
+            // All concrete owners/failure carriers are attached before any PIN or native effect.
             for (int slot = 0; slot < COUNT; slot++) modules[slot] = new WindowsOriginalSystemModuleCandidate(this, slot);
             prepareFrame();
             observeLoadedModules();
@@ -129,19 +135,23 @@ final class WindowsOriginalSystemModulesCandidate {
         for (int slot = 0; slot < COUNT; slot++) {
             activeSlot = slot;
             WindowsOriginalSystemModuleCandidate module = modules[slot];
+            diagnosticPhase = 5;
             module.observeFile();
+            diagnosticPhase = 6;
             module.observeSecurity();
             if (!module.descriptorPolicyAccepted()) {
                 stoppedSlot = slot;
                 outcome = "LEAF_POLICY_REFUSED";
                 return;
             }
+            diagnosticPhase = 7;
             module.observeAncestors();
             if (!module.descriptorPoliciesAccepted()) {
                 stoppedSlot = slot;
                 outcome = "ANCESTOR_POLICY_REFUSED";
                 return;
             }
+            diagnosticPhase = 8;
             aggregate = WindowsSystemExportPlan.checkedAggregateSize(aggregate, Math.toIntExact(module.byteCount()));
         }
         // The unchanged parser cap is an input arithmetic bound, NOT a -Xmx128m memory guarantee.
@@ -149,9 +159,12 @@ final class WindowsOriginalSystemModulesCandidate {
         inputs = new WindowsSystemExportPlan.Input[COUNT];
         for (int slot = 0; slot < COUNT; slot++) {
             activeSlot = slot;
+            diagnosticPhase = 9;
             modules[slot].observeBytes();
+            diagnosticPhase = 10;
             inputs[slot] = modules[slot].originalExportInput();
         }
+        diagnosticPhase = 11;
         WindowsSystemExportPlan observed = WindowsSystemExportPlan.parse(inputs);
         requireOriginalNativeInputs();
         graph = observed;
@@ -222,6 +235,7 @@ final class WindowsOriginalSystemModulesCandidate {
         requireOriginalNativeInputs();
         if (systemPathAttempted || frameRetired) throw new IllegalStateException("Original system pathname call was already consumed");
         systemPathAttempted = true;
+        diagnosticPhase = 2;
         buffers[2].fill((byte) 0x7f);
         nativeReturnUnconfirmed = true;
         systemPathReturn = (int) systemPathCall.invokeExact(buffers[4], buffers[2], PATH_CHARS);
@@ -240,6 +254,7 @@ final class WindowsOriginalSystemModulesCandidate {
             throw new IllegalStateException("Fixed original module observation is out of order or already consumed");
         }
         moduleAttempted[slot] = true;
+        diagnosticPhase = 3;
         String name = fixedName(slot);
         buffers[3].fill((byte) 0);
         for (int index = 0; index < name.length(); index++) buffers[3].setAtIndex(ValueLayout.JAVA_SHORT, index, (short) name.charAt(index));
@@ -266,6 +281,7 @@ final class WindowsOriginalSystemModulesCandidate {
             if (rawModules[slot] == rawModules[prior]) throw new IllegalStateException("Different fixed modules share one observation");
         }
         MemorySegment module = MemorySegment.ofAddress(rawModules[slot]).reinterpret(moduleArena, null);
+        diagnosticPhase = 4;
         buffers[1].fill((byte) 0x7f);
         nativeReturnUnconfirmed = true;
         pathReturns[slot] = (int) pathCall.invokeExact(buffers[4], module, buffers[1], PATH_CHARS);
@@ -429,6 +445,58 @@ final class WindowsOriginalSystemModulesCandidate {
         requireOriginalModule(requester, slot); requester.requireOriginalByteInputs(); return bootstrap.originalSystemModuleReadEntry(this);
     }
 
+    /**
+     * Only the sealed installed failure's reader uses this stored-state projection. In particular, do
+     * not call requireCompleted(), inspect a MemorySegment, or traverse arbitrary exception messages:
+     * a refused cohort is incomplete, and a failed cohort can retain an unconfirmed native return.
+     */
+    String failureOperation() {
+        if (nativeReturnUnconfirmed) return "SYSTEM_RETURN_UNKNOWN_" + diagnosticSlot(activeSlot);
+        if (failure.retirementFailed()) return "SYSTEM_RETIREMENT_" + diagnosticSlot(activeSlot);
+        if (outcome != null) {
+            String refusal = switch (outcome) {
+                case "MODULE_ABSENT" -> "SYSTEM_MODULE_ABSENT_";
+                case "LEAF_POLICY_REFUSED" -> "SYSTEM_LEAF_POLICY_";
+                case "ANCESTOR_POLICY_REFUSED" -> "SYSTEM_ANCESTOR_POLICY_";
+                case "COMPLETE" -> "SYSTEM_GRAPH_RECHECK_";
+                default -> "SYSTEM_UNKNOWN_OUTCOME_";
+            };
+            return refusal + diagnosticSlot(stoppedSlot);
+        }
+        String operation = switch (diagnosticPhase) {
+            case 0 -> "SYSTEM_PRECONDITION_";
+            case 1 -> "SYSTEM_FRAME_";
+            case 2 -> "SYSTEM_DIRECTORY_";
+            case 3 -> "SYSTEM_MODULE_PIN_";
+            case 4 -> "SYSTEM_MODULE_PATH_";
+            case 5 -> "SYSTEM_FILE_";
+            case 6 -> "SYSTEM_SECURITY_";
+            case 7 -> "SYSTEM_ANCESTORS_";
+            case 8 -> "SYSTEM_BYTE_BOUND_";
+            case 9 -> "SYSTEM_BYTES_";
+            case 10 -> "SYSTEM_EXPORT_INPUT_";
+            case 11 -> "SYSTEM_EXPORT_GRAPH_";
+            default -> "SYSTEM_UNKNOWN_OPERATION_";
+        };
+        return operation + diagnosticSlot(diagnosticPhase == 11 ? -1 : activeSlot);
+    }
+
+    private static String diagnosticSlot(int slot) {
+        return switch (slot) {
+            case -1 -> "NO_SLOT";
+            case 0 -> "SLOT_ZERO";
+            case 1 -> "SLOT_ONE";
+            case 2 -> "SLOT_TWO";
+            case 3 -> "SLOT_THREE";
+            case 4 -> "SLOT_FOUR";
+            case 5 -> "SLOT_FIVE";
+            case 6 -> "SLOT_SIX";
+            case 7 -> "SLOT_SEVEN";
+            case 8 -> "SLOT_EIGHT";
+            default -> "UNKNOWN_SLOT";
+        };
+    }
+
     private void requireCompleted() {
         requireOriginalBootstrap();
         if (!completed || outcome == null || !frameRetired || nativeReturnUnconfirmed) {
@@ -457,8 +525,55 @@ final class WindowsOriginalSystemModulesCandidate {
     }
     WindowsSystemExportPlan.Target resolve(String module, String symbol) {
         requireOriginalExportGraph();
-        try { return graph.resolve(module, symbol); }
+        try { return apiSets == null ? graph.resolve(module, symbol) : apiSets.resolve(module, symbol); }
         catch (Throwable caught) { throw fail(caught); }
+    }
+
+    WindowsSystemExportPlan.Target resolveIpExport(WindowsOriginalIpInterfaces requester, String name) {
+        requireOriginalExportGraph();
+        requester.requireOriginalModule(modules[8]);
+        if (!name.equals("GetIpInterfaceTable") && !name.equals("FreeMibTable")) {
+            throw new IllegalArgumentException("Unknown fixed IP Helper export");
+        }
+        // These two fixed physical exports require no new API-set routing after that owner was sealed.
+        return graph.resolve("iphlpapi.dll", name);
+    }
+
+    void prepareApiSetNamespace() {
+        requireOriginalExportGraph();
+        if (apiSetAttempted) throw new IllegalStateException("Original API-set namespace was already attempted");
+        apiSetAttempted = true;
+        try {
+            apiSets = new WindowsOriginalApiSetCandidate(this); // Permanent attachment before any query/PIN.
+            apiSets.observe();
+        } catch (Throwable caught) { throw fail(caught); }
+    }
+    void finishApiSetRoutes() {
+        requireOriginalExportGraph();
+        if (apiSets == null) throw new IllegalStateException("Missing original API-set namespace");
+        try { apiSets.finishRoutes(); }
+        catch (Throwable caught) { throw fail(caught); }
+    }
+    void requireSealedApiSetRoutes() {
+        requireOriginalExportGraph();
+        if (apiSets == null) throw new IllegalStateException("Missing original API-set route ownership");
+        apiSets.requireSealed();
+    }
+    void requireOriginalApiSet(WindowsOriginalApiSetCandidate candidate) {
+        requireOriginalExportGraph();
+        if (!apiSetAttempted || candidate == null || candidate != apiSets) {
+            throw new IllegalStateException("API-set namespace is not the original retained child");
+        }
+    }
+    Linker apiSetLinker(WindowsOriginalApiSetCandidate candidate) { requireOriginalApiSet(candidate); return linker; }
+    Arena apiSetArena(WindowsOriginalApiSetCandidate candidate) { requireOriginalApiSet(candidate); return bootstrapArena; }
+    WindowsSystemExportPlan apiSetGraph(WindowsOriginalApiSetCandidate candidate) { requireOriginalApiSet(candidate); return graph; }
+    MemorySegment apiSetEntry(WindowsOriginalApiSetCandidate candidate, int index) {
+        requireOriginalApiSet(candidate); return bootstrap.originalApiSetEntry(this, index);
+    }
+    String apiSetFailureOperation() { return apiSets == null ? "API_SET_PRECONDITION" : apiSets.failureOperation(); }
+    String importFailureOperation() {
+        return apiSets != null && apiSets.hasFailed() ? apiSets.failureOperation() : "PROFILE_IMPORTS";
     }
     WindowsSystemExportPlan.Target resolveOrdinal(String module, long ordinal) {
         requireOriginalExportGraph();

@@ -200,7 +200,7 @@ public final class OriginalProfileDllSystemImportsTests {
         final Arena modulesArena = Arena.ofConfined(), handlesArena = Arena.ofConfined(), queryArena = Arena.ofConfined(), ancestorsArena = Arena.ofConfined();
         final WindowsOriginalSystemModulesCandidate collection;
         final WindowsOriginalSystemModuleCandidate[] modules;
-        final WindowsSystemExportPlan.Input[] inputs = new WindowsSystemExportPlan.Input[8];
+        final WindowsSystemExportPlan.Input[] inputs = new WindowsSystemExportPlan.Input[9];
         final WindowsPackagedVerifier plan;
 
         Fixture(Object[] data, String mode) throws Throwable {
@@ -216,7 +216,7 @@ public final class OriginalProfileDllSystemImportsTests {
             field(collection, "moduleArena").set(collection, modulesArena);
             modules = (WindowsOriginalSystemModuleCandidate[]) value(collection, "modules");
             // Fabricated completed scopes/ACL/bytes only. This fixture invokes NO native-shaped calls.
-            for (int slot = 0; slot < 8; slot++) {
+            for (int slot = 0; slot < 9; slot++) {
                 WindowsOriginalSystemModuleCandidate owner = new WindowsOriginalSystemModuleCandidate(collection, slot);
                 modules[slot] = owner;
                 field(owner, "rawModule").setLong(owner, base(slot));
@@ -225,7 +225,7 @@ public final class OriginalProfileDllSystemImportsTests {
                 field(owner, "pinned").setBoolean(owner, true);
             }
             field(collection, "pinsComplete").setBoolean(collection, true);
-            for (int slot = 0; slot < 8; slot++) attach(slot, systemImage(slot, mode));
+            for (int slot = 0; slot < 9; slot++) attach(slot, systemImage(slot, mode));
             field(collection, "inputs").set(collection, inputs);
             field(collection, "graph").set(collection, WindowsSystemExportPlan.parse(inputs));
             field(collection, "frameRetired").setBoolean(collection, true);

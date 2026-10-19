@@ -2,8 +2,11 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest completed release is
-[`0.8.0-rc2`](../releases/0.8.0-rc2.md); current development source is
-`0.8.0-rc3` (unpublished candidate). The rc2 evidence does not qualify rc3.
+[`0.8.0-rc3`](../releases/0.8.0-rc3.md); current development source is
+`0.8.0-rc4` (unpublished candidate). Published rc3 evidence and incoming manual
+Windows/Android results do not replace rc4's required exact-source gates.
+Retain the [Windows qualification limits](../rpc/windows-release-scope.md),
+including the Back deadline failure and incomplete automated lifecycle coverage.
 
 Before selecting a version, review the unreleased behavior notes. The integrated
 audit's [#229 discovery-admission tightening](https://github.com/p2pKit/P2pKit/issues/229)
@@ -47,8 +50,10 @@ authorize a subsequent release or replace its qualification.
 10. Record the verified publication, update `LATEST_PUBLISHED_VERSION` and current
    documentation, and open the agreed next snapshot line through a normal reviewed
    change. Record the actual GitHub prerelease/release entry; do not create a
-   duplicate sample release or rebuild published bytes for bookkeeping. For rc2,
-   the sample prerelease already exists and the development line is `0.8.0-SNAPSHOT`.
+   duplicate sample release or rebuild published bytes for bookkeeping. The rc3
+   sample prerelease already exists; rc4 is a new candidate, not a replacement for
+   its immutable bytes. Do not advance latest-published metadata before verification
+   or invent the next snapshot version.
 
 Never move or recreate an existing release tag, weaken a gate, put secrets in
 the repository, or publish a snapshot.

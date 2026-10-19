@@ -153,6 +153,90 @@ cleanup:
     pwp_clear(path, sizeof(path)); pwp_clear(extended, sizeof(extended));
     return result;
 }
+/* Fixed contenders inherit the already admitted outer job. This is a payload control, not a
+ * second supervisor: no new job, credentialed launch, breakaway or arbitrary executable is accepted.
+ * The outer owner retains the exact EXE and its ancestors through all descendant retirement. */
+static int run_contender(int held) {
+    BOOL in_job = FALSE;
+    int result = standard_user();
+    if (result != SMOKE_OK) return result;
+    if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job) || !in_job) return SMOKE_PREFLIGHT;
+    uint64_t root = 0, lease = 0;
+    static const WCHAR profile[] = L"profile.lock";
+    if (held) {
+        PWSTR known = NULL;
+        WCHAR path[PWP_PATH_LIMIT] = {0};
+        owned_handle lock = {0};
+        result = SMOKE_CONTROL;
+        if (SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DONT_VERIFY, NULL, &known) != S_OK || !known)
+            goto held_done;
+        size_t length = wcsnlen_s(known, PWP_PATH_LIMIT);
+        if (!pwp_absolute_path((const uint16_t *)known, length)) goto held_done;
+        wcscpy_s(path, PWP_PATH_LIMIT, known);
+        static const WCHAR *const parts[] = {L"P2pKit", L"RpcProfile", L"profile.lock"};
+        for (size_t i = 0; i < sizeof(parts)/sizeof(parts[0]); ++i)
+            if (!pwp_append_path((uint16_t *)path, PWP_PATH_LIMIT, (const uint16_t *)parts[i], wcslen(parts[i])))
+                goto held_done;
+        /* Observe the held file's actual share-none refusal separately: production root admission
+         * can refuse even earlier at an exclusively write-capable fixed directory. */
+        lock.handle = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+        if (lock.handle != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) goto held_done;
+        if (pwp_win_open_root(&root) != PWP_OS || root != 0) goto held_done;
+        result = SMOKE_OK;
+held_done:
+        if (!close_owned(&lock)) result = SMOKE_CLEANUP_UNKNOWN;
+        if (known) CoTaskMemFree(known);
+        pwp_clear(path, sizeof(path));
+    } else {
+        result = SMOKE_CONTROL;
+        if (pwp_win_open_root(&root) == PWP_OK && root &&
+            pwp_win_lock(root, (const uint16_t *)profile, wcslen(profile), &lease) == PWP_OK && lease) {
+            if (pwp_win_close(lease) == PWP_OK) result = SMOKE_OK;
+            else result = SMOKE_CLEANUP_UNKNOWN;
+        }
+    }
+    if (root && pwp_win_close(root) != PWP_OK) result = SMOKE_CLEANUP_UNKNOWN;
+    return result;
+}
+static int run_contender_process(int held) {
+    BOOL parent_job = FALSE, child_job = FALSE;
+    WCHAR executable[PWP_PATH_LIMIT] = {0}, command[PWP_PATH_LIMIT+80] = {0};
+    owned_handle process = {0}, thread = {0};
+    STARTUPINFOW startup = {0}; PROCESS_INFORMATION pi = {0};
+    int result = SMOKE_CONTROL, observed_exit = 0;
+    ULONGLONG started = GetTickCount64();
+    DWORD count = GetModuleFileNameW(NULL, executable, PWP_PATH_LIMIT);
+    if (!count || count >= PWP_PATH_LIMIT || wcschr(executable, L'"') ||
+        !IsProcessInJob(GetCurrentProcess(), NULL, &parent_job) || !parent_job) goto done;
+    if (swprintf_s(command, sizeof(command)/sizeof(command[0]), L"\"%ls\" %ls", executable,
+        held ? L"--custody-held-contender" : L"--custody-released-contender") < 0) goto done;
+    startup.cb = sizeof(startup);
+    /* Inherit no caller handles; Windows inherits the parent's no-breakaway outer job at creation. */
+    BOOL created = CreateProcessW(executable, command, NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+        NULL, NULL, &startup, &pi);
+    process.handle = pi.hProcess; thread.handle = pi.hThread;
+    if (!created || !process.handle || !thread.handle ||
+        !IsProcessInJob(process.handle, NULL, &child_job) || !child_job ||
+        GetTickCount64()-started >= 5000u || ResumeThread(thread.handle) != 1) goto done;
+    ULONGLONG elapsed = GetTickCount64()-started;
+    if (elapsed >= 5000u || WaitForSingleObject(process.handle, (DWORD)(5000u-elapsed)) != WAIT_OBJECT_0 ||
+        GetTickCount64()-started >= 5000u) goto done;
+    observed_exit = 1;
+    DWORD code = STILL_ACTIVE;
+    if (GetExitCodeProcess(process.handle, &code) && code == SMOKE_OK) result = SMOKE_OK;
+done:
+    if (process.handle && !observed_exit) {
+        /* Failure cleanup uses only the returned original process, then observes its actual exit.
+         * A timeout never becomes passing even if this retirement succeeds. The outer budget wins. */
+        if (!TerminateProcess(process.handle, SMOKE_CONTROL) ||
+            WaitForSingleObject(process.handle, 1000u) != WAIT_OBJECT_0) result = SMOKE_CLEANUP_UNKNOWN;
+    }
+    if (!close_owned(&thread)) result = SMOKE_CLEANUP_UNKNOWN;
+    if (!close_owned(&process)) result = SMOKE_CLEANUP_UNKNOWN;
+    pwp_clear(executable, sizeof(executable)); pwp_clear(command, sizeof(command));
+    return result;
+}
 static int expected(const char *control, pwp_result actual, pwp_result want) {
     if (actual != want) {
         printf("FAIL %s actual=%d expected=%d\n", control, (int)actual, (int)want); return 0;
@@ -718,6 +802,10 @@ static int run_controls(void) {
     REQUIRE("held-profile-present", exists);
     EXPECT("held-profile-identity", pwp_win_file_identity(root, NAME(profile), profile_words), PWP_OK);
     REQUIRE("held-profile-custody-shape", pwp_expected_lock_file(root_words, profile_words, 6));
+    int cross_result = run_contender_process(1);
+    if (!condition("cross-process-held-file-and-root-refused", cross_result == SMOKE_OK)) {
+        result = cross_result; goto failed;
+    }
     /* Identity/exists borrow the held handle; read never unlocks/reopens a share-none lease successfully. */
     EXPECT("held-read-does-not-unlock", pwp_win_read(root, NAME(profile), 0, receive_empty, &read), PWP_OS);
     REQUIRE("held-read-no-receiver", read.calls == 0);
@@ -894,10 +982,16 @@ static int run_controls(void) {
         copy_synthetic, &copy, 1), PWP_CLOSED);
     EXPECT("closed-session-delete-denial", pwp_win_delete_record(id, NAME(denial_record), profile_words, 6), PWP_CLOSED);
     uint64_t old_root = root; root = 0;
+    cross_result = run_contender_process(0);
+    if (!condition("cross-process-released-root-and-profile-admitted", cross_result == SMOKE_OK)) {
+        result = cross_result; goto failed;
+    }
     EXPECT("owned-session-reopen", pwp_win_open_root(&root), PWP_OK);
     REQUIRE("root-token-not-reused", root > old_root);
     EXPECT("reopened-root-observation", pwp_win_identity(root, observed), PWP_OK);
     REQUIRE("same-owned-root-preserved", memcmp(observed, root_words, sizeof(observed)) == 0);
+    EXPECT("cross-process-profile-observation", pwp_win_file_identity(root, NAME(profile), observed), PWP_OK);
+    REQUIRE("cross-process-profile-identity-preserved", memcmp(observed, profile_words, sizeof(observed)) == 0);
     EXPECT("reopened-pre-profile-sync-denial", pwp_win_sync_directory(root), PWP_POLICY);
     EXPECT("reopened-pre-lease-read0", pwp_win_read(root, NAME(profile), 0, receive_empty, &read), PWP_OK);
     REQUIRE("reopened-empty-read-received", read.calls == 2);
@@ -1072,6 +1166,10 @@ failed:
     return result;
 }
 int wmain(int argc, wchar_t **argv) {
+    /* These fixed descendants perform no profile creation and are not exposed by the outer adapter.
+     * Their standard token and inherited job are checked again before the existing native entry. */
+    if (argc == 2 && wcscmp(argv[1], L"--custody-held-contender") == 0) return run_contender(1);
+    if (argc == 2 && wcscmp(argv[1], L"--custody-released-contender") == 0) return run_contender(0);
     int restart = argc == 2 && wcscmp(argv[1], L"--disposable-custody-restart-smoke") == 0;
     if (argc != 2 || (!restart && wcscmp(argv[1], L"--disposable-custody-smoke") != 0)) {
         fputs("REFUSED explicit-disposable-custody-scope-required\n", stderr); return SMOKE_SCOPE;

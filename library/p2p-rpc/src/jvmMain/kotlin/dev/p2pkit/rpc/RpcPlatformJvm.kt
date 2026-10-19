@@ -8,10 +8,11 @@ import dev.p2pkit.transport.lan.lan
 
 /** JVM 17 host/client with application-supplied protected identity storage; no insecure default. */
 public fun RpcPlatform.Companion.jvm(identityStore: JvmSecureIdentityStore): RpcPlatform = RpcPlatform { settings ->
-    P2pKit.create {
+    val kit = P2pKit.create {
         settings.configure(this)
         jvmSecureIdentityStore(identityStore)
         transports { lan(settings.lan, settings.role) }
         networkProvisioning { jvm() }
     }
+    if (System.getProperty("os.name", "").startsWith("Windows")) WindowsRpcDiagnosticKit(kit) else kit
 }

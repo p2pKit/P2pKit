@@ -64,6 +64,7 @@ def validate_observer(observed, args, hashes, deadline, witnesses, wrapper_id, e
     H.require(type(observed) is dict and type(observed["schema"]) is int and observed["schema"] == 1)
     H.require(observed["scope"] == "EXTERNAL_PROCESS_EXIT_OBSERVER_NOT_PROFILE_QUALIFICATION")
     H.require(observed["status"] == "PASS" and observed["appSource"] == args.expected_source)
+    H.require(observed["operation"] == args.operation)
     H.require(observed["control"] is None and observed["stage"] == "RECEIPT")
     H.require(observed["phase"] == "CANDIDATE_REQUIRES_OBSERVED_EXTERNAL_EXIT")
     H.require(observed["finalizationCompleted"] is False)
@@ -95,12 +96,16 @@ def validate_observer(observed, args, hashes, deadline, witnesses, wrapper_id, e
 def arguments(argv):
     parser = H.Parser(add_help=False, allow_abbrev=False)
     parser.add_argument("--expected-source", required=True)
+    parser.add_argument("--operation", choices=tuple(H.ALL_OPERATIONS), default="admission")
     parser.add_argument("--private-parent", required=True)
     parser.add_argument("--python", required=True)
+    parser.add_argument("--native-directory")
+    parser.add_argument("--native-sha256")
     args = parser.parse_args(argv)
     H.require(re.fullmatch(r"[0-9a-f]{40}", args.expected_source) is not None)
     H.require(Path(args.private_parent).is_absolute() and Path(args.python).is_absolute())
     H.require(same_path(os.path.realpath(args.python), os.path.realpath(sys.executable)))
+    H.N.validate_arguments(args)
     return args
 
 
@@ -118,8 +123,9 @@ def run(argv=None):
     wrapper_exit = wrapper_exit_counter = before_cleanup = wrapper_id = subject_end = None
     stage = "PREPARATION"
     hashes = source_identity()
-    launcher = H.installed_launcher()
-    powershell = launcher.parent.parent / "PowerShell" / "7" / "pwsh.exe"
+    installed = H.installed_launcher()
+    launcher = H.N.executable(args) if args.operation in H.N.OPERATIONS else installed
+    powershell = installed.parent.parent / "PowerShell" / "7" / "pwsh.exe"
     H.require(powershell.is_file())
     try:
         stage = "PRIVATE_CUSTODY"
@@ -133,7 +139,10 @@ def run(argv=None):
         witnesses = Witnesses(scope, deadline)
         command = [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
                    str(SCRIPTS / "run-windows-installed-diagnostic.ps1"), "-ExpectedSource", args.expected_source,
+                   "-Operation", args.operation,
                    "-PrivateParent", str(run_directory.path), "-Python", args.python]
+        if args.operation in H.N.OPERATIONS:
+            command += ["-NativeDirectory", args.native_directory, "-NativeSha256", args.native_sha256]
         stage = "WRAPPER_START"
         child = scope.spawn(command, str(SCRIPTS), environment)
         identity = scope.api.identity(child.handle, child.pid)
@@ -176,9 +185,11 @@ def run(argv=None):
         subject_end = validate_observer(observed, args, hashes, deadline, witnesses, wrapper_id,
                                         wrapper_exit_counter, powershell, launcher)
         H.require(inner["status"] == "PASS" and inner["appSource"] == args.expected_source)
-        H.require(inner["scope"] == H.SCOPE and inner["supervisorSource"] == {name: hashes[name] for name in H.SOURCE_FILES})
+        H.require(inner["operation"] == args.operation)
+        expected_scope = H.N.SCOPE if args.operation in H.N.OPERATIONS else H.SCOPE
+        H.require(inner["scope"] == expected_scope and inner["supervisorSource"] == {name: hashes[name] for name in H.SOURCE_FILES})
         H.require(inner["outerCleanupKnown"] is True and inner["capturesClosed"] is True)
-        H.require(H.validate_worker(inner["workerOutcome"], args.expected_source))
+        H.require(H.validate_worker(inner["workerOutcome"], args.expected_source, args.operation))
         stage = "FINAL_SOURCE_BINDING"
         H.require(source_identity() == hashes)
         accepted = True
@@ -231,8 +242,11 @@ def run(argv=None):
                 failures.append(failure_detail("WITNESS_CLOSE", error))
         passed = (accepted and not failures and cleanup and captures_closed and
                   subject_end is not None and deadline.now() < subject_end)
-        record = {"schema": 1, "scope": "INSTALLED_ADMISSION_ONLY_NOT_PROFILE_PROVIDER_QUALIFICATION",
+        record = {"schema": 1, "scope": ("NATIVE_SMOKE_FIXED_OPERATION_NOT_JNI_OR_HOST_CLIENT_QUALIFICATION"
+                    if args.operation in H.N.OPERATIONS else "INSTALLED_FIXED_OPERATION_NOT_HOST_CLIENT_QUALIFICATION"),
                   "status": "PASS" if passed else "FAIL", "appSource": args.expected_source, "sourceFiles": hashes,
+                  "operation": args.operation,
+                  "nativePayloadSha256": getattr(args, "native_sha256", None),
                   "phase": "CANDIDATE_REQUIRES_OBSERVED_DRIVER_EXIT", "finalizationCompleted": False,
                   "preparationStartCounter": deadline.start, "counterFrequency": deadline.frequency,
                   "preparationDeadlineCounter": deadline.end, "subjectDeadlineCounter": subject_end,

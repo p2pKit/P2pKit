@@ -25,6 +25,7 @@ internal data class DesktopRpcNetwork(
 
 /** Suggestions only. Selecting a visible interface never changes its routes, flags or permissions. */
 internal fun desktopRpcNetworks(): List<DesktopRpcNetwork> {
+    desktopWindowsIpNetworks()?.let { return it }
     // Read every interface's flags, including those which cannot supply a suggestion. An unreadable
     // competing interface must fail the scan, not disappear and make this topology appear usable.
     val interfaces = NetworkInterface.getNetworkInterfaces().toList()

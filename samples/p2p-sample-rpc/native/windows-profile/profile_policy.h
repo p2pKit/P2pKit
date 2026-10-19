@@ -49,7 +49,9 @@ typedef struct {
 } pwp_directory_names;
 /* FILE_ID_BOTH_DIR_INFO byte records. Failure invalidates the whole aggregate, never exposes a partial list. */
 pwp_result pwp_directory_decode(const unsigned char *bytes, size_t length, pwp_directory_names *names);
-int pwp_stream_record(const unsigned char *bytes, size_t length, uint64_t file_size, int directory);
+/* Standard EOF is an index size for directories. NULL/zero length represents only an OS-confirmed
+ * no-stream result; otherwise exactly one unnamed stream is required, empty for a directory. */
+int pwp_stream_record(const unsigned char *bytes, size_t length, uint64_t standard_eof, int directory);
 int pwp_acl_shape(uint16_t control, uint32_t revision, uint32_t ace_count,
                   const uint8_t types[2], const uint8_t flags[2], const uint32_t masks[2],
                   int owner_is_user, const int sid_kind[2], int directory);
@@ -239,6 +241,10 @@ pwp_result pwp_child_finish(pwp_owner *owner, uint64_t token, pwp_lock_action ve
                             pwp_close_callback close, void *context);
 /* Expected normal FILE tuple. Volume is unsigned/raw bits, not a positive signed Java Long. */
 int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volume);
+/* Same original file before/after acknowledged delete disposition. Pending NTFS readback has
+ * zero normal-record flags and zero links, never authority to admit an already unlinked file.
+ * Caller separately proves DeletePending, original-handle custody, ACL, parent and role grants. */
+int pwp_delete_observation(const uint64_t *expected, const uint64_t *observed, size_t count, int pending);
 /* Caller serializes and owns one freshly opened, unpublished, exclusive file handle.
  * Success means deletion intent/readback + exact-handle retirement, NOT name absence or durability.
  * Preverification rejection only closes. Any uncertainty after mark starts quarantines, even if

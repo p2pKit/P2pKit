@@ -21,7 +21,7 @@ class Clock:
 
 class AdmissionEvidenceTests(unittest.TestCase):
     def setUp(self):
-        self.args = types.SimpleNamespace(expected_source="a" * 40, python=r"C:\admitted\python.exe")
+        self.args = types.SimpleNamespace(expected_source="a" * 40, python=r"C:\admitted\python.exe", operation="admission")
         self.powershell = r"C:\Program Files\PowerShell\7\pwsh.exe"
         self.launcher = r"C:\Program Files\P2pKit Sample\P2pKit Sample.exe"
         self.hashes = {name: "b" * 64 for name in D.SOURCE_FILES}
@@ -32,7 +32,7 @@ class AdmissionEvidenceTests(unittest.TestCase):
         self.witnesses = types.SimpleNamespace(evidence=lambda: self.rows, all_exited=lambda: self.retired)
         self.deadline = D.PreparationDeadline(Clock())
         self.observed = dict(schema=1, scope="EXTERNAL_PROCESS_EXIT_OBSERVER_NOT_PROFILE_QUALIFICATION",
-            status="PASS", appSource=self.args.expected_source, control=None, stage="RECEIPT",
+            status="PASS", appSource=self.args.expected_source, operation="admission", control=None, stage="RECEIPT",
             phase="CANDIDATE_REQUIRES_OBSERVED_EXTERNAL_EXIT", finalizationCompleted=False,
             supervisorSource={name: self.hashes[name] for name in D.H.SOURCE_FILES},
             observerSource={name: self.hashes[name] for name in
@@ -69,6 +69,7 @@ class AdmissionEvidenceTests(unittest.TestCase):
 
     def test_retirement_and_success_fields_require_actual_types_and_values(self):
         for field, invalid in (("schema", True), ("status", "FAIL"), ("appSource", "c" * 40),
+            ("operation", "profile-create"), ("operation", None),
             ("counterFrequency", 1001), ("deadlineCounter", 61000), ("completedCounter", 4501),
             ("exitCode", True), ("exitCode", 125), ("processExitObserved", 1),
             ("originalProcessHandleClosed", False), ("managedProcessClosed", False),
@@ -100,6 +101,31 @@ class AdmissionEvidenceTests(unittest.TestCase):
             detail = D.failure_detail("OBSERVATION", error)
         self.assertNotIn("SECRET", str(detail))
         self.assertLessEqual(len(detail["frames"]), 12)
+
+    def test_fixed_operation_selection_and_observer_binding(self):
+        argv = ["--expected-source", "a" * 40, "--private-parent", str(Path.cwd()), "--python", sys.executable]
+        for operation in D.H.OPERATIONS:
+            self.assertEqual(D.arguments(argv + ["--operation", operation]).operation, operation)
+            self.args.operation = operation
+            matching = {**self.observed, "operation": operation}
+            self.assertEqual(self.validate(matching), 31000)
+            for other in D.H.OPERATIONS.keys() - {operation}:
+                with self.assertRaises(ValueError): self.validate({**matching, "operation": other})
+        for invalid in ("profile-reset", "profile-create ", "ADMISSION"):
+            with self.assertRaises(ValueError): D.arguments(argv + ["--operation", invalid])
+
+    def test_native_selection_requires_its_separate_fixed_payload_binding(self):
+        argv = ["--expected-source", "a" * 40, "--private-parent", str(Path.cwd()), "--python", sys.executable]
+        extra = ["--native-directory", str(Path.cwd()), "--native-sha256", "b" * 64]
+        for operation in D.H.N.OPERATIONS:
+            with self.assertRaises(ValueError): D.arguments(argv + ["--operation", operation])
+            accepted = D.arguments(argv + ["--operation", operation] + extra)
+            self.assertEqual(accepted.native_sha256, "b" * 64)
+            self.assertEqual(D.H.N.executable(accepted).name, D.H.N.FILE_NAME)
+            accepted.start_counter, accepted.counter_frequency = 1000, 1000
+            forwarded = D.H.worker_argv(accepted, Path.cwd() / "run")
+            self.assertEqual(forwarded[-4:], extra)
+        with self.assertRaises(ValueError): D.arguments(argv + extra)
 
 
 if __name__ == "__main__":

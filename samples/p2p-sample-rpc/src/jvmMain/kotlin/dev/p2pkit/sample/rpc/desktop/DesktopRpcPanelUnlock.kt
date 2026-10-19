@@ -37,7 +37,7 @@ internal class DesktopRpcPanelUnlockTask(
                 // An owned UI error must not escape to a global handler containing private exception text.
                 try {
                     accept(result)
-                    if (result.result.isSuccess && !isClosing()) ready()
+                    if (result.readyForRole && !isClosing()) ready()
                 } catch (failure: Throwable) { deliveryFailure = failure }
             }
         } catch (failure: Throwable) {
