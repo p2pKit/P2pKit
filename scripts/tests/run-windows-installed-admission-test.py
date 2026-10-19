@@ -122,6 +122,7 @@ class AdmissionEvidenceTests(unittest.TestCase):
             accepted = D.arguments(argv + ["--operation", operation] + extra)
             self.assertEqual(accepted.native_sha256, "b" * 64)
             self.assertEqual(D.H.N.executable(accepted).name, D.H.N.FILE_NAME)
+            accepted.start_counter, accepted.counter_frequency = 1000, 1000
             forwarded = D.H.worker_argv(accepted, Path.cwd() / "run")
             self.assertEqual(forwarded[-4:], extra)
         with self.assertRaises(ValueError): D.arguments(argv + extra)

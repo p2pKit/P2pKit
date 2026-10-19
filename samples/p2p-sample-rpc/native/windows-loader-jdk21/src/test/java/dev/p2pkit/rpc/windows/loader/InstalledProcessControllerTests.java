@@ -260,7 +260,7 @@ public final class InstalledProcessControllerTests {
             .equals("NO_MATCHING_RETAINED_FAILURE")); // Reserved is not a sealed failure.
         Throwable carrier = (Throwable) invoke(attempt, "seal", new Class<?>[] {Throwable.class}, privateFailure);
         String[] expected = {"RESERVATION", "BOOTSTRAP", "INSTALLATION", "PROFILE_PREPARATION",
-            "JNI_REGISTRATION", "PUBLISH_REGISTERED", "UNKNOWN_RETAINED_OPERATION"};
+            "JNI_REGISTRATION", "PUBLISH_REGISTERED", "IP_INTERFACE_OBSERVER", "UNKNOWN_RETAINED_OPERATION"};
         for (int phase = 0; phase < expected.length; phase++) {
             field(attempt, "diagnosticPhase").setInt(attempt, phase);
             check(Probe.installedAdmissionFailureStage(carrier).equals(expected[phase]));
