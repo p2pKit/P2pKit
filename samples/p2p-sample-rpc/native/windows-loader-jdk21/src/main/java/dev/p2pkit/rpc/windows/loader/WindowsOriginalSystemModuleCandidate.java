@@ -103,7 +103,10 @@ final class WindowsOriginalSystemModuleCandidate {
     long originalModuleBits() { requirePinned(); return rawModule; }
 
     MemorySegment originalIpModule(WindowsOriginalIpInterfaces requester) {
-        requireOriginalByteInputs();
+        // Acquisition is sealed once the graph completes. Borrow its original retained PIN through
+        // the completed export/byte/policy chain, as with the original known-folder consumer.
+        requirePinned();
+        if (requester == null) throw new IllegalStateException("Missing original IP observer");
         requester.requireOriginalModule(this);
         return module;
     }

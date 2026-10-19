@@ -16,6 +16,7 @@ public final class OriginalIpInterfacesTests {
 
     public static void main(String[] args) throws Throwable {
         check(args.length == 0);
+        completedModuleHandoff();
         for (String mode : new String[] {"normal", "query-failure", "late-pointer", "query-unknown", "free-unknown",
             "bad-count", "malformed-row"}) {
             try (Fixture fixture = new Fixture(mode)) {
@@ -42,7 +43,59 @@ public final class OriginalIpInterfacesTests {
                 }
             }
         }
-        System.out.println("WINDOWS_IP_OWNER_CONTROLS_PASS cases=7 scope=INERT_ALLOCATOR_LIFETIME_NOT_NATIVE_AUTHORITY");
+        System.out.println("WINDOWS_IP_OWNER_CONTROLS_PASS cases=8 scope=INERT_ALLOCATOR_LIFETIME_NOT_NATIVE_AUTHORITY");
+    }
+
+    /** Regression for the actual post-registration refusal: completed custody is readable but the
+     * earlier acquisition guard must stay sealed. All objects/addresses here are fabricated owners. */
+    private static void completedModuleHandoff() throws Throwable {
+        var profileConstructor = Class.forName(InstalledProfilePreparationTests.class.getName() + "$Fixture")
+            .getDeclaredConstructor();
+        profileConstructor.setAccessible(true);
+        var systemConstructor = Class.forName(OriginalApiSetTests.class.getName() + "$Fixture")
+            .getDeclaredConstructor(String.class);
+        systemConstructor.setAccessible(true);
+        try (AutoCloseable profileFixture = (AutoCloseable) profileConstructor.newInstance();
+             AutoCloseable systemFixture = (AutoCloseable) systemConstructor.newInstance("normal")) {
+            var core = (OriginalSystemModulesTests.Fixture) value(systemFixture, "core");
+            var parent = (WindowsInstalledProfileCandidate) value(profileFixture, "child");
+            var bootstrap = (WindowsSystemBootstrapCandidate) value(profileFixture, "bootstrap");
+            // Join the existing inert fixtures into one original-root graph. This is test-only
+            // reflection, never a production authority/context constructor or a native call.
+            field(core.collection, "bootstrap").set(core.collection, bootstrap);
+            field(bootstrap, "systemModules").set(bootstrap, core.collection);
+            field(bootstrap, "systemModulesAttempted").setBoolean(bootstrap, true);
+            field(parent, "systems").set(parent, core.collection);
+            var observer = new WindowsOriginalIpInterfaces(parent);
+            field(parent, "ipInterfaces").set(parent, observer);
+            field(observer, "attempted").setBoolean(observer, true);
+            field(observer, "systems").set(observer, core.collection);
+            field(observer, "ip").set(observer, core.modules[8]);
+            reject(core.collection::requireOriginalNativeInputs); // Never reopen acquisition.
+            check(core.modules[8].originalIpModule(observer) == value(core.modules[8], "module"));
+            reject(() -> core.modules[8].originalIpModule(null));
+            reject(() -> core.modules[0].originalIpModule(observer));
+            reject(() -> core.modules[8].originalIpModule(new WindowsOriginalIpInterfaces(parent)));
+            field(core.collection, "bootstrap").set(core.collection, core.bootstrap);
+            reject(() -> core.modules[8].originalIpModule(observer));
+            field(core.collection, "bootstrap").set(core.collection, bootstrap);
+            Object query = value(core.modules[8], "security");
+            field(query, "policyAccepted").setBoolean(query, false);
+            reject(() -> core.modules[8].originalIpModule(observer));
+            field(query, "policyAccepted").setBoolean(query, true);
+            field(core.collection, "completed").setBoolean(core.collection, false);
+            reject(() -> core.modules[8].originalIpModule(observer));
+            field(core.collection, "completed").setBoolean(core.collection, true);
+            AtomicReference<Throwable> problem = new AtomicReference<>();
+            Thread thread = new Thread(() -> {
+                try { reject(() -> core.modules[8].originalIpModule(observer)); }
+                catch (Throwable caught) { problem.set(caught); }
+            });
+            thread.start(); thread.join(2000);
+            check(!thread.isAlive() && problem.get() == null && value(observer, "permanentEntries") == null);
+            check(core.modules[8].originalIpModule(observer) == value(core.modules[8], "module"));
+            reject(core.collection::requireOriginalNativeInputs);
+        }
     }
 
     private static final class Fixture implements AutoCloseable {

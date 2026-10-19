@@ -232,6 +232,7 @@ final class WindowsInstalledProfileCandidate {
         if (candidate == null || candidate != ipInterfaces || systems == null) {
             throw new IllegalStateException("IP observation lacks its original installation parent");
         }
+        systems.requireOriginalBootstrap(originalBootstrap());
         systems.requireOriginalExportGraph();
     }
     WindowsOriginalSystemModulesCandidate originalIpSystems(WindowsOriginalIpInterfaces candidate) {

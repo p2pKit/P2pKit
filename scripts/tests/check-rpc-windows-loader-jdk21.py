@@ -299,7 +299,7 @@ def main():
         r"WINDOWS_IP_TABLE_CONTROLS_PASS controls=24 scope=COPIED_DATA_NOT_NATIVE_NETWORK_QUALIFICATION\n", "")
     run("windows-ip-owner", base + access + ["--patch-module", MODULE + "=" + str(classes),
         "--module", MODULE + "/" + PACKAGE + ".OriginalIpInterfacesTests"], 0,
-        r"WINDOWS_IP_OWNER_CONTROLS_PASS cases=7 scope=INERT_ALLOCATOR_LIFETIME_NOT_NATIVE_AUTHORITY\n", "")
+        r"WINDOWS_IP_OWNER_CONTROLS_PASS cases=8 scope=INERT_ALLOCATOR_LIFETIME_NOT_NATIVE_AUTHORITY\n", "")
     run("ancestor-frame-retirement", base + access + ["--patch-module", MODULE + "=" + str(classes),
         "--module", MODULE + "/" + PACKAGE + ".AncestorRetirementTests"], 0,
         r"WINDOWS_ANCESTOR_RETIREMENT_PASS tests=2 "
