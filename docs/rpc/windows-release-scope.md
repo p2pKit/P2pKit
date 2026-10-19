@@ -57,13 +57,18 @@ The shared JVM RPC library and the Windows sample's native protected-profile pro
 different components. The existing Windows Desktop application's other features remain;
 **its RPC section is present, but Windows RPC Host/Client is technically unavailable**:
 
-- `DesktopRpcProfile.open` / `openAttempt` select only `PosixProfileFiles` and refuse Windows.
+- The installed application acquisition and `DesktopRpcProfile.openAttempt` can use the admitted
+  `WindowsProfileFiles` provider. The Desktop UI's Windows unlock/Host/Client gate still refuses;
+  successful productive persistence and lifecycle qualification are not established.
 - `WindowsProfileAvailability` already has `IMPLEMENTED=false` and `QUALIFIED=false`.
 - The JDK21 adapter's public `WindowsLoader.openInstalledProvider()` now uses the
   original installed controller. Its productive storage and UI integration remain unqualified.
-  A private original-owner bootstrap/load/JNI controller and explicit installed
-  diagnostic now exist, but their development-fixture results do not qualify the
-  installed path or connect the productive public provider. Optional local adapter
+  The original-owner bootstrap/load/JNI controller has passed narrow installed admission, and
+  the public provider has entered real protected storage. The first encrypted-marker write failed;
+  the subsequent directory-index repair passes portable regressions and installed initial inventory,
+  but the retained failed profile still refuses later. This is not successful persistence or UI qualification.
+  See the [source/package-bound Windows checkpoint](../maintenance/windows-rpc-completion-20261018.md).
+  Optional local adapter
   packaging defaults off; the canonical Windows packaging component explicitly includes it.
 - The real JNI custody bridge reports ABI **13 / 0x43**, while the managed full-provider
   admission requires **1 / 0x7f**. Reporting invented capabilities is not an implementation.
@@ -75,12 +80,12 @@ Do not advertise working Windows protected RPC, promise native execution, or rep
 storage/loading requirements with an insecure fallback. Published Java17 bytecode targets
 and the packaged JDK21 family remain unchanged.
 
-The remaining work is to diagnose and qualify the actual installed root/runtime,
-first-OS-call and original-handle ancestor/ACL/reparse checks, then qualify constrained
-loading with loaded-module/import/JNI lifetime ownership. The implemented private chain
-must be connected to a genuinely admitted full-provider adapter and production factory,
-with safe profile/UI ownership transfer and original-owner reuse. Foundation owns installer/runtime/bootstrap authority; RPC owns loader/provider
-implementation. Composed native writes/deletes, synchronization and managed ownership
+The remaining work includes the complete installed root/runtime, first-OS-call, ancestor/ACL/reparse,
+constrained-loading and loaded-module/import/JNI negative/lifetime matrices. The original chain is
+connected to the public provider; successful encrypted persistence, safe application ownership transfer
+and actual UI Host/Client still require completion and qualification. Foundation retains installer/runtime/
+bootstrap authority; its October18 handoff delegates the necessary loader/provider/native/UI repairs
+to the isolated Windows branch. Composed native writes/deletes, synchronization and managed ownership
 already exist and must not be unnecessarily rebuilt. Flipping flags or loading a candidate
 DLL to authorize itself cannot fill the gap.
 
