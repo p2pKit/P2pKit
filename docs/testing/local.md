@@ -172,6 +172,11 @@ export ANDROID_HOME="/absolute/path/to/Android/sdk"
 ```
 
 In Windows PowerShell, set `$env:ANDROID_HOME` and invoke `sdkmanager.bat` with `&`; do not paste Bash continuations.
+
+Android LAN application/AAR builds also require NDK `29.0.14206865` in this SDK:
+`sdkmanager "ndk;29.0.14206865"`. The pinned native socket producer keeps the
+API 24 minimum and packages all four Android ABIs; see the
+[socket helper and device controls](../../library/p2p-transport-lan/src/nativeInterop/androidSockets/README.md).
 AGP selects the Build Tools version and can install it with accepted licenses and network access. Preinstall those
 tools before an offline build. The sample's package ID is `platforms;android-37.0`, not `platforms;android-37`;
 no manual directory rename or symlink is required. Keep `sdk.dir` in untracked `local.properties`, if present, pointed

@@ -1,4 +1,5 @@
 import dev.p2pkit.build.GitCommitValueSource
+import dev.p2pkit.build.BuildAndroidLanSocketsTask
 import java.io.File
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
@@ -92,7 +93,13 @@ val embeddedJmdnsDependency = files(embeddedJmdnsJar.flatMap { it.archiveFile })
 // classes.jar. Restore the declared publication layout without changing the
 // implementation dependency used by project consumers and Android host tests.
 extensions.configure<KotlinMultiplatformAndroidComponentsExtension> {
+    val nativeSockets = tasks.register<BuildAndroidLanSocketsTask>("buildAndroidLanSockets") {
+        sdkDirectory.set(sdkComponents.sdkDirectory)
+        sourceDirectory.set(layout.projectDirectory.dir("src/nativeInterop/androidSockets"))
+        jniDirectory.set(layout.buildDirectory.dir("generated/android-lan-sockets/jni"))
+    }
     onVariants(selector().all()) { variant ->
+        checkNotNull(variant.sources.jniLibs).addGeneratedSourceDirectory(nativeSockets) { it.jniDirectory }
         val restore = tasks.register<RestoreEmbeddedJmdnsAarTask>(
             "restore${variant.name.replaceFirstChar { it.uppercaseChar() }}EmbeddedJmdnsAar"
         ) {
@@ -127,6 +134,7 @@ kotlin {
         namespace = "dev.p2pkit.transport.lan"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
+        optimization.consumerKeepRules.file("src/nativeInterop/androidSockets/consumer-rules.pro")
         withHostTest { }
     }
 
