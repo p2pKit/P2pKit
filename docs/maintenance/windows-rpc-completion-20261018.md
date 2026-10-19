@@ -6,6 +6,12 @@ This report distinguishes source implementation, portable/model controls, actual
 productive storage failures and unexecuted acceptance work. Installation alone is not acceptance.
 Raw profiles, account/device identities, payloads and logs remain private.
 
+The later [Windows LAN and native checkpoint](windows-local-network-and-native-20261019.md)
+records successful real native custody/cross-process controls, productive encrypted
+profile creation/reopen and working Host startup. Its complete UI cycle still fails
+at the Back deadline, and two-device qualification is unfinished. The named earlier
+failures below remain preserved.
+
 ## Latest installed checkpoint: c2f58b59
 
 Tested implementation: **`c2f58b592af9a534d5e6d1b4f957e0f0f8c75bdb`**, tree

@@ -26,8 +26,14 @@ requires successful root/profile acquisition after original retirement. The
 parent observes the original child handles and checks unchanged root/profile
 identity after reacquiring them. No shell, credentialed launch, breakaway, new
 job or arbitrary child command is accepted. Five-second child work bounds do
-not extend the original outer budget. These added controls need their own
-exact-source execution result.
+not extend the original outer budget. These added controls passed on the same
+approved platform at `59eacd6e2f09cd98aa400a2f15ce3cb34c40fdc1`: 483 assertion lines,
+nine retired process witnesses and enclosing driver exit0. The exact EXE SHA-256
+is `2ba061488675526ad288823d740ca96b01c4b6fa0bf7950a21b9356ffe8e7a94`;
+receipt SHA-256 is `3c17714c290954d5af2944034a09b60610bcd8d80f9651892bd6a6042f374269`.
+Its fixture was archived intact separately. This scope does not include JNI,
+encrypted recovery, uncertain cleanup or installed Host/Client qualification.
+See the [later Windows checkpoint](../../../../../../docs/maintenance/windows-local-network-and-native-20261019.md).
 
 The owner-authorized Windows2022 run
 [38243224029](https://github.com/p2pKit/P2pKit/actions/runs/38243224029), at exact source
