@@ -140,7 +140,6 @@ jobs:
           MAVEN_SIGNING_KEY_B64: ${{ secrets.MAVEN_SIGNING_KEY_B64 }}
           MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
           MAVEN_SIGNING_KEY_FINGERPRINT: ${{ vars.MAVEN_SIGNING_KEY_FINGERPRINT }}
-          MAVEN_CENTRAL_TOKEN_ROTATE_BY: ${{ vars.MAVEN_CENTRAL_TOKEN_ROTATE_BY }}
           MAVEN_CENTRAL_NAMESPACE: io.github.apdelrahman1911
         run: |
           scripts/check-release-identity.sh "$RELEASE_TAG" "$RELEASE_SHA" require-tag

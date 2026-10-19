@@ -17,9 +17,18 @@ establish readiness for a subsequent release.
 
 Required secrets and variables remain in the GitHub Environment and must never
 be printed or committed. The workflow checks authenticated namespace-query access,
-the exact tag/commit/version relationship, signing-key fingerprint, credential
-rotation policy, artifact signatures/checksums, bundle shape, SBOM, provenance,
+the exact tag/commit/version relationship, credential presence, signing-key
+fingerprint, artifact signatures/checksums, bundle shape, SBOM, provenance,
 and coordinate absence before upload.
+
+Keep using existing Maven Central tokens while they remain valid; there is no
+repository-imposed periodic rotation date or fourteen-day renewal window.
+Rotate when required by compromise, exposure, revocation, the provider, or a
+genuine operational need—not merely because a calendar deadline passed.
+The legacy `MAVEN_CENTRAL_TOKEN_ROTATE_BY` variable is no longer consumed.
+This does not guarantee indefinite provider validity or bypass actual
+authentication/authorization, signing, protected approval, or integrity checks.
+The separate fourteen-day retention policy for release evidence is unchanged.
 
 Local secret-free verification:
 
