@@ -21,6 +21,13 @@ full durable profile functionality and `0x7f` remain absent.
 
 ## External authorization and environment are mandatory
 
+The fixed adapter is now implemented in the canonical supervisor; see
+[native smoke supervision](../../../../../../docs/maintenance/windows-native-smoke-supervision.md).
+Its two native operations retain the outer 30-second budget, separately pinned
+executable and original-file custody. This source change supersedes statements
+below that no adapter exists; it does **not** establish execution approval,
+passing native controls, a disposable context or Windows qualification.
+
 Before any future execution, the owner must explicitly authorize this exact source/build in a
 **newly disposable Windows standard-user account or disposable VM**, with no concurrent P2pKit app,
 profile work or other user data. Do not use the owner's normal Windows account, an elevated account,

@@ -23,6 +23,9 @@ import uuid
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import windows_native_smoke_payload as N
 SCOPE = "INSTALLED_OPERATION_SUPERVISION_NOT_HOST_CLIENT_QUALIFICATION"
 OPERATIONS = {
     "admission": "--rpc-windows-installed-admission",
@@ -31,11 +34,13 @@ OPERATIONS = {
     "password-refusal": "--rpc-windows-disposable-password-refusal",
     "ui-host-cycle": "--rpc-windows-disposable-ui-host-cycle",
 }
+ALL_OPERATIONS = {**OPERATIONS, **N.OPERATIONS}
 LIMIT_SECONDS = 30
 LOG_LIMIT = 4096
 RECORD_LIMIT = 16384
 SOURCE_FILES = ("run-windows-installed-diagnostic.py", "ci_evidence.py", "audit_processes.py",
-                "hosted_evidence.py", "hosted_evidence_primitives.py", "hosted_windows_files.py")
+                "hosted_evidence.py", "hosted_evidence_primitives.py", "hosted_windows_files.py",
+                "windows_native_smoke_payload.py")
 COMMAND_FIELDS = {"exitCode", "timedOut", "cleanupKnown", "capturesClosed", "stage", "code",
                   "nativeError", "cleanupReasons", "pendingContext", "elapsedSeconds"}
 
@@ -55,12 +60,15 @@ def arguments(argv):
     parser.add_argument("--start-counter", type=int, required=True)
     parser.add_argument("--counter-frequency", type=int, required=True)
     parser.add_argument("--expected-source", required=True)
-    parser.add_argument("--operation", choices=tuple(OPERATIONS), default="admission")
+    parser.add_argument("--operation", choices=tuple(ALL_OPERATIONS), default="admission")
     parser.add_argument("--private-parent", required=True)
+    parser.add_argument("--native-directory")
+    parser.add_argument("--native-sha256")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     require(re.fullmatch(r"[0-9a-f]{40}", args.expected_source) is not None)
     require(Path(args.private_parent).is_absolute())
+    N.validate_arguments(args)
     return args
 
 
@@ -212,6 +220,8 @@ def expected_result(source, operation):
 
 
 def admission_matches(raw, source, operation="admission"):
+    if operation in N.OPERATIONS:
+        return N.matches(raw, operation)
     line = json.dumps(expected_result(source, operation), separators=(",", ":")).encode("ascii")
     return raw in (line + b"\n", line + b"\r\n")
 
@@ -263,21 +273,26 @@ def worker_argv(args, directory):
         "--worker", "--start-counter", str(args.start_counter),
         "--counter-frequency", str(args.counter_frequency), "--expected-source", args.expected_source,
         "--operation", args.operation,
-        "--private-parent", str(directory.parent)]
+        "--private-parent", str(directory.parent), *N.extra_arguments(args)]
 
 
 def worker(args, deadline, E):
     directory = Path(args.private_parent) / "run"
-    launcher = installed_launcher()
-    work, cleanup = deadline.worker_budgets()
-    outcome = E.run_command([str(launcher), OPERATIONS[args.operation]], cwd=launcher.parent,
-        environment=dict(os.environ), private=directory / "command", timeout=work,
-        cleanup_seconds=cleanup, log_limit=LOG_LIMIT)
+    if args.operation in N.OPERATIONS:
+        _, _, F = modules()
+        outcome = N.run(args, deadline, E, F, directory / "command")
+    else:
+        launcher = installed_launcher()
+        work, cleanup = deadline.worker_budgets()
+        outcome = E.run_command([str(launcher), OPERATIONS[args.operation]], cwd=launcher.parent,
+            environment=dict(os.environ), private=directory / "command", timeout=work,
+            cleanup_seconds=cleanup, log_limit=LOG_LIMIT)
     deadline.check(2)
     accepted = False
     if command_pass(outcome):
-        raw = read_bounded(directory / "command" / "stdout.log", LOG_LIMIT)
-        stderr = read_bounded(directory / "command" / "stderr.log", LOG_LIMIT)
+        limit = N.LOG_LIMIT if args.operation in N.OPERATIONS else LOG_LIMIT
+        raw = read_bounded(directory / "command" / "stdout.log", limit)
+        stderr = read_bounded(directory / "command" / "stderr.log", limit)
         accepted = not stderr and admission_matches(raw, args.expected_source, args.operation)
     value = {"schema": 1, "appSource": args.expected_source, "operation": args.operation, "outcome": outcome,
              "admissionMatched": accepted}
@@ -287,7 +302,7 @@ def worker(args, deadline, E):
 
 
 def validate_worker(value, source, operation="admission"):
-    require(operation in OPERATIONS)
+    require(operation in ALL_OPERATIONS)
     require(type(value) is dict and set(value) == {"schema", "appSource", "operation", "outcome", "admissionMatched"})
     require(value["operation"] == operation)
     require(type(value["schema"]) is int and value["schema"] == 1 and value["appSource"] == source)
@@ -393,7 +408,8 @@ def supervise(args, deadline, A, E, F):
             failure, accepted = True, False
         try:
             accepted = accepted and not failure and cleanup and closed
-            record = {"schema": 1, "scope": SCOPE, "status": "PASS" if accepted else "FAIL",
+            record = {"schema": 1, "scope": N.SCOPE if args.operation in N.OPERATIONS else SCOPE,
+                "status": "PASS" if accepted else "FAIL",
                 "appSource": args.expected_source, "operation": args.operation, "supervisorSource": before,
                 "startCounter": deadline.start, "counterFrequency": deadline.frequency,
                 "deadlineCounter": deadline.end, "watchdogCounter": deadline.end - deadline.frequency,

@@ -28,7 +28,8 @@ namespace P2pKit.WindowsQualification {
         static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
         static readonly string[] Sources = {
             "run-windows-installed-diagnostic.py", "ci_evidence.py", "audit_processes.py",
-            "hosted_evidence.py", "hosted_evidence_primitives.py", "hosted_windows_files.py"
+            "hosted_evidence.py", "hosted_evidence_primitives.py", "hosted_windows_files.py",
+            "windows_native_smoke_payload.py"
         };
         [StructLayout(LayoutKind.Sequential)]
         struct SecurityAttributes {
@@ -180,7 +181,7 @@ namespace P2pKit.WindowsQualification {
         public static void ValidateReceipt(byte[] bytes, string source, string scope, long start, long frequency,
             Dictionary<string, string> hashes, string operation = "admission") {
             Require(operation == "admission" || operation == "profile-create" || operation == "profile-reopen" ||
-                operation == "password-refusal" || operation == "ui-host-cycle");
+                operation == "password-refusal" || operation == "ui-host-cycle" || IsNativeSmoke(operation));
             Require(bytes != null && bytes.Length > 0 && bytes.Length <= ReceiptLimit);
             using (var document = JsonDocument.Parse(Utf8.GetString(bytes), new JsonDocumentOptions { MaxDepth = 16 })) {
                 var root = document.RootElement; NoDuplicates(root);
@@ -212,12 +213,22 @@ namespace P2pKit.WindowsQualification {
                 operation == "password-refusal" || operation == "ui-host-cycle");
             return Run(scripts, python, parent, source, null, operation);
         }
+        static bool IsNativeSmoke(string operation) {
+            return operation == "native-custody" || operation == "native-restart";
+        }
+        public static Observation RunNativeSmoke(string scripts, string python, string parent, string source,
+            string operation, string nativeDirectory, string nativeSha256) {
+            Require(IsNativeSmoke(operation) && Path.IsPathFullyQualified(nativeDirectory) &&
+                Regex.IsMatch(nativeSha256, "^[0-9a-f]{64}$"));
+            return Run(scripts, python, parent, source, null, operation, nativeDirectory, nativeSha256);
+        }
         public static Observation RunControl(string scripts, string python, string parent, Control control) {
             Require(Enum.IsDefined(typeof(Control), control));
             string choice = new[] { "normal", "nonzero", "output-overflow", "blocked-worker", "blocked-outer", "observer-output-overflow" }[(int)control];
             return Run(scripts, python, parent, new string('0', 40), choice, "admission");
         }
-        static Observation Run(string scripts, string python, string parent, string source, string control, string operation) {
+        static Observation Run(string scripts, string python, string parent, string source, string control, string operation,
+            string nativeDirectory = null, string nativeSha256 = null) {
             Require(OperatingSystem.IsWindows() && Environment.Is64BitProcess && Stopwatch.IsHighResolution);
             Require(Regex.IsMatch(source, "^[0-9a-f]{40}$") && Path.IsPathFullyQualified(python) && File.Exists(python));
             scripts = Path.GetFullPath(scripts); string capsule = Capsule(parent);
@@ -242,6 +253,10 @@ namespace P2pKit.WindowsQualification {
                 else {
                     info.ArgumentList.Add("--expected-source"); info.ArgumentList.Add(source);
                     info.ArgumentList.Add("--operation"); info.ArgumentList.Add(operation);
+                    if (IsNativeSmoke(operation)) {
+                        info.ArgumentList.Add("--native-directory"); info.ArgumentList.Add(nativeDirectory);
+                        info.ArgumentList.Add("--native-sha256"); info.ArgumentList.Add(nativeSha256);
+                    }
                 }
                 info.ArgumentList.Add("--private-parent"); info.ArgumentList.Add(capsule);
                 start = Now(); end = checked(start + frequency * 30); Require(start > 0);
@@ -267,7 +282,9 @@ namespace P2pKit.WindowsQualification {
                 Require(output == "WINDOWS_INSTALLED_SUPERVISOR PASS\n" || output == "WINDOWS_INSTALLED_SUPERVISOR PASS\r\n");
                 stage = "RECEIPT";
                 ValidateReceipt(ReadClosed(Path.Combine(capsule, "run", "supervisor.json"), ReceiptLimit), source,
-                    control == null ? "INSTALLED_OPERATION_SUPERVISION_NOT_HOST_CLIENT_QUALIFICATION" : "SUPERVISOR_NATIVE_CONTROL_NOT_INSTALLED",
+                    control != null ? "SUPERVISOR_NATIVE_CONTROL_NOT_INSTALLED" : IsNativeSmoke(operation)
+                        ? "NATIVE_SMOKE_SUPERVISION_NOT_JNI_OR_HOST_CLIENT_QUALIFICATION"
+                        : "INSTALLED_OPERATION_SUPERVISION_NOT_HOST_CLIENT_QUALIFICATION",
                     start, frequency, hashes, operation);
                 var after = SourceHashes(scripts, control != null);
                 Require(hashes.All(pair => after.TryGetValue(pair.Key, out string value) && value == pair.Value));

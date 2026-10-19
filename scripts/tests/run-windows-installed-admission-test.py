@@ -114,6 +114,18 @@ class AdmissionEvidenceTests(unittest.TestCase):
         for invalid in ("profile-reset", "profile-create ", "ADMISSION"):
             with self.assertRaises(ValueError): D.arguments(argv + ["--operation", invalid])
 
+    def test_native_selection_requires_its_separate_fixed_payload_binding(self):
+        argv = ["--expected-source", "a" * 40, "--private-parent", str(Path.cwd()), "--python", sys.executable]
+        extra = ["--native-directory", str(Path.cwd()), "--native-sha256", "b" * 64]
+        for operation in D.H.N.OPERATIONS:
+            with self.assertRaises(ValueError): D.arguments(argv + ["--operation", operation])
+            accepted = D.arguments(argv + ["--operation", operation] + extra)
+            self.assertEqual(accepted.native_sha256, "b" * 64)
+            self.assertEqual(D.H.N.executable(accepted).name, D.H.N.FILE_NAME)
+            forwarded = D.H.worker_argv(accepted, Path.cwd() / "run")
+            self.assertEqual(forwarded[-4:], extra)
+        with self.assertRaises(ValueError): D.arguments(argv + extra)
+
 
 if __name__ == "__main__":
     unittest.main(failfast=True)
