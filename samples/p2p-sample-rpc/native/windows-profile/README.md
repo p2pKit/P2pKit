@@ -61,6 +61,18 @@ OS calls; a hung call is bounded only by the explicit application-exit watchdog,
 The canonical Windows Desktop exit uses a 30-second whole-application deadline; actual installed/native
 qualification remains required and no ordinary Stop/Back operation acquires that deadline.
 
+Directory stream inspection distinguishes NTFS index size from data-stream size. A directory's
+`FileStandardInfo.EndOfFile` can grow while `FileStreamInfo` still reports `ERROR_HANDLE_EOF` (no data
+streams). Original-handle readback after the installed `506d3bda` encrypted-marker failure observed
+this combination with a 4,096-byte identity-directory index. The previous zero-EOF requirement refused
+that valid metadata, including later inventory reads; the empty pending file from the failed write is
+retained. The policy now accepts an OS-confirmed no-stream directory independently of its nonnegative
+index size. If stream records exist, exactly one empty unnamed directory stream is permitted. Named,
+multiple, nonempty, truncated or invalid-size streams still refuse; regular files still require an
+unnamed stream matching their EOF. ACL, original identity, case, reparse, lease and synchronization
+checks are unchanged. Portable regressions cover this distinction; corrected installed persistence
+and recovery still require separate evidence. This repair does not authorize resetting the retained fixture.
+
 `capabilities()` returns `0x43` (root custody, metadata and cleanup only), not the required complete `0x7f`.
 There is deliberately no claim for complete atomic write/replace/delete transactions, durable namespace transactions,
 recovery or the complete

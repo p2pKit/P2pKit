@@ -256,7 +256,8 @@ static int inspect_mode(HANDLE handle, const WCHAR *path, int directory, int pri
         if (!private_security(handle, directory)) return 0;
         _Alignas(8) unsigned char streams[4096];
         if (!GetFileInformationByHandleEx(handle, FileStreamInfo, streams, sizeof(streams))) {
-            if (GetLastError() != ERROR_HANDLE_EOF || !directory || standard.EndOfFile.QuadPart != 0) return 0;
+            if (GetLastError() != ERROR_HANDLE_EOF ||
+                !pwp_stream_record(NULL, 0, (uint64_t)standard.EndOfFile.QuadPart, directory)) return 0;
         } else if (!pwp_stream_record(streams, sizeof(streams), (uint64_t)standard.EndOfFile.QuadPart, directory)) return 0;
     }
     uint64_t high = 0, low = 0;
