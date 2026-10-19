@@ -15,7 +15,7 @@ import static dev.p2pkit.rpc.windows.loader.OriginalFileBytesLeaseTests.value;
  */
 public final class NativeOriginalSystemModulesTests {
     private static final String[] NAMES = {"kernel32.dll", "advapi32.dll", "ntdll.dll", "shell32.dll",
-        "ole32.dll", "kernelbase.dll", "sechost.dll", "combase.dll"};
+        "ole32.dll", "kernelbase.dll", "sechost.dll", "combase.dll", "iphlpapi.dll"};
     private static WindowsSystemBootstrapCandidate bootstrap;
     private static WindowsOriginalSystemModulesCandidate collection;
     private NativeOriginalSystemModulesTests() {}
@@ -89,7 +89,7 @@ public final class NativeOriginalSystemModulesTests {
             } else check(!module.securityObserved() && !module.ancestorsObserved() && !module.bytesObserved());
         }
         if (outcome.equals("COMPLETE")) {
-            check(stopped == -1 && pinned == 8 && files == 8 && security == 8 && ancestors == 8 && bytes == 8);
+            check(stopped == -1 && pinned == 9 && files == 9 && security == 9 && ancestors == 9 && bytes == 9);
             String[] exports = {"GetCurrentProcessId", "RegCloseKey", "NtQuerySecurityObject", "SHGetKnownFolderPath", "CoTaskMemFree"};
             Set<String> originalNames = Set.of(NAMES);
             for (int slot = 0; slot < exports.length; slot++) {
@@ -98,10 +98,10 @@ public final class NativeOriginalSystemModulesTests {
                 graphQueries++;
             }
         } else {
-            check(stopped >= 0 && stopped < 8 && bytes == 0 && value(collection, "graph") == null && value(collection, "inputs") == null);
+            check(stopped >= 0 && stopped < 9 && bytes == 0 && value(collection, "graph") == null && value(collection, "inputs") == null);
             if (outcome.equals("MODULE_ABSENT")) check(pinned == stopped && files == 0 && security == 0 && ancestors == 0);
             else {
-                check(pinned == 8 && files == stopped + 1 && security == stopped + 1);
+                check(pinned == 9 && files == stopped + 1 && security == stopped + 1);
                 WindowsOriginalSystemModuleCandidate refused = collection.module(stopped);
                 if (outcome.equals("LEAF_POLICY_REFUSED")) {
                     check(!refused.descriptorPolicyAccepted() && ancestors == stopped);

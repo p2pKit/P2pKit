@@ -284,6 +284,7 @@ final class WindowsOriginalApiSetCandidate {
         String contract = route.contract();
         if (contract == null || contract.length() > 128 || !plan.defaultHost(contract).equals(route.host())) throw refused();
         WindowsOriginalSystemModuleCandidate provider = null;
+        // The IP Helper observation cohort addition does not expand profile API-set route authority.
         for (int slot = 0; slot < 8; slot++) {
             if (WindowsOriginalSystemModulesCandidate.fixedName(slot).equals(route.host())) provider = owner.module(slot);
         }

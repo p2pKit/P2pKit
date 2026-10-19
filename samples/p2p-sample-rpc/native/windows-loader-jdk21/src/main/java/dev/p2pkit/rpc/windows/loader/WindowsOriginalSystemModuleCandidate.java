@@ -101,6 +101,12 @@ final class WindowsOriginalSystemModuleCandidate {
     }
 
     long originalModuleBits() { requirePinned(); return rawModule; }
+
+    MemorySegment originalIpModule(WindowsOriginalIpInterfaces requester) {
+        requireOriginalByteInputs();
+        requester.requireOriginalModule(this);
+        return module;
+    }
     MemorySegment originalApiSetModule(WindowsOriginalApiSetCandidate requester) {
         requirePinned();
         requester.requireOriginalNtdll(this);

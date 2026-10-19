@@ -47,6 +47,7 @@ public final class WindowsLoader {
         WindowsOriginalInstallationCandidate installation;
         WindowsInstalledProfileCandidate profile;
         WindowsJniRegistrationOwner registration;
+        WindowsOriginalIpInterfaces ipInterfaces;
 
         private void requireClaimed() {
             synchronized (WindowsLoader.class) {
@@ -70,6 +71,8 @@ public final class WindowsLoader {
                 profile = installation.prepareProfileLoad();
                 diagnosticPhase = 4;
                 registration = profile.registerOriginalProfile();
+                diagnosticPhase = 6;
+                ipInterfaces = profile.prepareIpInterfaces();
                 diagnosticPhase = 5;
                 publishRegistered();
             } catch (Throwable caught) {
@@ -153,6 +156,7 @@ public final class WindowsLoader {
             case 3 -> "PROFILE_PREPARATION";
             case 4 -> "JNI_REGISTRATION";
             case 5 -> "PUBLISH_REGISTERED";
+            case 6 -> "IP_INTERFACE_OBSERVER";
             default -> "UNKNOWN_RETAINED_OPERATION";
         };
     }
@@ -170,6 +174,15 @@ public final class WindowsLoader {
             if (installedAttempt == null && !hasInstalledEntryLayout()) throw new Unavailable();
         }
         completeOriginalInstalledProvider();
+    }
+
+    static synchronized WindowsOriginalIpInterfaces originalIpInterfacesOrNull() {
+        if (installedAttempt == null) return null; // Advisory pre-unlock scan keeps the original strict policy.
+        if (installedAttempt.state == InstalledState.Failed) throw installedAttempt.failure;
+        if (installedAttempt.state != InstalledState.Registered || installedAttempt.ipInterfaces == null) {
+            throw new IllegalStateException("Original IP-interface observer is not available");
+        }
+        return installedAttempt.ipInterfaces;
     }
 
     /** Pure negative precondition, not filesystem identity, startup integrity or Program Files authority. */

@@ -46,6 +46,7 @@ final class WindowsInstalledProfileCandidate {
     private WindowsLibraryLoadInvocation.Result loadResult;
     private WindowsLoadedProfileImageVerification imageVerification;
     private WindowsJniRegistrationOwner registrationOwner;
+    private WindowsOriginalIpInterfaces ipInterfaces;
     private boolean attempted;
     private boolean profileAttempted;
     private boolean inputsReady;
@@ -212,6 +213,26 @@ final class WindowsInstalledProfileCandidate {
     }
     WindowsOriginalSystemModulesCandidate originalSystems(WindowsOriginalProgramFilesCandidate candidate) {
         requireOriginalKnownFolder(candidate); return systems;
+    }
+    WindowsOriginalIpInterfaces prepareIpInterfaces() {
+        requireOriginal();
+        if (ipInterfaces != null || registrationOwner == null ||
+            registrationOwner.state() != WindowsJniRegistrationOwner.State.Registered) {
+            throw new IllegalStateException("IP observation requires original installed registration");
+        }
+        ipInterfaces = new WindowsOriginalIpInterfaces(this);
+        ipInterfaces.prepare();
+        return ipInterfaces;
+    }
+    void requireOriginalIpInterfaces(WindowsOriginalIpInterfaces candidate) {
+        requireOriginal();
+        if (candidate == null || candidate != ipInterfaces || systems == null) {
+            throw new IllegalStateException("IP observation lacks its original installation parent");
+        }
+        systems.requireOriginalExportGraph();
+    }
+    WindowsOriginalSystemModulesCandidate originalIpSystems(WindowsOriginalIpInterfaces candidate) {
+        requireOriginalIpInterfaces(candidate); return systems;
     }
     void requireOriginalJvmFile(WindowsOriginalJvmFileCandidate candidate) {
         requireOriginal();

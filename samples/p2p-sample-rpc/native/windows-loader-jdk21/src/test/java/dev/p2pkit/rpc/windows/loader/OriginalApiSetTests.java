@@ -176,8 +176,8 @@ public final class OriginalApiSetTests {
             this.mode = mode;
             namespace = mode.equals("route-outside") ? ApiSetPlanTests.namespaceWithHost("elsewhere.dll") : ApiSetPlanTests.namespaceData();
             core.pinAll();
-            WindowsSystemExportPlan.Input[] inputs = new WindowsSystemExportPlan.Input[8];
-            for (int slot = 0; slot < 8; slot++) {
+            WindowsSystemExportPlan.Input[] inputs = new WindowsSystemExportPlan.Input[core.modules.length];
+            for (int slot = 0; slot < core.modules.length; slot++) {
                 byte[] image = SystemExportPlanTests.image(WindowsOriginalSystemModulesCandidate.fixedName(slot),
                     1, new long[] {0x1000}, new String[] {"Target"}, new int[] {0}, Map.of());
                 WindowsOriginalSystemModuleCandidate module = core.modules[slot];

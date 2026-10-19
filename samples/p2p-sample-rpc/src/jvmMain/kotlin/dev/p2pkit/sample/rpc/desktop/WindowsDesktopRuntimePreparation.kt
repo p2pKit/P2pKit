@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.rpc.desktop
 
 import java.awt.Toolkit
+import java.net.NetworkInterface
 
 /**
  * The installed Desktop diagnostic must initialize its real Desktop runtime before native admission,
@@ -30,6 +31,11 @@ internal object WindowsDesktopRuntimePreparation {
             val toolkit = Toolkit.getDefaultToolkit()
             retainedToolkit = toolkit // Preserve the actual runtime owner even if its type is refused.
             requireOriginalDesktopClass(toolkit.javaClass, "sun.awt.windows.WToolkit")
+            // Initialize the actual pinned JDK's networking library before observing already-loaded
+            // iphlpapi. This performs no socket creation and supplies no native-library trust authority.
+            check(NetworkInterface::class.java.classLoader == null &&
+                NetworkInterface::class.java.module === Any::class.java.module)
+            checkNotNull(NetworkInterface.getNetworkInterfaces())
             completed = true
         } catch (original: Throwable) {
             retainedFailure = original

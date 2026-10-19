@@ -79,6 +79,8 @@ def main():
                         "ApiSetPlanTests" in name or
                         "OriginalApiSetTests" in name or
                         "OriginalSystemModulesTests" in name or
+                        "WindowsIpInterfaceTableTests" in name or
+                        "OriginalIpInterfacesTests" in name or
                         "OriginalFileLeaseTests" in name or
                         "ProfileDllFileCandidateTests" in name or
                         "OriginalFileSecurityQueryTests" in name or
@@ -292,6 +294,12 @@ def main():
         "--module", MODULE + "/" + PACKAGE + ".InstallationSecurityTests"], 0,
         r"WINDOWS_INSTALLATION_SECURITY_PASS tests=259 "
         r"scope=INERT_DESCRIPTOR_POLICY_NOT_NATIVE_READBACK_OR_AUTHORITY\n", "")
+    run("windows-ip-table", base + access + ["--patch-module", MODULE + "=" + str(classes),
+        "--module", MODULE + "/" + PACKAGE + ".WindowsIpInterfaceTableTests"], 0,
+        r"WINDOWS_IP_TABLE_CONTROLS_PASS controls=24 scope=COPIED_DATA_NOT_NATIVE_NETWORK_QUALIFICATION\n", "")
+    run("windows-ip-owner", base + access + ["--patch-module", MODULE + "=" + str(classes),
+        "--module", MODULE + "/" + PACKAGE + ".OriginalIpInterfacesTests"], 0,
+        r"WINDOWS_IP_OWNER_CONTROLS_PASS cases=7 scope=INERT_ALLOCATOR_LIFETIME_NOT_NATIVE_AUTHORITY\n", "")
     run("ancestor-frame-retirement", base + access + ["--patch-module", MODULE + "=" + str(classes),
         "--module", MODULE + "/" + PACKAGE + ".AncestorRetirementTests"], 0,
         r"WINDOWS_ANCESTOR_RETIREMENT_PASS tests=2 "
@@ -554,11 +562,11 @@ def main():
             r"WINDOWS_NATIVE_ORIGINAL_SYSTEM_MODULES_PASS case=actual "
             r"scope=DEVELOPMENT_SYSTEM_MODULE_DISK_GRAPH_NOT_MAPPED_IDENTITY_OR_OS_AUTHORITY "
             r"outcome=(MODULE_ABSENT|LEAF_POLICY_REFUSED|ANCESTOR_POLICY_REFUSED|COMPLETE) "
-            r"stoppedSlot=(-1|[0-7]) pinned=[0-8] files=[0-8] bytes=[0-8] graphQueries=(0|5)\n", "")
+            r"stoppedSlot=(-1|[0-8]) pinned=[0-9] files=[0-9] bytes=[0-9] graphQueries=(0|5)\n", "")
         values = dict(value.split("=", 1) for value in system_modules.strip().split()[1:])
         if values["outcome"] == "COMPLETE":
             require(all(values[key] == expected for key, expected in
-                        (("stoppedSlot", "-1"), ("pinned", "8"), ("files", "8"), ("bytes", "8"),
+                        (("stoppedSlot", "-1"), ("pinned", "9"), ("files", "9"), ("bytes", "9"),
                          ("graphQueries", "5"))), "Complete system graph lacks its original full cohort")
         else:
             require(values["stoppedSlot"] != "-1" and values["bytes"] == "0" and values["graphQueries"] == "0",

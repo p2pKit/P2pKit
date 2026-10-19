@@ -328,13 +328,13 @@ public final class InstalledProcessControllerTests {
         Object systemFailure = value(systems, "failure");
         field(systemFailure, "operationFailure").set(systemFailure, privateFailure);
         String[] slots = {"NO_SLOT", "SLOT_ZERO", "SLOT_ONE", "SLOT_TWO", "SLOT_THREE", "SLOT_FOUR",
-            "SLOT_FIVE", "SLOT_SIX", "SLOT_SEVEN", "UNKNOWN_SLOT"};
+            "SLOT_FIVE", "SLOT_SIX", "SLOT_SEVEN", "SLOT_EIGHT", "UNKNOWN_SLOT"};
         // Both a completed negative cohort and a throw before the assignment to profile.systems must
         // survive the exact original failure chain. Neither path can query or recreate a native owner.
         for (boolean assigned : new boolean[] {false, true}) {
             field(profile, "systems").set(profile, assigned ? systems : null);
             field(profileFailure, "operationFailure").set(profileFailure, assigned ? privateFailure : systemFailure);
-            for (int slot = -1; slot <= 8; slot++) {
+            for (int slot = -1; slot <= 9; slot++) {
                 field(systems, "activeSlot").setInt(systems, slot);
                 field(systems, "stoppedSlot").setInt(systems, slot);
                 for (String[] outcome : new String[][] {

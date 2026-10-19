@@ -9,7 +9,7 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
 /**
- * Fixed already-loaded eight-module observation cohort, never an OS-provider admission allowlist.
+ * Fixed already-loaded nine-module observation cohort, never an OS-provider admission allowlist.
  * PIN/path observations do NOT associate the later disk HANDLE with the original mapped image section.
  * The original conditional bootstrap calls, ntdll GPA/query and startup still need independent authority.
  * The general graph API yields copied export DATA, not callable authority. The fixed original Program
@@ -19,7 +19,7 @@ import java.lang.invoke.MethodHandle;
  * Full OS transitive load closure is not modeled.
  */
 final class WindowsOriginalSystemModulesCandidate {
-    private static final int COUNT = 8;
+    private static final int COUNT = 9;
     private static final int PATH_CHARS = 1024;
     private static final MemoryLayout PATH = MemoryLayout.sequenceLayout(PATH_CHARS, ValueLayout.JAVA_SHORT);
     private static final MemoryLayout NAME = MemoryLayout.sequenceLayout(32, ValueLayout.JAVA_SHORT);
@@ -94,6 +94,7 @@ final class WindowsOriginalSystemModulesCandidate {
             case 5 -> "kernelbase.dll";
             case 6 -> "sechost.dll";
             case 7 -> "combase.dll";
+            case 8 -> "iphlpapi.dll";
             default -> throw new IllegalArgumentException("Unknown fixed system module slot");
         };
     }
@@ -105,7 +106,7 @@ final class WindowsOriginalSystemModulesCandidate {
         boolean observed = false;
         try {
             diagnosticPhase = 1;
-            // All eight concrete owners/failure carriers are attached before any PIN or native effect.
+            // All concrete owners/failure carriers are attached before any PIN or native effect.
             for (int slot = 0; slot < COUNT; slot++) modules[slot] = new WindowsOriginalSystemModuleCandidate(this, slot);
             prepareFrame();
             observeLoadedModules();
@@ -491,6 +492,7 @@ final class WindowsOriginalSystemModulesCandidate {
             case 5 -> "SLOT_FIVE";
             case 6 -> "SLOT_SIX";
             case 7 -> "SLOT_SEVEN";
+            case 8 -> "SLOT_EIGHT";
             default -> "UNKNOWN_SLOT";
         };
     }
@@ -525,6 +527,16 @@ final class WindowsOriginalSystemModulesCandidate {
         requireOriginalExportGraph();
         try { return apiSets == null ? graph.resolve(module, symbol) : apiSets.resolve(module, symbol); }
         catch (Throwable caught) { throw fail(caught); }
+    }
+
+    WindowsSystemExportPlan.Target resolveIpExport(WindowsOriginalIpInterfaces requester, String name) {
+        requireOriginalExportGraph();
+        requester.requireOriginalModule(modules[8]);
+        if (!name.equals("GetIpInterfaceTable") && !name.equals("FreeMibTable")) {
+            throw new IllegalArgumentException("Unknown fixed IP Helper export");
+        }
+        // These two fixed physical exports require no new API-set routing after that owner was sealed.
+        return graph.resolve("iphlpapi.dll", name);
     }
 
     void prepareApiSetNamespace() {

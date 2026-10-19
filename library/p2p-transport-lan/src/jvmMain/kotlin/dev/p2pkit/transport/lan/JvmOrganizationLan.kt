@@ -68,7 +68,7 @@ internal fun organizationJvmSelection(
 
 /** Unlike ordinary discovery, strict selection cannot discard an interface whose flags are unreadable. */
 private fun readStrictJvmLanInterfaces(): List<JvmLanInterfaceSnapshot>? = runCatching {
-    strictJvmLanInterfaces(NetworkInterface.getNetworkInterfaces().toList())
+    readWindowsIpSocketSnapshot()?.interfaces ?: strictJvmLanInterfaces(NetworkInterface.getNetworkInterfaces().toList())
 }.getOrNull()
 
 private fun strictJvmLanInterfaces(networks: List<NetworkInterface>): List<JvmLanInterfaceSnapshot> =
@@ -90,6 +90,7 @@ internal data class JvmLanSocketSnapshot(
 )
 
 internal fun readJvmLanSocketSnapshot(): JvmLanSocketSnapshot? = runCatching {
+    readWindowsIpSocketSnapshot()?.let { return@runCatching it }
     val networks = NetworkInterface.getNetworkInterfaces().toList()
     check(networks.map { it.name }.distinct().size == networks.size)
     JvmLanSocketSnapshot(strictJvmLanInterfaces(networks), unfilteredJvmLanAddresses(networks),
