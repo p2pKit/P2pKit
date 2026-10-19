@@ -35,7 +35,9 @@ public final class LanSocketRuntimeInstrumentation extends Instrumentation {
             finish(Activity.RESULT_OK, result);
         } catch (Throwable failure) {
             // Fixed result only: no addresses, device identifiers, payloads or exception messages.
-            result.putString("stream", "P2PKIT_ANDROID_SOCKET_RUNTIME FAIL stage=" + stage + "\n");
+            String error = failure instanceof ErrnoException ? "ERRNO_" + ((ErrnoException) failure).errno :
+                failure instanceof AssertionError ? "ASSERTION" : "OTHER";
+            result.putString("stream", "P2PKIT_ANDROID_SOCKET_RUNTIME FAIL stage=" + stage + " error=" + error + "\n");
             finish(Activity.RESULT_CANCELED, result);
         }
     }
@@ -101,20 +103,31 @@ public final class LanSocketRuntimeInstrumentation extends Instrumentation {
     }
 
     private void verifyKernelFlags(FileDescriptor descriptor) throws Exception {
+        String control = stage;
+        stage = control + "_FSTAT";
         StructStat original = Os.fstat(descriptor);
+        stage = control + "_LIST";
         File[] entries = new File("/proc/self/fd").listFiles();
         require(entries != null && entries.length <= 4096);
         int matches = 0;
         for (File entry : entries) {
             withinDeadline();
+            stage = control + "_READLINK";
             StructStat candidate;
-            try { candidate = Os.stat(entry.getPath()); }
+            try {
+                // Zygote/framework descriptors can point to files this app cannot stat. Inspect only
+                // the socket we own; an inaccessible matching socket still fails the control.
+                if (!Os.readlink(entry.getPath()).equals("socket:[" + original.st_ino + "]")) continue;
+                stage = control + "_STAT";
+                candidate = Os.stat(entry.getPath());
+            }
             catch (ErrnoException missing) {
                 if (missing.errno != OsConstants.ENOENT) throw missing;
                 continue;
             }
             if (candidate.st_dev != original.st_dev || candidate.st_ino != original.st_ino) continue;
             matches++;
+            stage = control + "_FDINFO";
             byte[] info = new byte[4097];
             int size = 0;
             try (var input = new FileInputStream(new File("/proc/self/fdinfo", entry.getName()))) {
@@ -125,14 +138,18 @@ public final class LanSocketRuntimeInstrumentation extends Instrumentation {
                 }
             }
             require(size <= 4096);
+            stage = control + "_PARSE";
             Matcher flags = Pattern.compile("(?m)^flags:\\s+([0-7]+)$")
                 .matcher(new String(info, 0, size, StandardCharsets.US_ASCII));
             require(flags.find());
             long bits = Long.parseLong(flags.group(1), 8);
             require(!flags.find());
+            stage = control + "_BITS";
             require((bits & 0x80000L) != 0 && (bits & 0x800L) != 0); // Linux O_CLOEXEC and O_NONBLOCK.
         }
+        stage = control + "_MATCH";
         require(matches == 1);
+        stage = control;
     }
 
     private void verifyClosed(FileDescriptor descriptor) throws Exception {

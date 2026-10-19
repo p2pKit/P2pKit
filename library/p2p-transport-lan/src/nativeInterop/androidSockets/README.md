@@ -27,7 +27,7 @@ sample and test APK with `:p2p-sample-android:assembleDebug` and
 On an approved device, after stopping the application, run:
 
 ```text
-adb shell am instrument -w dev.p2pkit.sample.android.test/dev.p2pkit.sample.android.runtime.LanSocketRuntimeInstrumentation
+adb shell am instrument -r -w dev.p2pkit.sample.android.test/dev.p2pkit.sample.android.runtime.LanSocketRuntimeInstrumentation
 ```
 
 Use an outer deadline and retain the final result. This supplemental runner has
