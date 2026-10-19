@@ -173,6 +173,8 @@ ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".cl
     "WindowsSystemExportPlan$Forward", "WindowsSystemExportPlan$Span", "WindowsSystemExportPlan$Section",
     "WindowsSystemExportPlan$Budget", "WindowsSystemExportPlan$Module",
     "WindowsPackagedVerifier",
+    "WindowsIpInterfaceTable", "WindowsIpInterfaceTable$Row", "WindowsIpInterfaces",
+    "WindowsOriginalIpInterfaces", "WindowsOriginalIpInterfaces$Query",
 ))))
 ADAPTER_OPTIONS = (
     "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",

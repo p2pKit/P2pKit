@@ -48,6 +48,9 @@ RPC_CLASSES = (
 
 ADAPTER_PREFIX = "dev/p2pkit/rpc/windows/loader/"
 ADAPTER_ENTRIES = (
+    ADAPTER_PREFIX + "WindowsIpInterfaceTable.class", ADAPTER_PREFIX + "WindowsIpInterfaceTable$Row.class",
+    ADAPTER_PREFIX + "WindowsIpInterfaces.class", ADAPTER_PREFIX + "WindowsOriginalIpInterfaces.class",
+    ADAPTER_PREFIX + "WindowsOriginalIpInterfaces$Query.class",
     "module-info.class", ADAPTER_PREFIX + "Probe.class", ADAPTER_PREFIX + "WindowsLoader.class",
     ADAPTER_PREFIX + "WindowsLoader$Unavailable.class",
     ADAPTER_PREFIX + "WindowsLoader$InstalledState.class",
