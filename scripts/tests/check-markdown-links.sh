@@ -62,3 +62,5 @@ end
 
 puts "RESULT: PASS — #{checked} relative links across #{files.length} active Markdown files resolve"
 RUBY
+
+python3 -B "$ROOT/scripts/tests/check-validation-status-policy-test.py"

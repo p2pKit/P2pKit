@@ -65,8 +65,8 @@ is ignored and must not become a source of truth.
 - `docs/releasing/checklist.md` — release process.
 - `docs/releases/0.8.0-rc4.md` — latest immutable publication evidence.
 
-The six external areas in `docs/validation/README.md` remain pending;
-do not promote them from compilation or simulator results.
+Use the [canonical external-validation status table](docs/validation/README.md#current-status)
+for all six campaign states; do not promote them from compilation or simulator results.
 
 The owner-authorized July review corpus is historical and lives under
 `docs/archive/remediation/2026-07/`. Do not treat archived status or test logs

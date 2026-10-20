@@ -10,12 +10,10 @@ do not replace it with a branch name. A passing build or a code review is not
 external evidence. Do not change a blocked tracker row to `Verified` until
 the required evidence below has been collected and reviewed.
 
-The repository cleanup does not close any external validation. The following
-six areas remain pending until this plan is executed and its evidence reviewed:
-Android physical devices; Apple devices/AWDL/path rotation/background/restart;
-two-machine hostile networks; CLI fault injection and headful Desktop
-observation; independent secure-v2 interoperability; and a professional
-cryptographic audit. Every run must record the actual SHA used by the tester.
+Repository cleanup does not close any external validation. The
+[canonical six-area status table](README.md#current-status) is the sole mutable
+campaign-status record. This catalog defines procedures and evidence, not a
+second status enumeration. Every run must record the actual SHA used by the tester.
 
 ## 1. Shared execution contract
 
