@@ -8,8 +8,8 @@ jobs:
   diagnose:
     if: ${{ github.event_name == 'push' && github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/work/issues-intel-inventory-diagnostic-20261020' }}
     runs-on: macos-15-intel
-    # Diagnostic-only headroom for setup, the 900s wrapper, encryption and upload.
-    timeout-minutes: 30
+    # Diagnostic-only headroom for setup, the 3000s wrapper, encryption and upload.
+    timeout-minutes: 65
     defaults:
       run:
         shell: bash
@@ -63,18 +63,21 @@ jobs:
             fi
           fi
           command -v gpg >/dev/null 2>&1
-      # This is one diagnostic measurement, not the failed component's full
-      # setup: no Bonjour preparation, Java, Gradle/cache, Android SDK or NDK.
-      # The production runtime-inventory timeout remains unchanged at 120s.
-      - name: Measure inventory once and encrypt owned context
+      # This diagnostic boots one selected shutdown simulator, measures its
+      # postboot inventory once, and attempts owned shutdown in finally. It is
+      # reversible lifecycle work, not a read-only probe or test qualification.
+      # No Bonjour preparation, Java, Gradle/cache, Android SDK or NDK setup:
+      # this is not the failed component's full precondition replay.
+      # All production inventory and simulator deadlines remain unchanged.
+      - name: Diagnose postboot inventory and encrypt owned context
         id: execution
         run: |
           python3 -B scripts/ci_evidence.py \
             --component intel-simulator-diagnostic \
-            --timeout-seconds 900 \
+            --timeout-seconds 3000 \
             --output-dir "$RUNNER_TEMP/ci-evidence-intel-simulator-diagnostic" \
             --report-glob 'build/reports/intel-simulator-diagnostic/**/*' \
-            -- python3 -B scripts/diagnose-intel-simulator.py
+            -- python3 -B scripts/diagnose-intel-simulator.py --postboot
       - name: Retain only encrypted evidence and finite public receipts
         if: ${{ always() && steps.execution.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

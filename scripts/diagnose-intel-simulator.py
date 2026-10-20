@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One read-only Intel inventory observation. Never platform-test qualification.
+"""One Intel inventory or reversible postboot observation. Never qualification.
 
 The 600-second ceiling belongs ONLY to this diagnostic. Production inventory
 keeps its 120-second deadline. Streams/context/stack samples remain encrypted by
@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,8 @@ owner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owner)
 OUTPUT = ROOT / 'build/reports/intel-simulator-diagnostic'
 SCOPE = 'READ_ONLY_INTEL_INVENTORY_DIAGNOSTIC_NOT_QUALIFICATION'
+POSTBOOT_SCOPE = 'REVERSIBLE_SELECTED_INTEL_SIMULATOR_DIAGNOSTIC_NOT_QUALIFICATION'
+POSTBOOT_COMMAND = ['/usr/bin/xcrun', 'simctl', 'list', '--json', 'devices', 'available']
 INVENTORY = ['/usr/bin/xcrun', 'simctl', 'list', '--json', 'runtimes']
 INVENTORY_SECONDS = 600
 SAMPLE_AT = (90, 180)
@@ -240,8 +243,11 @@ def retain_original_until_outer_handoff(inventory):
         'pidHoldAfterInterpreterExitClaimed': False})
 
 
-def inventory_observation():
-    inventory = Capture('inventory', INVENTORY, INVENTORY_SECONDS)
+def inventory_observation(label='inventory', argv=None):
+    argv = INVENTORY if argv is None else argv
+    require((label == 'inventory' and argv == INVENTORY) or
+            (label == 'postboot-prelaunch' and argv == POSTBOOT_COMMAND), 'FIXED_OBSERVATION')
+    inventory = Capture(label, argv, INVENTORY_SECONDS)
     samplers, rows, thresholds = [], [], iter(SAMPLE_AT)
     next_sample = next(thresholds, None)
     primary_error = None
@@ -303,12 +309,14 @@ def inventory_observation():
     return row, rows
 
 
-def admit(env):
+def admit(env, postboot=False):
     global OUTER_DEADLINE
     deadline = env.get('P2PKIT_CI_COMMAND_DEADLINE_NS', '')
     require(re.fullmatch('[0-9]{1,20}', deadline) is not None, 'OUTER_DEADLINE_MISSING')
     OUTER_DEADLINE = int(deadline) / 1_000_000_000
-    require(0 < OUTER_DEADLINE - time.monotonic() <= 900, 'OUTER_DEADLINE_BOUND')
+    remaining = OUTER_DEADLINE - time.monotonic()
+    require((2880 <= remaining <= 3000) if postboot else (0 < remaining <= 900),
+            'OUTER_DEADLINE_BOUND')
     expected = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
                 'GITHUB_REPOSITORY': 'p2pKit/P2pKit', 'GITHUB_EVENT_NAME': 'push',
                 'GITHUB_WORKFLOW': 'Intel simulator diagnostic', 'GITHUB_JOB': 'diagnose',
@@ -323,12 +331,121 @@ def admit(env):
     require(Path(env.get('GITHUB_WORKSPACE', '')).resolve() == ROOT, 'WORKSPACE')
 
 
+
+def lifecycle_phase(lifecycle, label):
+    """Use the original bounded phase, interrupting work but not retirement."""
+    require(not CANCELLED.is_set(), 'DIAGNOSTIC_CANCELLED')
+    def interrupted(*_):
+        CANCELLED.set()
+        raise InterruptedError('DIAGNOSTIC_CANCELLED')
+    handlers = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        return lifecycle.phase(label)
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+
+
+def postboot_observation(source, summary):
+    """Manual maintained ownership only: never prepare()/binding/Gradle/tests."""
+    source = {**source, 'status': '', 'diffSha256': hashlib.sha256(b'').hexdigest(),
+              'token': uuid.uuid4().hex}
+    lifecycle = owner.IntelSimulatorOwner(OUTPUT, source)
+    state = {'scope': POSTBOOT_SCOPE, 'bootAttempted': False, 'shutdownIssued': False,
+             'shutdownVerified': False, 'retirementErrors': [], 'qualifiedBindingCreated': False}
+    summary['simulatorLifecycle'] = state
+    primary_error = None
+    try:
+        values = {}
+        for label in owner.INTEL_PREPARE[:4]:
+            values[label] = owner.simulator.original(label, 'macos-x64', lifecycle_phase(lifecycle, label))
+        lifecycle_phase(lifecycle, 'intel-bootstatus-help')
+        help_text = (lifecycle.originals['intel-bootstatus-help/stdout.bin'] +
+                     lifecycle.originals['intel-bootstatus-help/stderr.bin']).decode('utf-8')
+        require('Usage: simctl bootstatus <device>' in help_text, 'INTEL_BOOTSTATUS_CAPABILITY')
+        device = owner.simulator.original('simulator-devices', 'macos-x64',
+                                          lifecycle_phase(lifecycle, 'simulator-devices'))
+        require(device['state'] == 'Shutdown', 'SELECTED_DEVICE_NOT_SHUTDOWN')
+        lifecycle.selected = {'runtime': values['simulator-runtimes'], 'device': device}
+        write(OUTPUT / 'postboot-selection.json', {'scope': POSTBOOT_SCOPE, 'source': source,
+                                                  'selected': lifecycle.selected})
+        # Reserve original boot/status, observed query, three retirement phases,
+        # process tails and final receipts BEFORE any selected-device mutation.
+        require(OUTER_DEADLINE - time.monotonic() >= 1900, 'PREBOOT_RETIREMENT_RESERVE')
+        lifecycle_phase(lifecycle, 'intel-boot')
+        lifecycle_phase(lifecycle, 'intel-bootstatus')
+        argv = owner._intel_phase_command('intel-prelaunch', lifecycle.selected)
+        require(argv == POSTBOOT_COMMAND, 'PRELAUNCH_SOURCE_COMMAND_CHANGED')
+        row, observers = inventory_observation('postboot-prelaunch', argv)
+        summary['inventory'], summary['observers'] = row, observers
+        if observed(row):
+            raw = (OUTPUT / 'commands/postboot-prelaunch/stdout.bin').read_bytes()
+            require(len(raw) == row['stdout']['bytes'] and
+                    hashlib.sha256(raw).hexdigest() == row['stdout']['sha256'], 'OBSERVED_OUTPUT_CHANGED')
+            ready = owner.simulator.terminal_device(raw, lifecycle.selected)
+            require(ready['state'] == 'Booted', 'SELECTED_DEVICE_NOT_BOOTED')
+        return row, observers
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        state['bootAttempted'] = lifecycle.boot_attempted
+        try:
+            # No mutation occurred if boot was never attempted. A normal failed
+            # or partial boot/query still follows the unchanged owned retirement.
+            if lifecycle.boot_attempted:
+                if OUTER_DEADLINE - time.monotonic() < 425:
+                    # Exceptional PID handoff/outer cancellation may consume its
+                    # reserve. Do not overrun the collector or invent shutdown.
+                    state['retirementErrors'] = ['OUTER_RETIREMENT_RESERVE_EXHAUSTED']
+                else:
+                    handlers = {sig: signal.signal(sig, signal.SIG_IGN)
+                                for sig in (signal.SIGINT, signal.SIGTERM)}
+                    try:
+                        state['retirementErrors'] = lifecycle.retire()
+                    finally:
+                        for sig, handler in handlers.items():
+                            signal.signal(sig, handler)
+                    state['shutdownIssued'] = lifecycle.shutdown_issued
+                    receipt = owner.simulator.parse(lifecycle.retirement_raw)
+                    state['shutdownVerified'] = (state['retirementErrors'] == [] and
+                                                  receipt['deviceAfter']['state'] == 'Shutdown')
+                    require(lifecycle.binding_raw is None and receipt['bindingSha256'] is None,
+                            'UNEXPECTED_QUALIFIED_BINDING')
+                require(state['shutdownVerified'], 'SELECTED_SIMULATOR_RETIREMENT_FAILED')
+        except BaseException as error:
+            if not state['retirementErrors']:
+                state['retirementErrors'] = ['SELECTED_SIMULATOR_RETIREMENT_FAILED']
+            if primary_error is not None:
+                primary_error.add_note('SELECTED_SIMULATOR_RETIREMENT_FAILED')
+            else:
+                primary_error = error
+                raise
+        finally:
+            state['shutdownIssued'] = lifecycle.shutdown_issued
+            state['qualifiedBindingCreated'] = lifecycle.binding_raw is not None
+            try:
+                write(OUTPUT / 'postboot-lifecycle.json', state)
+            except BaseException:
+                if primary_error is not None:
+                    primary_error.add_note('SIMULATOR_LIFECYCLE_RECORD_FAILED')
+                else:
+                    raise
+
+
+def mode(arguments):
+    require(arguments in ([], ['--postboot']), 'FIXED_DIAGNOSTIC_MODE')
+    return arguments == ['--postboot']
+
+
 def main():
-    require(len(sys.argv) == 1, 'NO_ARGUMENTS')
-    admit(os.environ)
+    postboot = mode(sys.argv[1:])
+    admit(os.environ, postboot)
     OUTPUT.mkdir(parents=True, mode=0o700, exist_ok=False)
     handlers = {sig: signal.signal(sig, lambda *_: CANCELLED.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
-    summary = {'schema': 1, 'scope': SCOPE, 'qualification': 'NOT_PERFORMED', 'testsExecuted': 0,
+    summary = {'schema': 1, 'scope': POSTBOOT_SCOPE if postboot else SCOPE,
+               'mode': 'postboot' if postboot else 'inventory',
+               'reversibleSimulatorLifecycle': postboot, 'qualification': 'NOT_PERFORMED', 'testsExecuted': 0,
                'configurationChanged': False, 'productionInventorySeconds': 120,
                'diagnosticInventorySeconds': INVENTORY_SECONDS, 'sourceBefore': None, 'sourceAfter': None,
                'inventory': None, 'observers': [], 'error': None, 'result': 'REFUSED',
@@ -357,10 +474,14 @@ def main():
                 require(observed(row) and raw.startswith(b'Xcode 26.3\n'), 'XCODE_VERSION')
         write(OUTPUT / 'context.json', context)
         require(time.monotonic() <= before_deadline, 'PRELUDE_BUDGET')
-        summary['inventory'], summary['observers'] = inventory_observation()
+        if postboot:
+            summary['inventory'], summary['observers'] = postboot_observation(summary['sourceBefore'], summary)
+        else:
+            summary['inventory'], summary['observers'] = inventory_observation()
         row = summary['inventory']
         summary['completedWithinProduction120'] = observed(row) and row['workElapsedSeconds'] <= 120
-        summary['result'] = 'INVENTORY_OBSERVED' if observed(row) else 'INVENTORY_NOT_OBSERVED'
+        prefix = 'POSTBOOT' if postboot else 'INVENTORY'
+        summary['result'] = prefix + ('_OBSERVED' if observed(row) else '_NOT_OBSERVED')
         after_deadline = time.monotonic() + 60
         # Fixed service-only log predicate, no arbitrary system log/environment dump.
         log_row, _ = probe('coresimulator-log', ['/usr/bin/log', 'show', '--last', '10m', '--style', 'ndjson',
