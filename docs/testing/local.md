@@ -603,10 +603,13 @@ scripts/check-dependency-update.sh <base-commit> <head-commit>
 scripts/run-release-gate.sh
 ```
 
-CI executes the range-aware update check before Gradle so an incomplete bot PR
-fails quickly instead of spending the Complete Gate discovering missing
-artifacts. Candidate generation is deliberately not automatic: newly downloaded
-checksums are not trusted until the maintainer review succeeds.
+The current modular CI dependencies component checks dependency-verification
+integrity, lockfile coverage and writer policy, and strict dependency floors.
+Those current-state checks do not inspect the complete base-to-head update range
+and are not equivalent to `check-dependency-update.sh`: maintainers must run that
+range-aware command above before pushing. Candidate generation is deliberately
+not automatic: newly downloaded checksums are not trusted until the maintainer
+review succeeds.
 
 ### Hosted candidate generation without changing the controller
 
