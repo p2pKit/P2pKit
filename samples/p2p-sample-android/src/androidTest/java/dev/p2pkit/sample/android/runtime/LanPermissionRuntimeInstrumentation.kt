@@ -59,6 +59,7 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
     private val witness = Activities()
     private var application: Application? = null
     private var kit: P2pKit? = null
+    private val mode: String? get() = arguments.getString("mode")
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -134,6 +135,7 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
 
     @OptIn(ExperimentalP2pApi::class)
     private suspend fun exercise() {
+        check(mode == null || mode == LanPermissionRevocation.MODE || mode == LanPermissionRevocation.REENTRY)
         val token = argument("token").also { check(it.matches(Regex("[0-9a-f]{32}"))) }
         val host = argument("host").also { check(it == "10.0.2.2") }
         val controlPort = argument("controlPort").toInt().also { check(it in 1024..65535) }
@@ -144,7 +146,17 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
         check(Build.VERSION.SDK_INT == 37 && app.applicationInfo.targetSdkVersion == 37)
         check(app.packageName == PACKAGE && Process.myUid() == app.applicationInfo.uid)
         check(app.checkSelfPermission(PERMISSION) == PackageManager.PERMISSION_DENIED)
-        check(app.checkSelfPermission("android.permission.NEARBY_WIFI_DEVICES") == PackageManager.PERMISSION_DENIED)
+        if (mode != LanPermissionRevocation.REENTRY) {
+            check(app.checkSelfPermission("android.permission.NEARBY_WIFI_DEVICES") == PackageManager.PERMISSION_DENIED)
+        }
+        if (mode != null) {
+            stage = "ordinary-uid-mandatory-flag-readback"
+            LanPermissionRevocation.profile(app, arguments)
+        }
+        val permissionExit = if (mode == LanPermissionRevocation.REENTRY) {
+            stage = "permission-driven-os-exit-attribution"
+            LanPermissionRevocation.requirePermissionDrivenExit(app, arguments)
+        } else null
         val pid = Process.myPid()
         val processStart = Process.getStartElapsedRealtime()
         result.putString("p2pkitPid", pid.toString())
@@ -187,6 +199,7 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
         waitText(MISSING)
         val old = witness.created.single()
         val vm = main { ViewModelProvider(old)[P2pKitViewModel::class.java] }
+        check(!vm.isRunning.value && !vm.isStarting.value && !vm.isStopping.value && !vm.cleanupPending.value)
         coroutineScope {
             val started = async(Dispatchers.Main.immediate, start = CoroutineStart.UNDISPATCHED) {
                 vm.isStarting.first { it }
@@ -202,6 +215,16 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
             }
         }
         waitText(MISSING)
+        if (mode == LanPermissionRevocation.REENTRY) {
+            check(rawDenied) { "Revoked process reentry raw socket bypassed LAN protection" }
+            check(manager.missingPermissions() == listOf(P2pPermission.LocalNetwork) && !manager.hasRequiredPermissions())
+            LanPermissionRevocation.retainReentry(app, arguments, checkNotNull(permissionExit)
+                .put("defaultManagerDenied", true).put("rawSocketDenied", true).put("sampleStartDenied", true))
+            result.putString("p2pkitManager", "PASS")
+            result.putString("p2pkitReentry", "DENIED_AFTER_ATTRIBUTABLE_PERMISSION_KILL")
+            result.putString("p2pkitSameInstanceRevocation", "OS_PERMISSION_KILL_NOT_SAME_INSTANCE")
+            return
+        }
         tap("Grant LAN access")
         waitPermissionDialog()
         phase("request-outstanding")
@@ -281,10 +304,42 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
         // Salvage the independent UI/traffic witnesses above, but NEVER pass an exempt/bypassed route.
         stage = "raw-enforcement-admission"
         check(rawDenied)
+        if (mode == LanPermissionRevocation.MODE) {
+            LanPermissionRevocation.checkpoint(app, arguments, result, System.identityHashCode(manager))
+            phase("awaiting-host-os-revocation")
+            await("live-local-network-revocation") {
+                app.checkSelfPermission(PERMISSION) == PackageManager.PERMISSION_DENIED
+            }
+            check(Process.myPid() == pid && Process.getStartElapsedRealtime() == processStart)
+            check(kit === owned && owned.permissions === manager)
+            check(manager.missingPermissions() == listOf(P2pPermission.LocalNetwork) && !manager.hasRequiredPermissions())
+            try {
+                owned.startDiscovery() // Not already active: genuine post-revocation feature preflight.
+                error("Revoked feature acquired resources")
+            } catch (expected: P2pError.PermissionMissing) {
+                check(expected.permissions == listOf(P2pPermission.LocalNetwork))
+            }
+            check(rawDenied(route, host, controlPort, "post-revocation-raw-socket"))
+            main { replacement.recreate() }
+            await("revoked-activity-reentered") {
+                witness.created.size == 3 && witness.destroyed.any { it === replacement }
+            }
+            waitText(MISSING)
+            check(main { ViewModelProvider(witness.created.last())[P2pKitViewModel::class.java] === vm })
+            check(!vm.isRunning.value && !vm.isStarting.value && !vm.isStopping.value && !vm.cleanupPending.value)
+            result.putString("p2pkitSameInstanceRevocation", "PASS")
+            result.putString("p2pkitReentry", "DENIED_SAME_MANAGER_AND_PROCESS")
+            phase("same-manager-revoked-and-reentered")
+        }
     }
 
-    private suspend fun rawDenied(route: Network, host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
-        stage = "pregrant-raw-socket"
+    private suspend fun rawDenied(
+        route: Network,
+        host: String,
+        port: Int,
+        label: String = "pregrant-raw-socket"
+    ): Boolean = withContext(Dispatchers.IO) {
+        stage = label
         try {
             route.socketFactory.createSocket().use { it.connect(InetSocketAddress(host, port), 1_500) }
             false
@@ -329,7 +384,11 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
 
     private fun testStatus(): Bundle = Bundle(result).apply {
         putString("class", LanPermissionRuntimeInstrumentation::class.java.name)
-        putString("test", "permissionRecreationAndPinnedTcp")
+        putString("test", when (mode) {
+            LanPermissionRevocation.MODE -> "permissionRecreationPinnedTcpAndRevocation"
+            LanPermissionRevocation.REENTRY -> "deniedReentryAfterPermissionDrivenExit"
+            else -> "permissionRecreationAndPinnedTcp"
+        })
         putInt("numtests", 1)
         putInt("current", 1)
     }

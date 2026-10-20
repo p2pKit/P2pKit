@@ -147,15 +147,22 @@ def write_json(path, data):
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
-def main(argv=None):
+def main(argv=None, *, campaign=None):
+    # Only a source-owned, separate entry point may supply a campaign. The UI
+    # command-line selector deliberately remains 317/324/both, never API37.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=("317", "324", "both"), default="both")
     args = parser.parse_args(argv)
+    api = campaign.API if campaign is not None else 35
+    image = campaign.IMAGE if campaign is not None else IMAGE
+    campaign_label = campaign.LABEL if campaign is not None else "android-ui"
+    scope = campaign.SCOPE if campaign is not None else (
+        "API35 rendered UI only; not physical, API37 permissions or mutation acceptance")
     need(sys.platform == "linux" and os.access("/dev/kvm", os.R_OK | os.W_OK), "Readable/writable Linux KVM required")
     need(re.fullmatch(r"[0-9a-f]{32}", os.environ.get("P2PKIT_AUDIT_JOB_ID", "")) and
          os.environ.get("P2PKIT_CI_COMMAND_DEADLINE_NS"), "Run inside ci_evidence.py ownership scope")
     sdk = Path(os.environ.get("ANDROID_HOME") or os.environ["ANDROID_SDK_ROOT"]).resolve()
-    report = ROOT / "build/reports/android-ui"
+    report = ROOT / "build/reports" / campaign_label
     need(not report.exists(), "Fresh UI report directory required")
     report.mkdir(parents=True, mode=0o700)
     env = dict(os.environ)
@@ -195,10 +202,11 @@ def main(argv=None):
 
     need(not git("status", "--porcelain", "--untracked-files=normal"), "Clean committed source required")
     source, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
-    write_json(report / "source.json", {"commit": source, "tree": tree, "case": args.case,
-               "scope": "API35 rendered UI only; not physical, API37 permissions or mutation acceptance"})
+    write_json(report / "source.json", {"commit": source, "tree": tree, "case": "372" if campaign is not None else args.case,
+               "scope": scope})
     run([ROOT / "gradlew", ":p2p-sample-android:clean", ":p2p-sample-android:assembleDebug",
-         ":p2p-sample-android:assembleDebugAndroidTest", "--no-daemon", "--max-workers=2", "--console=plain"], timeout=2400)
+         ":p2p-sample-android:assembleDebugAndroidTest",
+         *(campaign.BUILD_TASKS if campaign is not None else ()), "--no-daemon", "--max-workers=2", "--console=plain"], timeout=2400)
     sample = ROOT / "samples/p2p-sample-android/build"
     app_apk = sample / "outputs/apk/debug/p2p-sample-android-debug.apk"
     test_apk = sample / "outputs/apk/androidTest/debug/p2p-sample-android-debug-androidTest.apk"
@@ -221,12 +229,12 @@ def main(argv=None):
     write_json(report / "apks.json", apks)
     for label, relative in (("ndk", "ndk/29.0.14206865/source.properties"),
                             ("emulator", "emulator/source.properties"),
-                            ("system-image", "system-images/android-35/google_apis/x86_64/source.properties")):
+                            ("system-image", image.replace(";", "/") + "/source.properties")):
         (report / f"{label}-source.properties").write_bytes((sdk / relative).read_bytes())
     need(not git("status", "--porcelain", "--untracked-files=normal") and git("rev-parse", "HEAD") == source,
          "Source changed during build")
     # Keep tooling state separate from Gradle's HOME and the host's adb keys/AVDs.
-    private = Path(tempfile.mkdtemp(prefix="android-ui-", dir=os.environ.get("RUNNER_TEMP")))
+    private = Path(tempfile.mkdtemp(prefix=campaign_label + "-", dir=os.environ.get("RUNNER_TEMP")))
     for name in ("home", "android", "avd"):
         (private / name).mkdir(mode=0o700)
     env.update(HOME=str(private / "home"), ANDROID_USER_HOME=str(private / "android"),
@@ -237,11 +245,11 @@ def main(argv=None):
     adb = [sdk / "platform-tools/adb", "-P", str(server_port)]
     device = [*adb, "-s", serial]
     emulator = None
-    avd = "p2pkit-ui-" + uuid.uuid4().hex
+    avd = "p2pkit-" + campaign_label + "-" + uuid.uuid4().hex
     results, cleanup = {}, []
     try:
         run([sdk / "cmdline-tools/latest/bin/avdmanager", "create", "avd", "--name", avd,
-             "--package", IMAGE, "--path", private / "avd" / avd], timeout=90, input_bytes=b"no\n")
+             "--package", image, "--path", private / "avd" / avd], timeout=90, input_bytes=b"no\n")
         config = private / "avd" / avd / "config.ini"
         with config.open("a") as output:
             output.write("\nhw.lcd.width=1600\nhw.lcd.height=2560\nhw.lcd.density=200\nhw.keyboard=yes\n")
@@ -261,36 +269,40 @@ def main(argv=None):
                 time.sleep(2)
             need(run([*device, "emu", "avd", "name"])[1].decode().splitlines()[0] == avd,
                  "Serial is not the invocation-owned AVD")
-            need(run([*device, "shell", "getprop", "ro.build.version.sdk"])[1].strip() == b"35", "API35 required")
+            need(run([*device, "shell", "getprop", "ro.build.version.sdk"])[1].strip() == str(api).encode(), "Wrong admitted runtime API")
             runtime = run([*device, "shell", "getprop"])[1]
             (report / "runtime-properties.txt").write_bytes(runtime)
             run([*device, "shell", "input", "keyevent", "82"])
-            for case in CASES if args.case == "both" else (args.case,):
-                case_dir = report / case
-                case_dir.mkdir(mode=0o700)
-                # Sequential cases get a genuinely fresh install, not pm clear/restore.
-                if results:
-                    run([*device, "uninstall", PACKAGE + ".test"])
-                    run([*device, "uninstall", PACKAGE])
-                run([*device, "install", "--no-streaming", app_apk], timeout=90)
-                run([*device, "install", "--no-streaming", test_apk], timeout=90)
-                token = uuid.uuid4().hex
-                write_json(case_dir / "request.json", {"case": case, "token": token, "sourceCommit": source,
-                           "sourceTree": tree, "runner": CASES[case][0]})
-                code, output = run([*device, "shell", "am", "instrument", "-w", "-r", "-e", "case", case,
-                    "-e", "token", token, "-e", "sourceCommit", source, "-e", "sourceTree", tree,
-                    PACKAGE + ".test/" + CASES[case][0]], timeout=CASES[case][2], check=False)
-                (case_dir / "instrumentation.txt").write_bytes(output)
-                # Pull only our synthetic case directory, even on instrumentation failure.
-                archive_code, raw = run([*device, "exec-out", "run-as", PACKAGE, "tar", "-C",
-                    f"no_backup/ui-{case}-{token}", "-cf", "-", "."], timeout=30, check=False)
-                if archive_code == 0:
-                    for name, value in evidence_members(raw).items():
-                        (case_dir / name).write_bytes(value)
-                need(code == 0 and archive_code == 0, "Instrumentation or evidence capture failed")
-                instrumentation_result(output, case, token)
-                validate_report((case_dir / "result.json").read_bytes(), case, token, source, tree)
-                results[case] = PASS
+            if campaign is not None:
+                results.update(campaign.run(run=run, device=device, report=report, env=env, private=private,
+                                            source=source, tree=tree, apks=apks, app_apk=app_apk, test_apk=test_apk))
+            else:
+                for case in CASES if args.case == "both" else (args.case,):
+                    case_dir = report / case
+                    case_dir.mkdir(mode=0o700)
+                    # Sequential cases get a genuinely fresh install, not pm clear/restore.
+                    if results:
+                        run([*device, "uninstall", PACKAGE + ".test"])
+                        run([*device, "uninstall", PACKAGE])
+                    run([*device, "install", "--no-streaming", app_apk], timeout=90)
+                    run([*device, "install", "--no-streaming", test_apk], timeout=90)
+                    token = uuid.uuid4().hex
+                    write_json(case_dir / "request.json", {"case": case, "token": token, "sourceCommit": source,
+                               "sourceTree": tree, "runner": CASES[case][0]})
+                    code, output = run([*device, "shell", "am", "instrument", "-w", "-r", "-e", "case", case,
+                        "-e", "token", token, "-e", "sourceCommit", source, "-e", "sourceTree", tree,
+                        PACKAGE + ".test/" + CASES[case][0]], timeout=CASES[case][2], check=False)
+                    (case_dir / "instrumentation.txt").write_bytes(output)
+                    # Pull only our synthetic case directory, even on instrumentation failure.
+                    archive_code, raw = run([*device, "exec-out", "run-as", PACKAGE, "tar", "-C",
+                        f"no_backup/ui-{case}-{token}", "-cf", "-", "."], timeout=30, check=False)
+                    if archive_code == 0:
+                        for name, value in evidence_members(raw).items():
+                            (case_dir / name).write_bytes(value)
+                    need(code == 0 and archive_code == 0, "Instrumentation or evidence capture failed")
+                    instrumentation_result(output, case, token)
+                    validate_report((case_dir / "result.json").read_bytes(), case, token, source, tree)
+                    results[case] = PASS
     finally:
         if emulator is not None:
             if emulator.poll() is None:
@@ -304,13 +316,15 @@ def main(argv=None):
         run([*adb, "kill-server"], check=True)
         cleanup.append("private adb server stop requested; outer native scope verifies exit")
         write_json(report / "controller-result.json", {"cases": results, "cleanup": cleanup,
-                   "review": "REQUIRED: original screenshots/Parcel/lifecycle and immutable mutation controls",
-                   "notQualified": ["physical phones", "API29/OEM", "API37 LAN permission revocation"]})
+                   "review": campaign.REVIEW if campaign is not None else (
+                       "REQUIRED: original screenshots/Parcel/lifecycle and immutable mutation controls"),
+                   "notQualified": campaign.NOT_QUALIFIED if campaign is not None else (
+                       ["physical phones", "API29/OEM", "API37 LAN permission revocation"])})
         # The outer evidence scope establishes complete retirement before deleting
         # its private state. Do not delete live daemon/tool state speculatively.
     need(not git("status", "--porcelain", "--untracked-files=normal") and git("rev-parse", "HEAD") == source,
          "Source changed during runtime")
-    print("UI harness completed; independent original-evidence and mutation review remains required.")
+    print("Android harness completed; independent original-evidence/scope review remains required.")
     return 0
 
 
