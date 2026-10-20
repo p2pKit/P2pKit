@@ -44,6 +44,21 @@ def require(value, message):
         raise ValueError(message)
 
 
+def native_host(operation):
+    require(operation in OPERATIONS, 'Unknown native operation')
+    # Native2 exhausted the unchanged absolute360 cap during Intel XCTest/UI
+    # startup. Select the maintained ARM image for only the remaining #409 case;
+    # no prewarming, acceptance-clock changes or application changes are made.
+    arm = operation == 'swift-jvm-transfer'
+    require(platform.system() == 'Darwin' and platform.machine() == ('arm64' if arm else 'x86_64'),
+            'Selected operation requires its native macOS architecture')
+    require(os.environ.get('RUNNER_OS') == 'macOS' and os.environ.get('RUNNER_ARCH') == ('ARM64' if arm else 'X64'),
+            'Hosted runner architecture differs from the selected native operation')
+    require(platform.mac_ver()[0].split('.')[0] == ('26' if arm else '15'),
+            'Selected operation requires its maintained macOS image')
+    return 'macos-arm64' if arm else 'macos-x64'
+
+
 def read(path):
     require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 1024 * 1024, 'Invalid JSON file')
     return json.loads(path.read_text())
@@ -209,6 +224,8 @@ class Run:
             require(len(output) <= 65536, 'Tool identity output too large')
             tools[name] = {'command': command, 'output': output.decode('utf-8')}
         write(self.state / 'tools.json', tools)
+        expected_xcode = 'Xcode 26.5' if self.operation == 'swift-jvm-transfer' else 'Xcode 26.3'
+        require(tools['xcode']['output'].splitlines()[0] == expected_xcode, 'Selected maintained Xcode version required')
         require(not RELEASE.exists(), 'Canonical XCFramework output must not preexist this run')
         self.invoke('xcframework-build', [':p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance'], 'gradle', 7200)
         rows = []
@@ -263,12 +280,12 @@ class Run:
 
 
 def run(state, operation):
-    require(platform.system() == 'Darwin' and platform.machine() == 'x86_64', 'Native macOS Intel required')
+    host = native_host(operation)
     require(os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted', 'Use a disposable hosted runner')
     require(not any(os.environ.get(key) for key in ('P2PKIT_AUDIT_JOB_ID', 'P2PKIT_AUDIT_OWNERSHIP_CHAIN',
             'P2PKIT_AUDIT_OWNERSHIP_DOMAINS', 'P2PKIT_AUDIT_STATE_DIR')), 'Run directly, not inside another ownership context')
     code = subprocess.call([sys.executable, str(EXECUTOR), 'init', '--root', str(ROOT), '--state', str(state),
-                           '--expected-commit', os.environ['GITHUB_SHA'], '--host', 'macos-x64'], cwd=ROOT)
+                           '--expected-commit', os.environ['GITHUB_SHA'], '--host', host], cwd=ROOT)
     require(code == 0, 'Native context initialization failed')
     runner = Run(state, operation)
     try:

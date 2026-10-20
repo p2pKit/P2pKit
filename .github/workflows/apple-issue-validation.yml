@@ -19,7 +19,9 @@ concurrency:
 
 jobs:
   native:
-    runs-on: macos-15-intel
+    # Only the remaining real-transfer probe moves to the maintained ARM host.
+    # Its original cold-start/offer/cleanup deadlines and UI case are unchanged.
+    runs-on: ${{ inputs.operation == 'swift-jvm-transfer' && 'macos-26' || 'macos-15-intel' }}
     timeout-minutes: 300
     defaults:
       run:
@@ -46,8 +48,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install maintained Intel Xcode and Android prerequisites
-        run: bash scripts/setup-ci-component.sh consumers
+      - name: Install maintained selected Xcode and Android prerequisites
+        env:
+          SETUP_COMPONENT: ${{ inputs.operation == 'swift-jvm-transfer' && 'apple-arm64' || 'consumers' }}
+        run: bash scripts/setup-ci-component.sh "$SETUP_COMPONENT"
       - name: Allocate private native logs and fresh state
         run: |
           parent="$(mktemp -d "$RUNNER_TEMP/apple-issue-validation.XXXXXX")"

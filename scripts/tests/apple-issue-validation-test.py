@@ -174,6 +174,68 @@ class Controls(unittest.TestCase):
             module.run(Path('/unused'), 'both')
         execute.assert_not_called()
 
+    def test_only_transfer_operation_selects_exact_native_arm_host(self):
+        for operation in module.OPERATIONS:
+            arm = operation == 'swift-jvm-transfer'
+            environment = {'RUNNER_OS': 'macOS', 'RUNNER_ARCH': 'ARM64' if arm else 'X64'}
+            machine, version = ('arm64', '26.1') if arm else ('x86_64', '15.7')
+            with self.subTest(operation=operation), mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(module.platform, 'system', return_value='Darwin'), \
+                    mock.patch.object(module.platform, 'machine', return_value=machine), \
+                    mock.patch.object(module.platform, 'mac_ver', return_value=(version, (), '')):
+                self.assertEqual('macos-arm64' if arm else 'macos-x64', module.native_host(operation))
+                for key, value in [('RUNNER_OS', 'Linux'), ('RUNNER_ARCH', 'X64' if arm else 'ARM64')]:
+                    with mock.patch.dict(os.environ, {key: value}), self.assertRaises(ValueError):
+                        module.native_host(operation)
+                with mock.patch.object(module.platform, 'machine', return_value='x86_64' if arm else 'arm64'), \
+                        self.assertRaises(ValueError):
+                    module.native_host(operation)
+                with mock.patch.object(module.platform, 'mac_ver', return_value=('15.7' if arm else '26.1', (), '')), \
+                        self.assertRaises(ValueError):
+                    module.native_host(operation)
+        with self.assertRaises(ValueError):
+            module.native_host('unknown')
+
+    def test_run_initializes_selected_architecture_with_exact_source_and_refuses_nested_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary).resolve()
+            runner = types.SimpleNamespace(execute=mock.Mock(), result={'result': 'PASS'})
+            environment = {'RUNNER_ENVIRONMENT': 'github-hosted', 'GITHUB_SHA': 'a' * 40}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(module, 'native_host', return_value='macos-arm64') as host, \
+                    mock.patch.object(module.subprocess, 'call', return_value=0) as execute, \
+                    mock.patch.object(module, 'Run', return_value=runner):
+                self.assertEqual(0, module.run(state, 'swift-jvm-transfer'))
+                host.assert_called_once_with('swift-jvm-transfer')
+                argv = execute.call_args.args[0]
+                self.assertEqual('macos-arm64', argv[argv.index('--host') + 1])
+                self.assertEqual('a' * 40, argv[argv.index('--expected-commit') + 1])
+                execute.reset_mock()
+                for mutation in ({'RUNNER_ENVIRONMENT': 'self-hosted'}, {'P2PKIT_AUDIT_JOB_ID': 'nested'}):
+                    with mock.patch.dict(os.environ, mutation), self.assertRaises(ValueError):
+                        module.run(state, 'swift-jvm-transfer')
+                execute.assert_not_called()
+
+    def test_wrong_xcode_fails_before_canonical_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary).resolve()
+            (state / 'context.json').write_text(json.dumps({'source': SOURCE}))
+            runner = module.Run(state, 'swift-jvm-transfer')
+            with mock.patch.dict(os.environ, {'JAVA_HOME': '/synthetic/java'}), \
+                    mock.patch.object(module.subprocess, 'check_output', return_value=b'Xcode 26.3\nBuild synthetic\n'), \
+                    mock.patch.object(runner, 'invoke') as invoke, self.assertRaises(ValueError):
+                runner.execute()
+            invoke.assert_not_called()
+            self.assertTrue((state / 'tools.json').is_file())
+
+    def test_workflow_selects_maintained_arm_setup_only_for_transfer(self):
+        workflow = (ROOT / '.github/workflows/apple-issue-validation.yml').read_text()
+        self.assertIn("runs-on: ${{ inputs.operation == 'swift-jvm-transfer' && 'macos-26' || 'macos-15-intel' }}", workflow)
+        self.assertIn("SETUP_COMPONENT: ${{ inputs.operation == 'swift-jvm-transfer' && 'apple-arm64' || 'consumers' }}", workflow)
+        self.assertIn('bash scripts/setup-ci-component.sh "$SETUP_COMPONENT"', workflow)
+        setup = (ROOT / 'scripts/setup-ci-component.sh').read_text()
+        self.assertIn('ARM64 ]]; then xcode=/Applications/Xcode_26.5.app/Contents/Developer', setup)
+
     def test_workflow_encryption_step_describes_receipt_validation_not_native_execution(self):
         workflow = (ROOT / '.github/workflows/apple-issue-validation.yml').read_text()
         self.assertIn('scripts/run-apple-issue-validation.py run', workflow)
