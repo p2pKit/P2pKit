@@ -233,7 +233,8 @@ internal class CredentialUiProbe(
         visibleText: String,
         password: Boolean,
         frame: Frame,
-        minimumFrameNanos: Long = frame.armed
+        minimumFrameNanos: Long = frame.armed,
+        requiredStatus: String? = null
     ) {
         var observation: Drawn? = null
         credentialAwait {
@@ -241,13 +242,20 @@ internal class CredentialUiProbe(
             val committed = frame.committed.get()
             if (committed > 0 && committed < minimumFrameNanos) credentialMain { frame.arm() }
             observation?.let { it.text == visibleText && it.password == password } == true &&
-                frame.committed.get() >= minimumFrameNanos
+                frame.committed.get() >= minimumFrameNanos &&
+                (requiredStatus == null || textPresent(requiredStatus))
         }
         identity()
         val witness = checkNotNull(observation)
-        capture(label, listOf(witness.bounds), frame).put("drawnLength", witness.text.length)
+        val targets = mutableListOf(witness.bounds)
+        if (requiredStatus != null) {
+            val status = nodes().filter { it.isVisibleToUser && it.text?.toString() == requiredStatus }.single()
+            targets += Rect().also { status.getBoundsInScreen(it) }
+        }
+        capture(label, targets, frame).put("drawnLength", witness.text.length)
             .put("password", password).put("inputLength", input.length)
             .put("layoutText", witness.text).put("layoutSha256", credentialDigest(witness.text.toByteArray()))
+            .put("requiredStatus", requiredStatus)
             .put("oracle", "actual GetTextLayoutResult; raw InputText is not a pixel-exposure assertion")
     }
 

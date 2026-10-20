@@ -444,7 +444,8 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         probe = (path / "CredentialUiProbe.kt").read_text()
         self.assertIn('it.text == visibleText && it.password == password', probe)
         self.assertIn('frame.committed.get() >= minimumFrameNanos', probe)
-        self.assertIn('capture(label, listOf(witness.bounds), frame)', probe)
+        self.assertIn('val targets = mutableListOf(witness.bounds)', probe)
+        self.assertIn('capture(label, targets, frame)', probe)
 
     def test_accessibility_snapshots_clear_only_the_observer_cache(self):
         path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
@@ -459,6 +460,26 @@ class AndroidUiAdmissionTests(unittest.TestCase):
             self.assertIn('check(', reader[:reader.index(".clearCache()")])
             for forbidden in ('performAction(', 'invalidate(', 'requestLayout(', 'sendPointerSync(', 'delay('):
                 self.assertNotIn(forbidden, reader)
+
+    def test_failed_only_control_changes_and_observes_the_actual_status(self):
+        path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
+        fixture = (path / "CredentialUiFakes.kt").read_text()
+        self.assertIn('if (outcome == Outcome.FAILED_ONLY) FAILED_ONLY_REASON else "synthetic UI324 release"', fixture)
+        self.assertIn('const val FAILED_ONLY_REASON = "synthetic UI324 failed-only control"', fixture)
+        source = (path / "CredentialUiInstrumentation.kt").read_text()
+        control = source[source.index("private suspend fun failedJoinKeepsEditableCredential("):
+                         source.index("private suspend fun typeSecret(")]
+        self.assertIn('requiredStatus = "Failed: JoinFailed — ${CredentialNetworkFixture.FAILED_ONLY_REASON}"', control)
+        self.assertIn('ui().field(stage, secret, mask(), true, frame,', control)
+        self.assertNotIn('ui().status(', control)
+        self.assertIn('vm.joinSuccessCount.value == successes && credential() === old && old.passphrase == secret', control)
+        for forbidden in ('invalidate(', 'requestLayout(', 'sendPointerSync(', 'delay('):
+            self.assertNotIn(forbidden, control)
+        probe = (path / "CredentialUiProbe.kt").read_text()
+        field = probe[probe.index("suspend fun field("):probe.index("suspend fun status(")]
+        self.assertEqual(field.count('credentialAwait {'), 1)
+        self.assertIn('(requiredStatus == null || textPresent(requiredStatus))', field)
+        self.assertIn('targets += Rect().also { status.getBoundsInScreen(it) }', field)
 
     def test_shared_manifest_consumer_does_not_change_default_runner(self):
         source = (ui.ROOT / "scripts/run-android-art-smoke.py").read_text()

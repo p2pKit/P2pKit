@@ -143,7 +143,9 @@ internal class CredentialNetworkFixture(private val ssid: String, private val se
             check(events.tryEmit(NetworkProvisioningEvent.NetworkJoined(joined)))
             signals.put("NetworkJoined")
         }
-        val failure = NetworkProvisioningError.JoinFailed("synthetic UI324 release")
+        val failure = NetworkProvisioningError.JoinFailed(
+            if (outcome == Outcome.FAILED_ONLY) FAILED_ONLY_REASON else "synthetic UI324 release"
+        )
         if (outcome != Outcome.JOINED) {
             networkState.value = NetworkState.NoNetwork
             state.value = NetworkProvisioningState.Failed(failure)
@@ -161,6 +163,10 @@ internal class CredentialNetworkFixture(private val ssid: String, private val se
         closes++
         state.value = NetworkProvisioningState.Closed
         networkState.value = NetworkState.NoNetwork
+    }
+
+    companion object {
+        const val FAILED_ONLY_REASON = "synthetic UI324 failed-only control"
     }
 }
 

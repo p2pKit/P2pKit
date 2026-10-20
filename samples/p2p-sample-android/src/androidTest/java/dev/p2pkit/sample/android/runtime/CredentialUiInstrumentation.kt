@@ -515,7 +515,10 @@ class CredentialUiInstrumentation : Instrumentation() {
             vm.joinSuccessCount.value == successes && credential() === old && old.passphrase == secret
         })
         check(manager.calls.getJSONObject(calls).getString("returned") == "Failed")
-        ui().field(stage, secret, mask(), true, frame)
+        // A repeated identical failure has no changed pixels and need not draw.
+        // This control emits a distinct real result; require its natural status frame.
+        ui().field(stage, secret, mask(), true, frame,
+            requiredStatus = "Failed: JoinFailed — ${CredentialNetworkFixture.FAILED_ONLY_REASON}")
         passed(stage)
     }
 
