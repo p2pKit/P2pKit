@@ -105,6 +105,11 @@ class UiAcceptanceInstrumentation : Instrumentation() {
                 report.put("failure", failureRecord(error, stage))
                 result.putString("p2pkitFailureStage", stage)
                 result.putString("p2pkitFailureType", error.javaClass.simpleName)
+                try {
+                    retainFailureObservation()
+                } catch (retention: Throwable) {
+                    report.put("failureObservationUnavailable", failureRecord(retention, stage))
+                }
             } finally {
                 handsOff = false
                 // Attempt every observer/Activity retirement even after an earlier cleanup failure.
@@ -246,6 +251,7 @@ class UiAcceptanceInstrumentation : Instrumentation() {
                 }
             }
             accessibilityAttached = true
+            stage = "setup-activity-launch"
             main {
                 app.registerActivityLifecycleCallbacks(lifecycle)
                 lifecycleAttached = true
@@ -268,9 +274,12 @@ class UiAcceptanceInstrumentation : Instrumentation() {
                 model.recordDiagnostic(DiagnosticRecord(category = "ui", eventName = BASELINE))
                 check(model.diagnosticRecorder.activeSessionId == session)
             }
+            stage = "setup-diagnostics-entry"
             await(5_000) { currentAppTree()?.text("Diagnostics") != null }
             action(findText("Diagnostics"), AccessibilityNodeInfo.ACTION_CLICK, "open-diagnostics")
+            stage = "setup-diagnostics-screen"
             await(5_000) { currentAppTree()?.text("Test diagnostics") != null }
+            stage = "setup-filters"
             val search = editable("Search event, error, peer, packet")
             setText(search, SEARCH, "search-filter")
             val sessionField = editable("Session filter")
@@ -285,6 +294,7 @@ class UiAcceptanceInstrumentation : Instrumentation() {
             }
             val baseline = main { selected(model, session).single() }
             check(baseline.eventName == BASELINE)
+            stage = "setup-baseline-render"
             await(5_000) { beforeFrame.committed.get() != 0L && currentAppTree()?.ready(listOf(baseline)) == true }
             // Fixed settling allowance, not a retry that extends deadlines or requests another frame.
             delay(1_000)
@@ -506,6 +516,35 @@ class UiAcceptanceInstrumentation : Instrumentation() {
             repeat(node.childCount) { node.getChild(it)?.let(pending::add) }
         }
         return Tree(root, nodes)
+    }
+
+    /** Failure-only observation on the fresh owned guest; never input, a retry, or acceptance evidence. */
+    private fun retainFailureObservation() {
+        if (output == null) return
+        val root = uiAutomation.rootInActiveWindow
+        report.put("failureWindow", JSONObject().put("stage", stage)
+            .put("hasActiveRoot", root != null).put("rootIsTargetPackage", root?.packageName?.toString() == PACKAGE)
+            .put("rootVisible", root?.isVisibleToUser == true)
+            .put("activityHasFocus", main { activity?.hasWindowFocus() == true })
+            .put("activityResumed", main { activity?.lifecycle?.currentState == Lifecycle.State.RESUMED })
+            .put("windows", JSONArray(uiAutomation.windows.map { window ->
+                JSONObject().put("type", window.type).put("active", window.isActive).put("focused", window.isFocused)
+                    .put("rootIsTargetPackage", window.root?.packageName?.toString() == PACKAGE)
+                    .put("bounds", rect(Rect().also { window.getBoundsInScreen(it) }))
+            })))
+        // Do not retain text from unrelated system windows. Original pixels stay in encrypted evidence.
+        currentAppTree()?.let { write("failure-context-tree.json", it.json().toString(2) + "\n") }
+        val bitmap = checkNotNull(uiAutomation.takeScreenshot()) { "Failure display capture unavailable" }
+        try {
+            check(bitmap.width.toLong() * bitmap.height <= 16_777_216 && bitmap.config != Bitmap.Config.HARDWARE)
+            val file = newFile("failure-context.png")
+            file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            check(file.length() in 1L..16_777_216L)
+            report.put("failureScreenshot", JSONObject().put("file", file.name).put("sha256", digest(file.readBytes()))
+                .put("width", bitmap.width).put("height", bitmap.height).put("captured", moment()))
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun screenshot(name: String, targets: List<Rect>): JSONObject {

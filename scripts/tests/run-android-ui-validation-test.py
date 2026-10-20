@@ -127,6 +127,22 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         self.assertNotIn('File(directory, "fixture")', source)
         self.assertIn("check(!it.exists() && it.mkdir() && it.canonicalFile == it)", source)
 
+    def test_setup_failure_retains_observation_without_extending_deadlines(self):
+        # Source integration guard only; the encrypted owned-guest image is not
+        # available to this host fixture and must still be reviewed after ART.
+        path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
+        source = (path / "UiAcceptanceInstrumentation.kt").read_text()
+        self.assertIn('stage = "setup-diagnostics-entry"', source)
+        self.assertIn('await(5_000) { currentAppTree()?.text("Diagnostics") != null }', source)
+        self.assertIn('withTimeout(25_000)', source)
+        self.assertIn('val deadline = injection.end + 5_000_000_000L', source)
+        self.assertIn('retainFailureObservation()', source)
+        self.assertIn('newFile("failure-context.png")', source)
+        self.assertIn('currentAppTree()?.let { write("failure-context-tree.json"', source)
+        failure = source[source.index('private fun retainFailureObservation()'):source.index('private fun screenshot(')]
+        for forbidden in ('performAction(', 'invalidate(', 'requestLayout(', 'startActivity(', 'sendStatus('):
+            self.assertNotIn(forbidden, failure)
+
     def test_shared_manifest_consumer_does_not_change_default_runner(self):
         source = (ui.ROOT / "scripts/run-android-art-smoke.py").read_text()
         self.assertIn('INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"', source)
