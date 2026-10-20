@@ -133,6 +133,7 @@ TASK_NAMES = frozenset({
     "tcp-nodelay-latency-test.py", "run-rpc-qualification-test.py",
     "run-jmdns-interpreter-diagnostic-test.py", "jmdns-interpreter-diagnostic",
     "run-android-permission-validation-test.py",
+    "swift-jvm-transfer-test.py", "run-android-art-smoke-test.py",
     "embedded-jmdns-aar-test.py", "embedded-jmdns-archive-controls", "intel-bonjour-environment-test.py",
     "central-gpg-lifecycle-controls",
     "central-bundle-evidence-test.py", "maven-recovery-test.py",
