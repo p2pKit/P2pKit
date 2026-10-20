@@ -90,6 +90,24 @@ python3 -B scripts/tests/run-android-ui-validation-test.py
 python3 -B scripts/tests/run-android-art-smoke-test.py
 ```
 
+## Foreground pixels and stopped-task previews
+
+On API33+, `MainActivity` disables recents screenshots before its first content
+using `setRecentsScreenshotEnabled(false)`: Android can represent a stopped task
+with its theme rather than retain an explicitly revealed credential. This is
+not `FLAG_SECURE`; normal foreground screenshots and explicit-reveal pixel
+positive controls remain available and required. API24–32 keep the existing
+credential clearing behavior but do not gain this task-preview protection.
+
+The three previously disputed clear/reentry captures retain the first original
+full-display screenshot alongside a separately timestamped owned-Window
+PixelCopy and finite window identities/frame statistics. These are diagnostic,
+not interchangeable proof: an empty owned buffer never excuses exposed global
+pixels. Observation and capture share the original five-second deadline; late
+or blank first captures remain failures, with their evidence retained. This
+preview policy does not establish the cause of every historical contradictory capture
+or replace any masking, reveal, restoration, lifecycle or cleanup assertion.
+
 ## #372 is deliberately separate
 
 The original no-mode `LanPermissionRuntimeInstrumentation` and its existing

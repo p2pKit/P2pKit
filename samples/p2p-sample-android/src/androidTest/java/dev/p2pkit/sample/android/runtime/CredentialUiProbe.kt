@@ -495,7 +495,7 @@ internal class CredentialUiProbe(
         deadline: Long
     ) {
         credentialRemaining(deadline)
-        check(windowCopies.size < 2)
+        check(windowCopies.size < 3)
         check(owned.width.toLong() * owned.height <= 16_777_216)
         val bitmap = Bitmap.createBitmap(owned.width, owned.height, Bitmap.Config.ARGB_8888)
         val owner = AsyncCaptureOwnership(bitmap::recycle)
@@ -636,7 +636,8 @@ internal class CredentialUiProbe(
 
     companion object {
         private val PRESENTATION_DIAGNOSTICS = setOf(
-            "stop-reentry-reentered-empty", "fakegrant-true-resumed-cleared"
+            "stop-reentry-reentered-empty", "fakegrant-true-resumed-cleared",
+            "fakegrant-true-stopped-reentered-empty"
         )
         const val PACKAGE = "dev.p2pkit.sample.android"
         const val CARD_TITLE = "Join hotspot (WifiNetworkSpecifier)"

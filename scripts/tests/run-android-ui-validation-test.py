@@ -483,7 +483,7 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         self.assertIn('(requiredStatus == null || textPresent(requiredStatus))', field)
         self.assertIn('targets += Rect().also { status.getBoundsInScreen(it) }', field)
 
-    def test_two_window_diagnostics_preserve_first_display_and_one_deadline(self):
+    def test_three_window_diagnostics_preserve_first_display_and_one_deadline(self):
         path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
         source = (path / "CredentialUiProbe.kt").read_text()
         field = source[source.index("suspend fun field("):source.index("suspend fun status(")]
@@ -500,6 +500,8 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         self.assertIn("check(afterDisplay == owned)", capture)
         self.assertIn("check(afterCopy == owned)", capture)
         self.assertIn('"stop-reentry-reentered-empty", "fakegrant-true-resumed-cleared"', source)
+        self.assertIn('"fakegrant-true-stopped-reentered-empty"', source)
+        self.assertIn("check(windowCopies.size < 3)", source)
         copy = source[source.index("private fun copyOwnedWindow("):source.index("private data class WindowCopy(")]
         self.assertLess(copy.index("if (owner.start())"), copy.index("PixelCopy.request(owned.window"))
         self.assertIn("result.get(credentialRemaining(deadline), TimeUnit.NANOSECONDS)", copy)
@@ -515,6 +517,22 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         for forbidden in ("invalidate(", "requestLayout(", "Thread.sleep(", "waitForIdleSync(",
                           "clearWindowContentFrameStats(", "SurfaceControl.Transaction", "FLAG_SECURE"):
             self.assertNotIn(forbidden, source)
+
+    def test_task_preview_opt_out_is_api_guarded_before_first_content_not_foreground_blackout(self):
+        path = ui.ROOT / "samples/p2p-sample-android/src/main/java/dev/p2pkit/sample/android/MainActivity.kt"
+        source = path.read_text()
+        create = source[source.index("override fun onCreate("):source.index("override fun onStart(")]
+        guard = "if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {"
+        self.assertLess(create.index("super.onCreate("), create.index(guard))
+        self.assertLess(create.index(guard), create.index("setRecentsScreenshotEnabled(false)"))
+        self.assertIn(guard + "\n            setRecentsScreenshotEnabled(false)\n        }", create)
+        self.assertLess(create.index("setRecentsScreenshotEnabled(false)"), create.index("setContent {"))
+        self.assertEqual(source.count("setRecentsScreenshotEnabled("), 1)
+        self.assertNotIn("setRecentsScreenshotEnabled(true)", source)
+        self.assertNotIn("override fun onPause(", source)
+        self.assertNotIn("WindowManager.LayoutParams.FLAG_SECURE", source)
+        for forbidden in ("addFlags(", "setFlags(", "override fun onPause(", "setDisablePreviewScreenshots("):
+            self.assertNotIn(forbidden, create)
 
     def test_shared_manifest_consumer_does_not_change_default_runner(self):
         source = (ui.ROOT / "scripts/run-android-art-smoke.py").read_text()
