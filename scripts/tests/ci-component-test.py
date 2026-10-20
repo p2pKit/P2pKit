@@ -48,6 +48,25 @@ class ComponentTests(unittest.TestCase):
         rows = C.matrix('all')['include']
         self.assertEqual(len(rows), 14)
         self.assertEqual({x['component'] for x in rows}, set(C.COMPONENTS))
+    def test_workflow_only_diagnostics_cannot_enter_component_matrix(self):
+        for name in ('apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic'):
+            self.assertNotIn(name, C.COMPONENTS)
+            self.assertNotIn(name, C.DIAGNOSTICS)
+            for selection in (name, 'source,' + name, name + ',android'):
+                with self.subTest(selection=selection), self.assertRaises(ValueError):
+                    C.matrix(selection)
+
+    def test_maintained_fourteen_matrix_is_unchanged_by_workflow_dispatch(self):
+        expected = [('source', 'ubuntu-24.04', 30), ('dependencies', 'ubuntu-24.04', 45),
+                    ('jvm-linux', 'ubuntu-24.04', 60), ('jvm-windows', 'windows-2025', 60),
+                    ('android', 'ubuntu-24.04', 75), ('apple-arm64', 'macos-26', 150),
+                    ('apple-x64', 'macos-15-intel', 120), ('desktop-linux', 'ubuntu-24.04', 75),
+                    ('desktop-windows', 'windows-2025', 75), ('desktop-macos', 'macos-26', 75),
+                    ('security', 'ubuntu-24.04', 30), ('compatibility', 'macos-26', 180),
+                    ('consumers', 'macos-15-intel', 120), ('macos-shared', 'macos-15-intel', 120)]
+        self.assertEqual(C.matrix('all'), {'include': [dict(component=name, os=host,
+                         minutes=minutes, job_minutes=minutes + 10) for name, host, minutes in expected]})
+
     def test_work_budget_has_explicit_job_upload_headroom(self):
         for row in C.matrix('all')['include']:
             self.assertEqual(row['job_minutes'], row['minutes'] + 10)
@@ -79,6 +98,22 @@ class ComponentTests(unittest.TestCase):
         with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
             evidence_spec.loader.exec_module(evidence)
         self.assertTrue(set(actual) <= evidence.TASK_NAMES)
+
+    def test_issue_acceptance_offline_controls_are_mandatory_source_tasks(self):
+        names = ('apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
+                 'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',
+                 'run-jmdns-interpreter-diagnostic-test.py', 'run-android-permission-validation-test.py',
+                 'swift-jvm-transfer-test.py', 'run-android-art-smoke-test.py')
+        commands = C.commands('source')
+        evidence_spec = importlib.util.spec_from_file_location('issue_ci_evidence', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        for name in names:
+            self.assertEqual([argv for task, argv in commands if task == name],
+                             [[C.sys.executable, '-B', 'scripts/tests/' + name, '-v']])
+            self.assertTrue((ROOT / 'scripts/tests' / name).is_file())
+            self.assertIn(name, evidence.TASK_NAMES)
 
     def test_windows_packaging_runs_real_static_rpc_inspection_after_installer(self):
         commands = C.commands('desktop-windows')
@@ -280,11 +315,12 @@ class ComponentTests(unittest.TestCase):
             with self.subTest(argv=argv), self.assertRaises(AssertionError):
                 self.assert_no_publish_or_bootstrap_commands([('forbidden', argv)])
 
-    def execute_model(self, results, *, component='jvm-linux', tool_error=None):
+    def execute_model(self, results, *, component='jvm-linux', tool_error=None, command_rows=None):
         with tempfile.TemporaryDirectory(prefix='ci-component-model-') as temp:
             root = Path(temp)
             with patch.object(C, 'ROOT', root), patch.object(C, 'record_tools', side_effect=tool_error), \
-                    patch.object(C, 'commands', return_value=[('actual-tests', ['synthetic-test'])]), \
+                    patch.object(C, 'commands', return_value=command_rows if command_rows is not None else
+                                 [('actual-tests', ['synthetic-test'])]), \
                     patch.object(C.subprocess, 'run', side_effect=results) as invoked, \
                     patch.dict(C.os.environ, {'RUNNER_TEMP': temp}):
                 error = None
@@ -362,6 +398,31 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(calls[-1].kwargs['timeout'], 90)
             self.assertEqual(len(calls), 2)
 
+    def test_jmdns_interpreter_bridge_precedes_unchanged_close_acceptance(self):
+        commands = C.commands('jmdns-diagnostic')
+        self.assertEqual(commands[0], ('jmdns-interpreter-diagnostic',
+                         [C.sys.executable, '-B', 'scripts/run-jmdns-interpreter-diagnostic.py']))
+        self.assertEqual(len(commands), 2)
+        for component in C.COMPONENTS:
+            self.assertNotIn('jmdns-interpreter-diagnostic', dict(C.commands(component)))
+
+    def test_jmdns_bridge_failure_is_not_masked_and_still_stops_gradle(self):
+        commands = C.commands('jmdns-diagnostic')
+        for probe, close, stop in ((0, 0, 0), (7, 0, 0), (0, 9, 0), (7, 0, 11), (0, 0, 11)):
+            exits = [probe] + ([close] if probe == 0 else []) + [stop]
+            names = ['jmdns-interpreter-diagnostic'] + (['jmdns-close-tests'] if probe == 0 else []) + ['gradle-stop']
+            code, report, calls, error = self.execute_model([Mock(returncode=x) for x in exits],
+                component='jmdns-diagnostic', command_rows=commands)
+            self.assertIsNone(error)
+            self.assertEqual(code, probe or close or stop)
+            self.assertEqual(report['tasks'], [dict(task=name, exitCode=exit_code)
+                                               for name, exit_code in zip(names, exits)])
+            self.assertEqual(calls[0].args[0], commands[0][1])
+            if probe == 0:
+                self.assertEqual(calls[1].args[0], commands[1][1])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+            self.assertEqual(calls[-1].kwargs['timeout'], 90)
+
     def test_jmdns_diagnostic_is_focused_independent_and_preserves_failure_cleanup(self):
         self.assertEqual(C.matrix('jmdns-diagnostic'), {'include': [{'component': 'jmdns-diagnostic',
                          'os': 'macos-15-intel', 'minutes': 30, 'job_minutes': 40}]})
@@ -372,9 +433,9 @@ class ComponentTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 C.matrix(invalid)
         command = C.commands('jmdns-diagnostic')
-        self.assertEqual(len(command), 1)
-        self.assertEqual(command[0][0], 'jmdns-close-tests')
-        self.assertEqual(command[0][1][1:], [*C.FLAGS, ':p2p-transport-lan:jvmTest', '--tests',
+        self.assertEqual(len(command), 2)
+        self.assertEqual(command[1][0], 'jmdns-close-tests')
+        self.assertEqual(command[1][1][1:], [*C.FLAGS, ':p2p-transport-lan:jvmTest', '--tests',
                          'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])
         self.assert_no_publish_or_bootstrap_commands(command)
         for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
@@ -817,7 +878,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         self.assertNotIn('jmdns-diagnostic', C.COMPONENTS)
         self.assertEqual(C.matrix('jmdns-diagnostic')['include'][0]['job_minutes'], 40)
         self.assertEqual(len(C.matrix('all')['include']), 14)
-        self.assertEqual(C.commands('jmdns-diagnostic')[0][1][-3:],
+        self.assertEqual(C.commands('jmdns-diagnostic')[1][1][-3:],
             [':p2p-transport-lan:jvmTest', '--tests', 'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])
         self.assertEqual(C.commands('apple-arm64')[0][1][-1], 'ios-arm64')
         self.assertEqual(C.commands('apple-x64')[0][1][-1], 'ios-x64')
@@ -920,7 +981,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         with self.assertRaises(T.ContextFailure):
             T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
         native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
-        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200}[executionMode]', native)
+        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200,\n            @"modular-apple-swift-jvm-transfer":@16200}[executionMode]', native)
         self.assertIn('if (!modularCommand) return 125;', native)
         self.assertIn('childBound = @(modularCommand.doubleValue + 240);', native)
         self.assertIn('![expectedMode isEqualToString:executionMode]', native)
@@ -1024,7 +1085,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_deadlines_and_native_tracking_failure_are_fail_closed(self):
         T = self.T
-        for component in T.PROFILES.keys() - {'dependency-generate', 'release-consumers'}:
+        for component in T.PROFILES.keys() - {'dependency-generate', 'release-consumers', T.APPLE_COMPONENT}:
             budget = T.bounds(component)
             route = C.matrix(component)['include'][0]
             self.assertEqual(budget['command'], route['minutes'] * 60)
@@ -1045,7 +1106,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_shared_fixed_profile_has_original_full_shared_command_not_a_test_subset(self):
         T = self.T
-        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate', 'release-consumers'})
+        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate', 'release-consumers', T.APPLE_COMPONENT})
         argv = T.command(self.environment(), 'macos-shared')
         self.assertEqual(argv[argv.index('--component') + 1], 'macos-shared')
         self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')

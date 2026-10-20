@@ -11,8 +11,8 @@ protected approval and the final pre-upload check revalidate its original
 identity and retention. See the [exact-source release procedure](release-foundation.md)
 for owner challenge comments, post-Maven application delivery and partial-failure
 boundaries. The latest completed publication is
-[`0.8.0-rc2`](../releases/0.8.0-rc2.md); current development source is
-`0.8.0-SNAPSHOT`, which is not publishable. New source controls alone do not
+[`0.8.0-rc4`](../releases/0.8.0-rc4.md); current source `0.8.0-rc5` is an
+unpublished candidate requiring its own qualification and protected publication. New source controls alone do not
 establish readiness for a subsequent release.
 
 Required secrets and variables remain in the GitHub Environment and must never
@@ -140,7 +140,7 @@ ordinary exact-source complete consumer gate used during publication.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
-record. See [`0.8.0-rc2`](../releases/0.8.0-rc2.md) for the latest completed
+record. See [`0.8.0-rc4`](../releases/0.8.0-rc4.md) for the latest completed
 publication and [`0.7.0-rc3`](../releases/0.7.0-rc3.md) for immutable history.
 If an irreversible upload succeeds but verification fails, do not rerun the
 publisher. Follow the separately protected [read-only recovery procedure](release-foundation.md#read-only-recovery-after-an-original-published-deployment)

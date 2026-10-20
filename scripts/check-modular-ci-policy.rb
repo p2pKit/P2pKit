@@ -30,12 +30,12 @@ module ModularCI
     ci = load(File.join(root, '.github/workflows/ci.yml'))
     worker = load(File.join(root, '.github/workflows/ci-component.yml'))
     jobs = ci.fetch('jobs')
-    require!(jobs.keys.sort == %w[complete-gate component plan qualify], 'Missing or extra active CI stage')
+    require!(jobs.keys.sort == %w[android-permission-diagnostic android-ui-diagnostic apple-issue-diagnostic complete-gate component plan qualify], 'Missing or extra active CI stage')
     triggers = ci.fetch('on') { ci.fetch(true) }
     required = %w[source dependencies jvm-linux jvm-windows android apple-arm64 apple-x64
                   desktop-linux desktop-windows desktop-macos security compatibility consumers macos-shared]
     require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').sort ==
-             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic'].sort,
+             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic'].sort,
              'Missing or extra independently selectable required component')
     writer = load(File.join(root, '.github/workflows/dependency-update-candidate.yml')).fetch('jobs').fetch('generate')
     require!(writer['runs-on'] == 'macos-15-intel' && writer.fetch('steps').any? { |s|
@@ -62,12 +62,36 @@ module ModularCI
       require!(consumer && setup < consumer && !steps[consumer]['if'] && !steps[consumer]['continue-on-error'],
                'Complete remote consumers must remain required after supported setup')
     end
-    %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic].each do |diagnostic|
+    %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic].each do |diagnostic|
       require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),
                'Explicit focused diagnostic route missing')
       %w[qualify complete-gate].each do |name|
         require!(jobs[name].fetch('if').include?("inputs.component != '#{diagnostic}' &&"),
                  'Diagnostic must not aggregate or complete qualification')
+      end
+    end
+    # A manual issue run must not launch the regular matrix, gain credentials,
+    # or become a green release gate even when qualification_selection is set.
+    {'apple-issue-diagnostic' => ['apple-issue-validation', 'operation', 'apple_operation',
+                                 %w[both iphoneos-product swift-jvm-transfer]],
+     'android-ui-diagnostic' => ['android-ui-validation', 'case', 'android_case',
+                                %w[both 317 324]],
+     'android-permission-diagnostic' => ['android-permission-validation', nil, nil, nil]}.each do |name, (workflow, argument, input, options)|
+      if input
+        selector = triggers.dig('workflow_dispatch', 'inputs', input)
+        require!(selector && selector['type'] == 'choice' && selector['default'] == 'both' &&
+                 selector['options'] == options, 'Issue diagnostic selector must remain bounded')
+      end
+      job = jobs.fetch(name)
+      require!(job.keys.sort == (input ? %w[if permissions uses with] : %w[if permissions uses]) &&
+               job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.component == '#{name}' }}" &&
+               job['permissions'] == {'contents' => 'read'} &&
+               job['uses'] == "./.github/workflows/#{workflow}.yml" &&
+               job['with'] == (input ? {argument => "${{ inputs.#{input} || 'both' }}"} : nil),
+               'Issue diagnostic must remain explicit, same-source and without secrets or publication rights')
+      %w[plan component].each do |stage|
+        require!(jobs.fetch(stage).fetch('if').include?("inputs.component != '#{name}'"),
+                 'Issue diagnostic must not launch the component matrix')
       end
     end
     require!(jobs['component'].dig('strategy', 'fail-fast') == false, 'One component must not cancel another')

@@ -40,14 +40,44 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', macos-shared,', ',')
   end
   def test_pom_diagnostic_remains_explicit_and_cannot_qualify
-    altered('.github/workflows/ci.yml', ', consumers-pom-diagnostic]', ']')
+    altered('.github/workflows/ci.yml', ', consumers-pom-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'consumers-pom-diagnostic' && inputs.component", 'inputs.component')
   end
   def test_published_consumer_diagnostic_requires_choice_and_cannot_qualify
     altered('.github/workflows/ci.yml', ', published-consumers-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'published-consumers-diagnostic' && inputs.component", 'inputs.component')
-    altered('.github/workflows/ci.yml', "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'published-consumers-diagnostic' && inputs.component",
-            "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component")
+    altered('.github/workflows/ci.yml', "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component",
+            "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component")
+  end
+  def test_workflow_diagnostics_cannot_launch_matrix_or_qualify
+    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic].each do |name|
+      %w[plan component qualify complete-gate].each do |stage|
+        original = File.read(File.join(ROOT, '.github/workflows/ci.yml'))
+        section = original[/^  #{stage}:\n.*?(?=^  [a-z]|\z)/m]
+        altered('.github/workflows/ci.yml', section,
+                section.sub("inputs.component != '#{name}'", 'true'))
+      end
+    end
+  end
+  def test_workflow_diagnostics_remain_bounded_manual_same_source_and_read_only
+    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic].each do |name|
+      altered('.github/workflows/ci.yml',
+              "github.event_name == 'workflow_dispatch' && inputs.component == '#{name}'",
+              "inputs.component == '#{name}'")
+      original = File.read(File.join(ROOT, '.github/workflows/ci.yml'))
+      section = original[/^  #{name}:\n.*?(?=^  [a-z]|\z)/m]
+      ['contents: write', "contents: read\n      actions: write"].each do |permissions|
+        altered('.github/workflows/ci.yml', section, section.sub('contents: read', permissions))
+      end
+      altered('.github/workflows/ci.yml', section, section + "    secrets: inherit\n")
+      altered('.github/workflows/ci.yml', section, section.sub('./.github/workflows/', 'other/repo/.github/workflows/'))
+    end
+    altered('.github/workflows/ci.yml', 'options: [both, iphoneos-product, swift-jvm-transfer]',
+            'options: [both, iphoneos-product, swift-jvm-transfer, arbitrary]')
+    altered('.github/workflows/ci.yml', "options: [both, '317', '324']", "options: [both, '317', '324', '372']")
+    altered('.github/workflows/ci.yml', 'default: both', 'default: iphoneos-product')
+    altered('.github/workflows/ci.yml', 'uses: ./.github/workflows/android-permission-validation.yml',
+            "uses: ./.github/workflows/android-permission-validation.yml\n    with:\n      command: arbitrary")
   end
   def test_complete_consumers_remain_independently_required
     altered('.github/workflows/ci.yml', ', consumers,', ',')

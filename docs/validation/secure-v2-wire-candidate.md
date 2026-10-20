@@ -1,8 +1,8 @@
 # Authenticated-v2 wire contract — candidate and current continuation
 
 **Status: candidate-bound preparation for #133, not an independent
-interoperability result or professional cryptographic assurance. External #133
-remains NOT_STARTED.** This describes the committed candidates in §1, including
+interoperability result or professional cryptographic assurance.** Follow the
+[canonical interoperability status](README.md#independent-interop). This describes the committed candidates in §1, including
 caller behavior that a pure codec does not establish. It does not certify a
 published release, execute an independent peer, or grant repository-repair or
 whole-audit readiness credit. Labeled contract questions remain separate from

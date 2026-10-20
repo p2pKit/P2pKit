@@ -5,12 +5,16 @@ and [issue records](../audit/2026-09-04/issues.json) retain the completed work a
 exact limitations. [Consolidation/branch decisions](../maintenance/repository-consolidation-2026-09.md)
 explain the six unqualified dependency proposals intentionally kept separate.
 
-Status at handoff: **206/234 repair approvals (88.0%), 207 resolved (88.5%),
+Frozen historical status at the consolidation handoff: **206/234 repair approvals (88.0%), 207 resolved (88.5%),
 27 unresolved (11.5%)**. Those are issue-row counts, not effort or readiness.
 The audit is **NOT_READY**; independent interoperability **#133 NOT_STARTED**.
 No tag, release, issue closure, product decision or additional behavior change
 is authorized by repository consolidation. Preserve `0.7.0-SNAPSHOT`, immutable
 RC3 and the [0.8.0+ behavior restrictions](../releasing/checklist.md).
+
+The preceding counts, campaign labels and authorization boundaries describe that historical handoff,
+not current release readiness. Use the [canonical campaign table](../validation/README.md#current-status)
+for current external-validation states; do not rewrite the historical snapshot when they change.
 
 ## 1. Get the preserved source
 

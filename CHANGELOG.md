@@ -3,6 +3,36 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc5 — development release candidate (unpublished)
+
+Prepared from the current main line; publication requires the exact merged
+source's full qualification, frozen application set and protected publisher.
+Existing rc4 artifacts remain immutable. No rc5 publication is claimed here.
+
+- Correct Android, CLI and Desktop diagnostics that inferred an optional file
+  feature from a secure connection without observing feature negotiation.
+- Preserve Android password sensitivity across join-result UI changes and mask
+  before submission while retaining failed-retry input. Rendered/lifecycle
+  acceptance remains separately tracked; this source repair is not a runtime pass.
+- Disable Android sample recents screenshots on API33+ without blocking normal
+  foreground screenshots. API24–32 receive no task-preview suppression; retain
+  the [legacy preview limitation](docs/security/model.md#android-sample-credential-previews).
+- Support verified lock-only dependency refreshes through the documented direct
+  preparer, while preserving exact unchanged XML and verification-policy checks.
+- Canonicalize the optional RPC multicast diagnostic's Python interpreter before
+  allocating work; preserve invalid-input and actual primitive-admission guards.
+- Clarify provisioning constructor compatibility, process-wide Android join
+  routing, canonical SDK setup and external-validation status references.
+- Correct operational-limit source citations and add narrowly scoped drift checks.
+- Add bounded Windows Back-cleanup progress diagnostics without changing resource
+  ownership, close order, provider behavior or time limits.
+- Add a controlled actual authenticated-v2 PING/PONG RTT diagnostic. The recorded
+  JVM loopback comparison showed no consistent TCP_NODELAY speedup; the separate
+  synthetic TCP probe's benefit is not a measured protocol improvement.
+- Prepare focused Android UI and Apple acceptance routes.
+  Compilation, model and loopback results are not physical-device,
+  actual installed-Windows, independent-peer or complete real-LAN qualification.
+
 ## 0.8.0-rc4 — development release candidate (2026-10-20)
 
 Published and verified on Maven Central from immutable `v0.8.0-rc4`, source

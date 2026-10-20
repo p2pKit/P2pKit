@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -184,11 +185,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('task.device.finalizeValue()', q.SIMULATOR_INIT)
         self.assertIn("['iosX64Test', 'iosSimulatorArm64Test']", q.SIMULATOR_INIT)
         self.assertNotIn('enabled = false', q.SIMULATOR_INIT)
-        # Preserve every original control and require the new native shell-lifetime regression on BOTH hosts.
-        # Four added modeled session-diagnostic tests are not four new native controls.
-        self.assertEqual(q.control_inventory('macos-x64'), 133)
-        self.assertEqual(q.control_inventory('macos-arm64'), 133)
-        self.assertGreater(q.control_inventory('linux-x64'), 100)
+        # Source inventory: 45 pure policy + 66 modeled Darwin observation
+        # methods, plus 48 native Darwin methods (including inherited cases).
+        # These are required inventory totals, not evidence of native execution.
+        self.assertEqual(q.control_inventory('macos-x64'), 159)
+        self.assertEqual(q.control_inventory('macos-arm64'), 159)
+        self.assertEqual(q.control_inventory('linux-x64'), 157)
 
     def test_no_legacy_executor_or_pid_signaling_path(self):
         source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
@@ -209,7 +211,31 @@ class AdmissionTests(unittest.TestCase):
 
     def test_actual_xctest_inventory_is_closed_and_nonempty(self):
         cases = q.swift_inventory(ROOT)
-        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 88, 'p2pkit-sample-uitests': 6})
+        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 88, 'p2pkit-sample-uitests': 10})
+        self.assertEqual(cases['p2pkit-sample-uitests'], {
+            'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale()',
+            'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale()',
+            'ContentViewPresentationUITests/testFirstIncomingOfferRequiresConsentWithoutTransferHistory()',
+            'P2pKitSampleUITests/testLaunchStartAndStopControls()',
+            'P2pKitSampleUITests/testRecoversOneProvablyUnacknowledgedStartInput()',
+            'P2pKitSampleUITests/testLocalPairingDisclosureAndStopCleanup()',
+            # Four late-acknowledgement/retry controls added by 2133f655.
+            'P2pKitSampleUITests/testLateStartAcknowledgementBeforeDiagnosticsDoesNotRetry()',
+            'P2pKitSampleUITests/testLateStartAcknowledgementDuringDiagnosticsDoesNotRetry()',
+            'P2pKitSampleUITests/testLateStartAcknowledgementDuringReadinessDoesNotRetry()',
+            'P2pKitSampleUITests/testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry()',
+        })
+
+    def test_missing_or_duplicate_xctest_does_not_satisfy_updated_inventory(self):
+        bounded = q.bounded
+        method = b'func testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry('
+        for replacement in (b'func nonTestMethod(', method + b') {}\n    ' + method):
+            def changed(path, maximum=q.MAX_FILE):
+                raw = bounded(path, maximum)
+                return raw.replace(method, replacement)
+            with self.subTest(replacement=replacement), patch.object(q, 'bounded', side_effect=changed):
+                with self.assertRaises(q.QualificationError):
+                    q.swift_inventory(ROOT)
 
     def test_native_controls_reject_skipped_failed_or_partial_output(self):
         self.assertEqual(q.unittest_count('\nRan 122 tests in 190.25s\n\nOK\n'), 122)
@@ -448,7 +474,14 @@ class DiagnosticTests(unittest.TestCase):
             actual = q.control_diagnostics(raw, Path(directory), reader)
         self.assertEqual(actual[0]['method'], name)
         self.assertEqual(actual[0]['assertionLines'], [3271])
-        self.assertIn('Product command timed out', actual[0]['receipts'][0]['diagnostic']['fixedErrorMessages'])
+        diagnostic = actual[0]['receipts'][0]['diagnostic']
+        # The timeout message is now a local variable, not a source-literal
+        # error argument. Keep its closed semantic failure kind, not raw text.
+        self.assertEqual(diagnostic['errorKinds'], ['PRODUCT_DEADLINE_EXCEEDED'])
+        self.assertEqual(diagnostic['errorCount'], 1)
+        self.assertIsNone(diagnostic['productExitCode'])
+        self.assertEqual(diagnostic['finalExitCode'], 125)
+        self.assertEqual(diagnostic['fixedErrorMessages'], [])
         self.assertNotIn('private-', json.dumps(actual))
         self.assertNotIn('/private/', json.dumps(actual))
         private = result()
@@ -861,8 +894,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
-        # The shared inventory also includes the four modeled Darwin diagnostic tests.
-        self.assertEqual(q.control_inventory('linux-x64'), 131)
+        # 45 pure + 66 modeled Darwin + 40 native Linux + 6 Linux observation.
+        self.assertEqual(q.control_inventory('linux-x64'), 157)
 
     def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
         for lane in ('apple-arm64', 'apple-x64'):
@@ -1924,6 +1957,102 @@ class IntelAuditContextControls(unittest.TestCase):
         source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
         self.assertIn('audit_context.admit(os.environ, self.parent', source)
         self.assertIn('audit_context.recheck(os.environ, parent', source)
+
+
+class MulticastInterpreterTests(unittest.TestCase):
+    """Real caller/path resolution; all acquisition/compiler/native calls mocked."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='rpc-interpreter-')
+        self.addCleanup(self.temporary.cleanup)
+        self.parent = Path(self.temporary.name).resolve()
+        self.interpreter = self.parent / 'real parent with spaces' / 'python'
+        self.interpreter.parent.mkdir()
+        self.interpreter.write_text('not an actual interpreter; never executed\n')
+        self.interpreter.chmod(0o700)
+        self.java_home = self.parent / 'java'
+        self.java_home.mkdir()
+        self.instance = q.Qualification.__new__(q.Qualification)
+        self.instance.state = self.parent / 'state'
+        (self.instance.state / 'work').mkdir(parents=True)
+        self.instance.invoke = Mock(return_value={'productExitCode': 0})
+        self.instance.output = Mock(side_effect=[b'PASS mode=control\n', b''])
+        self.instance.result = {}
+        self.instance.policy = SimpleNamespace(FIXTURE_MARKERS=[re.compile('PASS mode=control')])
+
+    def invoke(self, executable):
+        with patch.object(q.sys, 'executable', executable), \
+                patch.dict(q.os.environ, {'JAVA_HOME': str(self.java_home)}, clear=True), \
+                patch.object(q, 'bounded', return_value=b'modeled dependency bytes'), \
+                patch.object(q.hashlib, 'sha256', return_value=SimpleNamespace(
+                    hexdigest=lambda: '5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4')):
+            self.instance.multicast_admission()
+
+    def assert_canonical_call(self, executable):
+        self.invoke(executable)
+        calls = self.instance.invoke.call_args_list
+        self.assertEqual([call.args[0] for call in calls], ['multicast-reviewed-dependency',
+            'multicast-vendor-compile', 'multicast-fixture-compile', 'multicast-readiness-control'])
+        actual = calls[-1]
+        properties = [arg for arg in actual.args[1] if arg.startswith('-Dp2pkit.audit.pythonExecutable=')]
+        self.assertEqual(properties, ['-Dp2pkit.audit.pythonExecutable=' + str(self.interpreter)])
+        self.assertEqual(actual.args[2], 45)
+        self.assertEqual(actual.kwargs, {'allow_failure': True})
+        self.assertIn('-Dp2pkit.audit.jmdnsStartupPrimitives=true', actual.args[1])
+        self.assertEqual(self.instance.result['multicastMarkers'], ['PASS mode=control'])
+
+    def test_canonical_running_interpreter_is_one_unchanged_argv_property(self):
+        self.assert_canonical_call(str(self.interpreter))
+
+    def test_direct_symlink_is_resolved_before_actual_caller_assembly(self):
+        launcher = self.parent / 'python launcher'
+        launcher.symlink_to(self.interpreter)
+        self.assert_canonical_call(str(launcher))
+
+    def test_ancestor_symlink_is_resolved_before_actual_caller_assembly(self):
+        launcher = self.parent / 'linked parent'
+        launcher.symlink_to(self.interpreter.parent, target_is_directory=True)
+        self.assert_canonical_call(str(launcher / 'python'))
+
+    def test_missing_relative_empty_directory_and_nonexecutable_fail_before_acquisition(self):
+        nonexecutable = self.parent / 'not executable'
+        nonexecutable.write_text('not executable\n')
+        nonexecutable.chmod(0o600)
+        for executable in ('', None, 0, 'python', str(self.parent / 'missing'), str(self.parent),
+                           str(nonexecutable), '\0', '/\0'):
+            with self.subTest(executable=executable), self.assertRaises(q.QualificationError):
+                self.invoke(executable)
+            self.instance.invoke.assert_not_called()
+            self.instance.output.assert_not_called()
+            self.assertFalse((self.instance.state / 'work/multicast').exists())
+
+    def test_broken_and_cyclic_symlinks_fail_before_acquisition(self):
+        broken, cyclic = self.parent / 'broken', self.parent / 'cyclic'
+        broken.symlink_to(self.parent / 'missing')
+        cyclic.symlink_to(cyclic)
+        for path in (broken, cyclic):
+            with self.subTest(path=path.name), self.assertRaises(q.QualificationError):
+                self.invoke(str(path))
+            self.instance.invoke.assert_not_called()
+            self.assertFalse((self.instance.state / 'work/multicast').exists())
+
+    def test_diagnostic_argument_does_not_accept_failed_multicast_or_skip_original_error(self):
+        for index, (code, raw) in enumerate((
+            (1, b'FAIL mode=control\n'), (None, b'PASS mode=control\n'),
+            (0, b'FAIL mode=control\n'), (0, b'PASS mode=control\nPASS mode=control\n'),
+            (0, b'PASS mode=control\nphase=fixture_rescue_begin\n'), (0, b''),
+        )):
+            self.instance.state = self.parent / ('state-' + str(index))
+            (self.instance.state / 'work').mkdir(parents=True)
+            self.instance.invoke.reset_mock()
+            self.instance.invoke.return_value = {'productExitCode': code}
+            self.instance.output.side_effect = [raw, b'']
+            with self.subTest(code=code, raw=raw), \
+                    self.assertRaisesRegex(q.QualificationError, 'Multicast prerequisite failed'):
+                self.invoke(str(self.interpreter))
+            self.assertEqual(self.instance.invoke.call_count, 4)
+            self.assertEqual(self.instance.invoke.call_args.args[2], 45)
+            self.assertTrue(self.instance.invoke.call_args.kwargs['allow_failure'])
 
 
 if __name__ == '__main__':

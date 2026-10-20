@@ -14,10 +14,12 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current source and latest published release are **`0.8.0-rc4`**. Its
+The latest published release is **`0.8.0-rc4`**; current source is
+**`0.8.0-rc5`**, not yet published. The rc4
 [release record](../releases/0.8.0-rc4.md) binds the actual main qualification,
 separate protected approvals and immutable public library/application bytes.
-No next snapshot is selected by the publication bookkeeping.
+The new candidate requires its own exact-source qualification and publication;
+rc4 evidence is not relabelled as rc5.
 
 Historically, combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466),
 release-admission [PR #467](https://github.com/p2pKit/P2pKit/pull/467), and the

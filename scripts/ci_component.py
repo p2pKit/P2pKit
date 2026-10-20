@@ -33,6 +33,8 @@ COMPONENTS = {
     'macos-shared': ('macos-15-intel', 120),
 }
 # Explicit focused diagnostics are not release components or aggregate inputs.
+# Workflow-call Apple/Android issue diagnostics are intentionally absent here:
+# ci.yml dispatches them separately, never through this component executor.
 DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
                'published-consumers-diagnostic': ('macos-15-intel', 120),
                'consumers-pom-diagnostic': ('macos-15-intel', 60)}
@@ -95,6 +97,10 @@ def commands(component):
             ('platform-contract', ['ruby', 'scripts/tests/check-platform-test-policy-test.rb']),
             ('version-encoding', bash + ['scripts/tests/check-application-release-version.sh']),
             *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
+                   'apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
+                   'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',
+                   'run-jmdns-interpreter-diagnostic-test.py', 'run-android-permission-validation-test.py',
+                   'swift-jvm-transfer-test.py', 'run-android-art-smoke-test.py',
                    'dependency-update-test.py', 'embedded-jmdns-aar-test.py', 'intel-bonjour-environment-test.py',
                    'central-bundle-evidence-test.py', 'maven-recovery-test.py',
                    'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
@@ -151,7 +157,8 @@ def commands(component):
     if component == 'macos-shared':
         return [('shared-platform-tests', py + ['scripts/run-platform-tests.py', 'macos-shared'])]
     if component == 'jmdns-diagnostic':
-        return [('jmdns-close-tests', gradle + [':p2p-transport-lan:jvmTest', '--tests',
+        return [('jmdns-interpreter-diagnostic', py + ['scripts/run-jmdns-interpreter-diagnostic.py']),
+                ('jmdns-close-tests', gradle + [':p2p-transport-lan:jvmTest', '--tests',
                  'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])]
     if component == 'bundle-diagnostic':
         return [('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh'])]

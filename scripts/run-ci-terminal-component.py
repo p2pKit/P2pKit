@@ -36,12 +36,14 @@ terminal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal)
 private = terminal.private
 COMPONENT = 'jmdns-diagnostic'
+APPLE_COMPONENT = 'apple-swift-jvm-transfer'
 # Fixed existing component budgets only. No arbitrary command or duration.
 PROFILES = {'jmdns-diagnostic': ('modular-jmdns', 1800), 'macos-shared': ('modular-shared', 7200),
             'consumers': ('modular-consumers', 7200),
             'published-consumers-diagnostic': ('modular-published-consumers', 7200),
             'dependency-generate': ('modular-dependency-generate', 10800),
-            'release-consumers': ('modular-release-consumers', 7200)}
+            'release-consumers': ('modular-release-consumers', 7200),
+            APPLE_COMPONENT: ('modular-apple-swift-jvm-transfer', 16200)}
 
 
 def bounds(component):
@@ -60,6 +62,7 @@ CI_EVIDENCE_RECIPIENT_SHA256 CI_EVIDENCE_RECIPIENT_FINGERPRINT'''.split())
 DEPENDENCY_ENVIRONMENT = frozenset({'DEPENDENCY_UPDATE_REQUEST', 'P2PKIT_CI_COMMAND_DEADLINE_NS',
     evidence.audit_processes.JOB_ENV, evidence.audit_processes.CHAIN_ENV, evidence.audit_processes.DOMAINS_ENV,
     evidence.audit_processes.STATE_ENV, evidence.audit_processes.PIPE_ENV})
+APPLE_ENVIRONMENT = frozenset({'APPLE_ISSUE_PARENT', 'P2PKIT_AUDIT_JDK21'})
 
 
 RELEASE_ENVIRONMENT = frozenset({'HOME', 'SDKROOT', 'P2PKIT_CONSUMER_REPOSITORY_URL', 'P2PKIT_CONSUMER_PROFILE',
@@ -76,6 +79,20 @@ class ContextFailure(RuntimeError):
 def require(condition, code):
     if not condition:
         raise ContextFailure(code)
+
+
+def apple_parent(env):
+    parent = Path(env.get('APPLE_ISSUE_PARENT', ''))
+    private.private_parent(parent, os.getuid())
+    require(parent.parent == Path(env['RUNNER_TEMP']).resolve(strict=True) and
+            re.fullmatch(r'apple-issue-validation\.[A-Za-z0-9_-]+', parent.name) is not None, 'APPLE_STATE')
+    return parent
+
+
+def allowed_environment(component):
+    return ENVIRONMENT | (DEPENDENCY_ENVIRONMENT if component == 'dependency-generate' else
+        RELEASE_ENVIRONMENT if component == 'release-consumers' else
+        APPLE_ENVIRONMENT if component == APPLE_COMPONENT else frozenset())
 
 
 def dependency_request(env):
@@ -201,15 +218,16 @@ def environment_admit(env, component=COMPONENT):
     require(component in PROFILES, 'COMPONENT')
     generating = component == 'dependency-generate'
     releasing = component == 'release-consumers'
+    apple = component == APPLE_COMPONENT
     events = {'workflow_dispatch'} if component in {'jmdns-diagnostic', 'published-consumers-diagnostic',
-                                                   'dependency-generate'} else {'workflow_dispatch', 'push', 'pull_request', 'schedule'}
+                                                   'dependency-generate', APPLE_COMPONENT} else {'workflow_dispatch', 'push', 'pull_request', 'schedule'}
     workflow = 'dependency-update-candidate.yml' if generating else 'ci.yml'
     if releasing:
         release_context(env)
         workflow = 'publish-maven-central.yml' if env['GITHUB_JOB'] == 'publish-release' else 'recover-maven-central.yml'
         events = {'push'} if env['GITHUB_JOB'] == 'publish-release' else {'workflow_dispatch'}
-    require(platform.system() == 'Darwin' and platform.machine() == 'x86_64' and
-            env.get('RUNNER_OS') == 'macOS' and env.get('RUNNER_ARCH') == 'X64' and
+    require(platform.system() == 'Darwin' and platform.machine() == ('arm64' if apple else 'x86_64') and
+            env.get('RUNNER_OS') == 'macOS' and env.get('RUNNER_ARCH') == ('ARM64' if apple else 'X64') and
             env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
             env.get('GITHUB_REPOSITORY') == 'p2pKit/P2pKit' and env.get('GITHUB_EVENT_NAME') in events and
             env.get('GITHUB_WORKFLOW_REF', '').startswith('p2pKit/P2pKit/.github/workflows/' + workflow + '@') and
@@ -219,6 +237,12 @@ def environment_admit(env, component=COMPONENT):
     require(releasing or (workspace / 'candidate' if generating else workspace) == ROOT, 'SOURCE_PATH')
     require(re.fullmatch('[A-Za-z0-9_-]{1,200}', env.get('RUNNER_TRACKING_ID', '')) is not None,
             'RUNNER_TRACKING')
+    if apple:
+        require(platform.mac_ver()[0].split('.')[0] == '26' and env.get('GITHUB_JOB') == 'native' and
+                env.get('GITHUB_WORKFLOW_REF') == 'p2pKit/P2pKit/.github/workflows/ci.yml@' + env.get('GITHUB_REF', '') and
+                env.get('GITHUB_REF', '').startswith('refs/heads/'), 'APPLE_CONTEXT')
+        apple_parent(env)
+        require(bool(env.get('P2PKIT_AUDIT_JDK21')) and Path(env['P2PKIT_AUDIT_JDK21']).is_absolute(), 'APPLE_JDK')
     if generating:
         request = dependency_request(env)
         require(env.get('GITHUB_JOB') == 'generate' and env['GITHUB_SHA'] == request['controller_sha'], 'DEPENDENCY_REQUEST')
@@ -230,7 +254,8 @@ def environment_admit(env, component=COMPONENT):
             {audit.JOB_ENV, audit.CHAIN_ENV, audit.DOMAINS_ENV, audit.STATE_ENV, audit.PIPE_ENV}, 'NESTED_DOMAIN')
         dependency_deadline(env)
     else:
-        require(not any(key.startswith('P2PKIT_AUDIT_') for key in env), 'NESTED_DOMAIN')
+        require({key for key in env if key.startswith('P2PKIT_AUDIT_')} ==
+                ({'P2PKIT_AUDIT_JDK21'} if apple else set()), 'NESTED_DOMAIN')
         if releasing:
             release_deadline(env)
 
@@ -255,6 +280,11 @@ def finish_source(component, source, before):
 
 def command(env, component=COMPONENT):
     budget = bounds(component)
+    if component == APPLE_COMPONENT:
+        state = apple_parent(env) / 'state'
+        require(not state.exists() and not state.is_symlink(), 'APPLE_STATE_EXISTS')
+        return [str(Path(sys.executable).resolve()), '-B', str(ROOT / 'scripts/run-apple-issue-validation.py'),
+                'run', '--state', str(state), '--operation', 'swift-jvm-transfer']
     if component == 'release-consumers':
         return ['bash', str(release_context(env)[0] / 'scripts/check-published-consumers.sh')]
     if component == 'dependency-generate':
@@ -278,8 +308,7 @@ def validate_config(config, directory):
             os.getgid() == os.getegid() == config['gid'] > 0 and
             config['groups'] == sorted(set(os.getgroups())), 'CREDENTIALS')
     env = config['environment']
-    require(type(env) is dict and set(env) <= (ENVIRONMENT | (DEPENDENCY_ENVIRONMENT if config['component'] == 'dependency-generate' else
-                RELEASE_ENVIRONMENT if releasing else frozenset())) and 'PATH' in env and
+    require(type(env) is dict and set(env) <= allowed_environment(config['component']) and 'PATH' in env and
             all(type(v) is str and '\0' not in v and len(v) <= 32768 for v in env.values()), 'ENVIRONMENT')
     environment_admit(env, config['component'])
     require(os.environ.get('RUNNER_TRACKING_ID') == env['RUNNER_TRACKING_ID'], 'RUNNER_TRACKING')
@@ -446,7 +475,7 @@ def run(component=COMPONENT, *, released=None, environment=None):
     environment_admit(original_env, component)
     generating, releasing = component == 'dependency-generate', component == 'release-consumers'
     require(releasing == (released is not None), 'RELEASE_INPUT')
-    allowed = ENVIRONMENT | (DEPENDENCY_ENVIRONMENT if generating else RELEASE_ENVIRONMENT if releasing else frozenset())
+    allowed = allowed_environment(component)
     env = {key: value for key, value in original_env.items() if key in allowed}
     outer_end = dependency_deadline(env) if generating else release_deadline(env) if releasing else start + budget['wrapper']
     require(not (generating or releasing) or outer_end - start > 450, 'RELEASE_DEADLINE' if releasing else 'DEPENDENCY_DEADLINE')
@@ -457,6 +486,9 @@ def run(component=COMPONENT, *, released=None, environment=None):
         config['release'] = released
     validate_config(config, directory)
     private.write_json(directory / 'config.json', config)
+    if component == APPLE_COMPONENT:
+        private.write_json(apple_parent(env) / 'terminal-context.json',
+            {'schema': 1, 'component': component, 'source': source, 'directory': str(directory)})
     script = command_bytes(directory)
     command_path = directory / 'native.command'
     private.write_new(command_path, script)
@@ -467,10 +499,13 @@ def run(component=COMPONENT, *, released=None, environment=None):
     try:
         binary = directory / 'terminal-context'
         compile_result = evidence.run_command(['/usr/bin/xcrun', '--sdk', 'macosx', 'clang', '-Wall', '-Wextra',
-            '-Werror', '-fobjc-arc', '-fblocks', '-arch', 'x86_64', '-mmacosx-version-min=15.0',
+            '-Werror', '-fobjc-arc', '-fblocks', '-arch', 'arm64' if component == APPLE_COMPONENT else 'x86_64',
+            '-mmacosx-version-min=26.0' if component == APPLE_COMPONENT else '-mmacosx-version-min=15.0',
             '-DP2PKIT_MODULAR_CI', '-framework', 'AppKit', str(ROOT / 'scripts/diagnostics/apple-terminal-context.m'),
             '-o', str(binary)], cwd=ROOT, environment=env, private=directory / 'compile',
             timeout=90, cancelled=cancelled.is_set, **({'create_gradle_home': False} if releasing else {}))
+        if component == APPLE_COMPONENT:
+            private.write_json(directory / 'compile-result.json', compile_result)
         require(compile_result['code'] == 'PASS' and compile_result['cleanupKnown'] and
                 compile_result['capturesClosed'], 'COMPILE_FAILED')
         require(not cancelled.is_set(), 'CANCELLED')
@@ -502,10 +537,21 @@ def run(component=COMPONENT, *, released=None, environment=None):
             failed = failed or error
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+    if failed is None:
+        try:
+            require(not command_path.is_symlink() and command_path.read_bytes() == script, 'COMMAND_CHANGED')
+            command_path.unlink()
+        except BaseException as error:
+            failed = error
+    if component == APPLE_COMPONENT:
+        try:
+            private.write_json(directory / 'wrapper-result.json', {'schema': 1, 'component': component,
+                'source': source, 'finalExitCode': code if failed is None else 125,
+                'finalized': failed is None, 'commandRemoved': not command_path.exists()})
+        except BaseException as error:
+            failed = failed or error
     if failed is not None:
         raise failed
-    require(not command_path.is_symlink() and command_path.read_bytes() == script, 'COMMAND_CHANGED')
-    command_path.unlink()
     # This independent wrapper result is required by the Actions job. The inner
     # manifest cannot make a failed application/source finalization job succeed.
     if releasing:

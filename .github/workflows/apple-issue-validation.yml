@@ -1,0 +1,93 @@
+name: Focused Apple issue validation
+
+# Actual execution through the maintained ci.yml dispatcher, not release or physical credit.
+on:
+  workflow_call:
+    inputs:
+      operation:
+        description: Actual native acceptance (iphoneos-product, swift-jvm-transfer, or both)
+        required: false
+        default: both
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-issue-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    # Only the remaining real-transfer probe moves to the maintained ARM host.
+    # Its original cold-start/offer/cleanup deadlines and UI case are unchanged.
+    runs-on: ${{ inputs.operation == 'swift-jvm-transfer' && 'macos-26' || 'macos-15-intel' }}
+    timeout-minutes: ${{ inputs.operation == 'swift-jvm-transfer' && 320 || 300 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - name: Check out exact dispatch source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure Java 21 daemon
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Bind provided Java 21
+        run: echo "P2PKIT_AUDIT_JDK21=$JAVA_HOME" >> "$GITHUB_ENV"
+      - name: Configure Java 17 library and CLI
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install maintained selected Xcode and Android prerequisites
+        env:
+          SETUP_COMPONENT: ${{ inputs.operation == 'swift-jvm-transfer' && 'apple-arm64' || 'consumers' }}
+        run: bash scripts/setup-ci-component.sh "$SETUP_COMPONENT"
+      - name: Allocate private native logs and fresh state
+        run: |
+          parent="$(mktemp -d "$RUNNER_TEMP/apple-issue-validation.XXXXXX")"
+          echo "APPLE_ISSUE_PARENT=$parent" >> "$GITHUB_ENV"
+      - name: Execute actual selected native commands
+        id: native
+        # The fixed Terminal wrapper adds only its existing retirement margin to
+        # the full prebuild envelope, never to the actual 900/360/120/30 probe.
+        timeout-minutes: ${{ inputs.operation == 'swift-jvm-transfer' && 285 || 270 }}
+        env:
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          umask 077
+          if [[ "$OPERATION" == swift-jvm-transfer ]]; then
+            python3 -B scripts/run-ci-terminal-component.py --component apple-swift-jvm-transfer \
+              > "$APPLE_ISSUE_PARENT/driver.log" 2>&1
+          else
+            python3 -B scripts/run-apple-issue-validation.py run \
+              --state "$APPLE_ISSUE_PARENT/state" --operation "$OPERATION" \
+              > "$APPLE_ISSUE_PARENT/driver.log" 2>&1
+          fi
+      - name: Validate actual receipts and encrypt original evidence including failures
+        id: evidence
+        if: ${{ always() && steps.native.outcome != 'skipped' }}
+        run: |
+          python3 -B scripts/ci_evidence.py --component apple-issue-validation \
+            --timeout-seconds 600 --output-dir "$RUNNER_TEMP/ci-evidence-apple-issue-validation" \
+            --report-glob 'build/apple-issue-validation/**/*' -- \
+            python3 -B scripts/run-apple-issue-validation.py retain \
+              --state "$APPLE_ISSUE_PARENT/state" --bootstrap-log "$APPLE_ISSUE_PARENT/driver.log"
+      - name: Retain encrypted native evidence and public manifest
+        if: ${{ always() && steps.evidence.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: apple-issue-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-evidence-apple-issue-validation/*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

@@ -5,11 +5,35 @@ import dev.p2pkit.sample.diagnostics.anonymizeIdentifier
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class DiagnosticConnectionTest {
+    @Test
+    fun connectedReconnectAndDiagnosticSnapshotDoNotAssertOptionalFeatures() = withHarness { harness ->
+        harness.registerConnection("live", "peer", "Connected")
+        harness.connection("live", "peer", "Reconnecting", "Connected")
+        harness.connection("live", "peer", "Connected", "Reconnecting")
+        fun assertProfiles(expected: Int) {
+            val profiles = harness.recorder.snapshot()
+                .filter { it.eventName == DiagnosticEventNames.PROTOCOL_NEGOTIATED }
+            assertEquals(expected, profiles.size)
+            profiles.forEach {
+                assertEquals("secure-v2", it.currentState)
+                assertEquals(anonymizeIdentifier("live"), it.sdkSessionId)
+                assertTrue(it.details.isEmpty())
+            }
+            assertFalse(harness.recorder.jsonLines().contains("file-commit-sha256-v1"))
+        }
+        assertProfiles(2)
+        harness.startSession("PS-T06", "both", "profile-snapshot") {
+            listOf(DesktopDiagnosticConnectionSnapshot("live", "peer", "Connected"))
+        }
+        assertProfiles(3)
+    }
+
     @Test
     fun lateStateNotificationsCannotRetireReplacementOrStealItsFirstTransfer() = withHarness { harness ->
         for (lateState in listOf("Closed", "Failed", "Connected", "Reconnecting")) {

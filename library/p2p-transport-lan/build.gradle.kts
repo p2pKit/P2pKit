@@ -475,3 +475,24 @@ tasks.register<Test>("macInstalledBundleTest") {
         systemProperty("dev.p2pkit.test.macos.bundleFixtures", directory.absolutePath)
     }
 }
+
+// Explicit diagnostic only: does not run in check/jvmTest or replace release/interop evidence.
+tasks.register<JavaExec>("protocolPingLatency") {
+    group = "verification"
+    description = "Measure actual secure-v2 PING/PONG over controlled real TCP with NODELAY off/on."
+    val test = kotlin.targets.getByName("jvm").compilations.getByName("test")
+    dependsOn(test.compileTaskProvider)
+    classpath = files(test.output.allOutputs, test.runtimeDependencyFiles)
+    javaLauncher.set(project.extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    })
+    mainClass.set("dev.p2pkit.transport.lan.ProtocolPingLatency")
+    workingDir(rootProject.projectDir)
+    maxHeapSize = "384m"
+    jvmArgs("-XX:ActiveProcessorCount=2")
+    doFirst {
+        args(listOf("protocolLatencyReport", "protocolLatencyCommit", "protocolLatencyTree").map {
+            providers.gradleProperty(it).get()
+        })
+    }
+}

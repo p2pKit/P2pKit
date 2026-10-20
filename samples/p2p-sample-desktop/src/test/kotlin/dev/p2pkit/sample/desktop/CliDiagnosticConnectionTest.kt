@@ -9,12 +9,36 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class CliDiagnosticConnectionTest {
+    @Test
+    fun connectedReconnectAndDiagnosticSnapshotDoNotAssertOptionalFeatures() = withHarness {
+        CliDiagnostics.registerConnection("live", "peer", "Connected")
+        CliDiagnostics.connection("live", "peer", "Reconnecting", "Connected")
+        CliDiagnostics.connection("live", "peer", "Connected", "Reconnecting")
+        fun assertProfiles(expected: Int) {
+            val profiles = CliDiagnostics.recorder.snapshot()
+                .filter { it.eventName == DiagnosticEventNames.PROTOCOL_NEGOTIATED }
+            assertEquals(expected, profiles.size)
+            profiles.forEach {
+                assertEquals("secure-v2", it.currentState)
+                assertEquals(anonymizeIdentifier("live"), it.sdkSessionId)
+                assertTrue(it.details.isEmpty())
+            }
+            assertFalse(CliDiagnostics.recorder.jsonLines().contains("file-commit-sha256-v1"))
+        }
+        assertProfiles(2)
+        CliDiagnostics.startSession("PS-T05", "both", "profile-snapshot") {
+            listOf(CliDiagnosticConnectionSnapshot("live", "peer", "Connected"))
+        }
+        assertProfiles(3)
+    }
+
     @Test
     fun lateStateNotificationsCannotRetireReplacementOrStealItsFirstTransfer() = withHarness {
         for (lateState in listOf("Closed", "Failed", "Connected", "Reconnecting")) {

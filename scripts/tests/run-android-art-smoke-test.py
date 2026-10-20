@@ -119,7 +119,7 @@ def instrumentation_output(changes=None):
 
 
 def test_apk_manifest(names=None):
-    runners = (art.INSTRUMENTATION, art.RPC_INSTRUMENTATION) if names is None else names
+    runners = art.TEST_INSTRUMENTATIONS if names is None else names
     entries = "".join(f'<instrumentation android:name="{name}" android:targetPackage="{art.PACKAGE}"/>'
                       for name in runners)
     return (f'<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{art.TEST_PACKAGE}">'
@@ -135,20 +135,22 @@ class AndroidArtAdmissionTest(unittest.TestCase):
         ns = "{http://schemas.android.com/apk/res/android}"
         entries = source.findall("instrumentation")
         self.assertEqual([entry.get(ns + "name") for entry in entries],
-                         [art.INSTRUMENTATION, art.RPC_INSTRUMENTATION])
-        self.assertEqual([entry.get(ns + "targetPackage") for entry in entries], [art.PACKAGE] * 2)
+                         list(art.TEST_INSTRUMENTATIONS))
+        self.assertEqual([entry.get(ns + "targetPackage") for entry in entries], [art.PACKAGE] * len(art.TEST_INSTRUMENTATIONS))
         configured = re.findall(r'\btestInstrumentationRunner\s*=\s*"([^"]+)"',
                                 (sample / "build.gradle.kts").read_text())
         self.assertEqual(configured, [art.INSTRUMENTATION])
 
     def test_test_apk_requires_exact_maintained_and_supplemental_runner_inventory(self):
-        expected = sorted((art.INSTRUMENTATION, art.RPC_INSTRUMENTATION))
+        expected = sorted(art.TEST_INSTRUMENTATIONS)
         self.assertEqual(art.verify_test_apk_manifest(test_apk_manifest()), expected)
         self.assertEqual(art.verify_test_apk_manifest(test_apk_manifest(list(reversed(expected)))), expected)
         for names in ([], [art.INSTRUMENTATION], [art.RPC_INSTRUMENTATION],
                       [art.INSTRUMENTATION, art.INSTRUMENTATION],
                       [art.RPC_INSTRUMENTATION, art.RPC_INSTRUMENTATION],
-                      [art.INSTRUMENTATION, "unrelated.Runner"], expected + ["unrelated.Runner"]):
+                      [art.INSTRUMENTATION, "unrelated.Runner"], expected + ["unrelated.Runner"],
+                      *[expected[:i] + expected[i + 1:] for i in range(len(expected))],
+                      *[expected + [runner] for runner in expected]):
             with self.subTest(names=names), self.assertRaises(ValueError):
                 art.verify_test_apk_manifest(test_apk_manifest(names))
 

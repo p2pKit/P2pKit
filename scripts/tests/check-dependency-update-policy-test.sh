@@ -645,11 +645,11 @@ wrapper_head="$(git -C "$wrapper_fixture" rev-parse HEAD)"
 expect_failure "wrapper without policy" "omitted required reviewed file" \
     bash -c "cd '$wrapper_fixture' && scripts/check-dependency-update.sh '$wrapper_base' '$wrapper_head'"
 
-# The workflow must contain the literal shell variable references.
-# shellcheck disable=SC2016
-grep -Fq 'scripts/check-dependency-update.sh "$BASE_SHA" "$HEAD_SHA"' \
-    "$ROOT/.github/workflows/ci.yml" ||
-    fail "CI does not fail fast on incomplete dependency updates"
+# The modular workflow requires current-state integrity/locks/strict floors.
+# This is not equivalent to the maintainer's complete base/head range check;
+# keep all range/history/wrapper fixtures above independent of this CI model.
+"$PYTHON3" -B "$ROOT/scripts/tests/dependency-update-test.py" DependencyCIPolicyTests
+ruby "$ROOT/scripts/check-modular-ci-policy.rb"
 grep -Fq 'scripts/check-dependency-verification.sh' "$ROOT/scripts/run-release-gate.sh" ||
     fail "release gate does not validate dependency-verification state"
 grep -Fq 'android-gradle-toolchain:' "$ROOT/.github/dependabot.yml" ||

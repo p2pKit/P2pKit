@@ -157,7 +157,7 @@ Install **both** for `./gradlew check` or Android sample builds; installing only
 | Android app sample | `android-sample-compileSdk` | Android SDK Platform 37 | `platforms;android-37.0` |
 
 The runtime minimum remains **Android API 24+** (`android-minSdk`); a compile SDK is not a device minimum.
-The preserved [agent guide](../../AGENTS.md) names only the library platform, not the complete sample prerequisites.
+The [agent guide](../../AGENTS.md) and contributor entry points link here rather than duplicating these prerequisites.
 Use this table for sample and repository-wide checks. The device/emulator validation matrix is separate from these
 build requirements; installing a platform does not verify that Android runtime.
 
@@ -603,10 +603,13 @@ scripts/check-dependency-update.sh <base-commit> <head-commit>
 scripts/run-release-gate.sh
 ```
 
-CI executes the range-aware update check before Gradle so an incomplete bot PR
-fails quickly instead of spending the Complete Gate discovering missing
-artifacts. Candidate generation is deliberately not automatic: newly downloaded
-checksums are not trusted until the maintainer review succeeds.
+The current modular CI dependencies component checks dependency-verification
+integrity, lockfile coverage and writer policy, and strict dependency floors.
+Those current-state checks do not inspect the complete base-to-head update range
+and are not equivalent to `check-dependency-update.sh`: maintainers must run that
+range-aware command above before pushing. Candidate generation is deliberately
+not automatic: newly downloaded checksums are not trusted until the maintainer
+review succeeds.
 
 ### Hosted candidate generation without changing the controller
 

@@ -9,6 +9,7 @@ LOCAL = "docs/testing/local.md"
 CI = "scripts/setup-ci-component.sh"
 NDK_PRODUCER = "buildSrc/src/main/java/dev/p2pkit/build/BuildAndroidLanSocketsTask.java"
 ENTRY_POINTS = {
+    "AGENTS.md" => ["## Build, Test, and Development Commands", "docs/testing/local.md#android-sdk-setup"],
     "CONTRIBUTING.md" => ["## Development setup", "docs/testing/local.md#android-sdk-setup"],
     "docs/validation/test-catalog.md" => ["### 1.1 Required tools and accounts", "../testing/local.md#android-sdk-setup"],
 }.freeze

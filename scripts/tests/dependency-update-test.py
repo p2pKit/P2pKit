@@ -372,6 +372,76 @@ class WorkflowRetentionTests(unittest.TestCase):
                 check(changed)
 
 
+class DependencyCIPolicyTests(unittest.TestCase):
+    """Actual modular component model; subprocesses/Gradle/tool probes mocked."""
+
+    def setUp(self):
+        path = Path(__file__).resolve().parents[1] / "ci_component.py"
+        spec = importlib.util.spec_from_file_location("dependency_ci_component", path)
+        self.component = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.component)
+
+    def expected(self):
+        c = self.component
+        return [
+            ("integrity-policy", ["bash", "scripts/check-dependency-verification.sh"]),
+            ("lock-coverage", ["bash", "scripts/tests/check-osv-lockfile-coverage.sh"]),
+            ("lock-writer-policy", ["bash", "scripts/tests/check-lock-write-policy-test.sh"]),
+            *[(name, [sys.executable, "-B", "scripts/tests/" + name, "-v"])
+              for name in ("check-freemarker-floor-test.py", "check-jackson-floor-test.py")],
+            ("build-plugin-floors", [str(c.ROOT / "gradlew.bat") if os.name == "nt" else "./gradlew",
+                "--no-daemon", "--no-build-cache", "--no-configuration-cache",
+                "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain",
+                ":verifyBuildPluginSecurityFloors", ":checkPublicConstantAbiPolicy"]),
+        ]
+
+    def test_required_modular_integrity_lock_and_strict_floor_commands(self):
+        c = self.component
+        self.assertEqual(c.commands("dependencies"), self.expected())
+        self.assertIn("dependencies", [row["component"] for row in c.matrix("all")["include"]])
+        source = dict(c.commands("source"))
+        self.assertEqual(source["dependency-update-test.py"],
+                         [sys.executable, "-B", "scripts/tests/dependency-update-test.py", "-v"])
+        self.assertEqual(source["workflow-contract"], ["ruby", "scripts/check-modular-ci-policy.rb"])
+
+    def test_missing_reordered_or_lenient_dependency_commands_are_not_equivalent(self):
+        actual = self.component.commands("dependencies")
+        lenient = copy.deepcopy(actual)
+        lenient[-1][1][lenient[-1][1].index("strict")] = "lenient"
+        for changed in (actual[1:], [*actual[1:], actual[0]], lenient):
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                self.assertEqual(changed, self.expected())
+
+    def test_actual_component_preserves_first_failure_and_bounded_stop(self):
+        c = self.component
+        for failed in (None, *range(len(self.expected()))):
+            for stop_code in (0, 9):
+                with self.subTest(failed=failed, stop_code=stop_code), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    with patch.object(c, "ROOT", root), patch.object(c, "record_tools"), \
+                            patch.object(c.subprocess, "run") as run:
+                        commands = self.expected()
+                        count = len(commands) if failed is None else failed + 1
+                        failure_code = 0 if failed is None else 37 + failed
+                        codes = [0] * count
+                        if failed is not None:
+                            codes[-1] = failure_code
+                        run.side_effect = [Mock(returncode=code) for code in (*codes, stop_code)]
+                        code = c.execute("dependencies")
+                    expected_code = failure_code or stop_code
+                    self.assertEqual(code, expected_code)  # Failure must never become PASS.
+                    stop = [str(root / "gradlew.bat") if os.name == "nt" else "./gradlew", "--stop"]
+                    self.assertEqual([call.args[0] for call in run.call_args_list],
+                                     [argv for _, argv in commands[:count]] + [stop])
+                    self.assertEqual(run.call_args.kwargs, {"cwd": root, "check": False, "timeout": 90})
+                    report = json.loads((root / "build/reports/ci-component/dependencies.json").read_text())
+                    self.assertEqual(report["exitCode"], expected_code)
+                    self.assertEqual(report["tasks"], [
+                        {"task": name, "exitCode": value}
+                        for (name, _), value in zip(commands[:count], codes)
+                    ] + [{"task": "gradle-stop", "exitCode": stop_code}])
+
+
 class GeneratorPhaseTests(unittest.TestCase):
     def test_actual_generator_phase_order_arguments_and_first_failure_are_preserved(self):
         maintained = Path(__file__).resolve().parents[1] / "prepare-dependency-update.sh"
@@ -399,7 +469,8 @@ class GeneratorPhaseTests(unittest.TestCase):
                     "'review-dependency-verification.sh':'PROVENANCE','git':'DIFF'}.get(name)\n"
                     "if name=='gradlew': phase='GENERATE' if sys.argv[1]=='resolveAndLockAll' else 'STRICT'\n"
                     "if name=='python3': phase='GENERATE'\n"
-                    "with open(os.environ['TRACE'],'a') as stream: stream.write(json.dumps([phase,sys.argv[1:]])+'\\n')\n"
+                    "with open(os.environ['TRACE'],'a') as stream: stream.write(json.dumps([phase,sys.argv[1:],"
+                    "os.environ.get('P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED')])+'\\n')\n"
                     "sys.exit(int(os.environ['FAIL_CODE']) if phase==os.environ.get('FAIL_PHASE') else 0)\n")
             for name in ("scripts/check-gradle-wrapper.sh", "scripts/check-dependency-verification.sh",
                          "scripts/review-dependency-verification.sh", "gradlew", "bin/git", "bin/python3"):
@@ -416,12 +487,14 @@ class GeneratorPhaseTests(unittest.TestCase):
                 environment = {**os.environ, "PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
                                "TRACE": str(trace), "FAIL_PHASE": "" if failed is None else expected[failed][0],
                                "FAIL_CODE": str(code), "P2PKIT_DEPENDENCY_TERMINAL_GENERATE": "1" if terminal else ""}
+                environment.pop("P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED", None)
                 result = subprocess.run(["bash", str(script), "synthetic-base"], env=environment,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
                 with self.subTest(terminal=terminal, failed=failed):
                     self.assertEqual(result.returncode, code)
                     self.assertEqual([json.loads(line) for line in trace.read_text().splitlines()],
-                                     [[phase, argv[1:]] for phase, argv in current[:count]])
+                                     [[phase, argv[1:], "1" if phase == "PROVENANCE" else None]
+                                      for phase, argv in current[:count]])
                     self.assertEqual(result.stderr.decode().splitlines(),
                                      [f"DEPENDENCY_GENERATOR_PHASE {phase} EXIT {code if i == failed else 0}"
                                       for i, (phase, _) in enumerate(current[:count])])
@@ -531,7 +604,7 @@ class UnchangedCuratorTests(unittest.TestCase):
                    '#!/bin/sh\necho policy >> "$TRACE"\n[ "${FAIL_STAGE:-}" != policy ]\n')
         self.write("gradlew", '''#!/bin/sh
 case " $* " in
-  *" --write-locks "*) echo writer >> "$TRACE" ;;
+  *" --write-locks "*) echo writer >> "$TRACE"; [ "${FAIL_STAGE:-}" != writer ] || exit 6 ;;
   *) echo strict-floors >> "$TRACE"; [ "${FAIL_STAGE:-}" != strict ] || exit 7 ;;
 esac
 ''')
@@ -548,7 +621,7 @@ esac
                             "GIT_CONFIG_GLOBAL": os.devnull, "P2PKIT_PYTHON3": sys.executable,
                             "P2PKIT_GPG_TMPDIR": str(self.root / "work"), "TMPDIR": str(self.root / "work"),
                             "TRACE": str(self.trace)}
-        for name in ("P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED", "FAIL_STAGE"):
+        for name in ("P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED", "P2PKIT_DEPENDENCY_TERMINAL_GENERATE", "FAIL_STAGE"):
             self.environment.pop(name, None)
         self.git("init", "--quiet")
         self.git("add", "scripts", "gradlew", "gradle")
@@ -600,6 +673,83 @@ esac
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn(b"byte-identical", result.stdout)
                 self.assertNotIn("cleanup", events)  # Curator was never reached.
+
+    def test_direct_preparer_accepts_lock_only_refresh_without_ambient_opt_in(self):
+        lock = self.root / "gradle.lockfile"
+        lock.write_text("org.example:old:1=runtimeClasspath\n")
+        self.git("add", "gradle.lockfile")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Synthetic accepted lock")
+        self.base = self.git("rev-parse", "HEAD").decode().strip()
+        writer = self.root / "gradlew"
+        writer.write_text(writer.read_text().replace('echo writer >> "$TRACE";',
+            'echo writer >> "$TRACE"; printf "org.example:old:1=otherClasspath\\n" > gradle.lockfile;'))
+        result, events = self.invoke(generator=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(events, ["wrapper", "writer", "policy", "strict-floors", "cleanup"])
+        self.assertEqual(lock.read_text(), "org.example:old:1=otherClasspath\n")
+        self.assertEqual(self.metadata.read_bytes(), self.original)
+        self.assertIn(b"byte-identical", result.stdout)
+        self.assertNotIn("P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED", self.environment)
+
+    def test_direct_preparer_retains_explicit_refusal_and_all_earlier_failures(self):
+        for flag in ("0", "", "true", "2"):
+            with self.subTest(flag=flag):
+                result, events = self.invoke(flag, generator=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"RESULT: PASS", result.stdout)
+                self.assertNotIn("curl", events)
+        for stage, code in (("writer", 6), ("policy", 1), ("strict", 7)):
+            with self.subTest(stage=stage):
+                result, events = self.invoke(generator=True, fail=stage)
+                self.assertEqual(result.returncode, code)
+                self.assertNotIn(b"RESULT: PASS", result.stdout)
+                self.assertNotIn("cleanup", events)
+
+    def test_unchanged_review_refuses_changed_or_missing_original_provenance_policy(self):
+        policy = self.root / "gradle/plugin-provenance-policy.txt"
+        policy.write_text("# Changed trust policy must be reviewed, even with identical XML\n")
+        for generator in (False, True):
+            with self.subTest(generator=generator):
+                result, events = self.invoke("1" if not generator else None, generator=generator)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"RESULT: PASS", result.stdout)
+                self.assertNotIn("curl", events)
+        policy.write_text("# No exceptions\n")
+        self.git("rm", "--cached", "gradle/plugin-provenance-policy.txt")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Synthetic missing base policy")
+        self.base = self.git("rev-parse", "HEAD").decode().strip()
+        result, events = self.invoke(generator=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"RESULT: PASS", result.stdout)
+        self.assertNotIn("curl", events)
+
+    def test_direct_preparer_refuses_invalid_base_metadata_and_routes_new_artifacts_to_curator(self):
+        original_base = self.base
+        for base in ("missing-base", "0" * 40):
+            self.base = base
+            result, events = self.invoke(generator=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b"RESULT: PASS", result.stdout)
+            self.assertNotIn("curl", events)
+        self.base = original_base
+        for raw in (self.original + b"\n", self.original.replace(b'true', b'false'),
+                    self.original.replace(b'a' * 64, b'b' * 64), b'<verification-metadata/>\n'):
+            with self.subTest(raw=raw[:30]):
+                self.metadata.write_bytes(raw)
+                result, events = self.invoke(generator=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"RESULT: PASS", result.stdout)
+        self.metadata.unlink()
+        result, events = self.invoke(generator=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"RESULT: PASS", result.stdout)
+        self.metadata.write_bytes(xml(True).replace(b'><', b'>\n<') + b'\n')
+        result, events = self.invoke(generator=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("curl", events)  # Real curator reaches deliberately refused fake transport.
+        self.assertNotIn(b"byte-identical", result.stdout)
 
     def test_noop_requires_entire_xml_and_additions_still_require_remote_review(self):
         for raw in (self.original + b"\n", self.original.replace(b'true', b'false'),

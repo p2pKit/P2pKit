@@ -10,12 +10,10 @@ do not replace it with a branch name. A passing build or a code review is not
 external evidence. Do not change a blocked tracker row to `Verified` until
 the required evidence below has been collected and reviewed.
 
-The repository cleanup does not close any external validation. The following
-six areas remain pending until this plan is executed and its evidence reviewed:
-Android physical devices; Apple devices/AWDL/path rotation/background/restart;
-two-machine hostile networks; CLI fault injection and headful Desktop
-observation; independent secure-v2 interoperability; and a professional
-cryptographic audit. Every run must record the actual SHA used by the tester.
+Repository cleanup does not close any external validation. The
+[canonical six-area status table](README.md#current-status) is the sole mutable
+campaign-status record. This catalog defines procedures and evidence, not a
+second status enumeration. Every run must record the actual SHA used by the tester.
 
 ## 1. Shared execution contract
 
@@ -1049,6 +1047,12 @@ correlated → `transfer.completed` → `test.session.completed` with
 failure, timeout, unexpected state regression, storage/permission error, or
 terminal `FAILURE`/`CANCELLATION` must be explained by the UI observation and
 the row's expected failure sequence.
+
+`protocol.secure_v2.negotiated` records the authenticated security profile, not
+the optional HELLO feature intersection. A Connected state or connection snapshot
+cannot prove support for `file-commit-sha256-v1`: retain actual peer HELLO/negotiation
+and operation evidence for optional-feature claims. Durable transfer completion is
+a separate observation, not implied by the security-profile record.
 
 | Test ID | Required structured events and exported fields | UI indicators to record | Expected success / failure sequence | Evidence from each peer and external capture |
 | --- | --- | --- | --- | --- |

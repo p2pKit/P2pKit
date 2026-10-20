@@ -183,9 +183,11 @@ def connected_owner(rows, *, swift):
             "Secure connection lacks endpoint ownership/protocol identity")
     require(all(tuple(row.get(key) for key in keys) == identity for row in states + negotiated),
             "Endpoint connection/negotiation owner differs")
+    # Connected proves the configured authenticated profile, not optional HELLO features.
+    # File support is demonstrated separately by the real durable duplex transfer below.
     require(all(row.get("currentState") == "secure-v2" and row.get("previousState") is None and
                 row.get("outcome") == ("SUCCESS" if swift else None) and
-                row.get("details", {}) == ({} if swift else {"feature": "file-commit-sha256-v1"})
+                row.get("details", {}) == {}
                 for row in negotiated), "Negotiation identity/result differs")
     require(all(row.get("outcome") == (None if swift else "SUCCESS") for row in connections),
             "Connected result differs")

@@ -135,6 +135,21 @@ def need(condition, message, code="CHECK_FAILED"):
         raise QualificationError(message, code)
 
 
+def multicast_interpreter():
+    # The Java primitive pair requires a canonical executable, not the running
+    # interpreter's possibly symlinked launcher spelling. Never select a fallback.
+    message = "Canonical Python executable required for multicast diagnostics"
+    need(type(sys.executable) is str and bool(sys.executable), message)
+    try:
+        executable = Path(sys.executable)
+        need(executable.is_absolute(), message)
+        executable = executable.resolve(strict=True)
+        need(executable.is_file() and os.access(executable, os.X_OK), message)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise QualificationError(message) from error
+    return str(executable)
+
+
 def module(name, filename):
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
     result = importlib.util.module_from_spec(spec)
@@ -377,7 +392,7 @@ def swift_inventory(root):
                     cases.add(name)
         need(cases, "No source XCTest methods")
         result[target] = cases
-    need(len(result["p2pkit-sample-tests"]) == 88 and len(result["p2pkit-sample-uitests"]) == 6,
+    need(len(result["p2pkit-sample-tests"]) == 88 and len(result["p2pkit-sample-uitests"]) == 10,
          "Maintained Swift inventory requires review")
     return result
 
@@ -995,6 +1010,7 @@ class Qualification:
         # First require this NEW host's unchanged real-resource control to finish
         # naturally, with the original 10s readiness and 45s child bound.
         need("P2PKIT_JMDNS_FIXTURE_IPV4" not in os.environ, "No multicast/interface override")
+        python = multicast_interpreter()  # Validate before any probe allocation/acquisition.
         work = self.state / "work/multicast"
         work.mkdir()
         dependency = work / "slf4j-api-2.0.7.jar"
@@ -1021,7 +1037,7 @@ class Qualification:
             "-d", str(classes), str(fixture)], 90)
         proof = self.invoke("multicast-readiness-control", [str(java / "java"), "-Xms16m", "-Xmx128m", "-XX:MaxMetaspaceSize=128m",
             "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC", "-Dorg.slf4j.simpleLogger.defaultLogLevel=off",
-            "-Dp2pkit.audit.jmdnsStartupPrimitives=true", "-Dp2pkit.audit.pythonExecutable=" + sys.executable,
+            "-Dp2pkit.audit.jmdnsStartupPrimitives=true", "-Dp2pkit.audit.pythonExecutable=" + python,
             "-cp", os.pathsep.join(map(str, (classes, vendor / "resources", dependency))),
             "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture", "control"], BOUNDS["multicast-admission"], allow_failure=True)
         raw = self.output(proof).decode() + self.output(proof, stream="stderr").decode()

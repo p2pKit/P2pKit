@@ -32,7 +32,12 @@ else
 fi
 run_phase INTEGRITY scripts/check-dependency-verification.sh
 run_phase STRICT ./gradlew verifyBuildPluginSecurityFloors help --dependency-verification=strict --no-daemon --console=plain
-run_phase PROVENANCE scripts/review-dependency-verification.sh "$BASE_REF"
+# A complete lock-only refresh can reuse identical accepted metadata/policy.
+# Scope this default to the curator only, after every required writer/strict
+# phase succeeds. Standalone curation still rejects an empty artifact delta;
+# an explicit caller refusal (0) or malformed flag is never overwritten here.
+P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED="${P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED-1}" \
+    run_phase PROVENANCE scripts/review-dependency-verification.sh "$BASE_REF"
 run_phase DIFF git diff --check
 
 echo "RESULT: PASS — dependency lock/checksum candidates are generated and independently reviewed; inspect the complete diff before committing"

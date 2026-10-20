@@ -37,6 +37,11 @@ PACKAGE = "dev.p2pkit.sample.android"
 TEST_PACKAGE = PACKAGE + ".test"
 INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"
 RPC_INSTRUMENTATION = PACKAGE + ".rpclab.RpcLabRuntimeInstrumentation"
+SOCKET_INSTRUMENTATION = PACKAGE + ".runtime.LanSocketRuntimeInstrumentation"
+UI_INSTRUMENTATION = PACKAGE + ".runtime.UiAcceptanceInstrumentation"
+CREDENTIAL_INSTRUMENTATION = PACKAGE + ".runtime.CredentialUiInstrumentation"
+TEST_INSTRUMENTATIONS = (INSTRUMENTATION, RPC_INSTRUMENTATION, SOCKET_INSTRUMENTATION,
+                         UI_INSTRUMENTATION, CREDENTIAL_INSTRUMENTATION)
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 IMAGE = "system-images;android-37.0;google_apis;x86_64"
 IMAGE_PIN = (6, 0, 0, 2234615040, "629e507fd5b737c2c836b12b52c81cd0e3b12399", "x86_64-37.0_r06.zip")
@@ -54,14 +59,14 @@ EXPORT_DIRECTORY = "cache/test-evidence"
 
 
 def verify_test_apk_manifest(raw):
-    """Admit both explicit runners without changing the maintained API37 test selection."""
+    """Admit the exact runner inventory without changing maintained API37 test selection."""
     manifest = xml(raw)
     ns = "{http://schemas.android.com/apk/res/android}"
     instruments = manifest.findall("instrumentation")
     sdk = manifest.findall("uses-sdk")
     names = [entry.get(ns + "name") for entry in instruments]
-    need(manifest.get("package") == TEST_PACKAGE and len(instruments) == 2 and
-         set(names) == {INSTRUMENTATION, RPC_INSTRUMENTATION} and
+    need(manifest.get("package") == TEST_PACKAGE and len(instruments) == len(TEST_INSTRUMENTATIONS) and
+         set(names) == set(TEST_INSTRUMENTATIONS) and
          all(entry.get(ns + "targetPackage") == PACKAGE for entry in instruments) and
          len(sdk) == 1 and sdk[0].get(ns + "minSdkVersion") == "24" and
          sdk[0].get(ns + "targetSdkVersion") == "37", "Wrong instrumentation APK")

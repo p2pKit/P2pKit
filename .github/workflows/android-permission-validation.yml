@@ -1,0 +1,85 @@
+name: Android API37 LAN permission validation
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: android-permission-validation-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  permission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - name: Check out exact event source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure Java 21 daemon/runtime
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Configure Java 17 library toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Select job-owned optional Gradle cache
+        run: echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-home" >> "$GITHUB_ENV"
+      - name: Configure optional verified dependency cache
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
+        with:
+          cache-read-only: true
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            caches/*/kotlin-dsl
+            caches/*/scripts
+            caches/*/groovy-dsl
+      - name: Install exact producer NDK and API37 witness image
+        timeout-minutes: 12
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platforms;android-36' 'platforms;android-37.0' 'ndk;29.0.14206865' \
+            'platform-tools' 'emulator' 'system-images;android-37.0;google_apis;x86_64'
+      - name: Admit KVM for this hosted job user
+        id: kvm
+        run: |
+          test -c /dev/kvm
+          getfacl -p /dev/kvm > "$RUNNER_TEMP/android-permission-kvm-original.acl"
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Build exact APKs and run genuine permission revocation witness
+        id: execution
+        run: |
+          python3 -B scripts/ci_evidence.py --component android-permission --timeout-seconds 3600 \
+            --output-dir "$RUNNER_TEMP/android-permission-evidence" \
+            --report-glob 'build/reports/android-permission/**/*' -- \
+            python3 -B scripts/run-android-permission-validation.py
+      - name: Restore the original hosted KVM access policy
+        if: ${{ always() && steps.kvm.outcome != 'skipped' }}
+        run: |
+          original="$RUNNER_TEMP/android-permission-kvm-original.acl"
+          if test -f "$original"; then
+            sudo setfacl --restore="$original"
+            getfacl -p /dev/kvm > "$RUNNER_TEMP/android-permission-kvm-final.acl"
+            cmp "$original" "$RUNNER_TEMP/android-permission-kvm-final.acl"
+          fi
+      - name: Retain encrypted original evidence, including failures
+        if: ${{ always() && steps.execution.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-permission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-permission-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

@@ -58,6 +58,17 @@ before using it as an independent test oracle.
   a subsequent `CleanupFailed`, and failed cleanup remains owned for retry.
   `stopLocalNetwork()` releases hotspots only and preserves a joined network's
   snapshots; joined bindings are released by system loss or manager/kit close.
+- A successful Android join owns the **process-wide default network binding**,
+  not just P2pKit sockets. New sockets without an explicit network binding and
+  default DNS resolutions use that network; already-created sockets are not
+  rerouted. An internet-less joined network can disrupt unrelated host-app
+  traffic. There is no caller-controlled nonterminal leave operation; closing
+  the manager releases the join but permanently disposes the manager. A second
+  join while the first is active is refused. System-loss cleanup is a separate
+  path, not an application leave API, and can report retained cleanup failures.
+  This describes the existing contract, not a decision to add or reject the
+  optional leave capability tracked in
+  [#284](https://github.com/p2pKit/P2pKit/issues/284).
 
 ## Peer and session contract
 

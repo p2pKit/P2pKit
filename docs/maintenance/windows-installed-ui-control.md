@@ -40,6 +40,13 @@ These observations identify a stalled stage; they do not substitute for native f
 Failure output also records elapsed monotonic milliseconds at each fixed stage and whether the
 original ten-second deadline expired. It contains no exception message, identity or user input;
 the timing observation neither extends a budget nor turns partial UI progress into a pass.
+The failure observation also projects the last **rendered** close phase as one fixed
+`CLOSE_` category: REQUESTED, NETWORK_REFRESH, STATUS_OBSERVER, PROFILE_UNLOCK,
+ROLE_RETIREMENT, PROTECTED_PROFILE, SCOPE_RETIREMENT or FAILED. Missing, conflicting
+or nonliteral labels produce UNOBSERVED. Rendering may lag the actual worker: a
+phase identifies a pending observation, not its completion, original failure cause
+or native-retirement proof. No private exception, profile value or arbitrary label
+is copied. See the [Back investigation checkpoint](windows-back-cleanup-20261020.md).
 The controller publishes its original worker before start, invalidates queued actions during
 terminal concealment and is joined by the original application's retirement worker. Unknown
 retirement fails within the unchanged terminal/outer budgets.
