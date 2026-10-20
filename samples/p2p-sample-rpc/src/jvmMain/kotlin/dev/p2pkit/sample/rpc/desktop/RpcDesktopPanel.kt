@@ -555,18 +555,28 @@ public class RpcDesktopPanel(
             if (failure == null) failure = caught
             else if (failure !== caught && failure.suppressed.none { it === caught }) failure.addSuppressed(caught)
         }
+        fun phase(value: String) {
+            // Finite source-owned progress only. A rendered phase is not proof that its operation
+            // returned, nor authority to remove the panel or release a still-owned profile.
+            try { SwingUtilities.invokeLater { state.text = "Closing RPC: $value" } }
+            catch (caught: Throwable) { retain(caught) } // Diagnostic scheduling must not skip owned cleanup.
+        }
         val work = scope.launch(start = CoroutineStart.LAZY) {
             suspend fun attempt(action: suspend () -> Unit) {
                 try { action() } catch (caught: Throwable) { retain(caught) }
             }
+            phase("network refresh")
             attempt { networkRefresh?.cancelAndJoin() }
+            phase("status observer")
             attempt { statusUpdates?.join() }
             // Do not cancel a native unlock or lose its successful late profile. No role can start while closing.
+            phase("profile unlock")
             attempt { unlockTask?.join() }
             retain(unlockTask?.completionFailure)
             retain(unlockCleanupFailure)
             retain(unlockTask?.attempt?.cleanupFailure)
             var roleRetired = false
+            phase("role retirement")
             attempt {
                 val roleFailure = stopped.await()
                 retain(roleFailure)
@@ -574,12 +584,16 @@ public class RpcDesktopPanel(
             }
             // The worker's captured profile remains owned even if its EDT delivery failed before publication.
             val acquiredProfile = profile ?: unlockTask?.attempt?.result?.getOrNull()
-            if (roleRetired) attempt { acquiredProfile?.close() }
+            if (roleRetired) {
+                phase("protected profile")
+                attempt { acquiredProfile?.close() }
+            }
             physicalFinished = true
         }
         work.invokeOnCompletion { cause ->
             retain(cause)
             if (!physicalFinished) retain(IllegalStateException("RPC physical cleanup did not return an outcome"))
+            phase("scope retirement")
             val expected = CancellationException("RPC panel retirement completed")
             val drain = DesktopRpcPanelDrainCompletion(failure, expected) { finalFailure ->
                 SwingUtilities.invokeLater {

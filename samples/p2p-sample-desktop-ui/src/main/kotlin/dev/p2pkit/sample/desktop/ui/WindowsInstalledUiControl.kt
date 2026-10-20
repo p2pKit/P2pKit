@@ -193,7 +193,8 @@ internal class WindowsInstalledUiControl private constructor() {
         val hostEnabled = controls.singleOrNull { it.text == "Start host" }?.isEnabled == true
         val stopEnabled = controls.singleOrNull { it.text == "Stop" }?.isEnabled == true
         lastObservation = "STATE_${state + 1}_ACTIVE_${window?.isActive == true}" +
-            "_PROFILE_REFUSED_${profileRefused}_HOST_ENABLED_${hostEnabled}_STOP_ENABLED_${stopEnabled}_REASON_$reason"
+            "_PROFILE_REFUSED_${profileRefused}_HOST_ENABLED_${hostEnabled}_STOP_ENABLED_${stopEnabled}_REASON_$reason" +
+            "_CLOSE_${installedUiClosePhase(labels)}"
     }
 
     companion object {
@@ -236,6 +237,22 @@ internal class WindowsInstalledUiControl private constructor() {
             return matches.singleOrNull()?.also { check(it.accessibleAction?.accessibleActionCount == 1) }
         }
     }
+}
+
+/** Last rendered close boundary only; never copy a label, private exception or user-controlled value. */
+internal fun installedUiClosePhase(labels: List<String>): String {
+    val phases = mapOf(
+        "Closing RPC and its protected profile…" to "REQUESTED",
+        "Closing RPC: network refresh" to "NETWORK_REFRESH",
+        "Closing RPC: status observer" to "STATUS_OBSERVER",
+        "Closing RPC: profile unlock" to "PROFILE_UNLOCK",
+        "Closing RPC: role retirement" to "ROLE_RETIREMENT",
+        "Closing RPC: protected profile" to "PROTECTED_PROFILE",
+        "Closing RPC: scope retirement" to "SCOPE_RETIREMENT",
+        "Cleanup failed; RPC ownership retained. Navigation is blocked." to "FAILED",
+    )
+    // Duplicate or conflicting observations are ambiguous, not evidence of a completed phase.
+    return labels.mapNotNull(phases::get).singleOrNull() ?: "UNOBSERVED"
 }
 
 /** The original run owner preserves a startup error after it successfully retires to Stopped. */

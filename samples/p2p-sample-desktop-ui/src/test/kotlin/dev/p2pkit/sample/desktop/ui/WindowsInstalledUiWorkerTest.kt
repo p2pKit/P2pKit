@@ -13,6 +13,27 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WindowsInstalledUiWorkerTest {
+    @Test fun closeObservationUsesOnlyTheExactFiniteRenderedPhase() {
+        val phases = mapOf(
+            "Closing RPC and its protected profile…" to "REQUESTED",
+            "Closing RPC: network refresh" to "NETWORK_REFRESH",
+            "Closing RPC: status observer" to "STATUS_OBSERVER",
+            "Closing RPC: profile unlock" to "PROFILE_UNLOCK",
+            "Closing RPC: role retirement" to "ROLE_RETIREMENT",
+            "Closing RPC: protected profile" to "PROTECTED_PROFILE",
+            "Closing RPC: scope retirement" to "SCOPE_RETIREMENT",
+            "Cleanup failed; RPC ownership retained. Navigation is blocked." to "FAILED",
+        )
+        for ((label, expected) in phases) {
+            assertEquals(expected, installedUiClosePhase(listOf("unrelated rendered state", label)))
+            assertEquals("UNOBSERVED", installedUiClosePhase(listOf("$label PRIVATE_SENTINEL")))
+            assertEquals("UNOBSERVED", installedUiClosePhase(listOf(label, label)))
+        }
+        assertEquals("UNOBSERVED", installedUiClosePhase(phases.keys.toList()))
+        assertEquals("UNOBSERVED", installedUiClosePhase(listOf("PRIVATE_SENTINEL", "Closing RPC: done")))
+        assertEquals("UNOBSERVED", installedUiClosePhase(emptyList()))
+    }
+
     @Test fun startupFailureRemainsClassifiedAfterTheActualOwnerRetiresToStopped() {
         val reason = "Discovery is blocked by the current JVM adapter with 12 other active non-loopback interfaces."
         for (state in listOf("Host: Failed", "No role: Stopped")) {
