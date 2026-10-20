@@ -599,7 +599,7 @@ class ProvisioningUiStateTest {
     fun hotspotFailureCardInvokesTheSameRetryActionAsTheControllerTests() {
         val vm = sampleSource("P2pKitViewModel.kt")
         val card = sampleSource("MainActivity.kt").substringAfter("private fun HotspotCard(")
-            .substringBefore("private fun JoinHotspotCard(")
+            .substringBefore("internal fun JoinHotspotCard(")
         val failedCard = card.substringAfter("r is LocalNetworkResult.Failed ->")
             .substringBefore("r is LocalNetworkResult.Unsupported ->")
         assertTrue(failedCard.contains("vm.retryHotspot { launcher.launch(perm) }"))
