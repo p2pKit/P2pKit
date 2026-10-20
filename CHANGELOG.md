@@ -14,6 +14,9 @@ Existing rc4 artifacts remain immutable. No rc5 publication is claimed here.
 - Preserve Android password sensitivity across join-result UI changes and mask
   before submission while retaining failed-retry input. Rendered/lifecycle
   acceptance remains separately tracked; this source repair is not a runtime pass.
+- Disable Android sample recents screenshots on API33+ without blocking normal
+  foreground screenshots. API24–32 receive no task-preview suppression; retain
+  the [legacy preview limitation](docs/security/model.md#android-sample-credential-previews).
 - Support verified lock-only dependency refreshes through the documented direct
   preparer, while preserving exact unchanged XML and verification-policy checks.
 - Canonicalize the optional RPC multicast diagnostic's Python interpreter before

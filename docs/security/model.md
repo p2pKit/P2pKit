@@ -114,6 +114,24 @@ Identity reset produces a new peer identity and requires re-approval. Follow
 [typed identity/error recovery](../guides/error-handling.md), never an automatic
 reset or security downgrade after failure.
 
+## Android sample credential previews
+
+The Android sample's in-memory credential clearing and default masking do not
+by themselves erase pixels already retained in an OS task representation. On
+API33+, `MainActivity` calls the public `setRecentsScreenshotEnabled(false)`
+before its first content to request theme-based task previews instead of real
+screenshots. Normal foreground screenshots remain possible; this is not
+`FLAG_SECURE` or general screenshot prevention.
+
+API24–32 receive no task-preview suppression from this change. Their stopped-task
+credential-preview channel remains unresolved; an API35 validation result cannot
+establish all-version absence of retained credential pixels. Do not describe
+this residual as fixed or risk-accepted by a prerelease. The
+[rendered/lifecycle validation guide](../testing/android-ui-validation.md#foreground-pixels-and-stopped-task-previews)
+keeps actual global pixels authoritative over cleared state or an empty owned
+window buffer. This sample-specific policy neither changes transport security
+nor supplies physical/OEM qualification.
+
 ## Explicitly risky compatibility mode
 
 `AcceptAnyAuthenticatedSameApp` authenticates possession of a key and encrypts
