@@ -25,6 +25,19 @@ PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 PEER_REPLY_PREFIX = "send jvm-"
 
 
+def live_lines(raw):
+    # CLI state lines contain UTF-8 arrows. Neither decoding a partial codepoint
+    # nor counting an unterminated receive line is valid stream admission.
+    complete = raw[:raw.rfind(b"\n") + 1]
+    return [line.lstrip("> ").strip() for line in complete.decode("utf-8", errors="strict").splitlines()]
+
+
+def final_peer_lines(raw):
+    need(raw.endswith(b"\n") or raw.endswith(b"\n> "), "Unterminated final peer output")
+    raw.decode("utf-8", errors="strict")  # EOF is strict; only the literal prompt tail is exempt.
+    return live_lines(raw)
+
+
 def parse_output(raw):
     result, pending, frames, codes = {}, {}, [], []
     for line in raw.decode("utf-8", errors="strict").splitlines():
@@ -159,7 +172,7 @@ class Campaign:
             return bytes(buffers[label]).decode("utf-8", errors="strict")
 
         def lines(label):
-            return [line.lstrip("> ").strip() for line in text(label).splitlines()]
+            return live_lines(bytes(buffers[label]))
 
         def send(process, command):
             need(process.poll() is None, "Peer exited before command")
@@ -356,7 +369,7 @@ class Campaign:
         art = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(art)
         alias = re.findall(r"incoming from (anon-[0-9a-f]{16}): <text 40B>", text("peer"))
-        host = art.runtime_host_result(lines("peer"), alias[0] if len(alias) == 1 else None,
+        host = art.runtime_host_result(final_peer_lines(bytes(buffers["peer"])), alias[0] if len(alias) == 1 else None,
             {"controlAccepts": raw_accepts, "controlChallenges": raw_challenges, "controlEmptyConnections": raw_empty},
             True, len(clients))
         need(peer.returncode == 0 and host["status"] == "PASS", "Final P2pKit peer or raw-route control failed")

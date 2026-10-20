@@ -76,14 +76,14 @@ python3 -B scripts/tests/run-android-art-smoke-test.py
 
 ## #372 is deliberately separate
 
-`LanPermissionRuntimeInstrumentation` and its existing driver still declare
-`p2pkitSameInstanceRevocation=NOT_EXECUTED`. Do not reinterpret it as a complete
-revocation result. Remaining acceptance needs a fresh API37/target37 install with
-no inherited Nearby grant, admissible actual runtime/permission-controller module
-and mandatory flag/compat readbacks, real denial → UI grant → authenticated
-controlled ordinary-LAN duplex traffic, then live OS revocation. Verify denial on
-the same manager if its process survives; otherwise retain attributable OS
-permission-kill evidence and unchanged-install denied reentry. A force-stop,
-modeled callback, API35 emulator, loopback connection or generic CI success does
-not satisfy this requirement. The API35 UI lane makes no availability claim about
-an eligible API37 runtime.
+The original no-mode `LanPermissionRuntimeInstrumentation` and its existing
+driver still declare `p2pkitSameInstanceRevocation=NOT_EXECUTED`; do not reinterpret
+that result. The separate [API37 permission lane](android-permission-validation.md)
+adds explicitly selected real revocation/reentry modes without widening this UI
+lane. It requires fresh API37/target37/no-prior-Nearby installation, original
+runtime/module/mandatory-flag/compat observations, actual denied → UI grant →
+pinned authenticated duplex controlled traffic → OS revocation/reentry evidence.
+An eligible emulator may satisfy that scope; a physical phone is not inherently
+required. A force-stop, modeled callback, API35 emulator, Android loopback or
+generic CI success does not satisfy it. The API35 UI lane makes no availability
+claim about an eligible API37 runtime.

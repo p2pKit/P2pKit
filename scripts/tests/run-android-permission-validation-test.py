@@ -75,6 +75,18 @@ class PermissionValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             p.terminal(output()[:-1], TOKEN, "revocation")
 
+    def test_live_peer_lines_allow_utf8_fragments_but_not_partial_receipts(self):
+        receipt = "incoming from anon-" + "a" * 16 + ": <text 40B>"
+        raw = ("[state] Starting → Running\n> " + receipt + "\n").encode()
+        for size in range(len(raw)):
+            with self.subTest(size=size):
+                self.assertNotIn(receipt, p.live_lines(raw[:size]))
+        self.assertIn(receipt, p.live_lines(raw))
+        self.assertIn(receipt, p.final_peer_lines(raw + b"> "))
+        for invalid in (raw[:-1], raw + b"unclosed diagnostic", raw + b"\xe2"):
+            with self.assertRaises(ValueError):
+                p.final_peer_lines(invalid)
+
     def test_peer_reply_uses_actual_maintained_cli_command(self):
         self.assertEqual(p.PEER_REPLY_PREFIX, "send jvm-")
         source = (p.ROOT / "samples/p2p-sample-desktop/src/main/kotlin/dev/p2pkit/sample/desktop/Main.kt").read_text()
