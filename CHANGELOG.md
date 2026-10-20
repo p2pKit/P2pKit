@@ -20,8 +20,11 @@ Existing rc4 artifacts remain immutable. No rc5 publication is claimed here.
 - Correct operational-limit source citations and add narrowly scoped drift checks.
 - Add bounded Windows Back-cleanup progress diagnostics without changing resource
   ownership, close order, provider behavior or time limits.
-- Prepare focused Android UI and Apple acceptance routes and a TCP_NODELAY latency
-  measurement tool. Compilation, model and loopback results are not physical-device,
+- Add a controlled actual authenticated-v2 PING/PONG RTT diagnostic. The recorded
+  JVM loopback comparison showed no consistent TCP_NODELAY speedup; the separate
+  synthetic TCP probe's benefit is not a measured protocol improvement.
+- Prepare focused Android UI and Apple acceptance routes.
+  Compilation, model and loopback results are not physical-device,
   actual installed-Windows, independent-peer or complete real-LAN qualification.
 
 ## 0.8.0-rc4 — development release candidate (2026-10-20)
