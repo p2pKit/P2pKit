@@ -24,6 +24,17 @@ properties are retained. No personal device, existing AVD or prior installation
 is adopted. Only the existing public evidence-recipient key is needed; raw
 synthetic output is encrypted by the native-owned `ci_evidence.py` exporter.
 
+Before either API35 UI or API37 permission instrumentation, the shared bootstrap
+requires the boot flag **and** real `input`, `activity`, `package` and `settings`
+binder services. The original 180-second boot deadline also bounds identity
+checks and the single unlock command; a failed unlock is not retried. A boot
+property alone does not establish that Android's system services are usable.
+Pre-admission failure retains a fixed, read-only service/process/property and
+filtered system-error snapshot privately, within a separate 20-second diagnostic
+bound. That retention cannot admit the guest or run any test. Persistent missing
+services remain a failed setup, not a permission result or an unavailable-runtime
+claim; no APK is installed before this admission completes.
+
 ## Real campaign, not shell network identity
 
 The existing `LanPermissionRuntimeInstrumentation` gains explicit modes; its

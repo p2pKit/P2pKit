@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 import sys
 import tarfile
+import tempfile
 import unittest
+from unittest.mock import Mock
 
 sys.dont_write_bytecode = True
 SPEC = importlib.util.spec_from_file_location("android_ui", Path(__file__).resolve().parents[1] /
@@ -52,6 +54,157 @@ def archive(entries):
             info.linkname = "result.json" if kind == tarfile.SYMTYPE else ""
             target.addfile(info, io.BytesIO(content) if kind == tarfile.REGTYPE else None)
     return out.getvalue()
+
+
+class GuestFixture:
+    """Synthetic command/clock control, never an adb or runtime witness."""
+    def __init__(self):
+        self.now = 0.0
+        self.calls = []
+        self.responses = {}
+        self.delay = 0.25
+        self.emulator = Mock()
+        self.emulator.poll.return_value = None
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+    def run(self, command, *, timeout, check):
+        self.calls.append((tuple(command), timeout, self.now))
+        if self.delay > timeout:
+            self.now += timeout
+            raise ValueError("synthetic command deadline")
+        self.now += self.delay
+        key = tuple(command[1:])
+        if key in self.responses:
+            value = self.responses[key]
+            if isinstance(value, Exception):
+                raise value
+            if callable(value):
+                return value()
+            return value
+        if key == ("shell", "getprop", "sys.boot_completed"):
+            return 0, b"1\n"
+        if key[:3] == ("shell", "service", "check"):
+            return 0, f"Service {key[3]}: found\n".encode()
+        if key == ("emu", "avd", "name"):
+            return 0, b"owned-fixture\nOK\n"
+        if key == ("shell", "getprop", "ro.build.version.sdk"):
+            return 0, b"37\n"
+        if key == ("shell", "getprop"):
+            return 0, b"synthetic properties\n"
+        if key == ("shell", "input", "keyevent", "82"):
+            return 0, b""
+        raise AssertionError("Unexpected synthetic command")
+
+    def admit(self, report):
+        ui.admit_android_guest(self.run, ["owned-adb"], self.emulator, "owned-fixture", 37,
+                               report, clock=lambda: self.now, sleep=self.sleep)
+
+    def unlocks(self):
+        return [item for item in self.calls if item[0][1:] == ("shell", "input", "keyevent", "82")]
+
+
+class AndroidBootAdmissionTests(unittest.TestCase):
+    def test_boot_flag_and_all_real_services_then_one_unlock(self):
+        guest = GuestFixture()
+        with tempfile.TemporaryDirectory() as directory:
+            guest.admit(Path(directory))
+            self.assertEqual((Path(directory) / "runtime-properties.txt").read_bytes(), b"synthetic properties\n")
+        self.assertEqual(len(guest.unlocks()), 1)
+        self.assertEqual([item[0][-1] for item in guest.calls if item[0][1:4] == ("shell", "service", "check")],
+                         ["input", "activity", "package", "settings"])
+        for _, timeout, start in guest.calls:
+            self.assertLessEqual(timeout, min(15, 180 - start))
+
+    def test_boot_flag_without_any_one_service_never_unlocks(self):
+        for service in ui.BOOT_SERVICES:
+            for invalid in ((0, f"Service {service}: not found\n".encode()), (0, b"found\n"),
+                            (0, b"Service foreign: found\n"), (1, f"Service {service}: found\n".encode()),
+                            (0, (f"Service {service}: found\n" * 2).encode())):
+                with self.subTest(service=service, invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                    guest = GuestFixture()
+                    guest.responses[("shell", "service", "check", service)] = invalid
+                    with self.assertRaises(ValueError):
+                        guest.admit(Path(directory))
+                    self.assertFalse(guest.unlocks())
+                    self.assertLessEqual(guest.now, 180)
+                    for _, timeout, start in guest.calls:
+                        self.assertLessEqual(timeout, min(15, 180 - start))
+
+    def test_real_service_readiness_may_follow_boot_flag_within_same_bound(self):
+        guest = GuestFixture()
+        guest.responses[("shell", "service", "check", "input")] = lambda: (
+            (0, b"Service input: not found\n") if guest.now < 12 else (0, b"Service input: found\n"))
+        with tempfile.TemporaryDirectory() as directory:
+            guest.admit(Path(directory))
+        self.assertEqual(len(guest.unlocks()), 1)
+        self.assertGreaterEqual(guest.unlocks()[0][2], 12)
+        self.assertLess(guest.now, 180)
+
+    def test_absent_boot_flag_or_dead_owned_emulator_never_unlocks(self):
+        for dead in (False, True):
+            guest = GuestFixture()
+            guest.responses[("shell", "getprop", "sys.boot_completed")] = (0, b"0\n")
+            if dead:
+                guest.emulator.poll.return_value = 1
+            with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+                guest.admit(Path(directory))
+            self.assertFalse(guest.unlocks())
+            self.assertLessEqual(guest.now, 180)
+            if dead:
+                self.assertFalse(guest.calls)
+
+    def test_identity_or_unlock_failure_is_not_retried(self):
+        for command, failure, unlocks in (
+            (("emu", "avd", "name"), (0, b"foreign\nOK\n"), 0),
+            (("shell", "getprop", "ro.build.version.sdk"), (0, b"35\n"), 0),
+            (("shell", "input", "keyevent", "82"), ValueError("synthetic missing input"), 1),
+        ):
+            guest = GuestFixture()
+            guest.responses[command] = failure
+            with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+                guest.admit(Path(directory))
+            self.assertEqual(len(guest.unlocks()), unlocks)
+            self.assertEqual(sum(item[0][1:] == command for item in guest.calls), 1)
+
+    def test_command_time_counts_toward_original_deadline(self):
+        guest = GuestFixture()
+        guest.delay = 14
+        guest.responses[("shell", "service", "check", "settings")] = (0, b"Service settings: not found\n")
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+            guest.admit(Path(directory))
+        self.assertFalse(guest.unlocks())
+        self.assertEqual(guest.now, 180)
+        self.assertLess(guest.calls[-1][1], 15)
+
+    def test_private_failure_capture_is_fixed_read_only_bounded_and_best_effort(self):
+        now, calls = [0.0], []
+
+        def run(command, *, timeout, check):
+            calls.append(command)
+            self.assertFalse(check)
+            self.assertLessEqual(timeout, min(5, 20 - now[0]))
+            now[0] += timeout
+            if len(calls) == 1:
+                raise ValueError("synthetic diagnostic timeout")
+            return 1, b"synthetic diagnostic failure\n"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            ui.capture_boot_failure(run, ["owned-adb"], path, clock=lambda: now[0])
+            failure = json.loads((path / "boot-failure.json").read_text())
+            self.assertEqual(failure["admission"], "FAILED")
+            self.assertEqual(failure["captures"][0]["failureType"], "ValueError")
+            self.assertEqual([item.get("exitCode") for item in failure["captures"][1:]], [1, 1, 1])
+        self.assertEqual(calls, [
+            ["owned-adb", "shell", "service", "list"],
+            ["owned-adb", "shell", "pidof", "system_server"],
+            ["owned-adb", "shell", "getprop"],
+            ["owned-adb", "shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
+             "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W"],
+        ])
+        self.assertEqual(now[0], 20)
 
 
 class AndroidUiAdmissionTests(unittest.TestCase):

@@ -147,6 +147,73 @@ def write_json(path, data):
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+BOOT_SERVICES = ("input", "activity", "package", "settings")
+
+
+def admit_android_guest(run, device, emulator, avd, api, report, *, clock=time.monotonic, sleep=time.sleep):
+    """Admit real binder services, not just a possibly stale boot property.
+
+    Keep the original 180-second boot bound, including identity checks and the
+    single unlock attempt. Polling here never retries an instrumentation/action.
+    """
+    end = clock() + 180
+
+    def bounded(command, *, check=True):
+        need(emulator.poll() is None, "Owned emulator exited before admission")
+        left = end - clock()
+        need(left > 0, "Emulator boot deadline")
+        result = run([*device, *command], timeout=min(15, left), check=check)
+        need(clock() < end, "Emulator boot deadline")
+        return result
+
+    while True:
+        code, boot = bounded(["shell", "getprop", "sys.boot_completed"], check=False)
+        ready = code == 0 and boot.strip() == b"1"
+        if ready:
+            for service in BOOT_SERVICES:
+                code, output = bounded(["shell", "service", "check", service], check=False)
+                if code != 0 or output.strip() != f"Service {service}: found".encode():
+                    ready = False
+                    break
+        if ready:
+            break
+        sleep(min(2, max(0, end - clock())))
+    need(bounded(["emu", "avd", "name"])[1].decode().splitlines()[0] == avd,
+         "Serial is not the invocation-owned AVD")
+    need(bounded(["shell", "getprop", "ro.build.version.sdk"])[1].strip() == str(api).encode(),
+         "Wrong admitted runtime API")
+    (report / "runtime-properties.txt").write_bytes(bounded(["shell", "getprop"])[1])
+    bounded(["shell", "input", "keyevent", "82"])  # Exactly once; failure is not retried.
+
+
+def capture_boot_failure(run, device, report, *, clock=time.monotonic):
+    """Best-effort, private diagnostics of our fresh guest before any APK install.
+
+    This separate 20-second retention bound cannot admit a guest or rerun a test;
+    every command is read-only, fixed and also bounded by the outer owner.
+    """
+    end = clock() + 20
+    captures = []
+    for name, command in (
+        ("services", ["shell", "service", "list"]),
+        ("system-server", ["shell", "pidof", "system_server"]),
+        ("properties", ["shell", "getprop"]),
+        ("system-errors", ["shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
+                           "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W"]),
+    ):
+        item = {"capture": name}
+        try:
+            left = end - clock()
+            need(left > 0, "Boot diagnostic retention deadline")
+            code, output = run([*device, *command], timeout=min(5, left), check=False)
+            item["exitCode"] = code
+            (report / f"boot-failure-{name}.txt").write_bytes(output)
+        except Exception as error:
+            item["failureType"] = type(error).__name__  # Never publish raw guest/command output.
+        captures.append(item)
+    write_json(report / "boot-failure.json", {"admission": "FAILED", "captures": captures})
+
+
 def main(argv=None, *, campaign=None):
     # Only a source-owned, separate entry point may supply a campaign. The UI
     # command-line selector deliberately remains 317/324/both, never API37.
@@ -245,6 +312,7 @@ def main(argv=None, *, campaign=None):
     adb = [sdk / "platform-tools/adb", "-P", str(server_port)]
     device = [*adb, "-s", serial]
     emulator = None
+    guest_admitted = False
     avd = "p2pkit-" + campaign_label + "-" + uuid.uuid4().hex
     results, cleanup = {}, []
     try:
@@ -259,20 +327,8 @@ def main(argv=None, *, campaign=None):
                 "-accel", "on", "-gpu", "swiftshader", "-memory", "2048", "-cores", "2", "-no-window",
                 "-skin", "1600x2560", "-dpi-device", "200", "-no-audio", "-no-boot-anim", "-no-snapshot", "-no-metrics"],
                 cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=emulog, stderr=emulog)
-            boot_end = time.monotonic() + 180
-            while True:
-                need(emulator.poll() is None, "Owned emulator exited before admission")
-                need(time.monotonic() < boot_end, "Emulator boot deadline")
-                code, boot = run([*device, "shell", "getprop", "sys.boot_completed"], timeout=15, check=False)
-                if code == 0 and boot.strip() == b"1":
-                    break
-                time.sleep(2)
-            need(run([*device, "emu", "avd", "name"])[1].decode().splitlines()[0] == avd,
-                 "Serial is not the invocation-owned AVD")
-            need(run([*device, "shell", "getprop", "ro.build.version.sdk"])[1].strip() == str(api).encode(), "Wrong admitted runtime API")
-            runtime = run([*device, "shell", "getprop"])[1]
-            (report / "runtime-properties.txt").write_bytes(runtime)
-            run([*device, "shell", "input", "keyevent", "82"])
+            admit_android_guest(run, device, emulator, avd, api, report)
+            guest_admitted = True
             if campaign is not None:
                 results.update(campaign.run(run=run, device=device, report=report, env=env, private=private,
                                             source=source, tree=tree, apks=apks, app_apk=app_apk, test_apk=test_apk))
@@ -303,6 +359,13 @@ def main(argv=None, *, campaign=None):
                     instrumentation_result(output, case, token)
                     validate_report((case_dir / "result.json").read_bytes(), case, token, source, tree)
                     results[case] = PASS
+    except BaseException:
+        if emulator is not None and not guest_admitted:
+            try:
+                capture_boot_failure(run, device, report)
+            except Exception:
+                pass  # Preserve the original admission failure even if retention itself fails.
+        raise
     finally:
         if emulator is not None:
             if emulator.poll() is None:
