@@ -3,6 +3,27 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc5 — development release candidate (unpublished)
+
+Prepared from the current main line; publication requires the exact merged
+source's full qualification, frozen application set and protected publisher.
+Existing rc4 artifacts remain immutable. No rc5 publication is claimed here.
+
+- Correct Android, CLI and Desktop diagnostics that inferred an optional file
+  feature from a secure connection without observing feature negotiation.
+- Support verified lock-only dependency refreshes through the documented direct
+  preparer, while preserving exact unchanged XML and verification-policy checks.
+- Canonicalize the optional RPC multicast diagnostic's Python interpreter before
+  allocating work; preserve invalid-input and actual primitive-admission guards.
+- Clarify provisioning constructor compatibility, process-wide Android join
+  routing, canonical SDK setup and external-validation status references.
+- Correct operational-limit source citations and add narrowly scoped drift checks.
+- Add bounded Windows Back-cleanup progress diagnostics without changing resource
+  ownership, close order, provider behavior or time limits.
+- Prepare focused Android UI and Apple acceptance routes and a TCP_NODELAY latency
+  measurement tool. Compilation, model and loopback results are not physical-device,
+  actual installed-Windows, independent-peer or complete real-LAN qualification.
+
 ## 0.8.0-rc4 — development release candidate (2026-10-20)
 
 Published and verified on Maven Central from immutable `v0.8.0-rc4`, source
