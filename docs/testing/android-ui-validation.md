@@ -7,7 +7,8 @@ an API29/OEM result, or a replacement for release CI.
 ## Run the exact committed source
 
 The workflow `.github/workflows/android-ui-validation.yml` accepts `case=317`,
-`case=324`, or `case=both`. Before the workflow exists on the default branch, push
+`case=324`, or `case=both`; reusable `workflow_call` accepts the same string
+input (default `both`). Before the workflow exists on the default branch, push
 an authorized `work/**` candidate with `[android-ui-validation]` in its tip commit
 message to select the same lane. Ordinary branch pushes do not run an emulator.
 

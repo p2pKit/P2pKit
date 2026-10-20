@@ -118,6 +118,15 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ui.evidence_members(out.getvalue())
 
+    def test_modeled_credential_storage_stays_outside_flat_export(self):
+        # Source-integration tripwire, not a Compose/device result: nested fixture
+        # storage would always make the intentional flat-only tar admission fail.
+        path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
+        source = (path / "CredentialUiInstrumentation.kt").read_text()
+        self.assertIn('File(app.cacheDir.canonicalFile, "ui-324-fixture-$token")', source)
+        self.assertNotIn('File(directory, "fixture")', source)
+        self.assertIn("check(!it.exists() && it.mkdir() && it.canonicalFile == it)", source)
+
     def test_shared_manifest_consumer_does_not_change_default_runner(self):
         source = (ui.ROOT / "scripts/run-android-art-smoke.py").read_text()
         self.assertIn('INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"', source)

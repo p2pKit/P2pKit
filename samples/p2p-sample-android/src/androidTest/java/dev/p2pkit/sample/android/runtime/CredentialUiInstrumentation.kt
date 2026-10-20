@@ -247,7 +247,11 @@ class CredentialUiInstrumentation : Instrumentation() {
                 originalVm = ViewModelProvider(current)[P2pKitViewModel::class.java].also {
                     check(it.currentRunAdmission().canRunKmpSmoke)
                 }
-                val fixtureDir = File(directory, "fixture").also { check(it.mkdir()) }
+                // Modeled app storage is not a flat UI witness artifact. Keep it outside
+                // the controller's exported no_backup/ui-324-<token> directory.
+                val fixtureDir = File(app.cacheDir.canonicalFile, "ui-324-fixture-$token").also {
+                    check(!it.exists() && it.mkdir() && it.canonicalFile == it)
+                }
                 val host = CredentialApplication(app, fixtureDir, token)
                 modeledApp = host
                 val fake = CredentialKit(CredentialNetworkFixture(ssid, secret))

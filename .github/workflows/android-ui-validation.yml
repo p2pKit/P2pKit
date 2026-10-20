@@ -1,5 +1,12 @@
 name: Android rendered UI validation
 on:
+  workflow_call:
+    inputs:
+      case:
+        description: UI witness only (317, 324, or both)
+        required: false
+        default: both
+        type: string
   workflow_dispatch:
     inputs:
       case:
@@ -17,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   ui:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[android-ui-validation]') }}
+    if: ${{ inputs.case != '' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[android-ui-validation]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     defaults:
