@@ -19,6 +19,7 @@ import android.os.SystemClock
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
@@ -72,6 +73,7 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
         result.putString("p2pkitToken", arguments.getString("token"))
         result.putString("p2pkitRecreation", "NOT_RUN")
         result.putString("p2pkitRequestSettled", "false")
+        result.putString("p2pkitOriginalRequestOutstanding", "false")
         result.putString("p2pkitManager", "NOT_RUN")
         result.putString("p2pkitTraffic", "NOT_RUN")
         result.putString("p2pkitRawRoute", "NOT_COMPLETED")
@@ -242,6 +244,8 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
         result.putString("p2pkitActivities", witness.created.size.toString())
         result.putString("p2pkitDestroyed", witness.destroyed.size.toString())
         phase("recreated-still-outstanding")
+        check(main { vm.lanPermissionState.value.requestInFlight })
+        result.putString("p2pkitOriginalRequestOutstanding", "true")
         coroutineScope {
             val automaticStart = async(Dispatchers.Main.immediate, start = CoroutineStart.UNDISPATCHED) {
                 vm.isStarting.first { it }
@@ -250,7 +254,7 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
                 clickPermissionAllow()
                 waitText(AVAILABLE)
                 // Foreground refresh alone can publish AVAILABLE even if ActivityResult was lost.
-                await("request-result-ui-settled") { permissionRequestSettled() }
+                await("request-result-ui-settled") { permissionRequestSettled(vm, replacement) }
                 check(app.checkSelfPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED)
                 result.putString("p2pkitRequestSettled", "true")
                 // Observe transitions too, not just a snapshot before a queued automatic start.
@@ -418,6 +422,8 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
             info.flags = info.flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             uiAutomation.serviceInfo = info
         }
+        // Refresh only the observer cache, never application layout/state or input.
+        check(uiAutomation.clearCache()) { "Fresh accessibility snapshot unavailable" }
         val root = uiAutomation.rootInActiveWindow ?: return null
         val pending = ArrayDeque<AccessibilityNodeInfo>()
         pending.add(root)
@@ -437,19 +443,63 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
         node { it.packageName?.toString() == PACKAGE && it.text?.toString() == text } != null
     }
 
-    private fun permissionRequestSettled(): Boolean {
-        val waiting = node {
-            it.packageName?.toString() == PACKAGE && it.text?.toString() == "Waiting for LAN access…"
+    private fun permissionRequestSettled(vm: P2pKitViewModel, replacement: MainActivity): Boolean {
+        val state = vm.lanPermissionState.value
+        check(uiAutomation.clearCache()) { "Fresh accessibility snapshot unavailable" }
+        val root = uiAutomation.rootInActiveWindow
+        val ownedWindow = root?.packageName?.toString() == PACKAGE && root.isVisibleToUser && main {
+            replacement.lifecycle.currentState == Lifecycle.State.RESUMED && replacement.hasWindowFocus() &&
+                ViewModelProvider(replacement)[P2pKitViewModel::class.java] === vm
         }
-        if (waiting != null) return false
-        val refresh = node {
-            it.packageName?.toString() == PACKAGE && it.text?.toString() == "Refresh LAN access"
-        } ?: return false
-        // Compose may expose an enabled Text child of a disabled button; inspect the actual button owner.
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        if (ownedWindow) {
+            val pending = ArrayDeque<AccessibilityNodeInfo>()
+            pending.add(checkNotNull(root))
+            while (pending.isNotEmpty()) {
+                val current = pending.removeFirst()
+                check(nodes.size < 1_500 && current.packageName?.toString() == PACKAGE)
+                nodes += current
+                repeat(current.childCount) { current.getChild(it)?.let(pending::add) }
+            }
+        }
+        fun visible(text: String): AccessibilityNodeInfo? = nodes.filter {
+            it.isVisibleToUser && it.text?.toString() == text
+        }.also { check(it.size <= 1) { "Ambiguous permission UI target" } }.singleOrNull()
+        val refresh = visible("Refresh LAN access")
         val button = generateSequence(refresh) { it.parent }.take(6)
             .takeWhile { it.packageName?.toString() == PACKAGE }
-            .firstOrNull { it.className?.toString() == "android.widget.Button" } ?: return false
-        return button.isVisibleToUser && button.isEnabled && button.isClickable
+            .firstOrNull { it.className?.toString() == "android.widget.Button" }
+        val observation = LanPermissionUiSettlement(
+            originalRequestObserved = result.getString("p2pkitOriginalRequestOutstanding") == "true",
+            ownedWindow = ownedWindow,
+            visibleAnchor = visible("P2pKit Test Harness") != null,
+            stateStable = vm.lanPermissionState.value == state,
+            liveGrant = targetContext.checkSelfPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED,
+            requestInFlight = state.requestInFlight,
+            missingEmpty = state.missing.isEmpty(),
+            checkFailed = state.checkFailed,
+            card = when (state.message) {
+                AVAILABLE -> LanPermissionUiSettlement.Card.AVAILABLE
+                null -> LanPermissionUiSettlement.Card.ABSENT
+                else -> LanPermissionUiSettlement.Card.OTHER
+            },
+            waitingVisible = visible("Waiting for LAN access…") != null,
+            grantVisible = visible("Grant LAN access") != null,
+            missingVisible = visible(MISSING) != null,
+            availableVisible = visible(AVAILABLE) != null,
+            cardExplanationVisible = visible(
+                "Permission results only update access status. Tap Start, KMP smoke, Connect or a switch again."
+            ) != null,
+            refreshVisible = refresh != null,
+            refreshButtonReady = button?.let { it.isVisibleToUser && it.isEnabled && it.isClickable } == true
+        )
+        // Fixed predicate ingredients only: no arbitrary screen text/payloads. Retained
+        // in the original encrypted terminal on failure as well as successful handoff.
+        result.putString("p2pkitRequestUiObservation", observation.toString())
+        result.putString("p2pkitRequestUiButton", "roleFound=${button != null};" +
+            "visible=${button?.isVisibleToUser == true};enabled=${button?.isEnabled == true};" +
+            "clickable=${button?.isClickable == true}")
+        return observation.settled()
     }
 
     private suspend fun tap(text: String, scroll: Boolean = false) {

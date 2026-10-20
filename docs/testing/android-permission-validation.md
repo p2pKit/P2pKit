@@ -121,6 +121,21 @@ original no-mode caller and `NOT_EXECUTED` revocation terminal remain separate.
    its checkpoint. The new manager, raw socket and explicit sample Start must
    remain denied. This branch never claims a surviving original manager.
 
+The completed-request observer binds an actual outstanding request to the
+original retained VM before granting, then requires that VM's request flag to
+settle, a live grant and an unchanged successful permission-state snapshot. A
+fresh observer-cache read must find the resumed replacement Activity's owned,
+focused app window and visible fixed title. The existing production card has two
+legal presentations: its available message and enabled Refresh button, or its
+intentional removal after a subsequent successful foreground refresh clears the
+message. The latter requires absence of the checked status, action and explanation
+labels in the same captured tree, not merely a null/missing window or a state-only assertion.
+Waiting/grant controls, stale visible labels, disabled buttons and ambiguous
+matches cannot pass. Fixed predicate ingredients are retained in the original
+private instrumentation terminal, including failures. This repairs an overly
+narrow observer contract; the earlier timeout alone did not establish whether a
+callback or observer/presentation mismatch caused that original failure.
+
 The original 90-second instrumentation body bounds remain; the host campaign is
 bounded separately. Failures still trigger every owned retirement attempt. The
 host never reads exit trace streams, unrelated app storage or credentials.

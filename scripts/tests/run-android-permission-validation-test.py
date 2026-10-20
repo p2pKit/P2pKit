@@ -19,7 +19,8 @@ TOKEN, SOURCE, TREE = "a" * 32, "b" * 40, "c" * 40
 
 def output(mode="revocation", changes=None, ready=False):
     fields = {"p2pkitToken": TOKEN, "p2pkitCompleted": "1", "p2pkitOutcome": "PASS", "p2pkitCleanup": "PASS",
-              "p2pkitManager": "PASS", "p2pkitRawPregrant": "DENIED", "p2pkitRawRoute": "DENIED_THEN_ADMITTED",
+              "p2pkitManager": "PASS", "p2pkitOriginalRequestOutstanding": "true",
+              "p2pkitRawPregrant": "DENIED", "p2pkitRawRoute": "DENIED_THEN_ADMITTED",
               "p2pkitTraffic": "PASS", "p2pkitRecreation": "PASS", "p2pkitRequestSettled": "true",
               "p2pkitSentBytes": "40", "p2pkitReceivedBytes": "36"}
     if mode == "revoked-reentry":
@@ -98,6 +99,32 @@ class PermissionValidationTests(unittest.TestCase):
         self.assertIn('write_json(report / "emulator-request.json", {"argv": emulator_argv, "sourceCommit": source, "sourceTree": tree})', source)
         self.assertIn('campaign.validate_emulator_boot((report / "emulator.log").read_bytes())', source)
         self.assertNotIn("GLDirectMem", source)  # No default/API35 UI flag or user feature selector.
+
+    def test_ui_settlement_preserves_callback_window_and_both_existing_presentations(self):
+        source = (p.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/"
+                  "LanPermissionRuntimeInstrumentation.kt").read_text()
+        self.assertLess(source.index('check(main { vm.lanPermissionState.value.requestInFlight })'),
+                        source.index('clickPermissionAllow()'))
+        self.assertIn('await("request-result-ui-settled") { permissionRequestSettled(vm, replacement) }', source)
+        self.assertIn('check(uiAutomation.clearCache())', source)
+        self.assertIn('replacement.lifecycle.currentState == Lifecycle.State.RESUMED && replacement.hasWindowFocus()', source)
+        self.assertIn('ViewModelProvider(replacement)[P2pKitViewModel::class.java] === vm', source)
+        self.assertIn('visibleAnchor = visible("P2pKit Test Harness") != null', source)
+        self.assertIn('stateStable = vm.lanPermissionState.value == state', source)
+        self.assertIn('result.putString("p2pkitRequestUiObservation", observation.toString())', source)
+        self.assertIn('result.putString("p2pkitRequestUiButton"', source)
+        self.assertIn('withTimeout(90_000) { exercise() }', source)
+        self.assertIn('withTimeout(15_000) {\n            while (!condition()) delay(100)', source)
+        self.assertIn('check(!automaticStart.isCompleted', source)
+        self.assertIn('rawExchange(route, host, controlPort, token)', source)
+        self.assertIn('phase("awaiting-host-os-revocation")', source)
+
+    def test_settled_result_without_original_outstanding_request_never_qualifies(self):
+        for fields in ({"p2pkitOriginalRequestOutstanding": "false"}, {"p2pkitRequestSettled": "false"}):
+            with self.assertRaises(ValueError):
+                p.terminal(output(changes=fields), TOKEN, "revocation")
+            with self.assertRaises(ValueError):
+                p.ready_checkpoint(output(changes=fields, ready=True), TOKEN)
 
     def test_absent_completed_instrumentation_output_is_not_runner_or_root_cause_proof(self):
         for raw in (b"", b"Error type 2\nonError: commandError=true message=synthetic frontend failure\n"):

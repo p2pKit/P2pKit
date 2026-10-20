@@ -72,7 +72,8 @@ def terminal(raw, token, mode):
     else:
         expected.update(p2pkitReentry="DENIED_SAME_MANAGER_AND_PROCESS", p2pkitSameInstanceRevocation="PASS",
                         p2pkitRawRoute="DENIED_THEN_ADMITTED", p2pkitTraffic="PASS", p2pkitRecreation="PASS",
-                        p2pkitRequestSettled="true", p2pkitSentBytes="40", p2pkitReceivedBytes="36")
+                        p2pkitRequestSettled="true", p2pkitOriginalRequestOutstanding="true",
+                        p2pkitSentBytes="40", p2pkitReceivedBytes="36")
     need(all(result.get(key) == value and frames[-1][1].get(key) == value for key, value in expected.items()),
          "Wrong permission terminal scope")
     need(not any("Failure" in key for key in result), "Permission test retained a failure")
@@ -92,7 +93,8 @@ def ready_checkpoint(raw, token):
     record = ready[0]
     expected = {"p2pkitToken": token, "class": RUNNER, "test": "permissionRecreationPinnedTcpAndRevocation",
                 "p2pkitTraffic": "PASS", "p2pkitRawRoute": "DENIED_THEN_ADMITTED", "p2pkitManager": "PASS",
-                "p2pkitRecreation": "PASS", "p2pkitRequestSettled": "true", "p2pkitSentBytes": "40",
+                "p2pkitRecreation": "PASS", "p2pkitRequestSettled": "true", "p2pkitOriginalRequestOutstanding": "true",
+                "p2pkitSentBytes": "40",
                 "p2pkitReceivedBytes": "36", "p2pkitSameInstanceRevocation": "NOT_EXECUTED"}
     need(all(record.get(key) == value for key, value in expected.items()), "Unqualified revocation handoff")
     return record
