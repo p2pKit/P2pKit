@@ -1,0 +1,89 @@
+name: Intel simulator diagnostic
+on:
+  push:
+    branches: [work/issues-intel-inventory-diagnostic-20261020]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: ${{ github.event_name == 'push' && github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/work/issues-intel-inventory-diagnostic-20261020' }}
+    runs-on: macos-15-intel
+    # Diagnostic-only headroom for setup, the 900s wrapper, encryption and upload.
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - name: Check out exact diagnostic source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require native macOS 15 Intel and the selected Xcode 26.3
+        timeout-minutes: 1
+        run: |
+          python3 -B - <<'PY'
+          import os
+          import platform
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          try:
+              developer = Path('/Applications/Xcode_26.3.app/Contents/Developer')
+              if (platform.system() != 'Darwin' or platform.machine() != 'x86_64'
+                      or os.environ.get('DEVELOPER_DIR') != str(developer) or not developer.is_dir()):
+                  raise ValueError('host')
+              version = subprocess.run(['/usr/bin/sw_vers', '-productVersion'], check=True,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5).stdout.decode('ascii').strip()
+              xcode = subprocess.run(['/usr/bin/xcodebuild', '-version'], check=True,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15).stdout.decode('ascii').splitlines()
+              if version.split('.')[0] != '15' or not xcode or xcode[0] != 'Xcode 26.3':
+                  raise ValueError('version')
+          except Exception:
+              print('INTEL_DIAGNOSTIC_HOST_ADMISSION_FAILED', file=sys.stderr)
+              raise SystemExit(1)
+          print('INTEL_DIAGNOSTIC_HOST_ADMISSION_PASS')
+          PY
+      - name: Ensure the public-key evidence encryptor is available
+        timeout-minutes: 3
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          if ! command -v gpg >/dev/null 2>&1; then
+            if ! command -v brew >/dev/null 2>&1 || ! brew install gnupg >"$RUNNER_TEMP/intel-diagnostic-gpg-install.log" 2>&1; then
+              echo 'INTEL_DIAGNOSTIC_GPG_SETUP_FAILED' >&2
+              exit 1
+            fi
+          fi
+          command -v gpg >/dev/null 2>&1
+      # This is one diagnostic measurement, not the failed component's full
+      # setup: no Bonjour preparation, Java, Gradle/cache, Android SDK or NDK.
+      # The production runtime-inventory timeout remains unchanged at 120s.
+      - name: Measure inventory once and encrypt owned context
+        id: execution
+        run: |
+          python3 -B scripts/ci_evidence.py \
+            --component intel-simulator-diagnostic \
+            --timeout-seconds 900 \
+            --output-dir "$RUNNER_TEMP/ci-evidence-intel-simulator-diagnostic" \
+            --report-glob 'build/reports/intel-simulator-diagnostic/**/*' \
+            -- python3 -B scripts/diagnose-intel-simulator.py
+      - name: Retain only encrypted evidence and finite public receipts
+        if: ${{ always() && steps.execution.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: intel-simulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ci-evidence-intel-simulator-diagnostic/manifest.json
+            ${{ runner.temp }}/ci-evidence-intel-simulator-diagnostic/evidence.tar.gz.gpg
+            ${{ runner.temp }}/ci-evidence-intel-simulator-diagnostic/failure.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

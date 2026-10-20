@@ -283,10 +283,19 @@ def _hosted_darwin_context(environment):
     return (platform.system() == "Darwin" and environment.get("GITHUB_ACTIONS") == "true" and
         environment.get("RUNNER_ENVIRONMENT") == "github-hosted" and
         environment.get("GITHUB_REPOSITORY") == "p2pKit/P2pKit" and separator == "@" and bool(ref) and
-        workflow in {"p2pKit/P2pKit/.github/workflows/ci.yml",
-                     "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml",
-                     "p2pKit/P2pKit/.github/workflows/publish-maven-central.yml",
-                     "p2pKit/P2pKit/.github/workflows/recover-maven-central.yml"} and
+        (workflow in {"p2pKit/P2pKit/.github/workflows/ci.yml",
+                      "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml",
+                      "p2pKit/P2pKit/.github/workflows/publish-maven-central.yml",
+                      "p2pKit/P2pKit/.github/workflows/recover-maven-central.yml"} or
+         (workflow == "p2pKit/P2pKit/.github/workflows/intel-simulator-diagnostic.yml" and
+          ref == "refs/heads/work/issues-intel-inventory-diagnostic-20261020" and
+          environment.get("GITHUB_REF") == ref and environment.get("GITHUB_REF_TYPE") == "branch" and
+          environment.get("GITHUB_EVENT_NAME") == "push" and environment.get("GITHUB_JOB") == "diagnose" and
+          environment.get("GITHUB_WORKFLOW") == "Intel simulator diagnostic" and
+          environment.get("GITHUB_SERVER_URL") == "https://github.com" and
+          environment.get("GITHUB_API_URL") == "https://api.github.com" and
+          environment.get("RUNNER_OS") == "macOS" and environment.get("RUNNER_ARCH") == "X64" and
+          platform.machine() == "x86_64" and re.fullmatch(r"15\.[0-9]+(?:\.[0-9]+)?", platform.mac_ver()[0]))) and
         (not workflow.endswith("/publish-maven-central.yml") or environment.get("GITHUB_JOB") == "publish-release") and
         (not workflow.endswith("/recover-maven-central.yml") or environment.get("GITHUB_JOB") == "verify-recovery") and
         re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None and

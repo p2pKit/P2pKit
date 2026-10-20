@@ -1532,6 +1532,46 @@ class EvidenceTests(unittest.TestCase):
         with mock.patch.object(E.platform, "system", return_value="Linux"):
             self.assertFalse(E._hosted_darwin_context(env))
 
+    def test_intel_inventory_diagnostic_context_is_exact_and_nonqualifying(self):
+        ref = 'refs/heads/work/issues-intel-inventory-diagnostic-20261020'
+        workflow = 'p2pKit/P2pKit/.github/workflows/intel-simulator-diagnostic.yml'
+        env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted',
+                   GITHUB_REPOSITORY='p2pKit/P2pKit', GITHUB_SHA='a' * 40, GITHUB_WORKFLOW_SHA='a' * 40,
+                   GITHUB_WORKFLOW_REF=workflow + '@' + ref, GITHUB_REF=ref, GITHUB_REF_TYPE='branch',
+                   GITHUB_EVENT_NAME='push', GITHUB_JOB='diagnose', GITHUB_WORKFLOW='Intel simulator diagnostic',
+                   GITHUB_SERVER_URL='https://github.com', GITHUB_API_URL='https://api.github.com',
+                   RUNNER_OS='macOS', RUNNER_ARCH='X64')
+        with mock.patch.object(E.platform, 'system', return_value='Darwin'), \
+                mock.patch.object(E.platform, 'machine', return_value='x86_64'), \
+                mock.patch.object(E.platform, 'mac_ver', return_value=('15.7.5', ('', '', ''), 'x86_64')):
+            self.assertTrue(E._hosted_darwin_context(env))
+            for changes in (
+                {'GITHUB_EVENT_NAME': 'pull_request'}, {'GITHUB_EVENT_NAME': 'workflow_dispatch'},
+                {'GITHUB_REF': 'refs/heads/main'}, {'GITHUB_REF_TYPE': 'tag'},
+                {'GITHUB_WORKFLOW_REF': workflow + '@refs/heads/main'},
+                {'GITHUB_WORKFLOW_REF': workflow + '-other@' + ref},
+                {'GITHUB_WORKFLOW': 'Other diagnostic'}, {'GITHUB_JOB': 'run'},
+                {'GITHUB_SHA': 'invalid'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40},
+                {'GITHUB_REPOSITORY': 'other/repository'}, {'GITHUB_ACTIONS': 'false'},
+                {'RUNNER_ENVIRONMENT': 'self-hosted'}, {'RUNNER_OS': 'Linux'}, {'RUNNER_ARCH': 'ARM64'},
+                {'GITHUB_SERVER_URL': 'https://example.invalid'}, {'GITHUB_API_URL': 'https://example.invalid'},
+            ):
+                with self.subTest(changes=changes):
+                    self.assertFalse(E._hosted_darwin_context({**env, **changes}))
+            with mock.patch.object(E, '_HostedDarwinScope', return_value='hosted') as hosted, \
+                    mock.patch.object(E.audit_processes, 'make_scope', side_effect=AssertionError('WRONG_FACTORY')):
+                self.assertEqual(E._command_scope('job', 'invocation', 'private', 'home', env), 'hosted')
+                hosted.assert_called_once_with('job', 'invocation', 'private', 'home')
+            with mock.patch.object(E.platform, 'machine', return_value='arm64'):
+                self.assertFalse(E._hosted_darwin_context(env))
+            with mock.patch.object(E.platform, 'mac_ver', return_value=('26.0', ('', '', ''), 'x86_64')):
+                self.assertFalse(E._hosted_darwin_context(env))
+            with mock.patch.object(E.platform, 'system', return_value='Linux'):
+                self.assertFalse(E._hosted_darwin_context(env))
+        import ci_qualification
+        self.assertNotIn('intel-simulator-diagnostic', ci_qualification.COMPONENTS)
+        self.assertNotIn('intel-simulator-diagnostic', ci_qualification.APPLICATIONS)
+
     def test_hosted_darwin_release_context_keeps_fixed_source_and_job_boundary(self):
         env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', GITHUB_REPOSITORY='p2pKit/P2pKit',
                    GITHUB_SHA='a' * 40, GITHUB_WORKFLOW_SHA='a' * 40)
