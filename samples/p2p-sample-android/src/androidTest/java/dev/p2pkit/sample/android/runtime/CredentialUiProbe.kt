@@ -9,8 +9,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Parcel
 import android.os.SystemClock
+import android.view.Display
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.PixelCopy
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -30,6 +32,7 @@ import androidx.lifecycle.Lifecycle
 import dev.p2pkit.sample.android.MainActivity
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -40,15 +43,27 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal fun <T> credentialMain(block: () -> T): T {
+private fun credentialRemaining(deadline: Long): Long =
+    (deadline - SystemClock.elapsedRealtimeNanos()).also {
+        check(it > 0) { "Five-second observation deadline exceeded" }
+    }
+
+internal fun <T> credentialMain(
+    deadline: Long = SystemClock.elapsedRealtimeNanos() + 5_000_000_000L,
+    block: () -> T
+): T {
     check(Looper.myLooper() != Looper.getMainLooper())
     val task = FutureTask<T> { block() }
     check(Handler(Looper.getMainLooper()).post(task))
-    return try { task.get(5, TimeUnit.SECONDS) } finally { task.cancel(false) }
+    return try {
+        task.get(credentialRemaining(deadline), TimeUnit.NANOSECONDS).also { credentialRemaining(deadline) }
+    } finally { task.cancel(false) }
 }
 
-internal suspend fun credentialAwait(condition: () -> Boolean) {
-    val deadline = SystemClock.elapsedRealtimeNanos() + 5_000_000_000L
+internal suspend fun credentialAwait(
+    deadline: Long = SystemClock.elapsedRealtimeNanos() + 5_000_000_000L,
+    condition: () -> Boolean
+) {
     withTimeout(5_000) {
         while (true) {
             val accepted = condition()
@@ -141,6 +156,7 @@ internal class CredentialUiProbe(
     val actions = JSONArray()
     val frames = mutableListOf<Frame>()
     val inputCount = AtomicLong()
+    private val windowCopies = mutableListOf<WindowCopy>()
     private val originalCallback = credentialMain { checkNotNull(activity.window.callback) }
     private val callback = object : Window.Callback by originalCallback {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -216,7 +232,11 @@ internal class CredentialUiProbe(
 
     fun textPresent(value: String): Boolean = nodes().any { it.isVisibleToUser && it.text?.toString() == value }
 
-    fun identity(): List<Any> = credentialMain {
+    fun identity(deadline: Long = SystemClock.elapsedRealtimeNanos() + 5_000_000_000L): List<Any> =
+        credentialMain(deadline) { identityOnMain() }
+
+    private fun identityOnMain(): List<Any> {
+        check(Looper.myLooper() == Looper.getMainLooper())
         check(activity.lifecycle.currentState == Lifecycle.State.RESUMED && activity.hasWindowFocus())
         val decor = activity.window.decorView
         check(decor.isHardwareAccelerated && decor.isShown && decor.isAttachedToWindow)
@@ -224,7 +244,7 @@ internal class CredentialUiProbe(
         check(!checkNotNull(decor.rootWindowInsets).isVisible(WindowInsets.Type.ime()))
         val config = activity.resources.configuration
         check(config.screenWidthDp >= 600 && config.screenHeightDp >= 900)
-        listOf(activity, decor, checkNotNull(decor.windowToken), root().first, config.toString())
+        return listOf(activity, decor, checkNotNull(decor.windowToken), root().first, config.toString())
     }
 
     suspend fun field(
@@ -236,27 +256,31 @@ internal class CredentialUiProbe(
         minimumFrameNanos: Long = frame.armed,
         requiredStatus: String? = null
     ) {
+        // Layout, original display pixels and optional owned-window diagnostic share ONE deadline.
+        val deadline = SystemClock.elapsedRealtimeNanos() + 5_000_000_000L
         var observation: Drawn? = null
-        credentialAwait {
-            observation = credentialMain { drawnField(input) }
+        credentialAwait(deadline) {
+            observation = credentialMain(deadline) { drawnField(input) }
             val committed = frame.committed.get()
-            if (committed > 0 && committed < minimumFrameNanos) credentialMain { frame.arm() }
+            if (committed > 0 && committed < minimumFrameNanos) credentialMain(deadline) { frame.arm() }
             observation?.let { it.text == visibleText && it.password == password } == true &&
                 frame.committed.get() >= minimumFrameNanos &&
                 (requiredStatus == null || textPresent(requiredStatus))
         }
-        identity()
+        identity(deadline)
         val witness = checkNotNull(observation)
         val targets = mutableListOf(witness.bounds)
         if (requiredStatus != null) {
             val status = nodes().filter { it.isVisibleToUser && it.text?.toString() == requiredStatus }.single()
             targets += Rect().also { status.getBoundsInScreen(it) }
         }
-        capture(label, targets, frame).put("drawnLength", witness.text.length)
+        capture(label, targets, frame, deadline).put("drawnLength", witness.text.length)
             .put("password", password).put("inputLength", input.length)
             .put("layoutText", witness.text).put("layoutSha256", credentialDigest(witness.text.toByteArray()))
             .put("requiredStatus", requiredStatus)
             .put("oracle", "actual GetTextLayoutResult; raw InputText is not a pixel-exposure assertion")
+            .put("observationDeadlineElapsedNanos", deadline)
+        credentialRemaining(deadline)
     }
 
     suspend fun status(label: String, visibleText: String, frame: Frame) {
@@ -337,37 +361,70 @@ internal class CredentialUiProbe(
         capture("failure", emptyList(), frames.lastOrNull()).put("failureStage", stage)
     }
 
-    private fun capture(label: String, targets: List<Rect>, frame: Frame?): JSONObject {
+    private fun capture(
+        label: String,
+        targets: List<Rect>,
+        frame: Frame?,
+        deadline: Long = SystemClock.elapsedRealtimeNanos() + 5_000_000_000L
+    ): JSONObject {
         check(label.matches(Regex("[a-z0-9-]+")))
+        val row = JSONObject().put("label", label).put("frame", frame?.json())
+            .put("targets", JSONArray(targets.map { it.toShortString() }))
+        captures.put(row)
+        credentialRemaining(deadline)
+        val diagnostic = label in PRESENTATION_DIAGNOSTICS
+        val owned = if (diagnostic) ownedWindow(deadline) else null
         val windows = instrumentation.uiAutomation.windows
+        check(windows.size <= 50)
         val appWindow = windows.single { it.isActive && it.isFocused &&
             it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.root?.packageName?.toString() == PACKAGE }
-        val viewport = credentialMain { Rect().also { activity.window.decorView.getWindowVisibleDisplayFrame(it) } }
+        if (owned != null) {
+            row.put("ownedWindowBefore", owned.json())
+                .put("accessibilityWindows", JSONArray(windows.map { window ->
+                    JSONObject().put("id", window.id).put("displayId", window.displayId)
+                        .put("type", window.type).put("layer", window.layer)
+                        .put("active", window.isActive).put("focused", window.isFocused)
+                        .put("bounds", Rect().also { window.getBoundsInScreen(it) }.toShortString())
+                        .put("package", window.root?.packageName?.toString())
+                }))
+                .put("selectedAccessibilityWindowId", appWindow.id)
+            check(appWindow.id == owned.windowId && appWindow.displayId == owned.displayId)
+            // The maintained runner and unqualified UiAutomation display capture are on the default display.
+            check(owned.displayId == Display.DEFAULT_DISPLAY)
+            row.put("windowFramesBefore", windowFrames(owned.windowId))
+        }
+        val viewport = credentialMain(deadline) {
+            Rect().also { activity.window.decorView.getWindowVisibleDisplayFrame(it) }
+        }
         targets.forEach { target ->
             check(!target.isEmpty && viewport.contains(target))
             windows.filter { it.layer > appWindow.layer }.forEach { other ->
                 check(!Rect.intersects(target, Rect().also { other.getBoundsInScreen(it) }))
             }
         }
+        // FIRST retain the unmodified full display. Do not flush SurfaceFlinger or substitute a window capture.
+        row.put("displayCaptureBeginElapsedNanos", SystemClock.elapsedRealtimeNanos())
         val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
-        val width = bitmap.width
-        val height = bitmap.height
+        row.put("displayCaptureEndElapsedNanos", SystemClock.elapsedRealtimeNanos())
         val file = File(output, "$label.png")
         try {
-            check(bitmap.width.toLong() * bitmap.height <= 16_777_216 && bitmap.config != Bitmap.Config.HARDWARE)
-            val display = Rect(0, 0, bitmap.width, bitmap.height)
-            targets.forEach { bounds ->
-                check(display.contains(bounds))
-                val size = bounds.width().toLong() * bounds.height()
-                check(size in 2L..1_048_576L)
-                val pixels = IntArray(size.toInt())
-                bitmap.getPixels(pixels, 0, bounds.width(), bounds.left, bounds.top, bounds.width(), bounds.height())
-                check(pixels.any { it != pixels.first() }) { "Blank display target" }
-            }
-            check(file.createNewFile())
-            file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            row.put("width", bitmap.width).put("height", bitmap.height)
+            // Preserve the FIRST returned display even if it is blank or late; those conditions still fail.
+            writePixels(bitmap, targets, file)
+            credentialRemaining(deadline) // The public screenshot API blocks; late completion is NOT a pass.
         } finally { bitmap.recycle() }
-        check(file.length() in 1L..16_777_216L)
+        row.put("pngSha256", credentialDigest(file.readBytes()))
+        if (owned != null) {
+            val afterDisplay = ownedWindow(deadline)
+            check(afterDisplay == owned) { "Owned window changed across display capture" }
+            row.put("ownedWindowAfterDisplay", afterDisplay.json())
+            copyOwnedWindow(label, owned, targets, row, deadline)
+            val afterCopy = ownedWindow(deadline)
+            check(afterCopy == owned) { "Owned window changed across PixelCopy" }
+            row.put("ownedWindowAfterCopy", afterCopy.json())
+                .put("windowFramesAfter", windowFrames(owned.windowId))
+                .put("presentationDiagnosticOnly", true)
+        }
         val tree = JSONArray(nodes().map { node ->
             JSONObject().put("text", node.text?.toString()).put("hint", node.hintText?.toString())
                 .put("editable", node.isEditable).put("password", node.isPassword).put("visible", node.isVisibleToUser)
@@ -376,10 +433,152 @@ internal class CredentialUiProbe(
         val treeFile = File(output, "$label-tree.json")
         check(treeFile.createNewFile())
         treeFile.writeText(tree.toString(2) + "\n")
-        return JSONObject().put("label", label).put("elapsedNanos", SystemClock.elapsedRealtimeNanos())
-            .put("frame", frame?.json()).put("pngSha256", credentialDigest(file.readBytes()))
-            .put("width", width).put("height", height)
-            .put("targets", JSONArray(targets.map { it.toShortString() })).also { captures.put(it) }
+        credentialRemaining(deadline)
+        return row.put("elapsedNanos", SystemClock.elapsedRealtimeNanos())
+    }
+
+    private fun writePixels(bitmap: Bitmap, targets: List<Rect>, file: File) {
+        check(bitmap.width.toLong() * bitmap.height <= 16_777_216 && bitmap.config != Bitmap.Config.HARDWARE)
+        // Preserve bounded private evidence BEFORE rejecting target pixels. Never use a later replacement capture.
+        check(file.createNewFile())
+        file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+        check(file.length() in 1L..16_777_216L)
+        val display = Rect(0, 0, bitmap.width, bitmap.height)
+        targets.forEach { bounds ->
+            check(display.contains(bounds))
+            val size = bounds.width().toLong() * bounds.height()
+            check(size in 2L..1_048_576L)
+            val pixels = IntArray(size.toInt())
+            bitmap.getPixels(pixels, 0, bounds.width(), bounds.left, bounds.top, bounds.width(), bounds.height())
+            check(pixels.any { it != pixels.first() }) { "Blank display target" }
+        }
+    }
+
+    private fun ownedWindow(deadline: Long): OwnedWindow = credentialMain(deadline) { ownedWindowOnMain() }
+
+    private fun ownedWindowOnMain(): OwnedWindow {
+        identityOnMain()
+        val window = activity.window
+        val decor = window.decorView
+        val origin = IntArray(2).also(decor::getLocationOnScreen)
+        return OwnedWindow(
+            System.identityHashCode(activity), window, decor, checkNotNull(decor.windowToken), root().first,
+            decor.createAccessibilityNodeInfo().windowId, checkNotNull(decor.display).displayId,
+            origin[0], origin[1], decor.width, decor.height, window.attributes.type, window.attributes.flags)
+            .also { check(it.width > 0 && it.height > 0 && it.windowId >= 0) }
+    }
+
+    /** Read-only, finite presentation timestamps. Null/undefined stats are retained, never converted to proof. */
+    private fun windowFrames(windowId: Int): JSONObject {
+        val row = JSONObject().put("readBeginElapsedNanos", SystemClock.elapsedRealtimeNanos())
+            .put("readBeginNanoTime", System.nanoTime())
+        val stats = instrumentation.uiAutomation.getWindowContentFrameStats(windowId)
+        row.put("available", stats != null)
+        if (stats != null) {
+            val count = stats.frameCount
+            check(count in 0..10_000)
+            row.put("frameCount", count).put("refreshPeriodNanos", stats.refreshPeriodNano)
+                .put("lastFrames", JSONArray((maxOf(0, count - 8) until count).map { index ->
+                    JSONObject().put("postedNanoTime", stats.getFramePostedTimeNano(index))
+                        .put("readyNanoTime", stats.getFrameReadyTimeNano(index))
+                        .put("presentedNanoTime", stats.getFramePresentedTimeNano(index))
+                }))
+        }
+        return row.put("readEndElapsedNanos", SystemClock.elapsedRealtimeNanos())
+    }
+
+    private fun copyOwnedWindow(
+        label: String,
+        owned: OwnedWindow,
+        targets: List<Rect>,
+        row: JSONObject,
+        deadline: Long
+    ) {
+        credentialRemaining(deadline)
+        check(windowCopies.size < 2)
+        check(owned.width.toLong() * owned.height <= 16_777_216)
+        val bitmap = Bitmap.createBitmap(owned.width, owned.height, Bitmap.Config.ARGB_8888)
+        val owner = AsyncCaptureOwnership(bitmap::recycle)
+        val copy = JSONObject().put("source", "actual owned Window; not full-display acceptance")
+            .put("width", owned.width).put("height", owned.height)
+            .put("screenOriginX", owned.screenX).put("screenOriginY", owned.screenY)
+        row.put("ownedWindowPixelCopy", copy)
+        val result = CompletableFuture<Int>()
+        val completed = AtomicLong()
+        val requested = AtomicLong()
+        val tracked = WindowCopy(owner, copy, requested, completed)
+        windowCopies += tracked
+        val handler = Handler(Looper.getMainLooper())
+        try {
+            check(handler.post {
+                // If the bounded observer already left, never start native access to its recycled destination.
+                if (owner.start()) {
+                    try {
+                        credentialRemaining(deadline)
+                        check(ownedWindowOnMain() == owned) { "Owned window changed before PixelCopy request" }
+                        requested.set(SystemClock.elapsedRealtimeNanos())
+                        PixelCopy.request(owned.window, bitmap, { status ->
+                            completed.set(SystemClock.elapsedRealtimeNanos())
+                            owner.complete()
+                            result.complete(status)
+                        }, handler)
+                    } catch (error: Throwable) {
+                        owner.complete() // Synchronous rejection: no producer accepted the destination.
+                        result.completeExceptionally(error)
+                    }
+                }
+            })
+            val status = result.get(credentialRemaining(deadline), TimeUnit.NANOSECONDS)
+            copy.put("status", status)
+            credentialRemaining(deadline)
+            check(status == PixelCopy.SUCCESS) { "Owned-window PixelCopy failed: $status" }
+            val relative = targets.map { Rect(it).apply { offset(-owned.screenX, -owned.screenY) } }
+            val file = File(output, "$label-owned-window.png")
+            writePixels(bitmap, relative, file)
+            copy.put("pngSha256", credentialDigest(file.readBytes()))
+                .put("targets", JSONArray(relative.map { it.toShortString() }))
+            credentialRemaining(deadline)
+        } finally {
+            owner.release()
+            copy.put("observerReleasedElapsedNanos", SystemClock.elapsedRealtimeNanos())
+                .put("requestRejected", result.isCompletedExceptionally)
+            tracked.report()
+        }
+    }
+
+    private data class WindowCopy(
+        val owner: AsyncCaptureOwnership,
+        val row: JSONObject,
+        val requested: AtomicLong,
+        val completed: AtomicLong
+    ) {
+        fun report() {
+            row.put("requestElapsedNanos", requested.get()).put("callbackElapsedNanos", completed.get())
+                .put("retired", owner.retired())
+        }
+    }
+
+    private data class OwnedWindow(
+        val activityIdentity: Int,
+        val window: Window,
+        val decor: View,
+        val token: Any,
+        val composeRoot: View,
+        val windowId: Int,
+        val displayId: Int,
+        val screenX: Int,
+        val screenY: Int,
+        val width: Int,
+        val height: Int,
+        val type: Int,
+        val flags: Int
+    ) {
+        fun json(): JSONObject = JSONObject().put("activityIdentity", activityIdentity)
+            .put("windowIdentity", System.identityHashCode(window))
+            .put("decorIdentity", System.identityHashCode(decor)).put("tokenIdentity", System.identityHashCode(token))
+            .put("composeRootIdentity", System.identityHashCode(composeRoot)).put("accessibilityWindowId", windowId)
+            .put("displayId", displayId).put("screenX", screenX).put("screenY", screenY)
+            .put("width", width).put("height", height).put("windowType", type).put("windowFlags", flags)
     }
 
     suspend fun retire() {
@@ -390,7 +589,7 @@ internal class CredentialUiProbe(
             credentialAwait {
                 val attempts = credentialMain { frames.map { frame -> runCatching { frame.retire() } } }
                 attempts.firstOrNull { it.isFailure }?.getOrThrow()
-                attempts.all { it.getOrThrow() }
+                attempts.all { it.getOrThrow() } && windowCopies.all { it.owner.retired() }
             }
         } catch (error: Throwable) {
             failure = error
@@ -403,6 +602,7 @@ internal class CredentialUiProbe(
         } catch (error: Throwable) {
             if (failure == null) failure = error
         }
+        windowCopies.forEach(WindowCopy::report)
         failure?.let { throw it }
     }
 
@@ -435,6 +635,9 @@ internal class CredentialUiProbe(
     private data class Drawn(val text: String, val password: Boolean, val bounds: Rect)
 
     companion object {
+        private val PRESENTATION_DIAGNOSTICS = setOf(
+            "stop-reentry-reentered-empty", "fakegrant-true-resumed-cleared"
+        )
         const val PACKAGE = "dev.p2pkit.sample.android"
         const val CARD_TITLE = "Join hotspot (WifiNetworkSpecifier)"
         const val PASSPHRASE_LABEL = "Passphrase (blank = open network)"

@@ -447,7 +447,7 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         self.assertIn('it.text == visibleText && it.password == password', probe)
         self.assertIn('frame.committed.get() >= minimumFrameNanos', probe)
         self.assertIn('val targets = mutableListOf(witness.bounds)', probe)
-        self.assertIn('capture(label, targets, frame)', probe)
+        self.assertIn('capture(label, targets, frame, deadline)', probe)
 
     def test_accessibility_snapshots_clear_only_the_observer_cache(self):
         path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
@@ -479,9 +479,42 @@ class AndroidUiAdmissionTests(unittest.TestCase):
             self.assertNotIn(forbidden, control)
         probe = (path / "CredentialUiProbe.kt").read_text()
         field = probe[probe.index("suspend fun field("):probe.index("suspend fun status(")]
-        self.assertEqual(field.count('credentialAwait {'), 1)
+        self.assertEqual(field.count('credentialAwait(deadline) {'), 1)
         self.assertIn('(requiredStatus == null || textPresent(requiredStatus))', field)
         self.assertIn('targets += Rect().also { status.getBoundsInScreen(it) }', field)
+
+    def test_two_window_diagnostics_preserve_first_display_and_one_deadline(self):
+        path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
+        source = (path / "CredentialUiProbe.kt").read_text()
+        field = source[source.index("suspend fun field("):source.index("suspend fun status(")]
+        self.assertEqual(field.count("+ 5_000_000_000L"), 1)
+        self.assertIn("credentialAwait(deadline)", field)
+        self.assertIn("credentialMain(deadline)", field)
+        self.assertIn("capture(label, targets, frame, deadline)", field)
+        self.assertIn("credentialRemaining(deadline)", field)
+        capture = source[source.index("private fun capture("):source.index("private fun writePixels(")]
+        self.assertLess(capture.index("takeScreenshot()"), capture.index("copyOwnedWindow("))
+        self.assertEqual(source.count("takeScreenshot()"), 1)
+        self.assertNotIn("takeScreenshot(activity.window)", source)
+        self.assertIn("appWindow.id == owned.windowId && appWindow.displayId == owned.displayId", capture)
+        self.assertIn("check(afterDisplay == owned)", capture)
+        self.assertIn("check(afterCopy == owned)", capture)
+        self.assertIn('"stop-reentry-reentered-empty", "fakegrant-true-resumed-cleared"', source)
+        copy = source[source.index("private fun copyOwnedWindow("):source.index("private data class WindowCopy(")]
+        self.assertLess(copy.index("if (owner.start())"), copy.index("PixelCopy.request(owned.window"))
+        self.assertIn("result.get(credentialRemaining(deadline), TimeUnit.NANOSECONDS)", copy)
+        self.assertIn("check(status == PixelCopy.SUCCESS)", copy)
+        self.assertIn("check(ownedWindowOnMain() == owned)", copy)
+        pixels = source[source.index("private fun writePixels("):source.index("private fun ownedWindow(")]
+        self.assertLess(pixels.index("bitmap.compress("), pixels.index("targets.forEach"))
+        display = capture[capture.index("takeScreenshot()"):capture.index("row.put(\"pngSha256\"")]
+        self.assertLess(display.index("writePixels("), display.index("credentialRemaining(deadline)"))
+        self.assertIn("owner.release()", copy)
+        self.assertIn("windowCopies.all { it.owner.retired() }", source)
+        self.assertIn("windowCopies.forEach(WindowCopy::report)", source)
+        for forbidden in ("invalidate(", "requestLayout(", "Thread.sleep(", "waitForIdleSync(",
+                          "clearWindowContentFrameStats(", "SurfaceControl.Transaction", "FLAG_SECURE"):
+            self.assertNotIn(forbidden, source)
 
     def test_shared_manifest_consumer_does_not_change_default_runner(self):
         source = (ui.ROOT / "scripts/run-android-art-smoke.py").read_text()
