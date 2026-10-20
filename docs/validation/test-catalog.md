@@ -1048,6 +1048,12 @@ failure, timeout, unexpected state regression, storage/permission error, or
 terminal `FAILURE`/`CANCELLATION` must be explained by the UI observation and
 the row's expected failure sequence.
 
+`protocol.secure_v2.negotiated` records the authenticated security profile, not
+the optional HELLO feature intersection. A Connected state or connection snapshot
+cannot prove support for `file-commit-sha256-v1`: retain actual peer HELLO/negotiation
+and operation evidence for optional-feature claims. Durable transfer completion is
+a separate observation, not implied by the security-profile record.
+
 | Test ID | Required structured events and exported fields | UI indicators to record | Expected success / failure sequence | Evidence from each peer and external capture |
 | --- | --- | --- | --- | --- |
 | PROV-A12 / PS-T01 | `application.started`, `test.session.*`, `peer.local.initialized`, `discovery.started/stopped`, `network.path.changed`, `timeout.expired`, `diagnostics.failure`; device/target SDK, permission branch, callback generation, cleanup attempt/result, redacted validation outcome, safe manual identity fields, and exact terminal outcome | Start/Stop/Host/Join result, permission/location text, provisioning state, manual port/hosts, masked credential indicator, build identity | Success: one callback terminal result, secure manual identity, and cleanup; invalid credentials fail before platform consent and a valid retry works. Failure: `permission-required`/`unsupported`/timeout with no “started” claim, secret output, detached operation, or stale generation changing the new result | Android ZIP plus logcat, instrumentation result, `dumpsys wifi/connectivity/package`, permission screenshots, safely redacted device fingerprint; no PCAP required |
