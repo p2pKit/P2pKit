@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -1956,6 +1957,102 @@ class IntelAuditContextControls(unittest.TestCase):
         source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
         self.assertIn('audit_context.admit(os.environ, self.parent', source)
         self.assertIn('audit_context.recheck(os.environ, parent', source)
+
+
+class MulticastInterpreterTests(unittest.TestCase):
+    """Real caller/path resolution; all acquisition/compiler/native calls mocked."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='rpc-interpreter-')
+        self.addCleanup(self.temporary.cleanup)
+        self.parent = Path(self.temporary.name).resolve()
+        self.interpreter = self.parent / 'real parent with spaces' / 'python'
+        self.interpreter.parent.mkdir()
+        self.interpreter.write_text('not an actual interpreter; never executed\n')
+        self.interpreter.chmod(0o700)
+        self.java_home = self.parent / 'java'
+        self.java_home.mkdir()
+        self.instance = q.Qualification.__new__(q.Qualification)
+        self.instance.state = self.parent / 'state'
+        (self.instance.state / 'work').mkdir(parents=True)
+        self.instance.invoke = Mock(return_value={'productExitCode': 0})
+        self.instance.output = Mock(side_effect=[b'PASS mode=control\n', b''])
+        self.instance.result = {}
+        self.instance.policy = SimpleNamespace(FIXTURE_MARKERS=[re.compile('PASS mode=control')])
+
+    def invoke(self, executable):
+        with patch.object(q.sys, 'executable', executable), \
+                patch.dict(q.os.environ, {'JAVA_HOME': str(self.java_home)}, clear=True), \
+                patch.object(q, 'bounded', return_value=b'modeled dependency bytes'), \
+                patch.object(q.hashlib, 'sha256', return_value=SimpleNamespace(
+                    hexdigest=lambda: '5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4')):
+            self.instance.multicast_admission()
+
+    def assert_canonical_call(self, executable):
+        self.invoke(executable)
+        calls = self.instance.invoke.call_args_list
+        self.assertEqual([call.args[0] for call in calls], ['multicast-reviewed-dependency',
+            'multicast-vendor-compile', 'multicast-fixture-compile', 'multicast-readiness-control'])
+        actual = calls[-1]
+        properties = [arg for arg in actual.args[1] if arg.startswith('-Dp2pkit.audit.pythonExecutable=')]
+        self.assertEqual(properties, ['-Dp2pkit.audit.pythonExecutable=' + str(self.interpreter)])
+        self.assertEqual(actual.args[2], 45)
+        self.assertEqual(actual.kwargs, {'allow_failure': True})
+        self.assertIn('-Dp2pkit.audit.jmdnsStartupPrimitives=true', actual.args[1])
+        self.assertEqual(self.instance.result['multicastMarkers'], ['PASS mode=control'])
+
+    def test_canonical_running_interpreter_is_one_unchanged_argv_property(self):
+        self.assert_canonical_call(str(self.interpreter))
+
+    def test_direct_symlink_is_resolved_before_actual_caller_assembly(self):
+        launcher = self.parent / 'python launcher'
+        launcher.symlink_to(self.interpreter)
+        self.assert_canonical_call(str(launcher))
+
+    def test_ancestor_symlink_is_resolved_before_actual_caller_assembly(self):
+        launcher = self.parent / 'linked parent'
+        launcher.symlink_to(self.interpreter.parent, target_is_directory=True)
+        self.assert_canonical_call(str(launcher / 'python'))
+
+    def test_missing_relative_empty_directory_and_nonexecutable_fail_before_acquisition(self):
+        nonexecutable = self.parent / 'not executable'
+        nonexecutable.write_text('not executable\n')
+        nonexecutable.chmod(0o600)
+        for executable in ('', None, 0, 'python', str(self.parent / 'missing'), str(self.parent),
+                           str(nonexecutable), '\0', '/\0'):
+            with self.subTest(executable=executable), self.assertRaises(q.QualificationError):
+                self.invoke(executable)
+            self.instance.invoke.assert_not_called()
+            self.instance.output.assert_not_called()
+            self.assertFalse((self.instance.state / 'work/multicast').exists())
+
+    def test_broken_and_cyclic_symlinks_fail_before_acquisition(self):
+        broken, cyclic = self.parent / 'broken', self.parent / 'cyclic'
+        broken.symlink_to(self.parent / 'missing')
+        cyclic.symlink_to(cyclic)
+        for path in (broken, cyclic):
+            with self.subTest(path=path.name), self.assertRaises(q.QualificationError):
+                self.invoke(str(path))
+            self.instance.invoke.assert_not_called()
+            self.assertFalse((self.instance.state / 'work/multicast').exists())
+
+    def test_diagnostic_argument_does_not_accept_failed_multicast_or_skip_original_error(self):
+        for index, (code, raw) in enumerate((
+            (1, b'FAIL mode=control\n'), (None, b'PASS mode=control\n'),
+            (0, b'FAIL mode=control\n'), (0, b'PASS mode=control\nPASS mode=control\n'),
+            (0, b'PASS mode=control\nphase=fixture_rescue_begin\n'), (0, b''),
+        )):
+            self.instance.state = self.parent / ('state-' + str(index))
+            (self.instance.state / 'work').mkdir(parents=True)
+            self.instance.invoke.reset_mock()
+            self.instance.invoke.return_value = {'productExitCode': code}
+            self.instance.output.side_effect = [raw, b'']
+            with self.subTest(code=code, raw=raw), \
+                    self.assertRaisesRegex(q.QualificationError, 'Multicast prerequisite failed'):
+                self.invoke(str(self.interpreter))
+            self.assertEqual(self.instance.invoke.call_count, 4)
+            self.assertEqual(self.instance.invoke.call_args.args[2], 45)
+            self.assertTrue(self.instance.invoke.call_args.kwargs['allow_failure'])
 
 
 if __name__ == '__main__':
