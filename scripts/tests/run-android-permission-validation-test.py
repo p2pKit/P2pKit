@@ -66,6 +66,20 @@ class PermissionValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             p.ready_checkpoint(output(ready=True) * 2, TOKEN)
 
+    def test_live_handoff_accepts_every_byte_fragment_without_treating_it_as_eof(self):
+        raw = "ⓘ synthetic non-record line\n".encode() + output(ready=True)
+        for size in range(len(raw)):
+            with self.subTest(size=size):
+                self.assertIsNone(p.ready_checkpoint(raw[:size], TOKEN))
+        self.assertIsNotNone(p.ready_checkpoint(raw, TOKEN))
+        with self.assertRaises(ValueError):
+            p.terminal(output()[:-1], TOKEN, "revocation")
+
+    def test_peer_reply_uses_actual_maintained_cli_command(self):
+        self.assertEqual(p.PEER_REPLY_PREFIX, "send jvm-")
+        source = (p.ROOT / "samples/p2p-sample-desktop/src/main/kotlin/dev/p2pkit/sample/desktop/Main.kt").read_text()
+        self.assertIn('"send" -> {', source)
+
     def test_actual_source_runtime_record_binding(self):
         base = {"token": TOKEN, "sourceCommit": SOURCE, "sourceTree": TREE, "sdk": 37, "targetSdk": 37}
         p.record_binding(base, TOKEN, SOURCE, TREE)

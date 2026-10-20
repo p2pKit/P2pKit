@@ -32,8 +32,7 @@ internal object LanPermissionRevocation {
         check(arguments.getString("sourceCommit") == BuildInfo.COMMIT && !BuildInfo.DIRTY)
         check(checkNotNull(arguments.getString("sourceTree")).matches(Regex("[0-9a-f]{40}")))
         val permission = app.packageManager.getPermissionInfo(PERMISSION, 0)
-        check(permission.protectionLevel and android.content.pm.PermissionInfo.PROTECTION_MASK_BASE ==
-            android.content.pm.PermissionInfo.PROTECTION_DANGEROUS)
+        check(permission.protection == android.content.pm.PermissionInfo.PROTECTION_DANGEROUS)
         val record = identity(app, arguments).put("readbackScope", "observed public flag; not generated-cache proof")
         try {
             // Same actual public reader and both defaults distinguish a present true

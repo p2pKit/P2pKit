@@ -329,6 +329,8 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
             check(!vm.isRunning.value && !vm.isStarting.value && !vm.isStopping.value && !vm.cleanupPending.value)
             result.putString("p2pkitSameInstanceRevocation", "PASS")
             result.putString("p2pkitReentry", "DENIED_SAME_MANAGER_AND_PROCESS")
+            result.putString("p2pkitActivities", witness.created.size.toString())
+            result.putString("p2pkitDestroyed", witness.destroyed.size.toString())
             phase("same-manager-revoked-and-reentered")
         }
     }

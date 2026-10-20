@@ -22,6 +22,7 @@ need = owner.need
 PACKAGE = owner.PACKAGE
 RUNNER = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+PEER_REPLY_PREFIX = "send jvm-"
 
 
 def parse_output(raw):
@@ -42,6 +43,7 @@ def parse_output(raw):
 
 
 def terminal(raw, token, mode):
+    need(raw.endswith(b"\n"), "Truncated permission terminal")
     result, frames, codes, pending = parse_output(raw)
     test = "deniedReentryAfterPermissionDrivenExit" if mode == "revoked-reentry" else (
         "permissionRecreationPinnedTcpAndRevocation")
@@ -64,7 +66,10 @@ def terminal(raw, token, mode):
 
 
 def ready_checkpoint(raw, token):
-    _, frames, _, _ = parse_output(raw)
+    # os.read is byte-stream delivery, not line framing. A partial field/UTF-8
+    # suffix is neither malformed evidence nor an authoritative handoff yet.
+    complete = raw[:raw.rfind(b"\n") + 1]
+    _, frames, _, _ = parse_output(complete)
     ready = [value for code, value in frames if code == "2" and
              value.get("p2pkitPhase") == "awaiting-host-os-revocation"]
     if not ready:
@@ -253,7 +258,7 @@ class Campaign:
                 received = any(re.fullmatch(r"incoming from anon-[0-9a-f]{16}: <text 40B>", line)
                                for line in lines("peer"))
                 if received and not responded and "INSTRUMENTATION_STATUS: p2pkitPhase=message-sent" in lines("revocation"):
-                    send(peer, "say jvm-" + token)
+                    send(peer, PEER_REPLY_PREFIX + token)
                     responded = True
                 handoff = ready_checkpoint(bytes(buffers["revocation"]), token)
                 if handoff is not None and not revoked:

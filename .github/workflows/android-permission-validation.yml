@@ -2,8 +2,6 @@ name: Android API37 LAN permission validation
 on:
   workflow_call: {}
   workflow_dispatch: {}
-  push:
-    branches: ['work/**']
 permissions:
   contents: read
 concurrency:
@@ -11,7 +9,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   permission:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[android-permission-validation]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     defaults:
