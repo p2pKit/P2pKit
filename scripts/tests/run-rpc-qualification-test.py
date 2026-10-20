@@ -184,11 +184,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('task.device.finalizeValue()', q.SIMULATOR_INIT)
         self.assertIn("['iosX64Test', 'iosSimulatorArm64Test']", q.SIMULATOR_INIT)
         self.assertNotIn('enabled = false', q.SIMULATOR_INIT)
-        # Preserve every original control and require the new native shell-lifetime regression on BOTH hosts.
-        # Four added modeled session-diagnostic tests are not four new native controls.
-        self.assertEqual(q.control_inventory('macos-x64'), 133)
-        self.assertEqual(q.control_inventory('macos-arm64'), 133)
-        self.assertGreater(q.control_inventory('linux-x64'), 100)
+        # Source inventory: 45 pure policy + 66 modeled Darwin observation
+        # methods, plus 48 native Darwin methods (including inherited cases).
+        # These are required inventory totals, not evidence of native execution.
+        self.assertEqual(q.control_inventory('macos-x64'), 159)
+        self.assertEqual(q.control_inventory('macos-arm64'), 159)
+        self.assertEqual(q.control_inventory('linux-x64'), 157)
 
     def test_no_legacy_executor_or_pid_signaling_path(self):
         source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
@@ -209,7 +210,31 @@ class AdmissionTests(unittest.TestCase):
 
     def test_actual_xctest_inventory_is_closed_and_nonempty(self):
         cases = q.swift_inventory(ROOT)
-        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 88, 'p2pkit-sample-uitests': 6})
+        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 88, 'p2pkit-sample-uitests': 10})
+        self.assertEqual(cases['p2pkit-sample-uitests'], {
+            'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale()',
+            'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale()',
+            'ContentViewPresentationUITests/testFirstIncomingOfferRequiresConsentWithoutTransferHistory()',
+            'P2pKitSampleUITests/testLaunchStartAndStopControls()',
+            'P2pKitSampleUITests/testRecoversOneProvablyUnacknowledgedStartInput()',
+            'P2pKitSampleUITests/testLocalPairingDisclosureAndStopCleanup()',
+            # Four late-acknowledgement/retry controls added by 2133f655.
+            'P2pKitSampleUITests/testLateStartAcknowledgementBeforeDiagnosticsDoesNotRetry()',
+            'P2pKitSampleUITests/testLateStartAcknowledgementDuringDiagnosticsDoesNotRetry()',
+            'P2pKitSampleUITests/testLateStartAcknowledgementDuringReadinessDoesNotRetry()',
+            'P2pKitSampleUITests/testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry()',
+        })
+
+    def test_missing_or_duplicate_xctest_does_not_satisfy_updated_inventory(self):
+        bounded = q.bounded
+        method = b'func testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry('
+        for replacement in (b'func nonTestMethod(', method + b') {}\n    ' + method):
+            def changed(path, maximum=q.MAX_FILE):
+                raw = bounded(path, maximum)
+                return raw.replace(method, replacement)
+            with self.subTest(replacement=replacement), patch.object(q, 'bounded', side_effect=changed):
+                with self.assertRaises(q.QualificationError):
+                    q.swift_inventory(ROOT)
 
     def test_native_controls_reject_skipped_failed_or_partial_output(self):
         self.assertEqual(q.unittest_count('\nRan 122 tests in 190.25s\n\nOK\n'), 122)
@@ -448,7 +473,14 @@ class DiagnosticTests(unittest.TestCase):
             actual = q.control_diagnostics(raw, Path(directory), reader)
         self.assertEqual(actual[0]['method'], name)
         self.assertEqual(actual[0]['assertionLines'], [3271])
-        self.assertIn('Product command timed out', actual[0]['receipts'][0]['diagnostic']['fixedErrorMessages'])
+        diagnostic = actual[0]['receipts'][0]['diagnostic']
+        # The timeout message is now a local variable, not a source-literal
+        # error argument. Keep its closed semantic failure kind, not raw text.
+        self.assertEqual(diagnostic['errorKinds'], ['PRODUCT_DEADLINE_EXCEEDED'])
+        self.assertEqual(diagnostic['errorCount'], 1)
+        self.assertIsNone(diagnostic['productExitCode'])
+        self.assertEqual(diagnostic['finalExitCode'], 125)
+        self.assertEqual(diagnostic['fixedErrorMessages'], [])
         self.assertNotIn('private-', json.dumps(actual))
         self.assertNotIn('/private/', json.dumps(actual))
         private = result()
@@ -861,8 +893,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
-        # The shared inventory also includes the four modeled Darwin diagnostic tests.
-        self.assertEqual(q.control_inventory('linux-x64'), 131)
+        # 45 pure + 66 modeled Darwin + 40 native Linux + 6 Linux observation.
+        self.assertEqual(q.control_inventory('linux-x64'), 157)
 
     def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
         for lane in ('apple-arm64', 'apple-x64'):
