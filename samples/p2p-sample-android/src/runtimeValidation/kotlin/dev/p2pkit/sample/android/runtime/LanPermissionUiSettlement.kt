@@ -33,3 +33,25 @@ internal data class LanPermissionUiSettlement(
         }
     }
 }
+
+/** A disabled Compose click owner remains clickable but may omit ACTION_CLICK. */
+internal data class LanPermissionActionNode(
+    val owned: Boolean,
+    val visible: Boolean,
+    val enabled: Boolean,
+    val clickable: Boolean,
+    val clickAction: Boolean,
+    val otherActivation: Boolean
+) {
+    fun ready(): Boolean = owned && visible && enabled && clickable && clickAction
+}
+
+/** Resolve structural ownership before checking readiness; never climb past a disabled owner. */
+internal fun nearestLanPermissionActionOwner(chain: List<LanPermissionActionNode>): Int? {
+    require(chain.size <= 6)
+    for ((index, node) in chain.withIndex()) {
+        if (!node.owned) return null
+        if (node.clickable || node.clickAction || node.otherActivation) return index
+    }
+    return null
+}

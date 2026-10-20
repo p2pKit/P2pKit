@@ -119,6 +119,21 @@ class PermissionValidationTests(unittest.TestCase):
         self.assertIn('rawExchange(route, host, controlPort, token)', source)
         self.assertIn('phase("awaiting-host-os-revocation")', source)
 
+    def test_refresh_owner_uses_action_semantics_without_skipping_disabled_nodes(self):
+        source = (p.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/"
+                  "LanPermissionRuntimeInstrumentation.kt").read_text()
+        section = source.split('val refresh = visible("Refresh LAN access")', 1)[1].split('val observation =', 1)[0]
+        self.assertIn('while (ancestor != null && chain.size < 6)', section)
+        self.assertIn('current == root || current.packageName?.toString() != PACKAGE', section)
+        self.assertIn('current.windowId != root?.windowId || nodes.none { it == current }', section)
+        self.assertIn('nodes.any { it == current }', section)
+        self.assertIn('current.windowId == root?.windowId', section)
+        self.assertIn('clickAction = AccessibilityNodeInfo.ACTION_CLICK in actions', section)
+        self.assertIn('otherActivation = current.isLongClickable || AccessibilityNodeInfo.ACTION_LONG_CLICK in actions', section)
+        self.assertIn('nearestLanPermissionActionOwner(actionNodes)', section)
+        self.assertNotIn('android.widget.Button', section)
+        self.assertNotIn('filter', section)
+
     def test_settled_result_without_original_outstanding_request_never_qualifies(self):
         for fields in ({"p2pkitOriginalRequestOutstanding": "false"}, {"p2pkitRequestSettled": "false"}):
             with self.assertRaises(ValueError):

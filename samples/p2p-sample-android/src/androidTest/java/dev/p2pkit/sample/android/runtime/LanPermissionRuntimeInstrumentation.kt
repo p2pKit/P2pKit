@@ -466,9 +466,34 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
             it.isVisibleToUser && it.text?.toString() == text
         }.also { check(it.size <= 1) { "Ambiguous permission UI target" } }.singleOrNull()
         val refresh = visible("Refresh LAN access")
-        val button = generateSequence(refresh) { it.parent }.take(6)
-            .takeWhile { it.packageName?.toString() == PACKAGE }
-            .firstOrNull { it.className?.toString() == "android.widget.Button" }
+        // Compose may place a legacy Button role on a fake child, not the click owner.
+        // Its disabled owner stays clickable while ACTION_CLICK is omitted: locate
+        // that structural owner first, so an enabled ancestor cannot hide a denial.
+        val chain = mutableListOf<AccessibilityNodeInfo>()
+        var ancestor = refresh
+        while (ancestor != null && chain.size < 6) {
+            val current = ancestor
+            chain += current
+            if (current == root || current.packageName?.toString() != PACKAGE ||
+                current.windowId != root?.windowId || nodes.none { it == current }
+            ) break
+            ancestor = current.parent
+        }
+        val actionNodes = chain.map { current ->
+            val actions = current.actionList.map { it.id }
+            check(actions.size <= 32)
+            LanPermissionActionNode(
+                owned = current.packageName?.toString() == PACKAGE && current.windowId == root?.windowId &&
+                    nodes.any { it == current },
+                visible = current.isVisibleToUser,
+                enabled = current.isEnabled,
+                clickable = current.isClickable,
+                clickAction = AccessibilityNodeInfo.ACTION_CLICK in actions,
+                otherActivation = current.isLongClickable || AccessibilityNodeInfo.ACTION_LONG_CLICK in actions
+            )
+        }
+        val ownerIndex = nearestLanPermissionActionOwner(actionNodes)
+        val buttonReady = ownerIndex?.let { actionNodes[it].ready() } == true
         val observation = LanPermissionUiSettlement(
             originalRequestObserved = result.getString("p2pkitOriginalRequestOutstanding") == "true",
             ownedWindow = ownedWindow,
@@ -491,14 +516,20 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
                 "Permission results only update access status. Tap Start, KMP smoke, Connect or a switch again."
             ) != null,
             refreshVisible = refresh != null,
-            refreshButtonReady = button?.let { it.isVisibleToUser && it.isEnabled && it.isClickable } == true
+            refreshButtonReady = buttonReady
         )
         // Fixed predicate ingredients only: no arbitrary screen text/payloads. Retained
         // in the original encrypted terminal on failure as well as successful handoff.
         result.putString("p2pkitRequestUiObservation", observation.toString())
-        result.putString("p2pkitRequestUiButton", "roleFound=${button != null};" +
-            "visible=${button?.isVisibleToUser == true};enabled=${button?.isEnabled == true};" +
-            "clickable=${button?.isClickable == true}")
+        result.putString("p2pkitRequestUiButton", "ownerIndex=$ownerIndex;ready=$buttonReady;" +
+            chain.indices.joinToString(";") { index ->
+                val current = chain[index]
+                val role = current.className?.toString().let {
+                    if (it in setOf("android.view.View", "android.widget.TextView", "android.widget.Button")) it
+                    else "OTHER"
+                }
+                "$index:role=$role,actions=${current.actionList.map { it.id }},${actionNodes[index]}"
+            })
         return observation.settled()
     }
 

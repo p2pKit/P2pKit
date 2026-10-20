@@ -131,7 +131,15 @@ intentional removal after a subsequent successful foreground refresh clears the
 message. The latter requires absence of the checked status, action and explanation
 labels in the same captured tree, not merely a null/missing window or a state-only assertion.
 Waiting/grant controls, stale visible labels, disabled buttons and ambiguous
-matches cannot pass. Fixed predicate ingredients are retained in the original
+matches cannot pass. The Refresh label resolves to its nearest owned structural
+click/activation owner in the bounded ancestry, not a legacy widget class.
+Compose can expose the Button role on a fake child while its real click owner
+remains a View. A disabled owner can remain clickable but omit ACTION_CLICK;
+therefore ownership is resolved before readiness, and the observer never skips
+it for an enabled ancestor. The chosen owner must be visible, enabled, clickable
+and actually export ACTION_CLICK. A long-click-only or foreign owner fails.
+Finite class-category/action-ID/ownership ingredients are recorded privately;
+no action is performed by this settlement observer. Fixed predicate ingredients are retained in the original
 private instrumentation terminal, including failures. This repairs an overly
 narrow observer contract; the earlier timeout alone did not establish whether a
 callback or observer/presentation mismatch caused that original failure.

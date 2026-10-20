@@ -1,6 +1,8 @@
 package dev.p2pkit.sample.android.runtime
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -61,4 +63,60 @@ class LanPermissionUiSettlementTest {
         assertFalse(absent.copy(refreshButtonReady = true).settled())
         assertFalse(absent.copy(cardExplanationVisible = true).settled())
     }
+    private val textNode = LanPermissionActionNode(true, true, true, false, false, false)
+    private val clickOwner = LanPermissionActionNode(true, true, true, true, true, false)
+
+    @Test
+    fun clickOwnerNeedsNoLegacyWidgetClassOrTextChildEnablement() {
+        val chain = listOf(textNode, clickOwner)
+        assertEquals(1, nearestLanPermissionActionOwner(chain))
+        assertTrue(chain[1].ready())
+        assertFalse(textNode.ready())
+        assertEquals(null, nearestLanPermissionActionOwner(listOf(textNode)))
+    }
+
+    @Test
+    fun disabledNearestOwnerWithoutClickActionCannotBeSkippedForEnabledAncestor() {
+        for (disabled in listOf(
+            clickOwner.copy(enabled = false, clickAction = false),
+            clickOwner.copy(enabled = false)
+        )) {
+            val chain = listOf(textNode, disabled, clickOwner)
+            assertEquals(1, nearestLanPermissionActionOwner(chain))
+            assertFalse(chain[1].ready())
+        }
+    }
+
+    @Test
+    fun invisibleOrInconsistentOwnerCannotBeSkipped() {
+        for (invalid in listOf(clickOwner.copy(visible = false), clickOwner.copy(clickable = false))) {
+            val chain = listOf(textNode, invalid, clickOwner)
+            assertEquals(1, nearestLanPermissionActionOwner(chain))
+            assertFalse(chain[1].ready())
+        }
+    }
+
+    @Test
+    fun wrongActivationOwnerDoesNotBecomeAParentClick() {
+        val chain = listOf(textNode, textNode.copy(otherActivation = true), clickOwner)
+        assertEquals(1, nearestLanPermissionActionOwner(chain))
+        assertFalse(chain[1].ready())
+    }
+
+    @Test
+    fun foreignBoundaryCannotBeCrossedToFindAnOwnedButton() {
+        assertEquals(null, nearestLanPermissionActionOwner(listOf(textNode.copy(owned = false), clickOwner)))
+        assertEquals(null, nearestLanPermissionActionOwner(
+            listOf(textNode, clickOwner.copy(owned = false), clickOwner)
+        ))
+        assertFalse(clickOwner.copy(owned = false).ready())
+    }
+
+    @Test
+    fun lookupRemainsBoundedAndDoesNotGuessMissingOwners() {
+        assertEquals(null, nearestLanPermissionActionOwner(emptyList()))
+        assertEquals(null, nearestLanPermissionActionOwner(List(6) { textNode }))
+        assertFailsWith<IllegalArgumentException> { nearestLanPermissionActionOwner(List(7) { clickOwner }) }
+    }
+
 }
