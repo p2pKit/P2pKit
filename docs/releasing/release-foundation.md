@@ -14,8 +14,12 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current candidate source is **`0.8.0-rc3`** (not yet published), after the published
-**`0.8.0-rc2`**. Combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466),
+The current source and latest published release are **`0.8.0-rc4`**. Its
+[release record](../releases/0.8.0-rc4.md) binds the actual main qualification,
+separate protected approvals and immutable public library/application bytes.
+No next snapshot is selected by the publication bookkeeping.
+
+Historically, combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466),
 release-admission [PR #467](https://github.com/p2pKit/P2pKit/pull/467), and the
 rc2 preflight/version repair [PR #468](https://github.com/p2pKit/P2pKit/pull/468)
 merged through their separately authorized protected process, preserving
@@ -40,8 +44,9 @@ The release record binds the original artifacts and public download hashes.
 
 Every future release still requires its own exact source/version and 14-lockfile
 graph checks, exact-head merge authorization, actual-main qualification, four
-application artifacts and separate tag/Maven/sample approvals. Neither rc1 nor
-rc2 artifacts qualify this new candidate or another release.
+application artifacts and separate tag/Maven/sample approvals. Historical
+rc1/rc2/rc3 artifacts do not qualify rc4; rc4 artifacts likewise cannot qualify
+a different source or later release.
 
 ## Independent components
 
@@ -73,7 +78,7 @@ the standalone `full` profile is unchanged.
 The prior macOS 26 FULL [run](https://github.com/p2pKit/P2pKit/actions/runs/38823809770)
 failed actual JmDNS close tests with `NoRouteToHostException`; that failure is not
 reclassified as passed. The published rc2 shared CLI tests used the reviewed macOS 14 baseline.
-The current replacement candidate uses macOS 15 Intel/Xcode 26.3; no result
+The published rc4 source uses macOS 15 Intel/Xcode 26.3; no result
 on either host proves macOS 26 JVM multicast functionality. New
 current-source results from all fourteen components are required, with all four
 application artifacts (18 frozen inputs total). Splitting consumers likewise
@@ -94,11 +99,12 @@ XCFramework and Swift lane, with Intel native execution on macOS 15 Intel.
 **Replacement qualification:** macOS 14 retires on 2026-11-02. The current
 source selects explicit macOS 15 Intel/Xcode 26.3 instead, including the focused
 JmDNS diagnostic, complete shared/consumer components and dependency writer.
-This configuration is not yet hosted acceptance: require the unchanged real
-JmDNS tests, complete shared gate and consumers on this exact source before
-claiming the migration qualified. Protected producer/recovery configuration is
-not signing, publication or actual recovery execution evidence. No Terminal/TCC
-permission workaround or Bonjour mutation is added to these CLI routes. Native
+The rc4 release record binds successful exact-source shared/consumer components
+and protected publication on this configuration. Those results are specific to
+that source; later sources still require their own real gates. Configuration
+alone is not signing/publication evidence, and the separate recovery procedure
+is not claimed executed. No Terminal/TCC permission workaround or Bonjour
+mutation is added to these CLI routes. Native
 ARM64/Intel and Desktop/Swift lanes are unchanged. Exact host/tool mismatches
 fail; no floating runner, architecture emulation or Xcode fallback is allowed.
 
@@ -277,10 +283,12 @@ Maven. Existing draft/asset idempotency checks remain enforced. See the
 [release checklist](checklist.md) for publication contents and limitations.
 
 No local model, source-only CI, accepted Windows risk or historical preview is a
-substitute for an actually required gate. Windows RPC's unfinished productive
-loader/profile behavior and owner-accepted post-release testing limits must be
-stated honestly for the published rc2 and later development source; no unsafe
-load or fake runtime pass.
+substitute for an actually required gate. Published rc2/rc3 Windows RPC retains
+its unavailable productive-provider behavior. The rc4 provider is implemented,
+but the source/artifact-bound incoming manual report, Back deadline failure,
+zero fully accepted automated UI cycles and partial W01–W11 remain distinct
+from publication. See the [Windows scope](../rpc/windows-release-scope.md);
+no unsafe load or inferred installed-runtime pass is permitted.
 
 For focused published-POM discovery diagnosis, dispatch CI with `component=consumers-pom-diagnostic`.
 This runs the original source-local POM smoke and cleanup, not the required complete consumer gate or release qualification.

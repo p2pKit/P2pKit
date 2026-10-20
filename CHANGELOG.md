@@ -3,11 +3,14 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc4 — unpublished development release candidate
+## 0.8.0-rc4 — development release candidate (2026-10-20)
 
-Prepared from the incoming Windows/Android integration. Latest published library
-and sample artifacts remain `0.8.0-rc3`; no rc4 publication or final-source CI pass
-is claimed. Historical rc3/rc2 results below are not evidence for this candidate.
+Published and verified on Maven Central from immutable `v0.8.0-rc4`, source
+`ba27d15eccfdc56756e6a2da4708a11e40bef690`. The same-source frozen Android APK,
+Windows x64 MSI, macOS ARM64 DMG and Linux x64 DEB are publicly available.
+See the [release record](docs/releases/0.8.0-rc4.md) for exact-source qualification,
+separate protected approvals and all seven public-download hashes. Publication
+does not complete the installed-Windows or external-device qualification below.
 
 - Connect the productive Windows installed-provider path and retain original
   runtime/module/JNI ownership, protected storage, cleanup and admission checks.
@@ -26,6 +29,16 @@ is claimed. Historical rc3/rc2 results below are not evidence for this candidate
   full installed lifecycle qualification are incomplete. See the
   [exact-source handoff](docs/maintenance/windows-android-rpc-handoff-20261019.md)
   and [current Windows scope](docs/rpc/windows-release-scope.md).
+- Remove the mandatory calendar-based Maven Central token-rotation deadline.
+  Existing credentials remain usable while valid; compromise, exposure,
+  revocation or provider requirements still require action. Authentication,
+  namespace access, signing, protected approvals and integrity gates are unchanged.
+- Strengthen the Apple post-transfer-cancellation fixture to observe a request
+  and reply before teardown, with both subscriptions established before sending
+  and both sessions still connected. The existing receive bound is unchanged;
+  a completed local send alone is no longer mistaken for remote receipt.
+- Make Swift UI Start-input recovery recognize late acknowledgements before
+  issuing its one bounded retry; retain the readiness and no-duplicate-start checks.
 - Required exact-source CI, Apple ABI/native checks, immutable artifact freezing
   and protected publication controls remain mandatory. No ABI baseline is changed
   to turn the earlier unavailable Apple-toolchain result into a pass.
