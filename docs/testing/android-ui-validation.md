@@ -60,12 +60,28 @@ outer job's ephemeral cleanup, not deleted while descendants may still be alive.
 
 The result remains `HARNESS_PASS_PENDING_REVIEW`, never issue-closure `PASS`.
 Independently inspect the original screenshots/Parcel/lifecycle/input interval
-and cleanup. Execute isolated, clean, committed negative-control candidates: the
-inert delegated-local diagnostic collector must reach its baseline and fail the
-hands-off refresh; the nine #324 controls must fail their intended save/restore,
-secret-display, expiry or clear/reentry observations. Compile failure, setup
-failure, unrelated crash or timeout before the intended observation is not a
-successful mutant. A green workflow alone does not close either issue.
+and cleanup against the original issues: #317 requires an untouched rendered
+update; #324 requires executable Compose restoration and lifecycle coverage,
+including absent restored plaintext and default masking. State-object or source-
+string tests alone do not satisfy these criteria. A green workflow alone does
+not close either issue.
+
+The September preparation campaign additionally proposed an inert delegated-
+local collector mutant and nine #324 mutants. These are optional stronger
+sensitivity checks, not new prerequisites for the original issue criteria. Keep
+any existing host negative-control results in their original scope; do not call
+them rendered mutant execution. Historical comments and the runner's legacy
+`independentVisualAndMutationReview` marker are retained unchanged: the runner
+does not perform that review or execute mutants. Record actual independent
+rendered/restoration review separately and identify unexecuted mutations as
+`NOT_RUN`; do not claim completion of the stronger historical campaign.
+
+If executing optional mutants, use isolated, clean, committed candidates. The
+collector mutant must reach baseline and fail the hands-off refresh; credential
+mutants must fail their intended save/restore, display, expiry or clear/reentry
+observation. Compilation/setup failure, unrelated crash or an earlier timeout
+is not a successful mutant. No runtime assertion, frame/visual requirement or
+cleanup check is relaxed by separating original acceptance from this extra work.
 
 Offline controller checks, which are not Android execution:
 
