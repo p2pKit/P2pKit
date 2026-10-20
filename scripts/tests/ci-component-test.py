@@ -981,7 +981,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         with self.assertRaises(T.ContextFailure):
             T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
         native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
-        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200}[executionMode]', native)
+        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200,\n            @"modular-apple-swift-jvm-transfer":@16200}[executionMode]', native)
         self.assertIn('if (!modularCommand) return 125;', native)
         self.assertIn('childBound = @(modularCommand.doubleValue + 240);', native)
         self.assertIn('![expectedMode isEqualToString:executionMode]', native)
@@ -1085,7 +1085,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_deadlines_and_native_tracking_failure_are_fail_closed(self):
         T = self.T
-        for component in T.PROFILES.keys() - {'dependency-generate', 'release-consumers'}:
+        for component in T.PROFILES.keys() - {'dependency-generate', 'release-consumers', T.APPLE_COMPONENT}:
             budget = T.bounds(component)
             route = C.matrix(component)['include'][0]
             self.assertEqual(budget['command'], route['minutes'] * 60)
@@ -1106,7 +1106,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_shared_fixed_profile_has_original_full_shared_command_not_a_test_subset(self):
         T = self.T
-        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate', 'release-consumers'})
+        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate', 'release-consumers', T.APPLE_COMPONENT})
         argv = T.command(self.environment(), 'macos-shared')
         self.assertEqual(argv[argv.index('--component') + 1], 'macos-shared')
         self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')

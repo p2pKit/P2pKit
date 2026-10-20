@@ -383,7 +383,8 @@ int main(int argc, const char **argv) {
          * collector retains its unchanged component command deadline. */
         NSNumber *modularCommand = @{@"modular-jmdns":@1800, @"modular-shared":@7200,
             @"modular-consumers":@7200, @"modular-published-consumers":@7200,
-            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200}[executionMode];
+            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200,
+            @"modular-apple-swift-jvm-transfer":@16200}[executionMode];
         if (!modularCommand) return 125;
         childBound = @(modularCommand.doubleValue + 240);
         BOOL modularGenerate = [executionMode isEqualToString:@"modular-dependency-generate"];
@@ -472,7 +473,8 @@ int main(int argc, const char **argv) {
                   @"consumers":@"modular-consumers",
                   @"published-consumers-diagnostic":@"modular-published-consumers",
                   @"dependency-generate":@"modular-dependency-generate",
-                  @"release-consumers":@"modular-release-consumers"}[component] : nil;
+                  @"release-consumers":@"modular-release-consumers",
+                  @"apple-swift-jvm-transfer":@"modular-apple-swift-jvm-transfer"}[component] : nil;
             if (![expectedMode isEqualToString:executionMode] || !tracking.length || tracking.length > 200 ||
                 [tracking rangeOfCharacterFromSet:trackingCharacters.invertedSet].location != NSNotFound ||
                 ![config[@"environment"][@"RUNNER_TRACKING_ID"] isEqual:tracking]) break;

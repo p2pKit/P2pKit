@@ -87,6 +87,48 @@ def audit_module():
     return module
 
 
+def terminal_module():
+    spec = importlib.util.spec_from_file_location('apple_terminal_receipts', ROOT / 'scripts/run-ci-terminal-component.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def terminal_directory(parent):
+    terminal = terminal_module()
+    terminal.apple_parent({'APPLE_ISSUE_PARENT': str(parent), 'RUNNER_TEMP': os.environ['RUNNER_TEMP']})
+    reference = terminal.private.read_json(parent / 'terminal-context.json')
+    require(set(reference) == {'schema', 'component', 'source', 'directory'} and
+            type(reference['schema']) is int and reference['schema'] == 1 and
+            reference['component'] == terminal.APPLE_COMPONENT, 'Invalid Apple Terminal reference')
+    directory = Path(reference['directory'])
+    terminal.private.private_parent(directory, os.getuid())
+    require(parent.parent == directory.parent == Path(os.environ['RUNNER_TEMP']).resolve(strict=True) and
+            directory.name.startswith('ci-terminal-'), 'Terminal evidence outside the original runner state')
+    return directory, reference
+
+
+def terminal_ok(parent, source):
+    terminal = terminal_module()
+    directory, reference = terminal_directory(parent)
+    identity = {key: source[key] for key in ('commit', 'tree')}
+    require(reference['source'] == identity, 'Terminal source differs from the native source')
+    wrapper = terminal.private.read_json(directory / 'wrapper-result.json')
+    require(type(wrapper.get('schema')) is int and type(wrapper.get('finalExitCode')) is int and
+            wrapper.get('finalized') is True and wrapper.get('commandRemoved') is True and
+            wrapper == {
+        'schema': 1, 'component': terminal.APPLE_COMPONENT, 'source': identity,
+        'finalExitCode': 0, 'finalized': True, 'commandRemoved': True}, 'Terminal wrapper did not finalize successfully')
+    compile_result = terminal.private.read_json(directory / 'compile-result.json')
+    require(compile_result.get('code') == 'PASS' and compile_result.get('cleanupKnown') is True and
+            compile_result.get('capturesClosed') is True, 'Terminal helper compile did not finalize successfully')
+    require(terminal.private.read_private(directory / 'shell-result.txt', os.getuid()) == b'0\n',
+            'Terminal shell did not return the original successful child status')
+    terminal.validate_result(terminal.private.read_json(directory / 'application-result.json'),
+        terminal.private.read_json(directory / 'child-admission.json'),
+        terminal.private.read_json(directory / 'child-result.json'), identity, 0, terminal.APPLE_COMPONENT)
+
+
 def iphoneos_command(derived):
     require(derived.is_absolute() and not derived.exists(), 'DerivedData must be fresh and absolute')
     return ['xcodebuild', '-jobs', '2', '-project', str(ROOT / 'samples/iosApp/p2pkit-sample.xcodeproj'),
@@ -305,12 +347,28 @@ def retain(state, bootstrap_log):
                 *state.glob('work/swift-ui/jvm-transfer/*.json'), *state.glob('work/swift-ui/jvm-transfer/*.jsonl'),
                 *state.glob('work/swift-ui/jvm-transfer/*.log'),
                 *state.glob('work/swift-ui/DerivedData/Logs/Test/swift-jvm-transfer-*.xcresult/**/*')]
+    terminal = None
+    reference = state.parent / 'terminal-context.json'
+    if reference.exists():
+        terminal, _ = terminal_directory(state.parent)
+        # Retain original private receipts/logs even on failure, never the helper
+        # binary or executable .command. A missing final result remains failure.
+        selected += [reference, *terminal.glob('*.json'), *terminal.glob('*.log'),
+                     *terminal.glob('shell-result.txt'),
+                     *terminal.glob('compile/**/*.json'), *terminal.glob('compile/**/*.log')]
     count = total = 0
     for path in sorted(set(selected)):
         if path.is_dir() and not path.is_symlink():
             continue
         require(path.is_file() and not path.is_symlink() and stat.S_ISREG(path.lstat().st_mode), 'Invalid retained evidence')
-        relative = Path('driver.log') if path == bootstrap_log else path.relative_to(state)
+        if path == bootstrap_log:
+            relative = Path('driver.log')
+        elif path == reference:
+            relative = Path('terminal-context.json')
+        elif terminal is not None and path.is_relative_to(terminal):
+            relative = Path('terminal') / path.relative_to(terminal)
+        else:
+            relative = path.relative_to(state)
         require(not any(parent.is_symlink() for parent in path.parents), 'Symlinked evidence path')
         total += path.stat().st_size
         count += 1
@@ -333,6 +391,8 @@ def retain(state, bootstrap_log):
     if '327' in expected:
         require(read(state / 'iphoneos-product.json').get('result') == 'PASS', 'Product inspection missing')
     if '409' in expected:
+        if result['operation'] == 'swift-jvm-transfer':
+            terminal_ok(state.parent, context['source'])
         bundles = list((state / 'work/swift-ui/DerivedData/Logs/Test').glob('swift-jvm-transfer-*.xcresult'))
         transfer_ok(read(state / 'work/swift-ui/jvm-transfer/result.json'), context['source'], bundles)
     print('APPLE_ISSUE_VALIDATION PASS ' + ','.join(sorted(result['issues'])))

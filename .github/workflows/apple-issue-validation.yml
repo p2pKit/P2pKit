@@ -22,7 +22,7 @@ jobs:
     # Only the remaining real-transfer probe moves to the maintained ARM host.
     # Its original cold-start/offer/cleanup deadlines and UI case are unchanged.
     runs-on: ${{ inputs.operation == 'swift-jvm-transfer' && 'macos-26' || 'macos-15-intel' }}
-    timeout-minutes: 300
+    timeout-minutes: ${{ inputs.operation == 'swift-jvm-transfer' && 320 || 300 }}
     defaults:
       run:
         shell: bash
@@ -58,14 +58,21 @@ jobs:
           echo "APPLE_ISSUE_PARENT=$parent" >> "$GITHUB_ENV"
       - name: Execute actual selected native commands
         id: native
-        timeout-minutes: 270
+        # The fixed Terminal wrapper adds only its existing retirement margin to
+        # the full prebuild envelope, never to the actual 900/360/120/30 probe.
+        timeout-minutes: ${{ inputs.operation == 'swift-jvm-transfer' && 285 || 270 }}
         env:
           OPERATION: ${{ inputs.operation }}
         run: |
           umask 077
-          python3 -B scripts/run-apple-issue-validation.py run \
-            --state "$APPLE_ISSUE_PARENT/state" --operation "$OPERATION" \
-            > "$APPLE_ISSUE_PARENT/driver.log" 2>&1
+          if [[ "$OPERATION" == swift-jvm-transfer ]]; then
+            python3 -B scripts/run-ci-terminal-component.py --component apple-swift-jvm-transfer \
+              > "$APPLE_ISSUE_PARENT/driver.log" 2>&1
+          else
+            python3 -B scripts/run-apple-issue-validation.py run \
+              --state "$APPLE_ISSUE_PARENT/state" --operation "$OPERATION" \
+              > "$APPLE_ISSUE_PARENT/driver.log" 2>&1
+          fi
       - name: Validate actual receipts and encrypt original evidence including failures
         id: evidence
         if: ${{ always() && steps.native.outcome != 'skipped' }}

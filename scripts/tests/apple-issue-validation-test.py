@@ -328,5 +328,159 @@ class HostedCommandControls(unittest.TestCase):
             self.assertEqual(str(module.HOSTED_EXECUTOR), kwargs['env']['P2PKIT_GRADLE_EXECUTOR'])
 
 
+class AppleTerminalControls(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.terminal = module.terminal_module()
+
+    def environment(self, temporary):
+        parent = temporary / 'apple-issue-validation.synthetic'
+        parent.mkdir(mode=0o700)
+        return {'PATH': '/usr/bin:/bin', 'RUNNER_TEMP': str(temporary), 'APPLE_ISSUE_PARENT': str(parent),
+            'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_OS': 'macOS',
+            'RUNNER_ARCH': 'ARM64', 'GITHUB_REPOSITORY': 'p2pKit/P2pKit', 'GITHUB_EVENT_NAME': 'workflow_dispatch',
+            'GITHUB_SHA': 'a' * 40, 'GITHUB_WORKFLOW_SHA': 'a' * 40, 'GITHUB_JOB': 'native',
+            'GITHUB_REF': 'refs/heads/synthetic', 'GITHUB_WORKSPACE': str(ROOT), 'RUNNER_TRACKING_ID': 'synthetic',
+            'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/ci.yml@refs/heads/synthetic',
+            'P2PKIT_AUDIT_JDK21': '/synthetic/java21'}
+
+    def test_fixed_arm_context_rejects_cross_profile_ref_source_ownership_and_injection(self):
+        terminal = self.terminal
+        component = terminal.APPLE_COMPONENT
+        with tempfile.TemporaryDirectory() as temporary:
+            env = self.environment(Path(temporary).resolve())
+            with mock.patch.object(terminal.platform, 'system', return_value='Darwin'), \
+                    mock.patch.object(terminal.platform, 'machine', return_value='arm64'), \
+                    mock.patch.object(terminal.platform, 'mac_ver', return_value=('26.1', (), '')):
+                terminal.environment_admit(env, component)
+                for mutation in ({'RUNNER_ARCH': 'X64'}, {'GITHUB_JOB': 'component'}, {'GITHUB_EVENT_NAME': 'push'},
+                    {'GITHUB_WORKFLOW_SHA': 'b' * 40}, {'GITHUB_REF': 'refs/heads/other'},
+                    {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/apple-issue-validation.yml@refs/heads/synthetic'},
+                    {'P2PKIT_AUDIT_JDK21': ''}, {'P2PKIT_AUDIT_JOB_ID': 'nested'},
+                    {'P2PKIT_AUDIT_OWNERSHIP_CHAIN': 'nested'}, {'P2PKIT_AUDIT_DARWIN_PIPES': 'nested'}):
+                    with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                        terminal.environment_admit({**env, **mutation}, component)
+                for other in terminal.PROFILES.keys() - {component}:
+                    with self.subTest(component=other), self.assertRaises(RuntimeError):
+                        terminal.environment_admit(env, other)
+            self.assertEqual(terminal.allowed_environment(component) - terminal.ENVIRONMENT,
+                             {'APPLE_ISSUE_PARENT', 'P2PKIT_AUDIT_JDK21'})
+            self.assertTrue({'GH_TOKEN', 'GITHUB_TOKEN', 'JAVA_TOOL_OPTIONS', 'OPERATION',
+                'P2PKIT_AUDIT_JOB_ID', 'P2PKIT_AUDIT_OWNERSHIP_CHAIN'}.isdisjoint(terminal.allowed_environment(component)))
+            argv = terminal.command({**env, 'OPERATION': 'both', 'EXTRA_ARGS': '--arbitrary'}, component)
+            self.assertEqual(argv, [str(Path(sys.executable).resolve()), '-B',
+                str(ROOT / 'scripts/run-apple-issue-validation.py'), 'run', '--state',
+                str(Path(env['APPLE_ISSUE_PARENT']) / 'state'), '--operation', 'swift-jvm-transfer'])
+            self.assertNotIn('ci_evidence.py', ' '.join(argv))
+            (Path(env['APPLE_ISSUE_PARENT']) / 'state').mkdir()
+            with self.assertRaisesRegex(RuntimeError, 'APPLE_STATE_EXISTS'):
+                terminal.command(env, component)
+            # Post-run source/config readback must still admit the now-existing state.
+            self.assertEqual(Path(env['APPLE_ISSUE_PARENT']), terminal.apple_parent(env))
+
+    def test_parent_must_be_physical_private_direct_runner_temp_child(self):
+        terminal = self.terminal
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            env = self.environment(root)
+            parent = Path(env['APPLE_ISSUE_PARENT'])
+            for value in ('relative', str(root / 'missing'), str(root), str(parent / 'nested')):
+                with self.subTest(value=value), self.assertRaises((RuntimeError, OSError)):
+                    terminal.apple_parent({**env, 'APPLE_ISSUE_PARENT': value})
+            link = root / 'apple-issue-validation.link'
+            link.symlink_to(parent, target_is_directory=True)
+            with self.assertRaises(RuntimeError):
+                terminal.apple_parent({**env, 'APPLE_ISSUE_PARENT': str(link)})
+            parent.chmod(0o755)
+            with self.assertRaises(RuntimeError):
+                terminal.apple_parent(env)
+
+    def test_native_driver_pass_cannot_replace_original_terminal_finalization(self):
+        terminal = self.terminal
+        identity = {key: SOURCE[key] for key in ('commit', 'tree')}
+        component = terminal.APPLE_COMPONENT
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            env = self.environment(root)
+            parent = Path(env['APPLE_ISSUE_PARENT'])
+            directory = root / 'ci-terminal-synthetic'
+            directory.mkdir(mode=0o700)
+            reference = {'schema': 1, 'component': component, 'source': identity, 'directory': str(directory)}
+            terminal.private.write_json(parent / 'terminal-context.json', reference)
+            documents = {
+                'wrapper-result.json': {'schema': 1, 'component': component, 'source': identity,
+                    'finalExitCode': 0, 'finalized': True, 'commandRemoved': True},
+                'compile-result.json': {'code': 'PASS', 'cleanupKnown': True, 'capturesClosed': True},
+                'application-result.json': dict(schema=3, executionMode=terminal.bounds(component)['mode'],
+                    stage='FINALIZED', exitCode=0, failureCheck='NONE', openErrorDomain='NONE', openErrorCode=0,
+                    **dict.fromkeys(terminal.terminal.APPLICATION_FLAGS, True)),
+                'child-admission.json': {'source': identity, 'ancestry': {'method': terminal.terminal.ANCESTRY_METHOD,
+                    'depth': 3, 'systemLoginAncestors': 1, 'restrictedCombinedDenials': 1}},
+                'child-result.json': {'source': identity, 'exitCode': 0}}
+            for name, document in documents.items():
+                terminal.private.write_json(directory / name, document)
+            terminal.private.write_new(directory / 'shell-result.txt', b'0\n')
+            with mock.patch.dict(os.environ, env, clear=True):
+                module.terminal_ok(parent, SOURCE)
+                for name, key, value in (
+                    ('wrapper-result.json', 'finalExitCode', 125), ('wrapper-result.json', 'finalized', False),
+                    ('wrapper-result.json', 'finalExitCode', False), ('wrapper-result.json', 'finalized', 1),
+                    ('wrapper-result.json', 'commandRemoved', False), ('wrapper-result.json', 'source', {}),
+                    ('compile-result.json', 'cleanupKnown', False), ('compile-result.json', 'code', 'COMMAND_FAILED'),
+                    ('application-result.json', 'applicationTerminated', False),
+                    ('application-result.json', 'executionMode', 'modular-consumers'),
+                    ('child-admission.json', 'source', {}), ('child-result.json', 'exitCode', 1)):
+                    path = directory / name
+                    path.write_text(json.dumps({**documents[name], key: value}))
+                    with self.subTest(name=name, key=key), self.assertRaises((ValueError, RuntimeError)):
+                        module.terminal_ok(parent, SOURCE)
+                    path.write_text(json.dumps(documents[name]))
+                (directory / 'shell-result.txt').write_bytes(b'1\n')
+                with self.assertRaises(ValueError):
+                    module.terminal_ok(parent, SOURCE)
+                (directory / 'shell-result.txt').write_bytes(b'0\n')
+                (directory / 'child-admission.json').unlink()
+                with self.assertRaises(OSError):
+                    module.terminal_ok(parent, SOURCE)
+
+    def test_early_driver_failure_still_retains_original_terminal_partial_logs_and_shell_status(self):
+        terminal = self.terminal
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            env = self.environment(root)
+            parent = Path(env['APPLE_ISSUE_PARENT'])
+            directory = root / 'ci-terminal-synthetic'
+            directory.mkdir(mode=0o700)
+            terminal.private.write_json(parent / 'terminal-context.json', {'schema': 1,
+                'component': terminal.APPLE_COMPONENT, 'source': SOURCE, 'directory': str(directory)})
+            terminal.private.write_json(directory / 'application-result.json', {'stage': 'CHILD', 'exitCode': 125})
+            terminal.private.write_new(directory / 'child.stdout.log', b'original private synthetic failure')
+            terminal.private.write_new(directory / 'shell-result.txt', b'1\n')
+            terminal.private.write_new(parent / 'driver.log', b'finite wrapper failure')
+            report = root / 'report'
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(module, 'REPORT', report), \
+                    self.assertRaises(ValueError):
+                module.retain(parent / 'state', parent / 'driver.log')
+            self.assertEqual((report / 'terminal/child.stdout.log').read_bytes(), b'original private synthetic failure')
+            self.assertEqual((report / 'terminal/shell-result.txt').read_bytes(), b'1\n')
+            self.assertTrue((report / 'terminal/application-result.json').is_file())
+
+    def test_workflow_terminal_overhead_does_not_change_probe_deadlines_or_intel_profiles(self):
+        terminal = self.terminal
+        budget = terminal.bounds(terminal.APPLE_COMPONENT)
+        self.assertEqual(budget, {'mode': 'modular-apple-swift-jvm-transfer', 'command': 16200,
+            'child': 16380, 'native': 16440, 'controller': 16500, 'wrapper': 16650})
+        workflow = (ROOT / '.github/workflows/apple-issue-validation.yml').read_text()
+        self.assertIn('if [[ "$OPERATION" == swift-jvm-transfer ]]; then', workflow)
+        self.assertIn('scripts/run-ci-terminal-component.py --component apple-swift-jvm-transfer', workflow)
+        self.assertIn("timeout-minutes: ${{ inputs.operation == 'swift-jvm-transfer' && 285 || 270 }}", workflow)
+        self.assertIn("timeout-minutes: ${{ inputs.operation == 'swift-jvm-transfer' && 320 || 300 }}", workflow)
+        controller = (ROOT / 'scripts/run-swift-jvm-transfer.py').read_text()
+        self.assertIn('self.deadline = time.monotonic() + 360', controller)
+        self.assertIn('self.cli.wait(timeout=30)', controller)
+        self.assertEqual(terminal.bounds('macos-shared')['command'], 7200)
+        self.assertEqual(terminal.bounds('jmdns-diagnostic')['command'], 1800)
+
+
 if __name__ == '__main__':
     unittest.main()
