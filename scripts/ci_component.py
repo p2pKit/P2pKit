@@ -99,6 +99,7 @@ def commands(component):
             *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
                    'apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
                    'tcp-nodelay-latency-test.py', 'run-rpc-qualification-test.py',
+                   'run-jmdns-interpreter-diagnostic-test.py', 'run-android-permission-validation-test.py',
                    'dependency-update-test.py', 'embedded-jmdns-aar-test.py', 'intel-bonjour-environment-test.py',
                    'central-bundle-evidence-test.py', 'maven-recovery-test.py',
                    'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
@@ -155,7 +156,8 @@ def commands(component):
     if component == 'macos-shared':
         return [('shared-platform-tests', py + ['scripts/run-platform-tests.py', 'macos-shared'])]
     if component == 'jmdns-diagnostic':
-        return [('jmdns-close-tests', gradle + [':p2p-transport-lan:jvmTest', '--tests',
+        return [('jmdns-interpreter-diagnostic', py + ['scripts/run-jmdns-interpreter-diagnostic.py']),
+                ('jmdns-close-tests', gradle + [':p2p-transport-lan:jvmTest', '--tests',
                  'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])]
     if component == 'bundle-diagnostic':
         return [('signed-bundle-test', bash + ['scripts/tests/build-central-portal-bundle-test.sh'])]

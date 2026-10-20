@@ -101,7 +101,8 @@ class ComponentTests(unittest.TestCase):
 
     def test_issue_acceptance_offline_controls_are_mandatory_source_tasks(self):
         names = ('apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
-                 'tcp-nodelay-latency-test.py', 'run-rpc-qualification-test.py')
+                 'tcp-nodelay-latency-test.py', 'run-rpc-qualification-test.py',
+                 'run-jmdns-interpreter-diagnostic-test.py', 'run-android-permission-validation-test.py')
         commands = C.commands('source')
         evidence_spec = importlib.util.spec_from_file_location('issue_ci_evidence', ROOT / 'scripts/ci_evidence.py')
         evidence = importlib.util.module_from_spec(evidence_spec)
@@ -313,11 +314,12 @@ class ComponentTests(unittest.TestCase):
             with self.subTest(argv=argv), self.assertRaises(AssertionError):
                 self.assert_no_publish_or_bootstrap_commands([('forbidden', argv)])
 
-    def execute_model(self, results, *, component='jvm-linux', tool_error=None):
+    def execute_model(self, results, *, component='jvm-linux', tool_error=None, command_rows=None):
         with tempfile.TemporaryDirectory(prefix='ci-component-model-') as temp:
             root = Path(temp)
             with patch.object(C, 'ROOT', root), patch.object(C, 'record_tools', side_effect=tool_error), \
-                    patch.object(C, 'commands', return_value=[('actual-tests', ['synthetic-test'])]), \
+                    patch.object(C, 'commands', return_value=command_rows if command_rows is not None else
+                                 [('actual-tests', ['synthetic-test'])]), \
                     patch.object(C.subprocess, 'run', side_effect=results) as invoked, \
                     patch.dict(C.os.environ, {'RUNNER_TEMP': temp}):
                 error = None
@@ -395,6 +397,31 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(calls[-1].kwargs['timeout'], 90)
             self.assertEqual(len(calls), 2)
 
+    def test_jmdns_interpreter_bridge_precedes_unchanged_close_acceptance(self):
+        commands = C.commands('jmdns-diagnostic')
+        self.assertEqual(commands[0], ('jmdns-interpreter-diagnostic',
+                         [C.sys.executable, '-B', 'scripts/run-jmdns-interpreter-diagnostic.py']))
+        self.assertEqual(len(commands), 2)
+        for component in C.COMPONENTS:
+            self.assertNotIn('jmdns-interpreter-diagnostic', dict(C.commands(component)))
+
+    def test_jmdns_bridge_failure_is_not_masked_and_still_stops_gradle(self):
+        commands = C.commands('jmdns-diagnostic')
+        for probe, close, stop in ((0, 0, 0), (7, 0, 0), (0, 9, 0), (7, 0, 11), (0, 0, 11)):
+            exits = [probe] + ([close] if probe == 0 else []) + [stop]
+            names = ['jmdns-interpreter-diagnostic'] + (['jmdns-close-tests'] if probe == 0 else []) + ['gradle-stop']
+            code, report, calls, error = self.execute_model([Mock(returncode=x) for x in exits],
+                component='jmdns-diagnostic', command_rows=commands)
+            self.assertIsNone(error)
+            self.assertEqual(code, probe or close or stop)
+            self.assertEqual(report['tasks'], [dict(task=name, exitCode=exit_code)
+                                               for name, exit_code in zip(names, exits)])
+            self.assertEqual(calls[0].args[0], commands[0][1])
+            if probe == 0:
+                self.assertEqual(calls[1].args[0], commands[1][1])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+            self.assertEqual(calls[-1].kwargs['timeout'], 90)
+
     def test_jmdns_diagnostic_is_focused_independent_and_preserves_failure_cleanup(self):
         self.assertEqual(C.matrix('jmdns-diagnostic'), {'include': [{'component': 'jmdns-diagnostic',
                          'os': 'macos-15-intel', 'minutes': 30, 'job_minutes': 40}]})
@@ -405,9 +432,9 @@ class ComponentTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 C.matrix(invalid)
         command = C.commands('jmdns-diagnostic')
-        self.assertEqual(len(command), 1)
-        self.assertEqual(command[0][0], 'jmdns-close-tests')
-        self.assertEqual(command[0][1][1:], [*C.FLAGS, ':p2p-transport-lan:jvmTest', '--tests',
+        self.assertEqual(len(command), 2)
+        self.assertEqual(command[1][0], 'jmdns-close-tests')
+        self.assertEqual(command[1][1][1:], [*C.FLAGS, ':p2p-transport-lan:jvmTest', '--tests',
                          'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])
         self.assert_no_publish_or_bootstrap_commands(command)
         for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
@@ -850,7 +877,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         self.assertNotIn('jmdns-diagnostic', C.COMPONENTS)
         self.assertEqual(C.matrix('jmdns-diagnostic')['include'][0]['job_minutes'], 40)
         self.assertEqual(len(C.matrix('all')['include']), 14)
-        self.assertEqual(C.commands('jmdns-diagnostic')[0][1][-3:],
+        self.assertEqual(C.commands('jmdns-diagnostic')[1][1][-3:],
             [':p2p-transport-lan:jvmTest', '--tests', 'dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest'])
         self.assertEqual(C.commands('apple-arm64')[0][1][-1], 'ios-arm64')
         self.assertEqual(C.commands('apple-x64')[0][1][-1], 'ios-x64')
