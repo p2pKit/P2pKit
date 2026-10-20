@@ -97,32 +97,133 @@ final class P2pKitSampleUITests: XCTestCase {
             return
         }
 
-        XCTContext.runActivity(named: "Record unacknowledged semantic Start tap") { activity in
-            let screenshot = XCTAttachment(screenshot: app.screenshot())
-            screenshot.name = "unacknowledged-start-tap"
-            screenshot.lifetime = .keepAlways
-            activity.add(screenshot)
-
-            let hierarchy = XCTAttachment(string: app.debugDescription)
-            hierarchy.name = "unacknowledged-start-accessibility-hierarchy"
-            hierarchy.lifetime = .keepAlways
-            activity.add(hierarchy)
-        }
-
-        XCTAssertEqual(app.state, .runningForeground, "sample must remain foreground for input recovery")
-        XCTAssertEqual(
-            status.label,
-            "Status: Not started",
-            "only an input event that left application state untouched may be retried"
-        )
-        XCTAssertTrue(start.exists, "Start must still exist before the alternate input path")
-        XCTAssertTrue(start.isHittable, "Start must still be hittable before the alternate input path")
-
-        start.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(
-            waitForStartAcknowledgement(status: status, timeout: 8),
-            "neither semantic nor center-coordinate Start input reached the application"
+            recoverUnacknowledgedStart(
+                acknowledged: { status.label != "Status: Not started" },
+                record: {
+                    XCTContext.runActivity(named: "Record unacknowledged semantic Start tap") { activity in
+                        let screenshot = XCTAttachment(screenshot: app.screenshot())
+                        screenshot.name = "unacknowledged-start-tap"
+                        screenshot.lifetime = .keepAlways
+                        activity.add(screenshot)
+
+                        let hierarchy = XCTAttachment(string: app.debugDescription)
+                        hierarchy.name = "unacknowledged-start-accessibility-hierarchy"
+                        hierarchy.lifetime = .keepAlways
+                        activity.add(hierarchy)
+                    }
+                },
+                ready: { app.state == .runningForeground && start.exists && start.isHittable },
+                retry: { start.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() },
+                wait: { waitForStartAcknowledgement(status: status, timeout: $0) }
+            ),
+            "Start remained unacknowledged or its alternate input path was not safe"
         )
+    }
+
+    /// Accessibility and diagnostic reads can outlive the first wait. An
+    /// acknowledgement observed during either is progress, not evidence that
+    /// Start must be tapped again. Final running/QR/stop checks remain separate.
+    @MainActor
+    private func recoverUnacknowledgedStart(
+        acknowledged: () -> Bool,
+        record: () -> Void,
+        ready: () -> Bool,
+        retry: () -> Void,
+        wait: (TimeInterval) -> Bool
+    ) -> Bool {
+        if acknowledged() { return true }
+        record()
+        if acknowledged() { return true }
+        let mayRetry = ready()
+        if acknowledged() { return true }
+        guard mayRetry else { return false }
+        retry()
+        return wait(8)
+    }
+
+    @MainActor
+    func testLateStartAcknowledgementBeforeDiagnosticsDoesNotRetry() {
+        var recordings = 0
+        var readinessReads = 0
+        var retries = 0
+        var waits: [TimeInterval] = []
+        let result = recoverUnacknowledgedStart(
+            acknowledged: { true },
+            record: { recordings += 1 },
+            ready: { readinessReads += 1; return true },
+            retry: { retries += 1 },
+            wait: { waits.append($0); return true }
+        )
+        XCTAssertTrue(result)
+        XCTAssertEqual(recordings, 0)
+        XCTAssertEqual(readinessReads, 0)
+        XCTAssertEqual(retries, 0)
+        XCTAssertTrue(waits.isEmpty)
+    }
+
+    @MainActor
+    func testLateStartAcknowledgementDuringDiagnosticsDoesNotRetry() {
+        var acknowledged = false
+        var recordings = 0
+        var readinessReads = 0
+        var retries = 0
+        var waits: [TimeInterval] = []
+        let result = recoverUnacknowledgedStart(
+            acknowledged: { acknowledged },
+            record: { recordings += 1; acknowledged = true },
+            ready: { readinessReads += 1; return true },
+            retry: { retries += 1 },
+            wait: { waits.append($0); return true }
+        )
+        XCTAssertTrue(result)
+        XCTAssertEqual(recordings, 1)
+        XCTAssertEqual(readinessReads, 0)
+        XCTAssertEqual(retries, 0)
+        XCTAssertTrue(waits.isEmpty)
+    }
+
+    @MainActor
+    func testLateStartAcknowledgementDuringReadinessDoesNotRetry() {
+        var acknowledged = false
+        var recordings = 0
+        var readinessReads = 0
+        var retries = 0
+        var waits: [TimeInterval] = []
+        let result = recoverUnacknowledgedStart(
+            acknowledged: { acknowledged },
+            record: { recordings += 1 },
+            ready: { readinessReads += 1; acknowledged = true; return false },
+            retry: { retries += 1 },
+            wait: { waits.append($0); return true }
+        )
+        XCTAssertTrue(result)
+        XCTAssertEqual(recordings, 1)
+        XCTAssertEqual(readinessReads, 1)
+        XCTAssertEqual(retries, 0)
+        XCTAssertTrue(waits.isEmpty)
+    }
+
+    @MainActor
+    func testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry() {
+        for (isReady, waitResult) in [(false, true), (true, false), (true, true)] {
+            var recordings = 0
+            var readinessReads = 0
+            var retries = 0
+            var waits: [TimeInterval] = []
+            let result = recoverUnacknowledgedStart(
+                acknowledged: { false },
+                record: { recordings += 1 },
+                ready: { readinessReads += 1; return isReady },
+                retry: { retries += 1 },
+                wait: { waits.append($0); return waitResult }
+            )
+            XCTAssertEqual(result, isReady && waitResult)
+            XCTAssertEqual(recordings, 1)
+            XCTAssertEqual(readinessReads, 1)
+            XCTAssertEqual(retries, isReady ? 1 : 0)
+            XCTAssertEqual(waits, isReady ? [8] : [])
+        }
     }
 
     @MainActor
