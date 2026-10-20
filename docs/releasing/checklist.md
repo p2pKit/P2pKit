@@ -2,9 +2,10 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest completed release is
-[`0.8.0-rc3`](../releases/0.8.0-rc3.md); current development source is
-`0.8.0-rc4` (unpublished candidate). Published rc3 evidence and incoming manual
-Windows/Android results do not replace rc4's required exact-source gates.
+[`0.8.0-rc4`](../releases/0.8.0-rc4.md); current source remains `0.8.0-rc4`.
+Its publication record binds the actual exact-source gates and public bytes.
+The incoming manual Windows/Android report remains a separate, limited result;
+publication does not extend its installed-application coverage.
 Retain the [Windows qualification limits](../rpc/windows-release-scope.md),
 including the Back deadline failure and incomplete automated lifecycle coverage.
 
@@ -48,11 +49,11 @@ authorize a subsequent release or replace its qualification.
    every complete public download against its recorded hash. Do not rebuild or
    reselect applications after Maven.
 10. Record the verified publication, update `LATEST_PUBLISHED_VERSION` and current
-   documentation, and open the agreed next snapshot line through a normal reviewed
-   change. Record the actual GitHub prerelease/release entry; do not create a
-   duplicate sample release or rebuild published bytes for bookkeeping. The rc3
-   sample prerelease already exists; rc4 is a new candidate, not a replacement for
-   its immutable bytes. Do not advance latest-published metadata before verification
+   documentation through a normal reviewed change. Open a next snapshot line only
+   when separately agreed; the rc4 bookkeeping selects no new version. Record the
+   actual GitHub prerelease/release entry; do not create a duplicate sample release
+   or rebuild published bytes. The rc3 and rc4 sample prereleases retain their own
+   immutable bytes. Do not advance latest-published metadata before verification
    or invent the next snapshot version.
 
 Never move or recreate an existing release tag, weaken a gate, put secrets in
