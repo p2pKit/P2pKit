@@ -372,6 +372,76 @@ class WorkflowRetentionTests(unittest.TestCase):
                 check(changed)
 
 
+class DependencyCIPolicyTests(unittest.TestCase):
+    """Actual modular component model; subprocesses/Gradle/tool probes mocked."""
+
+    def setUp(self):
+        path = Path(__file__).resolve().parents[1] / "ci_component.py"
+        spec = importlib.util.spec_from_file_location("dependency_ci_component", path)
+        self.component = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.component)
+
+    def expected(self):
+        c = self.component
+        return [
+            ("integrity-policy", ["bash", "scripts/check-dependency-verification.sh"]),
+            ("lock-coverage", ["bash", "scripts/tests/check-osv-lockfile-coverage.sh"]),
+            ("lock-writer-policy", ["bash", "scripts/tests/check-lock-write-policy-test.sh"]),
+            *[(name, [sys.executable, "-B", "scripts/tests/" + name, "-v"])
+              for name in ("check-freemarker-floor-test.py", "check-jackson-floor-test.py")],
+            ("build-plugin-floors", [str(c.ROOT / "gradlew.bat") if os.name == "nt" else "./gradlew",
+                "--no-daemon", "--no-build-cache", "--no-configuration-cache",
+                "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain",
+                ":verifyBuildPluginSecurityFloors", ":checkPublicConstantAbiPolicy"]),
+        ]
+
+    def test_required_modular_integrity_lock_and_strict_floor_commands(self):
+        c = self.component
+        self.assertEqual(c.commands("dependencies"), self.expected())
+        self.assertIn("dependencies", [row["component"] for row in c.matrix("all")["include"]])
+        source = dict(c.commands("source"))
+        self.assertEqual(source["dependency-update-test.py"],
+                         [sys.executable, "-B", "scripts/tests/dependency-update-test.py", "-v"])
+        self.assertEqual(source["workflow-contract"], ["ruby", "scripts/check-modular-ci-policy.rb"])
+
+    def test_missing_reordered_or_lenient_dependency_commands_are_not_equivalent(self):
+        actual = self.component.commands("dependencies")
+        lenient = copy.deepcopy(actual)
+        lenient[-1][1][lenient[-1][1].index("strict")] = "lenient"
+        for changed in (actual[1:], [*actual[1:], actual[0]], lenient):
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                self.assertEqual(changed, self.expected())
+
+    def test_actual_component_preserves_first_failure_and_bounded_stop(self):
+        c = self.component
+        for failed in (None, *range(len(self.expected()))):
+            for stop_code in (0, 9):
+                with self.subTest(failed=failed, stop_code=stop_code), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    with patch.object(c, "ROOT", root), patch.object(c, "record_tools"), \
+                            patch.object(c.subprocess, "run") as run:
+                        commands = self.expected()
+                        count = len(commands) if failed is None else failed + 1
+                        failure_code = 0 if failed is None else 37 + failed
+                        codes = [0] * count
+                        if failed is not None:
+                            codes[-1] = failure_code
+                        run.side_effect = [Mock(returncode=code) for code in (*codes, stop_code)]
+                        code = c.execute("dependencies")
+                    expected_code = failure_code or stop_code
+                    self.assertEqual(code, expected_code)  # Failure must never become PASS.
+                    stop = [str(root / "gradlew.bat") if os.name == "nt" else "./gradlew", "--stop"]
+                    self.assertEqual([call.args[0] for call in run.call_args_list],
+                                     [argv for _, argv in commands[:count]] + [stop])
+                    self.assertEqual(run.call_args.kwargs, {"cwd": root, "check": False, "timeout": 90})
+                    report = json.loads((root / "build/reports/ci-component/dependencies.json").read_text())
+                    self.assertEqual(report["exitCode"], expected_code)
+                    self.assertEqual(report["tasks"], [
+                        {"task": name, "exitCode": value}
+                        for (name, _), value in zip(commands[:count], codes)
+                    ] + [{"task": "gradle-stop", "exitCode": stop_code}])
+
+
 class GeneratorPhaseTests(unittest.TestCase):
     def test_actual_generator_phase_order_arguments_and_first_failure_are_preserved(self):
         maintained = Path(__file__).resolve().parents[1] / "prepare-dependency-update.sh"
