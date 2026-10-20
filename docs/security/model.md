@@ -126,7 +126,8 @@ screenshots. Normal foreground screenshots remain possible; this is not
 API24–32 receive no task-preview suppression from this change. Their stopped-task
 credential-preview channel remains unresolved; an API35 validation result cannot
 establish all-version absence of retained credential pixels. Do not describe
-this residual as fixed or risk-accepted by a prerelease. The
+this residual as fixed or risk-accepted by a prerelease; it remains tracked in
+[issue #479](https://github.com/p2pKit/P2pKit/issues/479). The
 [rendered/lifecycle validation guide](../testing/android-ui-validation.md#foreground-pixels-and-stopped-task-previews)
 keeps actual global pixels authoritative over cleared state or an empty owned
 window buffer. This sample-specific policy neither changes transport security
