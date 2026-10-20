@@ -6,7 +6,8 @@ P2pKit is a Kotlin Multiplatform library. Production modules live under `library
 
 ## Build, Test, and Development Commands
 
-Use JDK 17, the checked-in Gradle wrapper, and Android SDK Platform 36.
+Use JDK 17 and the checked-in Gradle wrapper. Install both library and sample
+Android compile platforms and the pinned NDK from the [canonical Android setup](docs/testing/local.md#android-sdk-setup).
 
 - `./gradlew check --console=plain` runs the standard cross-module test and verification gate.
 - `scripts/tests/check-repository-layout.sh` validates repository layout.
