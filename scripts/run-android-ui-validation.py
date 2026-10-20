@@ -242,6 +242,10 @@ def capture_guest_failure(run, device, emulator, avd, report, *, phase, clock=ti
         ("system-errors", ["shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
                            "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W"]),
     ) if phase == "boot" else (
+        # Keep crash-buffer records independent of the mixed-buffer tail: a
+        # framework death/restart can bury its cause under routine newer logs.
+        # Privileged/native stack text stays only in the encrypted owned capture.
+        ("crash-buffer", ["shell", "logcat", "-b", "crash", "-d", "-t", "200", "-v", "brief"]),
         # Capture failure-time system errors before slower service observers. Only
         # fixed tags and aggregate kernel counters; no app data or dynamic PID paths.
         ("system-errors", ["shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
@@ -259,7 +263,8 @@ def capture_guest_failure(run, device, emulator, avd, report, *, phase, clock=ti
             need(emulator.poll() is None, "Owned emulator exited before diagnostic capture")
             left = end - clock()
             need(left > 0, "Boot diagnostic retention deadline")
-            code, output = run([*device, *command], timeout=min(5 if phase == "boot" else 3, left), check=False)
+            # Permission: at most 5s identity + six 2.5s observers = the same 20s.
+            code, output = run([*device, *command], timeout=min(5 if phase == "boot" else 2.5, left), check=False)
             item["exitCode"] = code
             (report / f"{prefix}-{name}.txt").write_bytes(output)
         except Exception as error:

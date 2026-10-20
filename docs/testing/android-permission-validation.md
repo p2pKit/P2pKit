@@ -93,11 +93,15 @@ misleading `.json` evidence record.
 
 On a live-campaign failure, a source-owned callback revalidates the original live
 emulator and exact generated AVD before private diagnostics. The same20-second
-diagnostic work budget covers identity and fixed read-only queries: at most200
-filtered system/ActivityManager/ServiceManager/low-memory/audit log entries,
+diagnostic work budget covers identity and fixed read-only queries: first the
+last200 crash-buffer entries (independent of mixed-buffer log turnover), then
+at most200 filtered system/ActivityManager/ServiceManager/low-memory/audit entries,
 service list, system-server PID, native `cmd activity get-current-user`, and
 fixed aggregate memory-pressure/cgroup counters. No root, dynamic PID paths,
 app-storage search, memory/image change, or instrumentation replay is used.
+The identity check has at most5seconds and each of the six observations at
+most2.5seconds, still within the same20-second work budget. Privileged/native
+crash stacks remain in the encrypted private capture, never public logs.
 Missing observers stay explicit; failed diagnostics preserve the original
 failure. Existing exact-owned-leader retirement tails are unchanged, not an
 acceptance grace period or a claim of a hard20-second wall-clock cleanup bound.

@@ -257,12 +257,12 @@ class AndroidBootAdmissionTests(unittest.TestCase):
         def run(command, *, timeout, check):
             calls.append(command)
             self.assertFalse(check)
-            self.assertEqual(timeout, 5 if len(calls) == 1 else 3)
+            self.assertEqual(timeout, 5 if len(calls) == 1 else 2.5)
             now[0] += timeout
             if len(calls) == 1:
                 return 0, b"owned-fixture\nOK\n"
             if len(calls) == 2:
-                raise ValueError("synthetic logcat timeout")
+                raise ValueError("synthetic crash-buffer timeout")
             return 1, b"synthetic unavailable observer\n"
 
         with tempfile.TemporaryDirectory() as directory:
@@ -273,9 +273,11 @@ class AndroidBootAdmissionTests(unittest.TestCase):
             self.assertEqual(failure["admission"], "PREVIOUSLY_COMPLETED")
             self.assertEqual(failure["outcome"], "FAILED")
             self.assertEqual(failure["captures"][0]["failureType"], "ValueError")
-            self.assertEqual(len(failure["captures"]), 5)
+            self.assertEqual(failure["captures"][0]["capture"], "crash-buffer")
+            self.assertEqual(len(failure["captures"]), 6)
         self.assertEqual(calls, [
             ["owned-adb", "emu", "avd", "name"],
+            ["owned-adb", "shell", "logcat", "-b", "crash", "-d", "-t", "200", "-v", "brief"],
             ["owned-adb", "shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
              "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W", "ServiceManager:W", "servicemanager:W",
              "lmkd:I", "lowmemorykiller:I", "libprocessgroup:W", "auditd:I"],
