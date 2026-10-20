@@ -180,24 +180,31 @@ class AndroidBootAdmissionTests(unittest.TestCase):
 
     def test_private_failure_capture_is_fixed_read_only_bounded_and_best_effort(self):
         now, calls = [0.0], []
+        emulator = Mock()
+        emulator.poll.return_value = None
 
         def run(command, *, timeout, check):
             calls.append(command)
             self.assertFalse(check)
             self.assertLessEqual(timeout, min(5, 20 - now[0]))
-            now[0] += timeout
             if len(calls) == 1:
+                now[0] += 0.25
+                return 0, b"owned-fixture\nOK\n"
+            now[0] += timeout
+            if len(calls) == 2:
                 raise ValueError("synthetic diagnostic timeout")
             return 1, b"synthetic diagnostic failure\n"
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            ui.capture_boot_failure(run, ["owned-adb"], path, clock=lambda: now[0])
+            ui.capture_boot_failure(run, ["owned-adb"], emulator, "owned-fixture", path, clock=lambda: now[0])
             failure = json.loads((path / "boot-failure.json").read_text())
             self.assertEqual(failure["admission"], "FAILED")
+            self.assertEqual(failure["guestDiagnostics"], "ATTEMPTED")
             self.assertEqual(failure["captures"][0]["failureType"], "ValueError")
             self.assertEqual([item.get("exitCode") for item in failure["captures"][1:]], [1, 1, 1])
         self.assertEqual(calls, [
+            ["owned-adb", "emu", "avd", "name"],
             ["owned-adb", "shell", "service", "list"],
             ["owned-adb", "shell", "pidof", "system_server"],
             ["owned-adb", "shell", "getprop"],
@@ -205,6 +212,38 @@ class AndroidBootAdmissionTests(unittest.TestCase):
              "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W"],
         ])
         self.assertEqual(now[0], 20)
+
+    def test_diagnostics_refuse_dead_foreign_partial_duplicate_failed_or_timed_out_identity(self):
+        for identity in (None, (0, b"foreign\nOK\n"), (0, b"owned-fixture\n"),
+                         (0, b"owned-fixture\nOK\nOK\n"), (1, b"owned-fixture\nOK\n"),
+                         ValueError("synthetic identity timeout")):
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
+                emulator, run = Mock(), Mock()
+                emulator.poll.return_value = 1 if identity is None else None
+                if isinstance(identity, Exception):
+                    run.side_effect = identity
+                else:
+                    run.return_value = identity
+                path = Path(directory)
+                ui.capture_boot_failure(run, ["owned-adb"], emulator, "owned-fixture", path)
+                failure = json.loads((path / "boot-failure.json").read_text())
+                self.assertEqual(failure["guestDiagnostics"], "NOT_CAPTURED")
+                self.assertEqual(failure["captures"], [])
+                self.assertEqual(list(path.iterdir()), [path / "boot-failure.json"])
+                self.assertEqual(run.call_count, 0 if identity is None else 1)
+                if identity is not None:
+                    self.assertEqual(run.call_args.args[0], ["owned-adb", "emu", "avd", "name"])
+
+    def test_diagnostics_stop_if_original_emulator_exits_after_identity(self):
+        emulator, run = Mock(), Mock()
+        emulator.poll.side_effect = [None, None, 1, 1, 1, 1]
+        run.return_value = (0, b"owned-fixture\nOK\n")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            ui.capture_boot_failure(run, ["owned-adb"], emulator, "owned-fixture", path)
+            failure = json.loads((path / "boot-failure.json").read_text())
+            self.assertTrue(all(item.get("failureType") == "ValueError" for item in failure["captures"]))
+            self.assertEqual(run.call_count, 1)
 
 
 class AndroidUiAdmissionTests(unittest.TestCase):

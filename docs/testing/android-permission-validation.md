@@ -31,7 +31,9 @@ checks and the single unlock command; a failed unlock is not retried. A boot
 property alone does not establish that Android's system services are usable.
 Pre-admission failure retains a fixed, read-only service/process/property and
 filtered system-error snapshot privately, within a separate 20-second diagnostic
-bound. That retention cannot admit the guest or run any test. Persistent missing
+bound. Before those queries, the same bound covers exact generated-AVD identity
+and live original-emulator checks; an unverified/dead guest is `NOT_CAPTURED`.
+That retention cannot admit the guest or run any test. Persistent missing
 services remain a failed setup, not a permission result or an unavailable-runtime
 claim; no APK is installed before this admission completes.
 

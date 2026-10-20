@@ -186,7 +186,7 @@ def admit_android_guest(run, device, emulator, avd, api, report, *, clock=time.m
     bounded(["shell", "input", "keyevent", "82"])  # Exactly once; failure is not retried.
 
 
-def capture_boot_failure(run, device, report, *, clock=time.monotonic):
+def capture_boot_failure(run, device, emulator, avd, report, *, clock=time.monotonic):
     """Best-effort, private diagnostics of our fresh guest before any APK install.
 
     This separate 20-second retention bound cannot admit a guest or rerun a test;
@@ -194,6 +194,18 @@ def capture_boot_failure(run, device, report, *, clock=time.monotonic):
     """
     end = clock() + 20
     captures = []
+    try:
+        need(emulator.poll() is None, "Owned emulator exited before diagnostic identity")
+        left = end - clock()
+        need(left > 0, "Boot diagnostic retention deadline")
+        code, identity = run([*device, "emu", "avd", "name"], timeout=min(5, left), check=False)
+        need(code == 0 and identity.splitlines() == [avd.encode(), b"OK"] and clock() < end,
+             "Unverified owned AVD diagnostic identity")
+        need(emulator.poll() is None, "Owned emulator exited during diagnostic identity")
+    except Exception as error:
+        write_json(report / "boot-failure.json", {"admission": "FAILED", "guestDiagnostics": "NOT_CAPTURED",
+                   "identityFailureType": type(error).__name__, "captures": []})
+        return
     for name, command in (
         ("services", ["shell", "service", "list"]),
         ("system-server", ["shell", "pidof", "system_server"]),
@@ -203,6 +215,7 @@ def capture_boot_failure(run, device, report, *, clock=time.monotonic):
     ):
         item = {"capture": name}
         try:
+            need(emulator.poll() is None, "Owned emulator exited before diagnostic capture")
             left = end - clock()
             need(left > 0, "Boot diagnostic retention deadline")
             code, output = run([*device, *command], timeout=min(5, left), check=False)
@@ -211,7 +224,8 @@ def capture_boot_failure(run, device, report, *, clock=time.monotonic):
         except Exception as error:
             item["failureType"] = type(error).__name__  # Never publish raw guest/command output.
         captures.append(item)
-    write_json(report / "boot-failure.json", {"admission": "FAILED", "captures": captures})
+    write_json(report / "boot-failure.json", {"admission": "FAILED", "guestDiagnostics": "ATTEMPTED",
+               "captures": captures})
 
 
 def main(argv=None, *, campaign=None):
@@ -362,7 +376,7 @@ def main(argv=None, *, campaign=None):
     except BaseException:
         if emulator is not None and not guest_admitted:
             try:
-                capture_boot_failure(run, device, report)
+                capture_boot_failure(run, device, emulator, avd, report)
             except Exception:
                 pass  # Preserve the original admission failure even if retention itself fails.
         raise
