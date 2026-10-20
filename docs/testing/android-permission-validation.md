@@ -46,6 +46,48 @@ That retention cannot admit the guest or run any test. Persistent missing
 services remain a failed setup, not a permission result or an unavailable-runtime
 claim; no APK is installed before this admission completes.
 
+## API37 graphics prerequisite candidate
+
+The API37 lane alone requests the documented positive feature-override syntax
+`-feature GLDirectMem,HasSharedSlotsHostMemoryAllocator`. A prior exact-source run reached two SurfaceFlinger/GoldfishMapper aborts
+before permission evidence. The public [guest mapper fatal-if condition](https://android.googlesource.com/device/generic/goldfish/+/3ce87694caeb4a330280bb1284d9ad050fe28263/hals/gralloc/mapper.cpp)
+requires `hasReadColorBufferDma` to be **present**, not absent. Public
+[host extension advertisement](https://android.googlesource.com/platform/hardware/google/gfxstream/+/d047a57228332d995d36600792fa9ccc26cf8ae6/host/RenderControl.cpp)
+depends on direct memory and shared-slot allocation. The positive CLI is
+[officially documented](https://developer.android.com/studio/releases/emulator#29.0.6).
+These public sources justify a prospective graphics prerequisite test; they are
+not asserted to identify the exact internal source of hosted emulator37.2.12,
+and the candidate is not a proven repair or permission result.
+
+The original single-override diagnostic at9600852c accepted GLDirectMem as
+explicitly enabled, yet the same mapper fatal persisted. Its fresh graphics
+observation advertised direct memory but neither shared-slot allocation nor
+read-color-buffer DMA. This motivates the narrow second positive request: the
+supplier recognizes that feature and the public host code requires both. A
+supplier default of on is not evidence that the effective renderer enabled it.
+This is a prospective fresh-host emulator configuration test, not a declaration
+of guest support, a proven repair, or permission-enforcement waiver. The original
+failed source/run remains preserved; neither extension strings nor successful
+feature overrides can replace the full unchanged permission/traffic campaign.
+
+Before launch, the actual installed binary's bounded `-help-feature` response
+and supplier `advancedFeatures.ini` are retained and hashed, together with the
+frontend binary hash. Both relevant supplier declarations must be unique and
+recognized; their on/off defaults are **not** treated as effective capability
+values. Both direct memory and shared-slot allocation are now positively
+requested through the same supported emulator feature CLI; no Android permission
+or compat flag is changed. The full emulator argv is recorded with source commit/tree, alongside
+the existing installed-source properties and actual guest properties. Unknown or
+unsupported feature warnings fail closed, even if boot otherwise succeeds. A
+bounded private SurfaceFlinger observation precedes real instrumentation; it
+cannot prove internal DMA support merely by being nonempty.
+
+There is no renderer fallback, second launch, permission/module flag override,
+RAM/image/viewport change, or extended boot/body/cleanup deadline. API35 UI
+options are unchanged. Only the original full runtime assertions plus independent
+profile review can qualify #372; successful option preflight or graphics-service
+observation alone cannot.
+
 ## Real campaign, not shell network identity
 
 The existing `LanPermissionRuntimeInstrumentation` gains explicit modes; its
@@ -78,6 +120,29 @@ original no-mode caller and `NOT_EXECUTED` revocation terminal remain separate.
    `ApplicationExitInfo.REASON_PERMISSION_CHANGE` for the original PID/UID after
    its checkpoint. The new manager, raw socket and explicit sample Start must
    remain denied. This branch never claims a surviving original manager.
+
+The completed-request observer binds an actual outstanding request to the
+original retained VM before granting, then requires that VM's request flag to
+settle, a live grant and an unchanged successful permission-state snapshot. A
+fresh observer-cache read must find the resumed replacement Activity's owned,
+focused app window and visible fixed title. The existing production card has two
+legal presentations: its available message and enabled Refresh button, or its
+intentional removal after a subsequent successful foreground refresh clears the
+message. The latter requires absence of the checked status, action and explanation
+labels in the same captured tree, not merely a null/missing window or a state-only assertion.
+Waiting/grant controls, stale visible labels, disabled buttons and ambiguous
+matches cannot pass. The Refresh label resolves to its nearest owned structural
+click/activation owner in the bounded ancestry, not a legacy widget class.
+Compose can expose the Button role on a fake child while its real click owner
+remains a View. A disabled owner can remain clickable but omit ACTION_CLICK;
+therefore ownership is resolved before readiness, and the observer never skips
+it for an enabled ancestor. The chosen owner must be visible, enabled, clickable
+and actually export ACTION_CLICK. A long-click-only or foreign owner fails.
+Finite class-category/action-ID/ownership ingredients are recorded privately;
+no action is performed by this settlement observer. Fixed predicate ingredients are retained in the original
+private instrumentation terminal, including failures. This repairs an overly
+narrow observer contract; the earlier timeout alone did not establish whether a
+callback or observer/presentation mismatch caused that original failure.
 
 The original 90-second instrumentation body bounds remain; the host campaign is
 bounded separately. Failures still trigger every owned retirement attempt. The

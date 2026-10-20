@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Synthetic permission-controller admission tests, not API37 runtime proof."""
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -17,7 +19,8 @@ TOKEN, SOURCE, TREE = "a" * 32, "b" * 40, "c" * 40
 
 def output(mode="revocation", changes=None, ready=False):
     fields = {"p2pkitToken": TOKEN, "p2pkitCompleted": "1", "p2pkitOutcome": "PASS", "p2pkitCleanup": "PASS",
-              "p2pkitManager": "PASS", "p2pkitRawPregrant": "DENIED", "p2pkitRawRoute": "DENIED_THEN_ADMITTED",
+              "p2pkitManager": "PASS", "p2pkitOriginalRequestOutstanding": "true",
+              "p2pkitRawPregrant": "DENIED", "p2pkitRawRoute": "DENIED_THEN_ADMITTED",
               "p2pkitTraffic": "PASS", "p2pkitRecreation": "PASS", "p2pkitRequestSettled": "true",
               "p2pkitSentBytes": "40", "p2pkitReceivedBytes": "36"}
     if mode == "revoked-reentry":
@@ -40,6 +43,104 @@ def output(mode="revocation", changes=None, ready=False):
 
 
 class PermissionValidationTests(unittest.TestCase):
+    def test_graphics_option_requires_actual_supplier_declarations_and_positive_help(self):
+        help_output = b"-feature: enable or disable individual feature overrides\n"
+        defaults = b"GLDirectMem = off\nHasSharedSlotsHostMemoryAllocator = on\n"
+        self.assertEqual(p.graphics_options(help_output, defaults), ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))
+        self.assertEqual(p.graphics_options(help_output, defaults.replace(b"off", b"on")),
+                         ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))
+        self.assertEqual(p.graphics_options(help_output, defaults.replace(b"Allocator = on", b"Allocator = off")),
+                         ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))  # Default values are not effective capability proof.
+        for invalid in (b"", defaults.replace(b"GLDirectMem", b"Other"), defaults + b"GLDirectMem=off\n",
+                        defaults.replace(b"GLDirectMem = off", b"GLDirectMem = maybe"),
+                        defaults + b"HasSharedSlotsHostMemoryAllocator=off\n"):
+            with self.subTest(defaults=invalid), self.assertRaises(ValueError):
+                p.graphics_options(help_output, invalid)
+        for invalid in (b"", b"unrelated help text\n", b"unknown help topic: feature\n",
+                        b"-feature: enable overrides\nWARNING: Unknown feature GLDirectMem\n"):
+            with self.subTest(help=invalid), self.assertRaises(ValueError):
+                p.graphics_options(invalid, defaults)
+
+    def test_emulator_graphics_rejection_is_failure_even_with_successful_boot_text(self):
+        p.Campaign.validate_emulator_boot(b"Graphics backend: gfxstream\nBoot completed\n")
+        for warning in (b"Unknown feature: GLDirectMem", b"Feature name GLDirectMem is invalid",
+                        b"unsupported option -feature", b"GLDirectMem unrecognized",
+                        b"HasSharedSlotsHostMemoryAllocator unrecognized",
+                        b"HasSharedSlotsHostMemoryAllocator is not supported"):
+            with self.subTest(warning=warning), self.assertRaises(ValueError):
+                p.Campaign.validate_emulator_boot(warning + b"\nBoot completed\n")
+
+    def test_graphics_preflight_records_supplier_bytes_and_never_runs_an_avd(self):
+        help_output = b"-feature: enable or disable feature overrides\n"
+        defaults = b"GLDirectMem=off\nHasSharedSlotsHostMemoryAllocator=on\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk, report = root / "sdk", root / "report"
+            (sdk / "emulator/lib").mkdir(parents=True)
+            report.mkdir()
+            (sdk / "emulator/lib/advancedFeatures.ini").write_bytes(defaults)
+            (sdk / "emulator/emulator").write_bytes(b"synthetic frontend identity, not executed")
+            run = Mock(return_value=(0, help_output))
+            self.assertEqual(p.Campaign.prepare_emulator(run=run, sdk=sdk, report=report), ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))
+            run.assert_called_once_with([sdk / "emulator/emulator", "-help-feature"], timeout=15)
+            receipt = json.loads((report / "emulator-graphics-request.json").read_text())
+            self.assertEqual(receipt["options"], ["-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"])
+            self.assertEqual(receipt["supplierDefaultsSha256"], hashlib.sha256(defaults).hexdigest())
+            self.assertEqual(receipt["helpSha256"], hashlib.sha256(help_output).hexdigest())
+            self.assertEqual(receipt["effectiveGuestDmaSupport"], "NOT_ESTABLISHED_BY_PREFLIGHT")
+            self.assertEqual((report / "emulator-feature-help.txt").read_bytes(), help_output)
+            self.assertEqual((report / "emulator-feature-defaults.ini").read_bytes(), defaults)
+
+    def test_graphics_override_is_campaign_only_without_backend_or_runtime_relaxation(self):
+        source = (p.ROOT / "scripts/run-android-ui-validation.py").read_text()
+        self.assertIn("campaign.prepare_emulator(run=run, sdk=sdk, report=report) if campaign is not None else ()", source)
+        self.assertIn('"-gpu", "swiftshader", "-memory", "2048", "-cores", "2"', source)
+        self.assertIn("*emulator_options]", source)
+        self.assertIn('write_json(report / "emulator-request.json", {"argv": emulator_argv, "sourceCommit": source, "sourceTree": tree})', source)
+        self.assertIn('campaign.validate_emulator_boot((report / "emulator.log").read_bytes())', source)
+        self.assertNotIn("GLDirectMem", source)  # No default/API35 UI flag or user feature selector.
+
+    def test_ui_settlement_preserves_callback_window_and_both_existing_presentations(self):
+        source = (p.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/"
+                  "LanPermissionRuntimeInstrumentation.kt").read_text()
+        self.assertLess(source.index('check(main { vm.lanPermissionState.value.requestInFlight })'),
+                        source.index('clickPermissionAllow()'))
+        self.assertIn('await("request-result-ui-settled") { permissionRequestSettled(vm, replacement) }', source)
+        self.assertIn('check(uiAutomation.clearCache())', source)
+        self.assertIn('replacement.lifecycle.currentState == Lifecycle.State.RESUMED && replacement.hasWindowFocus()', source)
+        self.assertIn('ViewModelProvider(replacement)[P2pKitViewModel::class.java] === vm', source)
+        self.assertIn('visibleAnchor = visible("P2pKit Test Harness") != null', source)
+        self.assertIn('stateStable = vm.lanPermissionState.value == state', source)
+        self.assertIn('result.putString("p2pkitRequestUiObservation", observation.toString())', source)
+        self.assertIn('result.putString("p2pkitRequestUiButton"', source)
+        self.assertIn('withTimeout(90_000) { exercise() }', source)
+        self.assertIn('withTimeout(15_000) {\n            while (!condition()) delay(100)', source)
+        self.assertIn('check(!automaticStart.isCompleted', source)
+        self.assertIn('rawExchange(route, host, controlPort, token)', source)
+        self.assertIn('phase("awaiting-host-os-revocation")', source)
+
+    def test_refresh_owner_uses_action_semantics_without_skipping_disabled_nodes(self):
+        source = (p.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/"
+                  "LanPermissionRuntimeInstrumentation.kt").read_text()
+        section = source.split('val refresh = visible("Refresh LAN access")', 1)[1].split('val observation =', 1)[0]
+        self.assertIn('while (ancestor != null && chain.size < 6)', section)
+        self.assertIn('current == root || current.packageName?.toString() != PACKAGE', section)
+        self.assertIn('current.windowId != root?.windowId || nodes.none { it == current }', section)
+        self.assertIn('nodes.any { it == current }', section)
+        self.assertIn('current.windowId == root?.windowId', section)
+        self.assertIn('clickAction = AccessibilityNodeInfo.ACTION_CLICK in actions', section)
+        self.assertIn('otherActivation = current.isLongClickable || AccessibilityNodeInfo.ACTION_LONG_CLICK in actions', section)
+        self.assertIn('nearestLanPermissionActionOwner(actionNodes)', section)
+        self.assertNotIn('android.widget.Button', section)
+        self.assertNotIn('filter', section)
+
+    def test_settled_result_without_original_outstanding_request_never_qualifies(self):
+        for fields in ({"p2pkitOriginalRequestOutstanding": "false"}, {"p2pkitRequestSettled": "false"}):
+            with self.assertRaises(ValueError):
+                p.terminal(output(changes=fields), TOKEN, "revocation")
+            with self.assertRaises(ValueError):
+                p.ready_checkpoint(output(changes=fields, ready=True), TOKEN)
+
     def test_absent_completed_instrumentation_output_is_not_runner_or_root_cause_proof(self):
         for raw in (b"", b"Error type 2\nonError: commandError=true message=synthetic frontend failure\n"):
             self.assertEqual(p.completed_instrumentation_output(raw), "NO_INSTRUMENTATION_OUTPUT")

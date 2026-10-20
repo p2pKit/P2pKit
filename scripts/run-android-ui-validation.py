@@ -331,6 +331,7 @@ def main(argv=None, *, campaign=None):
     source, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
     write_json(report / "source.json", {"commit": source, "tree": tree, "case": "372" if campaign is not None else args.case,
                "scope": scope})
+    emulator_options = campaign.prepare_emulator(run=run, sdk=sdk, report=report) if campaign is not None else ()
     run([ROOT / "gradlew", ":p2p-sample-android:clean", ":p2p-sample-android:assembleDebug",
          ":p2p-sample-android:assembleDebugAndroidTest",
          *(campaign.BUILD_TASKS if campaign is not None else ()), "--no-daemon", "--max-workers=2", "--console=plain"], timeout=2400)
@@ -386,11 +387,17 @@ def main(argv=None, *, campaign=None):
         (report / "fresh-avd-config.ini").write_bytes(config.read_bytes())
         run([*adb, "start-server"])
         with (report / "emulator.log").open("xb") as emulog:
-            emulator = subprocess.Popen([str(sdk / "emulator/emulator"), "-avd", avd, "-port", str(console_port),
+            emulator_argv = [str(sdk / "emulator/emulator"), "-avd", avd, "-port", str(console_port),
                 "-accel", "on", "-gpu", "swiftshader", "-memory", "2048", "-cores", "2", "-no-window",
-                "-skin", "1600x2560", "-dpi-device", "200", "-no-audio", "-no-boot-anim", "-no-snapshot", "-no-metrics"],
+                "-skin", "1600x2560", "-dpi-device", "200", "-no-audio", "-no-boot-anim", "-no-snapshot", "-no-metrics",
+                *emulator_options]
+            write_json(report / "emulator-request.json", {"argv": emulator_argv, "sourceCommit": source, "sourceTree": tree})
+            emulator = subprocess.Popen(emulator_argv,
                 cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=emulog, stderr=emulog)
             admit_android_guest(run, device, emulator, avd, api, report)
+            if campaign is not None:
+                need((report / "emulator.log").stat().st_size <= LIMIT, "Emulator startup output limit")
+                campaign.validate_emulator_boot((report / "emulator.log").read_bytes())
             guest_admitted = True
             if campaign is not None:
                 results.update(campaign.run(run=run, device=device, report=report, env=env, private=private,

@@ -2,6 +2,7 @@
 """API37 actual deny/grant/pinned-duplex/revoke witness; independent profile review remains required."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -71,7 +72,8 @@ def terminal(raw, token, mode):
     else:
         expected.update(p2pkitReentry="DENIED_SAME_MANAGER_AND_PROCESS", p2pkitSameInstanceRevocation="PASS",
                         p2pkitRawRoute="DENIED_THEN_ADMITTED", p2pkitTraffic="PASS", p2pkitRecreation="PASS",
-                        p2pkitRequestSettled="true", p2pkitSentBytes="40", p2pkitReceivedBytes="36")
+                        p2pkitRequestSettled="true", p2pkitOriginalRequestOutstanding="true",
+                        p2pkitSentBytes="40", p2pkitReceivedBytes="36")
     need(all(result.get(key) == value and frames[-1][1].get(key) == value for key, value in expected.items()),
          "Wrong permission terminal scope")
     need(not any("Failure" in key for key in result), "Permission test retained a failure")
@@ -91,7 +93,8 @@ def ready_checkpoint(raw, token):
     record = ready[0]
     expected = {"p2pkitToken": token, "class": RUNNER, "test": "permissionRecreationPinnedTcpAndRevocation",
                 "p2pkitTraffic": "PASS", "p2pkitRawRoute": "DENIED_THEN_ADMITTED", "p2pkitManager": "PASS",
-                "p2pkitRecreation": "PASS", "p2pkitRequestSettled": "true", "p2pkitSentBytes": "40",
+                "p2pkitRecreation": "PASS", "p2pkitRequestSettled": "true", "p2pkitOriginalRequestOutstanding": "true",
+                "p2pkitSentBytes": "40",
                 "p2pkitReceivedBytes": "36", "p2pkitSameInstanceRevocation": "NOT_EXECUTED"}
     need(all(record.get(key) == value for key, value in expected.items()), "Unqualified revocation handoff")
     return record
@@ -132,6 +135,36 @@ def attempt_failure_capture(capture):
     return receipt
 
 
+def reject_graphics_feature_error(raw):
+    text = raw.decode("utf-8", errors="strict")
+    feature = r"(?:feature|GLDirectMem|HasSharedSlotsHostMemoryAllocator)"
+    error = r"(?:unknown|invalid|unsupported|unrecognized|not supported)"
+    need(not re.search(rf"(?im){error}[^\r\n]*{feature}|{feature}[^\r\n]*{error}", text),
+         "Emulator rejected the requested graphics feature")
+
+
+def graphics_options(help_output, defaults):
+    """Supplier capability preflight, not proof of effective guest DMA support."""
+    need(0 < len(help_output) <= 131_072 and 0 < len(defaults) <= 131_072, "Graphics preflight size")
+    reject_graphics_feature_error(help_output)
+    help_text = help_output.decode("utf-8", errors="strict").lower()
+    need("feature" in help_text and any(word in help_text for word in ("enabl", "disabl", "overrid")),
+         "Actual emulator feature-option help unavailable")
+    values = {}
+    for line in defaults.decode("utf-8", errors="strict").splitlines():
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if key in ("GLDirectMem", "HasSharedSlotsHostMemoryAllocator"):
+            need(separator and key not in values and value.strip() in ("on", "off"),
+                 "Ambiguous supplier graphics feature declaration")
+            values[key] = value.strip()
+    # Supplier defaults identify recognized features, not their effective runtime
+    # values. Never infer either effective capability from a particular default.
+    need(set(values) == {"GLDirectMem", "HasSharedSlotsHostMemoryAllocator"},
+         "Required supplier graphics feature declarations unavailable")
+    return ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator")
+
+
 class Campaign:
     API = 37
     IMAGE = "system-images;android-37.0;google_apis;x86_64"
@@ -140,6 +173,37 @@ class Campaign:
     BUILD_TASKS = (":p2p-sample-desktop:installDist",)
     REVIEW = "REQUIRED: actual loaded permission module, mandatory flag/cache/compat, route and original runtime evidence"
     NOT_QUALIFIED = ["physical phones/OEM behavior", "legacy target36 and Android16 opt-in", "unreviewed profile semantics"]
+
+    @staticmethod
+    def prepare_emulator(*, run, sdk, report):
+        # API37-only: no user-provided feature selector or backend fallback. These
+        # positive options request both prerequisites of the mapper's DMA path;
+        # they do not alter Android permission/module flags or the API35 UI lane.
+        help_output = run([sdk / "emulator/emulator", "-help-feature"], timeout=15)[1]
+        defaults_path = sdk / "emulator/lib/advancedFeatures.ini"
+        need(defaults_path.is_file() and 0 < defaults_path.stat().st_size <= 131_072,
+             "Actual supplier feature defaults unavailable")
+        defaults = defaults_path.read_bytes()
+        (report / "emulator-feature-help.txt").write_bytes(help_output)
+        (report / "emulator-feature-defaults.ini").write_bytes(defaults)
+        options = graphics_options(help_output, defaults)
+        with (sdk / "emulator/emulator").open("rb") as binary:
+            frontend_hash = hashlib.file_digest(binary, "sha256").hexdigest()
+        owner.write_json(report / "emulator-graphics-request.json", {
+            "options": list(options), "scope": "API37 graphics only; not permission or profile acceptance",
+            "emulatorFrontendSha256": frontend_hash,
+            "helpSha256": hashlib.sha256(help_output).hexdigest(),
+            "supplierDefaultsSha256": hashlib.sha256(defaults).hexdigest(),
+            "effectiveGuestDmaSupport": "NOT_ESTABLISHED_BY_PREFLIGHT",
+        })
+        return options
+
+    @staticmethod
+    def validate_emulator_boot(raw):
+        # A warning that an option is unknown must fail even if launch exits zero
+        # or the guest otherwise boots. No alternate option/backend is attempted.
+        need(0 < len(raw) <= owner.LIMIT, "Bounded emulator startup log required")
+        reject_graphics_feature_error(raw)
 
     @staticmethod
     def run(*, run, device, report, env, private, source, tree, apks, app_apk, test_apk, capture_failure):
@@ -265,6 +329,14 @@ class Campaign:
             return store_retained_record(raw, evidence, name)
 
         try:
+            code, graphics = run([*device, "shell", "dumpsys", "SurfaceFlinger"], timeout=10, check=False)
+            need(len(graphics) <= 2 * 1024 * 1024, "SurfaceFlinger observation size")
+            (evidence / "fresh-surfaceflinger.txt").write_bytes(graphics)
+            owner.write_json(evidence / "fresh-graphics-observation.json", {
+                "exitCode": code, "bytes": len(graphics),
+                "scope": "Actual graphics service observation, not internal DMA or permission proof",
+            })
+            need(code == 0 and graphics, "Fresh graphics service unavailable")
             distribution = ROOT / "samples/p2p-sample-desktop/build/install/p2p-sample-desktop/lib"
             java = Path(env["JAVA_HOME"]) / "bin/java"
             peer = spawn("peer", [java, "-Xmx384m", "-XX:ActiveProcessorCount=2",
