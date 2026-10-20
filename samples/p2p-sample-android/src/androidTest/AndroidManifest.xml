@@ -3,7 +3,7 @@
   <!--
     AGP injects testInstrumentationRunner into the FIRST instrumentation entry.
     Keep the maintained API37 runner first so it cannot replace the supplemental runner.
-    Both final APK entries are checked before either device-runtime driver starts.
+    The exact final APK runner inventory is checked before a device-runtime driver starts.
   -->
   <instrumentation
       android:name="dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation"
