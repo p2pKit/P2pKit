@@ -135,8 +135,9 @@ def attempt_failure_capture(capture):
 
 def reject_graphics_feature_error(raw):
     text = raw.decode("utf-8", errors="strict")
-    need(not re.search(r"(?im)(?:unknown|invalid|unsupported|unrecognized)[^\r\n]*(?:feature|GLDirectMem)|"
-                       r"(?:feature|GLDirectMem)[^\r\n]*(?:unknown|invalid|unsupported|unrecognized)", text),
+    feature = r"(?:feature|GLDirectMem|HasSharedSlotsHostMemoryAllocator)"
+    error = r"(?:unknown|invalid|unsupported|unrecognized|not supported)"
+    need(not re.search(rf"(?im){error}[^\r\n]*{feature}|{feature}[^\r\n]*{error}", text),
          "Emulator rejected the requested graphics feature")
 
 
@@ -156,10 +157,10 @@ def graphics_options(help_output, defaults):
                  "Ambiguous supplier graphics feature declaration")
             values[key] = value.strip()
     # Supplier defaults identify recognized features, not their effective runtime
-    # values. Never demand a particular default or override shared-slot behavior.
+    # values. Never infer either effective capability from a particular default.
     need(set(values) == {"GLDirectMem", "HasSharedSlotsHostMemoryAllocator"},
          "Required supplier graphics feature declarations unavailable")
-    return ("-feature", "GLDirectMem")
+    return ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator")
 
 
 class Campaign:
@@ -173,9 +174,9 @@ class Campaign:
 
     @staticmethod
     def prepare_emulator(*, run, sdk, report):
-        # API37-only: no user-provided feature selector or backend fallback. This
-        # documented positive option requests the mapper's required DMA path;
-        # it does not alter Android permission/module flags or the API35 UI lane.
+        # API37-only: no user-provided feature selector or backend fallback. These
+        # positive options request both prerequisites of the mapper's DMA path;
+        # they do not alter Android permission/module flags or the API35 UI lane.
         help_output = run([sdk / "emulator/emulator", "-help-feature"], timeout=15)[1]
         defaults_path = sdk / "emulator/lib/advancedFeatures.ini"
         need(defaults_path.is_file() and 0 < defaults_path.stat().st_size <= 131_072,

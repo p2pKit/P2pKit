@@ -45,11 +45,11 @@ class PermissionValidationTests(unittest.TestCase):
     def test_graphics_option_requires_actual_supplier_declarations_and_positive_help(self):
         help_output = b"-feature: enable or disable individual feature overrides\n"
         defaults = b"GLDirectMem = off\nHasSharedSlotsHostMemoryAllocator = on\n"
-        self.assertEqual(p.graphics_options(help_output, defaults), ("-feature", "GLDirectMem"))
+        self.assertEqual(p.graphics_options(help_output, defaults), ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))
         self.assertEqual(p.graphics_options(help_output, defaults.replace(b"off", b"on")),
-                         ("-feature", "GLDirectMem"))
+                         ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))
         self.assertEqual(p.graphics_options(help_output, defaults.replace(b"Allocator = on", b"Allocator = off")),
-                         ("-feature", "GLDirectMem"))  # Default values are not effective capability proof.
+                         ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))  # Default values are not effective capability proof.
         for invalid in (b"", defaults.replace(b"GLDirectMem", b"Other"), defaults + b"GLDirectMem=off\n",
                         defaults.replace(b"GLDirectMem = off", b"GLDirectMem = maybe"),
                         defaults + b"HasSharedSlotsHostMemoryAllocator=off\n"):
@@ -63,7 +63,9 @@ class PermissionValidationTests(unittest.TestCase):
     def test_emulator_graphics_rejection_is_failure_even_with_successful_boot_text(self):
         p.Campaign.validate_emulator_boot(b"Graphics backend: gfxstream\nBoot completed\n")
         for warning in (b"Unknown feature: GLDirectMem", b"Feature name GLDirectMem is invalid",
-                        b"unsupported option -feature", b"GLDirectMem unrecognized"):
+                        b"unsupported option -feature", b"GLDirectMem unrecognized",
+                        b"HasSharedSlotsHostMemoryAllocator unrecognized",
+                        b"HasSharedSlotsHostMemoryAllocator is not supported"):
             with self.subTest(warning=warning), self.assertRaises(ValueError):
                 p.Campaign.validate_emulator_boot(warning + b"\nBoot completed\n")
 
@@ -78,10 +80,10 @@ class PermissionValidationTests(unittest.TestCase):
             (sdk / "emulator/lib/advancedFeatures.ini").write_bytes(defaults)
             (sdk / "emulator/emulator").write_bytes(b"synthetic frontend identity, not executed")
             run = Mock(return_value=(0, help_output))
-            self.assertEqual(p.Campaign.prepare_emulator(run=run, sdk=sdk, report=report), ("-feature", "GLDirectMem"))
+            self.assertEqual(p.Campaign.prepare_emulator(run=run, sdk=sdk, report=report), ("-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"))
             run.assert_called_once_with([sdk / "emulator/emulator", "-help-feature"], timeout=15)
             receipt = json.loads((report / "emulator-graphics-request.json").read_text())
-            self.assertEqual(receipt["options"], ["-feature", "GLDirectMem"])
+            self.assertEqual(receipt["options"], ["-feature", "GLDirectMem,HasSharedSlotsHostMemoryAllocator"])
             self.assertEqual(receipt["supplierDefaultsSha256"], hashlib.sha256(defaults).hexdigest())
             self.assertEqual(receipt["helpSha256"], hashlib.sha256(help_output).hexdigest())
             self.assertEqual(receipt["effectiveGuestDmaSupport"], "NOT_ESTABLISHED_BY_PREFLIGHT")

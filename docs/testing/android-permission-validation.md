@@ -48,8 +48,8 @@ claim; no APK is installed before this admission completes.
 
 ## API37 graphics prerequisite candidate
 
-The API37 lane alone requests the documented positive `-feature GLDirectMem`
-option. A prior exact-source run reached two SurfaceFlinger/GoldfishMapper aborts
+The API37 lane alone requests the documented positive feature-override syntax
+`-feature GLDirectMem,HasSharedSlotsHostMemoryAllocator`. A prior exact-source run reached two SurfaceFlinger/GoldfishMapper aborts
 before permission evidence. The public [guest mapper fatal-if condition](https://android.googlesource.com/device/generic/goldfish/+/3ce87694caeb4a330280bb1284d9ad050fe28263/hals/gralloc/mapper.cpp)
 requires `hasReadColorBufferDma` to be **present**, not absent. Public
 [host extension advertisement](https://android.googlesource.com/platform/hardware/google/gfxstream/+/d047a57228332d995d36600792fa9ccc26cf8ae6/host/RenderControl.cpp)
@@ -59,12 +59,24 @@ These public sources justify a prospective graphics prerequisite test; they are
 not asserted to identify the exact internal source of hosted emulator37.2.12,
 and the candidate is not a proven repair or permission result.
 
+The original single-override diagnostic at9600852c accepted GLDirectMem as
+explicitly enabled, yet the same mapper fatal persisted. Its fresh graphics
+observation advertised direct memory but neither shared-slot allocation nor
+read-color-buffer DMA. This motivates the narrow second positive request: the
+supplier recognizes that feature and the public host code requires both. A
+supplier default of on is not evidence that the effective renderer enabled it.
+This is a prospective fresh-host emulator configuration test, not a declaration
+of guest support, a proven repair, or permission-enforcement waiver. The original
+failed source/run remains preserved; neither extension strings nor successful
+feature overrides can replace the full unchanged permission/traffic campaign.
+
 Before launch, the actual installed binary's bounded `-help-feature` response
 and supplier `advancedFeatures.ini` are retained and hashed, together with the
 frontend binary hash. Both relevant supplier declarations must be unique and
 recognized; their on/off defaults are **not** treated as effective capability
-values. Only `GLDirectMem` is positively requested; shared-slot allocation is not
-overridden. The full emulator argv is recorded with source commit/tree, alongside
+values. Both direct memory and shared-slot allocation are now positively
+requested through the same supported emulator feature CLI; no Android permission
+or compat flag is changed. The full emulator argv is recorded with source commit/tree, alongside
 the existing installed-source properties and actual guest properties. Unknown or
 unsupported feature warnings fail closed, even if boot otherwise succeeds. A
 bounded private SurfaceFlinger observation precedes real instrumentation; it
