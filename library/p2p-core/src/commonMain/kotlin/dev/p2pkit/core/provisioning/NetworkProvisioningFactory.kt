@@ -47,6 +47,16 @@ public interface NetworkProvisioningFactory {
  * Constructor is `public` so factories and tests in other Gradle modules
  * can construct one directly; production callers should not — `P2pKitImpl`
  * builds these for registered factories.
+ *
+ * Compatibility: the existing constructor, including its default-argument
+ * entry points, is published ABI. Adding a parameter, even with a default,
+ * does not preserve the descriptors used by already-compiled callers. A
+ * compatible extension must retain those entry points; a separately reviewed
+ * builder/factory or compatibility constructor can provide another creation
+ * path without replacing them. Source recompilation alone does not establish
+ * compatibility: changes require existing-consumer JVM/Android and KLIB
+ * checks. This class has reference identity, not value equality
+ * over its logger, callbacks and parent job.
  */
 @OptIn(ExperimentalP2pApi::class)
 public class ProvisioningContext public constructor(

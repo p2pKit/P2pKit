@@ -45,6 +45,28 @@ physical-device evidence. Exact toolchain versions are locked in the Gradle
 wrapper, version catalog, and CI workflows. Physical validation at the Android
 and Apple minimums remains pending until the evidence handbook is completed.
 
+## Provisioning factory context
+
+`NetworkProvisioningFactory.build` receives a `ProvisioningContext` created by
+the kit. Its public constructor also supports factories and tests in other
+modules; those existing callers remain part of the compatibility surface.
+The ten-parameter constructor and its three default arguments are recorded in
+the JVM/Android and KLIB baselines. Adding an eleventh defaulted parameter is
+not automatically binary-compatible: already-compiled callers still reference
+the old constructor/default-argument entry points.
+
+Compatible evolution must retain the existing entry points. An additive
+builder/factory, compatibility constructor, or non-constructor addition may
+provide an extension route, but requires review of the actual generated ABI
+and existing-consumer JVM/Android and KLIB checks. A new `copy()` method alone
+would not solve constructor evolution. Recompiling callers against the new
+source is not a binary-compatibility experiment.
+
+No constructor, builder, or compatibility promise is changed by this
+clarification. The choice of a future extension surface remains tracked in
+[#274](https://github.com/p2pKit/P2pKit/issues/274); the current constructor is
+not itself a runtime defect.
+
 ## Public sealed hierarchies
 
 Public sealed hierarchies, including `PeerAuthorizationPolicy`, are not
