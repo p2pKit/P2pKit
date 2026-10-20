@@ -98,7 +98,7 @@ def commands(component):
             ('version-encoding', bash + ['scripts/tests/check-application-release-version.sh']),
             *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
                    'apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
-                   'tcp-nodelay-latency-test.py', 'run-rpc-qualification-test.py',
+                   'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',
                    'run-jmdns-interpreter-diagnostic-test.py', 'run-android-permission-validation-test.py',
                    'swift-jvm-transfer-test.py', 'run-android-art-smoke-test.py',
                    'dependency-update-test.py', 'embedded-jmdns-aar-test.py', 'intel-bonjour-environment-test.py',
