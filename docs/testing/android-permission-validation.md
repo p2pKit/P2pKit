@@ -24,6 +24,15 @@ properties are retained. No personal device, existing AVD or prior installation
 is adopted. Only the existing public evidence-recipient key is needed; raw
 synthetic output is encrypted by the native-owned `ci_evidence.py` exporter.
 
+The newly created, unbooted AVD requests a **2-GiB userdata partition**, following
+the maintained RPC Android fixture's bounded allocation pattern. Only its fresh
+`config.ini` is changed before first launch; SDK/system images, existing AVDs,
+host caches and personal data are never resized or deleted. The generated config
+and actual admitted guest `df -k /data /data/local/tmp` observation are retained
+privately. This prepares space for APK staging/install and synthetic evidence;
+it is not storage qualification, and a successful allocation/install is not
+permission acceptance. No boot, instrumentation or retirement bound is extended.
+
 Before either API35 UI or API37 permission instrumentation, the shared bootstrap
 requires the boot flag **and** real `input`, `activity`, `package` and `settings`
 binder services. The original 180-second boot deadline also bounds identity

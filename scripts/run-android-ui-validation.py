@@ -147,6 +147,25 @@ def write_json(path, data):
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def configure_new_avd_userdata(text):
+    """Allocate only the invocation's not-yet-booted userdata, never an image/cache.
+
+    Like the maintained RPC Android fixture, request a bounded 2-GiB data
+    partition. A generic avdmanager profile may omit the size (implicit default);
+    make that explicit without adding an ambiguous second property.
+    """
+    lines = text.splitlines()
+    images = [line for line in lines if line.partition("=")[0].strip() == "image.sysdir.1"]
+    sizes = [line for line in lines if line.partition("=")[0].strip() == "disk.dataPartition.size"]
+    need(len(images) == 1 and images[0].startswith("image.sysdir.1=") and
+         images[0].partition("=")[2].strip(), "Missing/ambiguous fresh AVD image property")
+    need(len(sizes) <= 1 and (not sizes or re.fullmatch(r"disk\.dataPartition\.size=[0-9]+[KMG]?", sizes[0])),
+         "Malformed/ambiguous fresh AVD userdata property")
+    if sizes:
+        return re.sub(r"(?m)^disk\.dataPartition\.size=[^\r\n]*$", "disk.dataPartition.size=2G", text)
+    return text + ("" if text.endswith("\n") else "\n") + "disk.dataPartition.size=2G\n"
+
+
 BOOT_SERVICES = ("input", "activity", "package", "settings")
 
 
@@ -183,6 +202,7 @@ def admit_android_guest(run, device, emulator, avd, api, report, *, clock=time.m
     need(bounded(["shell", "getprop", "ro.build.version.sdk"])[1].strip() == str(api).encode(),
          "Wrong admitted runtime API")
     (report / "runtime-properties.txt").write_bytes(bounded(["shell", "getprop"])[1])
+    (report / "runtime-data-space.txt").write_bytes(bounded(["shell", "df", "-k", "/data", "/data/local/tmp"])[1])
     bounded(["shell", "input", "keyevent", "82"])  # Exactly once; failure is not retried.
 
 
@@ -333,8 +353,11 @@ def main(argv=None, *, campaign=None):
         run([sdk / "cmdline-tools/latest/bin/avdmanager", "create", "avd", "--name", avd,
              "--package", image, "--path", private / "avd" / avd], timeout=90, input_bytes=b"no\n")
         config = private / "avd" / avd / "config.ini"
+        need(not (config.parent / "userdata-qemu.img").exists(), "Fresh unbooted userdata required")
+        config.write_text(configure_new_avd_userdata(config.read_text()))
         with config.open("a") as output:
             output.write("\nhw.lcd.width=1600\nhw.lcd.height=2560\nhw.lcd.density=200\nhw.keyboard=yes\n")
+        (report / "fresh-avd-config.ini").write_bytes(config.read_bytes())
         run([*adb, "start-server"])
         with (report / "emulator.log").open("xb") as emulog:
             emulator = subprocess.Popen([str(sdk / "emulator/emulator"), "-avd", avd, "-port", str(console_port),

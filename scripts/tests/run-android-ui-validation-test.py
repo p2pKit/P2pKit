@@ -93,6 +93,8 @@ class GuestFixture:
             return 0, b"37\n"
         if key == ("shell", "getprop"):
             return 0, b"synthetic properties\n"
+        if key == ("shell", "df", "-k", "/data", "/data/local/tmp"):
+            return 0, b"synthetic data filesystem observation\n"
         if key == ("shell", "input", "keyevent", "82"):
             return 0, b""
         raise AssertionError("Unexpected synthetic command")
@@ -111,6 +113,8 @@ class AndroidBootAdmissionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             guest.admit(Path(directory))
             self.assertEqual((Path(directory) / "runtime-properties.txt").read_bytes(), b"synthetic properties\n")
+            self.assertEqual((Path(directory) / "runtime-data-space.txt").read_bytes(),
+                             b"synthetic data filesystem observation\n")
         self.assertEqual(len(guest.unlocks()), 1)
         self.assertEqual([item[0][-1] for item in guest.calls if item[0][1:4] == ("shell", "service", "check")],
                          ["input", "activity", "package", "settings"])
@@ -247,6 +251,44 @@ class AndroidBootAdmissionTests(unittest.TestCase):
 
 
 class AndroidUiAdmissionTests(unittest.TestCase):
+    def test_new_userdata_size_is_bounded_and_does_not_change_selected_image(self):
+        image = "image.sysdir.1=system-images/android-37.0/google_apis/x86_64/\n"
+        for old in ("", "disk.dataPartition.size=800M\n", "disk.dataPartition.size=10G\n",
+                    "disk.dataPartition.size=6442450944\n"):
+            with self.subTest(old=old):
+                text = "AvdId=owned-fixture\n" + image + old + "hw.cpu.arch=x86_64\n"
+                result = ui.configure_new_avd_userdata(text)
+                self.assertEqual(result.count("disk.dataPartition.size="), 1)
+                self.assertIn("disk.dataPartition.size=2G\n", result)
+                self.assertEqual(result.replace("disk.dataPartition.size=2G\n", ""), text.replace(old, "") if old else text)
+                self.assertIn(image, result)
+        self.assertTrue(ui.configure_new_avd_userdata(image.rstrip()).endswith("\ndisk.dataPartition.size=2G\n"))
+
+    def test_missing_duplicate_or_malformed_fresh_avd_properties_fail_closed(self):
+        image = "image.sysdir.1=system-images/android-37.0/google_apis/x86_64/\n"
+        size = "disk.dataPartition.size=800M\n"
+        invalid = ["", size, image + image + size, "image.sysdir.1=\n" + size,
+                   image + size + size, image + "disk.dataPartition.size\n",
+                   image + "disk.dataPartition.size=\n", image + "disk.dataPartition.size=-1\n",
+                   image + " disk.dataPartition.size=800M\n", image + "disk.dataPartition.size =800M\n",
+                   image + size + " disk.dataPartition.size=2G\n"]
+        for text in invalid:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                ui.configure_new_avd_userdata(text)
+
+    def test_userdata_configuration_is_only_after_fresh_avd_creation_before_launch(self):
+        # Integration tripwire, not a real allocation/storage acceptance result.
+        source = (ui.ROOT / "scripts/run-android-ui-validation.py").read_text()
+        create = source.index('"create", "avd", "--name", avd')
+        configure = source.index("config.write_text(configure_new_avd_userdata(config.read_text()))")
+        launch = source.index("emulator = subprocess.Popen(")
+        self.assertLess(create, configure)
+        self.assertLess(configure, launch)
+        self.assertIn('config = private / "avd" / avd / "config.ini"', source)
+        self.assertIn('need(not (config.parent / "userdata-qemu.img").exists()', source)
+        self.assertNotIn('"-wipe-data"', source)
+        self.assertNotIn('"--force"', source)
+
     def test_both_explicit_synthetic_completed_bundles(self):
         for case in ui.CASES:
             self.assertEqual(ui.instrumentation_result(result(case), case, TOKEN)["p2pkitOutcome"], ui.PASS)
