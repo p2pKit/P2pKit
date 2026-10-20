@@ -351,6 +351,20 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         self.assertIn('frame.committed.get() >= minimumFrameNanos', probe)
         self.assertIn('capture(label, listOf(witness.bounds), frame)', probe)
 
+    def test_accessibility_snapshots_clear_only_the_observer_cache(self):
+        path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
+        for filename, start, end in (
+            ("UiAcceptanceInstrumentation.kt", "private fun currentAppTree()", "private fun retainFailureObservation()"),
+            ("CredentialUiProbe.kt", "private fun nodes()", "fun retainFailure("),
+        ):
+            source = (path / filename).read_text()
+            reader = source[source.index(start):source.index(end)]
+            self.assertEqual(reader.count(".clearCache()"), 1)
+            self.assertLess(reader.index(".clearCache()"), reader.index(".rootInActiveWindow"))
+            self.assertIn('check(', reader[:reader.index(".clearCache()")])
+            for forbidden in ('performAction(', 'invalidate(', 'requestLayout(', 'sendPointerSync(', 'delay('):
+                self.assertNotIn(forbidden, reader)
+
     def test_shared_manifest_consumer_does_not_change_default_runner(self):
         source = (ui.ROOT / "scripts/run-android-art-smoke.py").read_text()
         self.assertIn('INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"', source)

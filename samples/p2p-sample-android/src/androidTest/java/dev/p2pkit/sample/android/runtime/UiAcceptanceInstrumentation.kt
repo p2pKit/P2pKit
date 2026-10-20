@@ -503,6 +503,9 @@ class UiAcceptanceInstrumentation : Instrumentation() {
     private fun tree(): Tree = checkNotNull(currentAppTree()) { "No active visible Android application window" }
 
     private fun currentAppTree(): Tree? {
+        // Invalidate only the observer's node cache, not the app's composition/layout.
+        // Filtered rows can move while cached accessibility bounds keep their old position.
+        check(uiAutomation.clearCache()) { "Fresh accessibility snapshot unavailable" }
         val root = uiAutomation.rootInActiveWindow ?: return null
         if (root.packageName?.toString() != PACKAGE || !root.isVisibleToUser) return null
         val nodes = mutableListOf<AccessibilityNodeInfo>()

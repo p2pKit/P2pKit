@@ -308,6 +308,9 @@ internal class CredentialUiProbe(
     }
 
     private fun nodes(): List<AccessibilityNodeInfo> {
+        // Read a fresh accessibility snapshot after text/layout changes. This does
+        // not send input, invalidate the app, request a frame, or change a deadline.
+        check(instrumentation.uiAutomation.clearCache()) { "Fresh accessibility snapshot unavailable" }
         val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow)
         check(root.packageName?.toString() == PACKAGE && root.isVisibleToUser)
         val all = mutableListOf<AccessibilityNodeInfo>()
