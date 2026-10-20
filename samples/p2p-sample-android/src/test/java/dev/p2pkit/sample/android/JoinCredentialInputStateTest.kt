@@ -5,6 +5,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
@@ -82,6 +83,56 @@ class JoinCredentialInputStateTest {
         state.onPermissionResult()
 
         assertCleared(state)
+    }
+
+    @Test
+    fun actualSubmissionConcealsBeforeTheCallbackAndRetainsTheSecretForRetry() {
+        val state = revealedCredential()
+        val secret = state.passphrase
+        var submissions = 0
+
+        repeat(2) {
+            assertTrue(state.isRevealed)
+            state.submitJoin { submitted ->
+                submissions++
+                assertFalse(state.isRevealed)
+                assertEquals(secret, submitted)
+                assertEquals(secret, state.passphrase)
+                assertIs<PasswordVisualTransformation>(joinPassphraseVisualTransformation(state.isRevealed))
+            }
+            assertFalse(state.isRevealed)
+            assertEquals(secret, state.passphrase)
+            state.toggleReveal()
+        }
+        assertEquals(2, submissions)
+    }
+
+    @Test
+    fun failedSubmissionDoesNotRevealOrClearTheRetryCredential() {
+        val state = revealedCredential()
+        val secret = state.passphrase
+
+        assertFailsWith<IllegalStateException> {
+            state.submitJoin { error("Synthetic submission failure") }
+        }
+
+        assertFalse(state.isRevealed)
+        assertEquals(secret, state.passphrase)
+    }
+
+    @Test
+    fun idleAndFailedStatusShareOneEditorAndOnlyActualSubmissionConceals() {
+        val source = mainActivitySource()
+        val card = source.substringAfter("internal fun JoinHotspotCard(")
+            .substringBefore("private fun JoinInputs(")
+
+        assertEquals(1, Regex("JoinInputs\\(").findAll(card).count())
+        assertTrue(card.contains("if (r == null || r is JoinNetworkResult.Failed)"))
+        assertTrue(card.contains("if (missing.isNotEmpty()) permLauncher.launch(perm)"))
+        assertTrue(card.contains("else credentialInput.submitJoin { passphrase ->"))
+        assertTrue(card.contains("vm.joinHotspot(ssidInput, passphrase, security)"))
+        assertEquals(1, Regex("vm\\.joinHotspot\\(").findAll(card).count())
+        assertFalse(card.contains("key(credentialInput.isRevealed)"))
     }
 
     @Test

@@ -1441,30 +1441,6 @@ internal fun JoinHotspotCard(
                         )
                     }
                     Spacer(Modifier.height(Dimens.ItemGap))
-                    JoinInputs(
-                        ssid = ssidInput,
-                        onSsidChange = { ssidInput = it },
-                        credentialInput = credentialInput,
-                        useWpa3 = useWpa3,
-                        onUseWpa3Change = { useWpa3 = it }
-                    )
-                    Spacer(Modifier.height(Dimens.SmallGap))
-                    Button(
-                        onClick = {
-                            if (missing.isNotEmpty()) permLauncher.launch(perm)
-                            else vm.joinHotspot(ssidInput, credentialInput.passphrase, security)
-                        },
-                        enabled = ssidInput.trim().isNotEmpty() && !busy,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            when {
-                                busy -> "Working…"
-                                missing.isNotEmpty() -> "Grant permission and retry"
-                                else -> "Retry join"
-                            }
-                        )
-                    }
                 }
                 r is JoinNetworkResult.Unsupported -> {
                     Text(
@@ -1498,30 +1474,42 @@ internal fun JoinHotspotCard(
                         style = MaterialTheme.typography.bodySmall
                     )
                     Spacer(Modifier.height(Dimens.ItemGap))
-                    JoinInputs(
-                        ssid = ssidInput,
-                        onSsidChange = { ssidInput = it },
-                        credentialInput = credentialInput,
-                        useWpa3 = useWpa3,
-                        onUseWpa3Change = { useWpa3 = it }
-                    )
-                    Spacer(Modifier.height(Dimens.SmallGap))
-                    Button(
-                        onClick = {
-                            if (missing.isNotEmpty()) permLauncher.launch(perm)
-                            else vm.joinHotspot(ssidInput, credentialInput.passphrase, security)
-                        },
-                        enabled = ssidInput.trim().isNotEmpty() && !busy,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            when {
-                                busy -> "Working…"
-                                missing.isNotEmpty() -> "Grant permission and join"
-                                else -> "Join hotspot"
+                }
+            }
+            // One composition call site keeps the editor/focus and its password
+            // semantics across idle/failed status changes. Recreating it while
+            // revealed can retain a non-password classification in Compose 1.11.4.
+            if (r == null || r is JoinNetworkResult.Failed) {
+                JoinInputs(
+                    ssid = ssidInput,
+                    onSsidChange = { ssidInput = it },
+                    credentialInput = credentialInput,
+                    useWpa3 = useWpa3,
+                    onUseWpa3Change = { useWpa3 = it }
+                )
+                Spacer(Modifier.height(Dimens.SmallGap))
+                Button(
+                    onClick = {
+                        if (missing.isNotEmpty()) permLauncher.launch(perm)
+                        else credentialInput.submitJoin { passphrase ->
+                            vm.joinHotspot(ssidInput, passphrase, security)
+                        }
+                    },
+                    enabled = ssidInput.trim().isNotEmpty() && !busy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        when {
+                            busy -> "Working…"
+                            missing.isNotEmpty() -> if (r is JoinNetworkResult.Failed) {
+                                "Grant permission and retry"
+                            } else {
+                                "Grant permission and join"
                             }
-                        )
-                    }
+                            r is JoinNetworkResult.Failed -> "Retry join"
+                            else -> "Join hotspot"
+                        }
+                    )
                 }
             }
         }

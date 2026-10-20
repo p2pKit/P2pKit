@@ -27,6 +27,12 @@ internal class JoinCredentialInputState {
         isRevealed = false
     }
 
+    /** Mask before submission can replace the editor with pending/result UI; retain it for a failed retry. */
+    fun submitJoin(join: (String) -> Unit) {
+        conceal()
+        join(passphrase)
+    }
+
     /** Clears the credential when the containing Activity is no longer visible. */
     fun onHostStopped() {
         clear()
