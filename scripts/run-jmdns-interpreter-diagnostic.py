@@ -38,7 +38,8 @@ COMMANDS = ('multicast-reviewed-dependency', 'multicast-vendor-compile',
 # Preserve inherited ownership carriers; this is not a new root process domain.
 ENVIRONMENT = frozenset(('PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'JAVA_HOME', 'GRADLE_USER_HOME',
     'CI', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'RUNNER_OS', 'RUNNER_ARCH', 'RUNNER_TEMP',
-    'RUNNER_TRACKING_ID', DEADLINE, evidence.audit_processes.JOB_ENV,
+    'RUNNER_TRACKING_ID', 'GITHUB_REPOSITORY', 'GITHUB_WORKFLOW_REF', 'GITHUB_SHA',
+    'GITHUB_WORKFLOW_SHA', 'GITHUB_JOB', DEADLINE, evidence.audit_processes.JOB_ENV,
     evidence.audit_processes.CHAIN_ENV, evidence.audit_processes.DOMAINS_ENV,
     evidence.audit_processes.STATE_ENV, evidence.audit_processes.PIPE_ENV))
 

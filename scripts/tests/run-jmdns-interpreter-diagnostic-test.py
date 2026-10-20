@@ -173,6 +173,27 @@ class DiagnosticTests(unittest.TestCase):
         self.assertTrue(all(diagnostic.environment[key] == 'test-owned' for key in keys))
         self.assertFalse(set(forbidden) & diagnostic.environment.keys())
 
+    def test_actual_workflow_identity_retains_hosted_scope_without_fabricating_admission(self):
+        # Synthetic CI metadata only; production forwards these values unchanged.
+        github = {'GITHUB_REPOSITORY': 'p2pKit/P2pKit', 'GITHUB_SHA': 'a' * 40,
+                  'GITHUB_WORKFLOW_SHA': 'a' * 40, 'GITHUB_JOB': 'jmdns-diagnostic',
+                  'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/ci.yml@refs/heads/main'}
+        for changes, admitted in (({}, True), ({'GITHUB_REPOSITORY': 'other/repository'}, False),
+                                  ({'GITHUB_WORKFLOW_SHA': 'b' * 40}, False),
+                                  ({'GITHUB_WORKFLOW_REF': ''}, False)):
+            with self.subTest(changes=changes), \
+                    patch.dict(os.environ, dict(self.env, **dict(github, **changes)), clear=True):
+                diagnostic = self.diagnostic()
+            for key, value in dict(github, **changes).items():
+                self.assertEqual(diagnostic.environment[key], value)
+            with patch.object(d.evidence.platform, 'system', return_value='Darwin'), \
+                    patch.object(d.evidence, '_HostedDarwinScope') as hosted, \
+                    patch.object(d.evidence.audit_processes, 'make_scope') as fallback:
+                # Exercise the maintained selector itself, not an equivalent test predicate.
+                scope = d.evidence._command_scope('job', 'invocation', 'private', 'home', diagnostic.environment)
+                self.assertIs(scope, (hosted if admitted else fallback).return_value)
+                (fallback if admitted else hosted).assert_not_called()
+
     def test_cancel_and_exhausted_cumulative_budget_do_not_spawn(self):
         for cancelled, end in ((True, time.monotonic() + 90), (False, time.monotonic() + 10)):
             event = threading.Event()
