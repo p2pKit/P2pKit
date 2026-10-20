@@ -83,6 +83,25 @@ The original 90-second instrumentation body bounds remain; the host campaign is
 bounded separately. Failures still trigger every owned retirement attempt. The
 host never reads exit trace streams, unrelated app storage or credentials.
 
+If the original, fully drained command stream contains no instrumentation
+records, the controller records `NO_INSTRUMENTATION_OUTPUT` and fails. This
+classifies output only: it does not prove whether the runner body started or
+attribute a platform/service failure. It never authorizes a launch retry or
+substitutes for traffic, permission or terminal evidence. Invalid/missing-file
+output from optional record retrieval remains a private command capture, not a
+misleading `.json` evidence record.
+
+On a live-campaign failure, a source-owned callback revalidates the original live
+emulator and exact generated AVD before private diagnostics. The same20-second
+diagnostic work budget covers identity and fixed read-only queries: at most200
+filtered system/ActivityManager/ServiceManager/low-memory/audit log entries,
+service list, system-server PID, native `cmd activity get-current-user`, and
+fixed aggregate memory-pressure/cgroup counters. No root, dynamic PID paths,
+app-storage search, memory/image change, or instrumentation replay is used.
+Missing observers stay explicit; failed diagnostics preserve the original
+failure. Existing exact-owned-leader retirement tails are unchanged, not an
+acceptance grace period or a claim of a hard20-second wall-clock cleanup bound.
+
 ## Acceptance boundary
 
 A completed result is `HARNESS_PASS_PENDING_PROFILE_REVIEW`, not issue closure or

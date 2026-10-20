@@ -103,6 +103,35 @@ def record_binding(record, token, source, tree):
          "Wrong retained API37 source/runtime binding")
 
 
+def completed_instrumentation_output(raw):
+    """Classify only a complete drained stream, not runner entry or root cause."""
+    return ("INSTRUMENTATION_OUTPUT_PRESENT" if any(line.startswith("INSTRUMENTATION_")
+            for line in raw.decode("utf-8", errors="strict").splitlines()) else "NO_INSTRUMENTATION_OUTPUT")
+
+
+RETAINED_RECORDS = ("profile-revocation.json", "before-revocation.json", "profile-revoked-reentry.json",
+                    "revoked-reentry.json")
+
+
+def store_retained_record(raw, evidence, name):
+    # exec-out does not guarantee the remote cat exit status. A missing-file
+    # message stays in the private command capture, never a purported JSON record.
+    need(name in RETAINED_RECORDS and 0 < len(raw) <= 16_384, "API37 record identity/size")
+    record = owner.decode_json(raw)
+    need(isinstance(record, dict), "API37 record must be an object")
+    (evidence / name).write_bytes(raw)
+    return record
+
+
+def attempt_failure_capture(capture):
+    receipt = {"status": "ATTEMPTED"}
+    try:
+        capture()
+    except BaseException as error:
+        receipt["failureType"] = type(error).__name__
+    return receipt
+
+
 class Campaign:
     API = 37
     IMAGE = "system-images;android-37.0;google_apis;x86_64"
@@ -113,7 +142,7 @@ class Campaign:
     NOT_QUALIFIED = ["physical phones/OEM behavior", "legacy target36 and Android16 opt-in", "unreviewed profile semantics"]
 
     @staticmethod
-    def run(*, run, device, report, env, private, source, tree, apks, app_apk, test_apk):
+    def run(*, run, device, report, env, private, source, tree, apks, app_apk, test_apk, capture_failure):
         token = uuid.uuid4().hex
         evidence = report / "372"
         evidence.mkdir(mode=0o700)
@@ -156,6 +185,7 @@ class Campaign:
         raw_accepts = raw_challenges = raw_empty = 0
         received = responded = revoked = False
         outcome, original_error = {}, None
+        instrumentation_output, failure_capture = {}, None
         overall_end = time.monotonic() + 240
 
         def spawn(label, command):
@@ -232,9 +262,7 @@ class Campaign:
             if code != 0:
                 need(not required, "Required private API37 record missing")
                 return None
-            need(0 < len(raw) <= 16_384, "API37 record size")
-            (evidence / name).write_bytes(raw)
-            return owner.decode_json(raw)
+            return store_retained_record(raw, evidence, name)
 
         try:
             distribution = ROOT / "samples/p2p-sample-desktop/build/install/p2p-sample-desktop/lib"
@@ -287,6 +315,8 @@ class Campaign:
                     revoked = True
             original.wait(timeout=5)
             until(lambda: drained("revocation"), 3, "Original instrumentation EOF missing")
+            instrumentation_output["revocation"] = completed_instrumentation_output(bytes(buffers["revocation"]))
+            need(instrumentation_output["revocation"] != "NO_INSTRUMENTATION_OUTPUT", "NO_INSTRUMENTATION_OUTPUT")
             need(revoked and responded, "No completed traffic-to-live-revocation handoff")
             profile = retained("profile-revocation.json")
             record_binding(profile, token, source, tree)
@@ -305,6 +335,8 @@ class Campaign:
                 until(lambda: reentry.poll() is not None, 100, "Denied OS-kill reentry deadline")
                 reentry.wait(timeout=5)
                 until(lambda: drained("revoked-reentry"), 3, "Reentry instrumentation EOF missing")
+                instrumentation_output["revoked-reentry"] = completed_instrumentation_output(bytes(buffers["revoked-reentry"]))
+                need(instrumentation_output["revoked-reentry"] != "NO_INSTRUMENTATION_OUTPUT", "NO_INSTRUMENTATION_OUTPUT")
                 need(reentry.returncode == 0, "Reentry adb command failed")
                 result = terminal(bytes(buffers["revoked-reentry"]), token, "revoked-reentry")
                 record = retained("revoked-reentry.json")
@@ -317,6 +349,8 @@ class Campaign:
             metadata("reentered")
         except BaseException as error:
             original_error = error
+            # Source-owned original emulator/AVD binding, never an acceptance retry.
+            failure_capture = attempt_failure_capture(capture_failure)
             raise
         finally:
             cleanup_errors, forced = [], []
@@ -328,8 +362,7 @@ class Campaign:
                     cleanup_errors.append({"step": label, "errorType": type(error).__name__})
 
             # Every retirement attempt runs even if retention or graceful quit fails.
-            for name in ("profile-revocation.json", "before-revocation.json", "profile-revoked-reentry.json",
-                         "revoked-reentry.json"):
+            for name in RETAINED_RECORDS:
                 clean("retain-" + name, lambda name=name: retained(name, required=False))
             peer = processes.get("peer")
 
@@ -361,6 +394,7 @@ class Campaign:
             owner.write_json(evidence / "host-result.json", {"outcome": outcome, "rawAccepts": raw_accepts,
                 "rawChallenges": raw_challenges, "rawEmptyConnections": raw_empty, "cleanupErrors": cleanup_errors,
                 "forcedLeaders": forced, "review": Campaign.REVIEW,
+                "instrumentationOutput": instrumentation_output, "failureCapture": failure_capture,
                 "sameManagerClaimed": outcome.get("revocation") == "SAME_MANAGER_AND_PROCESS_DENIED"})
             if original_error is None:
                 need(not cleanup_errors and not forced, "API37 campaign cleanup failed")

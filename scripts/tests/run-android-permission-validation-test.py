@@ -3,7 +3,9 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+from unittest.mock import Mock
 
 sys.dont_write_bytecode = True
 SPEC = importlib.util.spec_from_file_location("permission_validation", Path(__file__).resolve().parents[1] /
@@ -38,6 +40,50 @@ def output(mode="revocation", changes=None, ready=False):
 
 
 class PermissionValidationTests(unittest.TestCase):
+    def test_absent_completed_instrumentation_output_is_not_runner_or_root_cause_proof(self):
+        for raw in (b"", b"Error type 2\nonError: commandError=true message=synthetic frontend failure\n"):
+            self.assertEqual(p.completed_instrumentation_output(raw), "NO_INSTRUMENTATION_OUTPUT")
+        for raw in (output(), b"INSTRUMENTATION_CODE: 0\n", b"INSTRUMENTATION_FAILED: crashed\n"):
+            self.assertEqual(p.completed_instrumentation_output(raw), "INSTRUMENTATION_OUTPUT_PRESENT")
+        with self.assertRaises(ValueError):
+            p.terminal(b"INSTRUMENTATION_FAILED: crashed\n", TOKEN, "revocation")
+        source = (p.ROOT / "scripts/run-android-permission-validation.py").read_text()
+        self.assertLess(source.index('until(lambda: drained("revocation")'),
+                        source.index('instrumentation_output["revocation"] = completed_instrumentation_output'))
+        self.assertLess(source.index('until(lambda: drained("revoked-reentry")'),
+                        source.index('instrumentation_output["revoked-reentry"] = completed_instrumentation_output'))
+
+    def test_invalid_or_missing_remote_record_never_becomes_a_json_evidence_file(self):
+        for raw in (b"cat: synthetic-record: No such file or directory\n", b"", b"[]", b"null",
+                    b'{"outcome":"FAIL","outcome":"PASS"}'):
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                with self.assertRaises(ValueError):
+                    p.store_retained_record(raw, path, "before-revocation.json")
+                self.assertFalse(list(path.iterdir()))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            self.assertEqual(p.store_retained_record(b'{"fixture":true}', path, "before-revocation.json"),
+                             {"fixture": True})
+            self.assertEqual((path / "before-revocation.json").read_bytes(), b'{"fixture":true}')
+            with self.assertRaises(ValueError):
+                p.store_retained_record(b'{}', path, "../unowned.json")
+
+    def test_failure_diagnostic_error_does_not_replace_original_failure_or_retry(self):
+        for capture_error in (RuntimeError("synthetic retention failure"), SystemExit(2)):
+            capture = Mock(side_effect=capture_error)
+            original = ValueError("synthetic original no-output failure")
+            receipt = None
+            with self.assertRaises(ValueError) as caught:
+                try:
+                    raise original
+                except BaseException:
+                    receipt = p.attempt_failure_capture(capture)
+                    raise
+            self.assertIs(caught.exception, original)
+            self.assertEqual(receipt, {"status": "ATTEMPTED", "failureType": type(capture_error).__name__})
+            capture.assert_called_once_with()
+
     def test_survival_and_os_kill_have_distinct_success_claims(self):
         for mode in ("revocation", "revoked-reentry"):
             self.assertEqual(p.terminal(output(mode), TOKEN, mode)["p2pkitOutcome"], "PASS")

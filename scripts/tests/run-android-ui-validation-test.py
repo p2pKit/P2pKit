@@ -249,6 +249,59 @@ class AndroidBootAdmissionTests(unittest.TestCase):
             self.assertTrue(all(item.get("failureType") == "ValueError" for item in failure["captures"]))
             self.assertEqual(run.call_count, 1)
 
+    def test_permission_failure_observations_share_20s_and_never_repeat_instrumentation(self):
+        now, calls = [0.0], []
+        emulator = Mock()
+        emulator.poll.return_value = None
+
+        def run(command, *, timeout, check):
+            calls.append(command)
+            self.assertFalse(check)
+            self.assertEqual(timeout, 5 if len(calls) == 1 else 3)
+            now[0] += timeout
+            if len(calls) == 1:
+                return 0, b"owned-fixture\nOK\n"
+            if len(calls) == 2:
+                raise ValueError("synthetic logcat timeout")
+            return 1, b"synthetic unavailable observer\n"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            ui.capture_guest_failure(run, ["owned-adb"], emulator, "owned-fixture", path,
+                                     phase="permission", clock=lambda: now[0])
+            failure = json.loads((path / "permission-failure.json").read_text())
+            self.assertEqual(failure["admission"], "PREVIOUSLY_COMPLETED")
+            self.assertEqual(failure["outcome"], "FAILED")
+            self.assertEqual(failure["captures"][0]["failureType"], "ValueError")
+            self.assertEqual(len(failure["captures"]), 5)
+        self.assertEqual(calls, [
+            ["owned-adb", "emu", "avd", "name"],
+            ["owned-adb", "shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
+             "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W", "ServiceManager:W", "servicemanager:W",
+             "lmkd:I", "lowmemorykiller:I", "libprocessgroup:W", "auditd:I"],
+            ["owned-adb", "shell", "service", "list"],
+            ["owned-adb", "shell", "pidof", "system_server"],
+            ["owned-adb", "shell", "cmd", "activity", "get-current-user"],
+            ["owned-adb", "shell", "cat", "/proc/meminfo", "/proc/pressure/memory", "/proc/self/cgroup",
+             "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.max"],
+        ])
+        self.assertEqual(now[0], 20)
+
+    def test_permission_diagnostics_require_original_live_generated_avd_and_known_phase(self):
+        for dead, identity in ((True, b"owned-fixture\nOK\n"), (False, b"foreign\nOK\n"),
+                               (False, b"owned-fixture\n")):
+            with self.subTest(dead=dead, identity=identity), tempfile.TemporaryDirectory() as directory:
+                emulator, run = Mock(), Mock(return_value=(0, identity))
+                emulator.poll.return_value = 1 if dead else None
+                path = Path(directory)
+                ui.capture_guest_failure(run, ["owned-adb"], emulator, "owned-fixture", path, phase="permission")
+                failure = json.loads((path / "permission-failure.json").read_text())
+                self.assertEqual(failure["guestDiagnostics"], "NOT_CAPTURED")
+                self.assertEqual(failure["captures"], [])
+                self.assertEqual(run.call_count, 0 if dead else 1)
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+            ui.capture_guest_failure(Mock(), [], Mock(), "owned-fixture", Path(directory), phase="arbitrary")
+
 
 class AndroidUiAdmissionTests(unittest.TestCase):
     def test_new_userdata_size_is_bounded_and_does_not_change_selected_image(self):

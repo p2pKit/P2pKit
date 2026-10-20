@@ -207,13 +207,22 @@ def admit_android_guest(run, device, emulator, avd, api, report, *, clock=time.m
 
 
 def capture_boot_failure(run, device, emulator, avd, report, *, clock=time.monotonic):
-    """Best-effort, private diagnostics of our fresh guest before any APK install.
+    return capture_guest_failure(run, device, emulator, avd, report, phase="boot", clock=clock)
 
-    This separate 20-second retention bound cannot admit a guest or rerun a test;
-    every command is read-only, fixed and also bounded by the outer owner.
+
+def capture_guest_failure(run, device, emulator, avd, report, *, phase, clock=time.monotonic):
+    """Fixed private observations, never a guest admission or test/action retry.
+
+    Both phases require the original live emulator and exact generated AVD. The
+    separate 20-second work budget includes identity and every read-only query;
+    existing owner/leader retirement tails are not a new acceptance grace period.
     """
+    need(phase in ("boot", "permission"), "Unknown owned guest diagnostic phase")
     end = clock() + 20
     captures = []
+    prefix = phase + "-failure"
+    summary = {"phase": phase, "outcome": "FAILED",
+               "admission": "FAILED" if phase == "boot" else "PREVIOUSLY_COMPLETED"}
     try:
         need(emulator.poll() is None, "Owned emulator exited before diagnostic identity")
         left = end - clock()
@@ -223,28 +232,40 @@ def capture_boot_failure(run, device, emulator, avd, report, *, clock=time.monot
              "Unverified owned AVD diagnostic identity")
         need(emulator.poll() is None, "Owned emulator exited during diagnostic identity")
     except Exception as error:
-        write_json(report / "boot-failure.json", {"admission": "FAILED", "guestDiagnostics": "NOT_CAPTURED",
+        write_json(report / f"{prefix}.json", {**summary, "guestDiagnostics": "NOT_CAPTURED",
                    "identityFailureType": type(error).__name__, "captures": []})
         return
-    for name, command in (
+    commands = (
         ("services", ["shell", "service", "list"]),
         ("system-server", ["shell", "pidof", "system_server"]),
         ("properties", ["shell", "getprop"]),
         ("system-errors", ["shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
                            "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W"]),
-    ):
+    ) if phase == "boot" else (
+        # Capture failure-time system errors before slower service observers. Only
+        # fixed tags and aggregate kernel counters; no app data or dynamic PID paths.
+        ("system-errors", ["shell", "logcat", "-d", "-t", "200", "-v", "brief", "-s",
+                           "SystemServer:E", "AndroidRuntime:E", "ActivityManager:W", "ServiceManager:W",
+                           "servicemanager:W", "lmkd:I", "lowmemorykiller:I", "libprocessgroup:W", "auditd:I"]),
+        ("services", ["shell", "service", "list"]),
+        ("system-server", ["shell", "pidof", "system_server"]),
+        ("native-activity", ["shell", "cmd", "activity", "get-current-user"]),
+        ("memory", ["shell", "cat", "/proc/meminfo", "/proc/pressure/memory", "/proc/self/cgroup",
+                    "/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.max"]),
+    )
+    for name, command in commands:
         item = {"capture": name}
         try:
             need(emulator.poll() is None, "Owned emulator exited before diagnostic capture")
             left = end - clock()
             need(left > 0, "Boot diagnostic retention deadline")
-            code, output = run([*device, *command], timeout=min(5, left), check=False)
+            code, output = run([*device, *command], timeout=min(5 if phase == "boot" else 3, left), check=False)
             item["exitCode"] = code
-            (report / f"boot-failure-{name}.txt").write_bytes(output)
+            (report / f"{prefix}-{name}.txt").write_bytes(output)
         except Exception as error:
             item["failureType"] = type(error).__name__  # Never publish raw guest/command output.
         captures.append(item)
-    write_json(report / "boot-failure.json", {"admission": "FAILED", "guestDiagnostics": "ATTEMPTED",
+    write_json(report / f"{prefix}.json", {**summary, "guestDiagnostics": "ATTEMPTED",
                "captures": captures})
 
 
@@ -368,7 +389,9 @@ def main(argv=None, *, campaign=None):
             guest_admitted = True
             if campaign is not None:
                 results.update(campaign.run(run=run, device=device, report=report, env=env, private=private,
-                                            source=source, tree=tree, apks=apks, app_apk=app_apk, test_apk=test_apk))
+                                            source=source, tree=tree, apks=apks, app_apk=app_apk, test_apk=test_apk,
+                                            capture_failure=lambda: capture_guest_failure(
+                                                run, device, emulator, avd, report, phase="permission")))
             else:
                 for case in CASES if args.case == "both" else (args.case,):
                     case_dir = report / case
