@@ -15,8 +15,6 @@ on:
         default: both
         type: choice
         options: ['both', '317', '324']
-  push:
-    branches: ['work/**']
 permissions:
   contents: read
 concurrency:
@@ -24,7 +22,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   ui:
-    if: ${{ inputs.case != '' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[android-ui-validation]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     defaults:

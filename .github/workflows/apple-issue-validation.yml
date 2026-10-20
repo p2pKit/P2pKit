@@ -2,6 +2,13 @@ name: Focused Apple issue validation
 
 # Manual actual execution, not part of release qualification or physical credit.
 on:
+  workflow_call:
+    inputs:
+      operation:
+        description: Actual native acceptance (iphoneos-product, swift-jvm-transfer, or both)
+        required: false
+        default: both
+        type: string
   workflow_dispatch:
     inputs:
       operation:
