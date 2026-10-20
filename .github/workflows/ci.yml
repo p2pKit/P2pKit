@@ -9,7 +9,7 @@ on:
         description: all, one component, or a focused diagnostic (not qualification)
         default: all
         type: choice
-        options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, macos-shared, bundle-diagnostic, jmdns-diagnostic, published-consumers-diagnostic, consumers-pom-diagnostic, apple-issue-diagnostic, android-ui-diagnostic]
+        options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, macos-shared, bundle-diagnostic, jmdns-diagnostic, published-consumers-diagnostic, consumers-pom-diagnostic, apple-issue-diagnostic, android-ui-diagnostic, android-permission-diagnostic]
       apple_operation:
         description: Apple diagnostic only (no release qualification or physical credit)
         default: both
@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   plan:
-    if: ${{ inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-ui-diagnostic' }}
+    if: ${{ inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' }}
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.components.outputs.matrix }}
@@ -48,7 +48,7 @@ jobs:
           COMPONENT: ${{ inputs.component || 'all' }}
         run: echo "matrix=$(python3 -B scripts/ci_component.py --matrix "$COMPONENT")" >> "$GITHUB_OUTPUT"
   component:
-    if: ${{ inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.qualification_selection == '' }}
+    if: ${{ inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.qualification_selection == '' }}
     needs: plan
     name: ${{ matrix.component }}
     strategy:
@@ -76,10 +76,15 @@ jobs:
     uses: ./.github/workflows/android-ui-validation.yml
     with:
       case: ${{ inputs.android_case || 'both' }}
+  android-permission-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.component == 'android-permission-diagnostic' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/android-permission-validation.yml
   qualify:
     name: Qualify release components
     needs: [plan, component]
-    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && needs.plan.result == 'success' && (inputs.qualification_selection != '' || ((inputs.component == 'all' || inputs.component == '') && needs.component.result == 'success')) }}
+    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && needs.plan.result == 'success' && (inputs.qualification_selection != '' || ((inputs.component == 'all' || inputs.component == '') && needs.component.result == 'success')) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -102,7 +107,7 @@ jobs:
           overwrite: false
   complete-gate:
     needs: [qualify]
-    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name != 'workflow_dispatch' || inputs.component == 'all' || inputs.qualification_selection != '') }}
+    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name != 'workflow_dispatch' || inputs.component == 'all' || inputs.qualification_selection != '') }}
     runs-on: ubuntu-24.04
     steps:
       - name: Require real complete qualification, including all failed/skipped dependencies

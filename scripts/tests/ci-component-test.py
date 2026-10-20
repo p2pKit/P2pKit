@@ -49,7 +49,7 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(len(rows), 14)
         self.assertEqual({x['component'] for x in rows}, set(C.COMPONENTS))
     def test_workflow_only_diagnostics_cannot_enter_component_matrix(self):
-        for name in ('apple-issue-diagnostic', 'android-ui-diagnostic'):
+        for name in ('apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic'):
             self.assertNotIn(name, C.COMPONENTS)
             self.assertNotIn(name, C.DIAGNOSTICS)
             for selection in (name, 'source,' + name, name + ',android'):
