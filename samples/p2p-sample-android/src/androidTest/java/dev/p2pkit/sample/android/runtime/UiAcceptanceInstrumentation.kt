@@ -652,7 +652,11 @@ class UiAcceptanceInstrumentation : Instrumentation() {
             .put("testId", testId).put("role", role).put("session", session).put("lanPermission", lanPermission)
     }
 
-    private class Tree(val root: AccessibilityNodeInfo, val nodes: List<AccessibilityNodeInfo>) {
+    // getChecked() is API36+. Preserve the API35 witness without a new runtime API call.
+    @Suppress("DEPRECATION")
+    private fun checked(node: AccessibilityNodeInfo): Boolean = node.isChecked
+
+    private inner class Tree(val root: AccessibilityNodeInfo, val nodes: List<AccessibilityNodeInfo>) {
         fun text(value: String): AccessibilityNodeInfo? = nodes.filter {
             it.isVisibleToUser && it.text?.toString() == value
         }.also { check(it.size <= 1) { "Ambiguous visible text" } }.singleOrNull()
@@ -674,7 +678,7 @@ class UiAcceptanceInstrumentation : Instrumentation() {
             it.isEditable || it.text?.toString() in setOf("All levels", "WARNING", "ERROR", "Pause live logs") ||
                 it.text?.toString()?.startsWith("test=") == true
         }.map { node ->
-            listOf(node.text, node.hintText, node.isSelected, node.isChecked, node.isFocused,
+            listOf(node.text, node.hintText, node.isSelected, checked(node), node.isFocused,
                 node.isAccessibilityFocused).joinToString("|")
         }
 
@@ -682,7 +686,7 @@ class UiAcceptanceInstrumentation : Instrumentation() {
             .put("nodes", JSONArray(nodes.map { node ->
                 JSONObject().put("text", node.text?.toString()).put("hint", node.hintText?.toString())
                     .put("class", node.className?.toString()).put("visible", node.isVisibleToUser)
-                    .put("editable", node.isEditable).put("selected", node.isSelected).put("checked", node.isChecked)
+                    .put("editable", node.isEditable).put("selected", node.isSelected).put("checked", checked(node))
                     .put("focused", node.isFocused).put("accessibilityFocused", node.isAccessibilityFocused)
                     .put("bounds", rect(Rect().also { node.getBoundsInScreen(it) }))
             }))
