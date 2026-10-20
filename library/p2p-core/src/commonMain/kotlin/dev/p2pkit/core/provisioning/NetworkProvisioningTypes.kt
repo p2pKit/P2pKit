@@ -43,6 +43,24 @@ public interface NetworkProvisioningManager {
     @Throws(Exception::class)
     public suspend fun stopLocalNetwork()
 
+    /**
+     * Request a platform-supported Wi-Fi join.
+     *
+     * The bundled Android manager requires system user approval and, on
+     * success, owns a **process-wide default network binding**, not a binding
+     * limited to P2pKit. New sockets without an explicit network binding and
+     * default DNS resolutions use the joined network, including unrelated
+     * host-app traffic. Existing sockets are not rerouted by this operation.
+     * An internet-less joined network can therefore disrupt other app traffic.
+     *
+     * Android permits one active join per manager. [stopLocalNetwork] stops
+     * hosted networks only; it does not leave a join. There is no caller-driven
+     * nonterminal leave operation: use [close] to release the join, permanently
+     * disposing this manager. System loss also triggers joined-resource cleanup;
+     * cleanup failures remain owned and can require another [close] attempt.
+     * Bundled JVM, iOS and fallback managers do not join and return
+     * [JoinNetworkResult.Unsupported] while open.
+     */
     @Throws(Exception::class)
     public suspend fun joinLocalNetwork(credentials: WifiCredentials): JoinNetworkResult
 

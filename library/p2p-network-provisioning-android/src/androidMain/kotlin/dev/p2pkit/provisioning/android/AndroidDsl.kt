@@ -30,6 +30,16 @@ import dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder
  *    Android 10+ (API 29); returns `Unsupported` below that.
  *  - `getManualConnectionInfo()` + `createManualPeer()` → identical shape to JVM.
  *
+ * **Joining changes the process-wide default network binding**, not just
+ * P2pKit's route. New sockets without an explicit network binding and default
+ * DNS resolutions, including unrelated host-app traffic, use the joined
+ * network; existing sockets are not rerouted. An internet-less network can
+ * disrupt the app's other traffic. `stopLocalNetwork()` only stops hosting;
+ * it does not leave a join. There is no nonterminal leave API: caller-driven
+ * release requires the manager's terminal `close()` (or kit shutdown). System
+ * loss also triggers cleanup; failed cleanup remains owned for a `close()`
+ * retry. A second join is refused while the first is active.
+ *
  * **Permissions:** the host app must declare and request:
  *  - `NEARBY_WIFI_DEVICES` when both the device API and targetSdk are 33+
  *    (with `usesPermissionFlags="neverForLocation"`)
