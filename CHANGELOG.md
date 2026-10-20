@@ -3,11 +3,15 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc5 — development release candidate (unpublished)
+## 0.8.0-rc5 — development release candidate (2026-10-20)
 
-Prepared from the current main line; publication requires the exact merged
-source's full qualification, frozen application set and protected publisher.
-Existing rc4 artifacts remain immutable. No rc5 publication is claimed here.
+Published and verified on Maven Central from immutable `v0.8.0-rc5`, source
+`c8cca6db4d36dff61242c9e02b3bd0f4cb4eb5a9`, with the same-source frozen
+Android APK, Windows x64 MSI, macOS ARM64 DMG and Linux x64 DEB. See the
+[release record](docs/releases/0.8.0-rc5.md) for exact-source qualification,
+separate protected approvals and all seven verified public-download hashes.
+This remains a development prerelease, not complete installed, physical-device
+or independent-audit qualification. Earlier releases remain immutable.
 
 - Correct Android, CLI and Desktop diagnostics that inferred an optional file
   feature from a secure connection without observing feature negotiation.

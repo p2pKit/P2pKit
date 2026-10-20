@@ -14,12 +14,11 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The latest published release is **`0.8.0-rc4`**; current source is
-**`0.8.0-rc5`**, not yet published. The rc4
-[release record](../releases/0.8.0-rc4.md) binds the actual main qualification,
+The latest published release and current source version are **`0.8.0-rc5`**.
+Its [release record](../releases/0.8.0-rc5.md) binds the actual main qualification,
 separate protected approvals and immutable public library/application bytes.
-The new candidate requires its own exact-source qualification and publication;
-rc4 evidence is not relabelled as rc5.
+Later source requires its own exact-source gates; neither earlier release
+evidence nor subsequent bookkeeping results replace the published originals.
 
 Historically, combined [PR #466](https://github.com/p2pKit/P2pKit/pull/466),
 release-admission [PR #467](https://github.com/p2pKit/P2pKit/pull/467), and the
@@ -80,7 +79,7 @@ the standalone `full` profile is unchanged.
 The prior macOS 26 FULL [run](https://github.com/p2pKit/P2pKit/actions/runs/38823809770)
 failed actual JmDNS close tests with `NoRouteToHostException`; that failure is not
 reclassified as passed. The published rc2 shared CLI tests used the reviewed macOS 14 baseline.
-The published rc4 source uses macOS 15 Intel/Xcode 26.3; no result
+The released rc5 source uses macOS 15 Intel/Xcode 26.3; no result
 on either host proves macOS 26 JVM multicast functionality. New
 current-source results from all fourteen components are required, with all four
 application artifacts (18 frozen inputs total). Splitting consumers likewise
@@ -101,7 +100,7 @@ XCFramework and Swift lane, with Intel native execution on macOS 15 Intel.
 **Replacement qualification:** macOS 14 retires on 2026-11-02. The current
 source selects explicit macOS 15 Intel/Xcode 26.3 instead, including the focused
 JmDNS diagnostic, complete shared/consumer components and dependency writer.
-The rc4 release record binds successful exact-source shared/consumer components
+The rc5 release record binds successful exact-source shared/consumer components
 and protected publication on this configuration. Those results are specific to
 that source; later sources still require their own real gates. Configuration
 alone is not signing/publication evidence, and the separate recovery procedure
