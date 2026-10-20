@@ -2,8 +2,8 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest completed release is
-[`0.8.0-rc4`](../releases/0.8.0-rc4.md); current source remains `0.8.0-rc4`.
-Its publication record binds the actual exact-source gates and public bytes.
+[`0.8.0-rc4`](../releases/0.8.0-rc4.md); current source is the unpublished
+`0.8.0-rc5` candidate. The rc4 record binds its actual exact-source gates and public bytes.
 The incoming manual Windows/Android report remains a separate, limited result;
 publication does not extend its installed-application coverage.
 Retain the [Windows qualification limits](../rpc/windows-release-scope.md),
