@@ -530,7 +530,11 @@ class CredentialUiInstrumentation : Instrumentation() {
     private suspend fun reveal(label: String): Long {
         val frame = ui().frame(label)
         val begin = ui().click("Show")
-        ui().field(label, secret, secret, false, frame)
+        // Pinned foundation 1.11.4 retains the initial password classification in
+        // CoreTextFieldSemanticsModifierNode.updateNodeSemantics. That classification
+        // is not the drawn text: require the actual plaintext layout/frame here,
+        // while initial/default/restored fields must still be visibly masked/empty.
+        ui().field(label, secret, secret, true, frame)
         check(credentialMain { credential().passphrase == secret && credential().isRevealed })
         return begin
     }

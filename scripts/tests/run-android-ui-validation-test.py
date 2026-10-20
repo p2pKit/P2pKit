@@ -335,6 +335,22 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         for forbidden in ('performAction(', 'invalidate(', 'requestLayout(', 'startActivity(', 'sendStatus('):
             self.assertNotIn(forbidden, failure)
 
+    def test_reveal_checks_plaintext_layout_separately_from_password_classification(self):
+        # Pinned Compose 1.11.4 retains its initial classification after reveal.
+        # Guard the corrected expectation without substituting it for pixels,
+        # layout text, owner state or the original frame/deadline assertions.
+        path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
+        source = (path / "CredentialUiInstrumentation.kt").read_text()
+        reveal = source[source.index("private suspend fun reveal("):source.index("private suspend fun mount(")]
+        self.assertIn('ui().field(label, secret, secret, true, frame)', reveal)
+        self.assertIn('credential().passphrase == secret && credential().isRevealed', reveal)
+        self.assertIn('ui().field(label, secret, mask(), true, frame)', source)
+        self.assertIn('ui().field("restored-empty-secret", "", "", true, restoredFrame)', source)
+        probe = (path / "CredentialUiProbe.kt").read_text()
+        self.assertIn('it.text == visibleText && it.password == password', probe)
+        self.assertIn('frame.committed.get() >= minimumFrameNanos', probe)
+        self.assertIn('capture(label, listOf(witness.bounds), frame)', probe)
+
     def test_shared_manifest_consumer_does_not_change_default_runner(self):
         source = (ui.ROOT / "scripts/run-android-art-smoke.py").read_text()
         self.assertIn('INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"', source)
