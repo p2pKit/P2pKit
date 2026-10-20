@@ -33,6 +33,8 @@ COMPONENTS = {
     'macos-shared': ('macos-15-intel', 120),
 }
 # Explicit focused diagnostics are not release components or aggregate inputs.
+# Workflow-call Apple/Android issue diagnostics are intentionally absent here:
+# ci.yml dispatches them separately, never through this component executor.
 DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
                'published-consumers-diagnostic': ('macos-15-intel', 120),
                'consumers-pom-diagnostic': ('macos-15-intel', 60)}

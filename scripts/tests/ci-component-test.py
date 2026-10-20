@@ -48,6 +48,25 @@ class ComponentTests(unittest.TestCase):
         rows = C.matrix('all')['include']
         self.assertEqual(len(rows), 14)
         self.assertEqual({x['component'] for x in rows}, set(C.COMPONENTS))
+    def test_workflow_only_diagnostics_cannot_enter_component_matrix(self):
+        for name in ('apple-issue-diagnostic', 'android-ui-diagnostic'):
+            self.assertNotIn(name, C.COMPONENTS)
+            self.assertNotIn(name, C.DIAGNOSTICS)
+            for selection in (name, 'source,' + name, name + ',android'):
+                with self.subTest(selection=selection), self.assertRaises(ValueError):
+                    C.matrix(selection)
+
+    def test_maintained_fourteen_matrix_is_unchanged_by_workflow_dispatch(self):
+        expected = [('source', 'ubuntu-24.04', 30), ('dependencies', 'ubuntu-24.04', 45),
+                    ('jvm-linux', 'ubuntu-24.04', 60), ('jvm-windows', 'windows-2025', 60),
+                    ('android', 'ubuntu-24.04', 75), ('apple-arm64', 'macos-26', 150),
+                    ('apple-x64', 'macos-15-intel', 120), ('desktop-linux', 'ubuntu-24.04', 75),
+                    ('desktop-windows', 'windows-2025', 75), ('desktop-macos', 'macos-26', 75),
+                    ('security', 'ubuntu-24.04', 30), ('compatibility', 'macos-26', 180),
+                    ('consumers', 'macos-15-intel', 120), ('macos-shared', 'macos-15-intel', 120)]
+        self.assertEqual(C.matrix('all'), {'include': [dict(component=name, os=host,
+                         minutes=minutes, job_minutes=minutes + 10) for name, host, minutes in expected]})
+
     def test_work_budget_has_explicit_job_upload_headroom(self):
         for row in C.matrix('all')['include']:
             self.assertEqual(row['job_minutes'], row['minutes'] + 10)
