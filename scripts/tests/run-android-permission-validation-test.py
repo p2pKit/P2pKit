@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Synthetic permission-controller admission tests, not API37 runtime proof."""
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -40,6 +42,61 @@ def output(mode="revocation", changes=None, ready=False):
 
 
 class PermissionValidationTests(unittest.TestCase):
+    def test_graphics_option_requires_actual_supplier_declarations_and_positive_help(self):
+        help_output = b"-feature: enable or disable individual feature overrides\n"
+        defaults = b"GLDirectMem = off\nHasSharedSlotsHostMemoryAllocator = on\n"
+        self.assertEqual(p.graphics_options(help_output, defaults), ("-feature", "GLDirectMem"))
+        self.assertEqual(p.graphics_options(help_output, defaults.replace(b"off", b"on")),
+                         ("-feature", "GLDirectMem"))
+        self.assertEqual(p.graphics_options(help_output, defaults.replace(b"Allocator = on", b"Allocator = off")),
+                         ("-feature", "GLDirectMem"))  # Default values are not effective capability proof.
+        for invalid in (b"", defaults.replace(b"GLDirectMem", b"Other"), defaults + b"GLDirectMem=off\n",
+                        defaults.replace(b"GLDirectMem = off", b"GLDirectMem = maybe"),
+                        defaults + b"HasSharedSlotsHostMemoryAllocator=off\n"):
+            with self.subTest(defaults=invalid), self.assertRaises(ValueError):
+                p.graphics_options(help_output, invalid)
+        for invalid in (b"", b"unrelated help text\n", b"unknown help topic: feature\n",
+                        b"-feature: enable overrides\nWARNING: Unknown feature GLDirectMem\n"):
+            with self.subTest(help=invalid), self.assertRaises(ValueError):
+                p.graphics_options(invalid, defaults)
+
+    def test_emulator_graphics_rejection_is_failure_even_with_successful_boot_text(self):
+        p.Campaign.validate_emulator_boot(b"Graphics backend: gfxstream\nBoot completed\n")
+        for warning in (b"Unknown feature: GLDirectMem", b"Feature name GLDirectMem is invalid",
+                        b"unsupported option -feature", b"GLDirectMem unrecognized"):
+            with self.subTest(warning=warning), self.assertRaises(ValueError):
+                p.Campaign.validate_emulator_boot(warning + b"\nBoot completed\n")
+
+    def test_graphics_preflight_records_supplier_bytes_and_never_runs_an_avd(self):
+        help_output = b"-feature: enable or disable feature overrides\n"
+        defaults = b"GLDirectMem=off\nHasSharedSlotsHostMemoryAllocator=on\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk, report = root / "sdk", root / "report"
+            (sdk / "emulator/lib").mkdir(parents=True)
+            report.mkdir()
+            (sdk / "emulator/lib/advancedFeatures.ini").write_bytes(defaults)
+            (sdk / "emulator/emulator").write_bytes(b"synthetic frontend identity, not executed")
+            run = Mock(return_value=(0, help_output))
+            self.assertEqual(p.Campaign.prepare_emulator(run=run, sdk=sdk, report=report), ("-feature", "GLDirectMem"))
+            run.assert_called_once_with([sdk / "emulator/emulator", "-help-feature"], timeout=15)
+            receipt = json.loads((report / "emulator-graphics-request.json").read_text())
+            self.assertEqual(receipt["options"], ["-feature", "GLDirectMem"])
+            self.assertEqual(receipt["supplierDefaultsSha256"], hashlib.sha256(defaults).hexdigest())
+            self.assertEqual(receipt["helpSha256"], hashlib.sha256(help_output).hexdigest())
+            self.assertEqual(receipt["effectiveGuestDmaSupport"], "NOT_ESTABLISHED_BY_PREFLIGHT")
+            self.assertEqual((report / "emulator-feature-help.txt").read_bytes(), help_output)
+            self.assertEqual((report / "emulator-feature-defaults.ini").read_bytes(), defaults)
+
+    def test_graphics_override_is_campaign_only_without_backend_or_runtime_relaxation(self):
+        source = (p.ROOT / "scripts/run-android-ui-validation.py").read_text()
+        self.assertIn("campaign.prepare_emulator(run=run, sdk=sdk, report=report) if campaign is not None else ()", source)
+        self.assertIn('"-gpu", "swiftshader", "-memory", "2048", "-cores", "2"', source)
+        self.assertIn("*emulator_options]", source)
+        self.assertIn('write_json(report / "emulator-request.json", {"argv": emulator_argv, "sourceCommit": source, "sourceTree": tree})', source)
+        self.assertIn('campaign.validate_emulator_boot((report / "emulator.log").read_bytes())', source)
+        self.assertNotIn("GLDirectMem", source)  # No default/API35 UI flag or user feature selector.
+
     def test_absent_completed_instrumentation_output_is_not_runner_or_root_cause_proof(self):
         for raw in (b"", b"Error type 2\nonError: commandError=true message=synthetic frontend failure\n"):
             self.assertEqual(p.completed_instrumentation_output(raw), "NO_INSTRUMENTATION_OUTPUT")

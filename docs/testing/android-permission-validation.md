@@ -46,6 +46,36 @@ That retention cannot admit the guest or run any test. Persistent missing
 services remain a failed setup, not a permission result or an unavailable-runtime
 claim; no APK is installed before this admission completes.
 
+## API37 graphics prerequisite candidate
+
+The API37 lane alone requests the documented positive `-feature GLDirectMem`
+option. A prior exact-source run reached two SurfaceFlinger/GoldfishMapper aborts
+before permission evidence. The public [guest mapper fatal-if condition](https://android.googlesource.com/device/generic/goldfish/+/3ce87694caeb4a330280bb1284d9ad050fe28263/hals/gralloc/mapper.cpp)
+requires `hasReadColorBufferDma` to be **present**, not absent. Public
+[host extension advertisement](https://android.googlesource.com/platform/hardware/google/gfxstream/+/d047a57228332d995d36600792fa9ccc26cf8ae6/host/RenderControl.cpp)
+depends on direct memory and shared-slot allocation. The positive CLI is
+[officially documented](https://developer.android.com/studio/releases/emulator#29.0.6).
+These public sources justify a prospective graphics prerequisite test; they are
+not asserted to identify the exact internal source of hosted emulator37.2.12,
+and the candidate is not a proven repair or permission result.
+
+Before launch, the actual installed binary's bounded `-help-feature` response
+and supplier `advancedFeatures.ini` are retained and hashed, together with the
+frontend binary hash. Both relevant supplier declarations must be unique and
+recognized; their on/off defaults are **not** treated as effective capability
+values. Only `GLDirectMem` is positively requested; shared-slot allocation is not
+overridden. The full emulator argv is recorded with source commit/tree, alongside
+the existing installed-source properties and actual guest properties. Unknown or
+unsupported feature warnings fail closed, even if boot otherwise succeeds. A
+bounded private SurfaceFlinger observation precedes real instrumentation; it
+cannot prove internal DMA support merely by being nonempty.
+
+There is no renderer fallback, second launch, permission/module flag override,
+RAM/image/viewport change, or extended boot/body/cleanup deadline. API35 UI
+options are unchanged. Only the original full runtime assertions plus independent
+profile review can qualify #372; successful option preflight or graphics-service
+observation alone cannot.
+
 ## Real campaign, not shell network identity
 
 The existing `LanPermissionRuntimeInstrumentation` gains explicit modes; its
