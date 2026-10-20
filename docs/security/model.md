@@ -17,7 +17,7 @@ of decrypted content. A broken assumption is not repaired by successful encrypti
 
 ## Default profile
 
-P2pKit `0.7` defaults to authenticated protocol v2 using
+The maintained P2pKit source defaults to authenticated protocol v2 using
 `Noise_XX_25519_ChaChaPoly_SHA256`. It provides confidentiality, integrity,
 peer key possession, authenticated metadata, replay protection, and downgrade
 resistance for protocol records. Authenticated application metadata and the

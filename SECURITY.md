@@ -4,7 +4,7 @@
 
 | Version | Security support |
 | --- | --- |
-| Latest published `0.7.x` release candidate | Supported |
+| Latest published release candidate ([current version](README.md)) | Supported |
 | `0.6.x` and older | Unsupported legacy line |
 
 Published artifacts remain immutable. Security fixes are released under a new

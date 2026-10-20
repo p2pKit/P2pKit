@@ -26,11 +26,18 @@ POINTERS = {
 HISTORICAL = "docs/testing/mac-handoff.md"
 HISTORICAL_MARKER = "Frozen historical status at the consolidation handoff"
 HISTORICAL_TARGET = "../validation/README.md#current-status"
+VERSION_GUIDANCE = {
+    "SECURITY.md": "| Latest published release candidate ([current version](README.md)) | Supported |",
+    "docs/security/model.md": "The maintained P2pKit source defaults to authenticated protocol v2 using",
+}
 
 
 def check(files):
     authority = files[CANONICAL]
     assert "sole mutable campaign-status authority" in authority, "missing authority"
+    introduction = authority.split("## Current status", 1)[0]
+    assert "](../../README.md)" in introduction, "missing canonical version pointer"
+    assert not re.search(r"\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b", introduction), "copied mutable version"
     for path, target in POINTERS.items():
         text = files[path]
         assert "](" + target + ")" in text, path + ": missing canonical pointer"
@@ -43,11 +50,14 @@ def check(files):
     assert "do not promote them from compilation or simulator results" in files["CLAUDE.md"], "lost evidence constraint"
     assert HISTORICAL_MARKER in files[HISTORICAL], "missing historical boundary"
     assert "](" + HISTORICAL_TARGET + ")" in files[HISTORICAL], "missing historical current-status pointer"
+    for path, guidance in VERSION_GUIDANCE.items():
+        assert guidance in files[path], path + ": stale current-version guidance"
+    assert "| `0.6.x` and older | Unsupported legacy line |" in files["SECURITY.md"], "changed legacy support policy"
 
 
 class StatusPolicyTest(unittest.TestCase):
     def setUp(self):
-        self.files = {path: (ROOT / path).read_text() for path in (CANONICAL, *POINTERS, HISTORICAL)}
+        self.files = {path: (ROOT / path).read_text() for path in (CANONICAL, *POINTERS, HISTORICAL, *VERSION_GUIDANCE)}
 
     def test_current(self):
         check(self.files)
@@ -73,6 +83,25 @@ class StatusPolicyTest(unittest.TestCase):
                             (HISTORICAL_TARGET, "missing historical current-status pointer")):
             with self.subTest(text=text), self.assertRaisesRegex(AssertionError, error):
                 check({**self.files, HISTORICAL: self.files[HISTORICAL].replace(text, "")})
+
+    def test_campaign_introduction_uses_canonical_versions(self):
+        for text, error in (
+                (self.files[CANONICAL].replace("](../../README.md)", "](missing.md)"), "missing canonical version pointer"),
+                ("Latest release: 0.8.0-rc2; current source: 0.8.0-SNAPSHOT.\n" + self.files[CANONICAL],
+                 "copied mutable version")):
+            with self.subTest(error=error), self.assertRaisesRegex(AssertionError, error):
+                check({**self.files, CANONICAL: text})
+
+    def test_security_current_references_preserve_legacy_support_policy(self):
+        originals = {
+            "SECURITY.md": "| Latest published `0.7.x` release candidate | Supported |",
+            "docs/security/model.md": "P2pKit `0.7` defaults to authenticated protocol v2 using",
+        }
+        for path, guidance in VERSION_GUIDANCE.items():
+            with self.subTest(path=path), self.assertRaisesRegex(AssertionError, "stale current-version guidance"):
+                check({**self.files, path: self.files[path].replace(guidance, originals[path])})
+        with self.assertRaisesRegex(AssertionError, "changed legacy support policy"):
+            check({**self.files, "SECURITY.md": self.files["SECURITY.md"].replace("Unsupported legacy line", "Supported")})
 
     def test_each_status_can_change_in_canonical_file_only(self):
         # Synthetic source-only fixture: never advances a real campaign.

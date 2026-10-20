@@ -1,10 +1,10 @@
 # Real-world and independent validation handbook
 
 This directory is the authoritative execution handbook for validation that
-cannot be completed honestly by a single local checkout. The latest published
-release candidate, `0.8.0-rc2`, is immutable source-bound release evidence; see
-its [release record](../releases/0.8.0-rc2.md). Current development uses
-`0.8.0-SNAPSHOT`. Tests of a later snapshot do not certify released binaries,
+cannot be completed honestly by a single local checkout. For the current source
+version and latest published release, use the [repository version overview](../../README.md)
+and its linked release record. Published artifacts and their source-bound
+evidence are immutable. Tests of later source do not certify released binaries,
 and release automation does not complete the external campaigns below.
 
 Before any campaign starts, freeze one explicitly approved commit and artifact
