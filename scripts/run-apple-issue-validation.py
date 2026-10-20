@@ -25,6 +25,8 @@ import sys
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTOR = ROOT / 'scripts/run-audit-command.py'
+HOSTED_EXECUTOR = ROOT / 'scripts/run-apple-issue-command.py'
+HOSTED_BOUNDARY = 'GITHUB_HOSTED_DARWIN_MARKER_DOMAIN_V1'
 SELF = ROOT / 'scripts/run-apple-issue-validation.py'
 RELEASE = ROOT / 'library/p2p-transport-lan/build/XCFrameworks/release'
 SIDECARS = ('BUILD_COMMIT.txt', 'BUILD_SOURCE_STATE.txt', 'BUILD_INPUTS_SHA256.txt', 'BUILD_ARTIFACTS_SHA256.txt')
@@ -116,7 +118,9 @@ def receipt_ok(value, source):
     require(value.get('finalExitCode') == 0 and value.get('productExitCode') == 0 and
             value.get('stopExitCode') == 0 and value.get('sourceUnchanged') is True and
             value.get('sourceBefore') == value.get('sourceAfter') == source and
-            value.get('errors') == [] and value.get('ownedSurvivors') == [], 'Native command/cleanup did not pass')
+            value.get('errors') == [] and value.get('ownedSurvivors') == [] and
+            value.get('ownership', {}).get('ownershipBoundary') == HOSTED_BOUNDARY,
+            'Native command/cleanup/boundary did not pass')
 
 
 def transfer_ok(value, source, bundles):
@@ -167,14 +171,14 @@ class Run:
         self.context = read(state / 'context.json')
         self.environment = dict(os.environ, P2PKIT_AUDIT_STATE_DIR=str(state),
                                 GRADLE_USER_HOME=str(state / 'gradle-home'),
-                                P2PKIT_GRADLE_EXECUTOR=str(EXECUTOR), P2PKIT_XCODE_JOBS='2')
+                                P2PKIT_GRADLE_EXECUTOR=str(HOSTED_EXECUTOR), P2PKIT_XCODE_JOBS='2')
         self.result = {'schema': 1, 'source': self.context['source'], 'operation': operation,
                        'result': 'FAIL', 'issues': {}, 'commands': [],
                        'limits': 'Unsigned device build and same-codebase host/simulator integration only; no physical, AWDL, backup or independent-peer credit.'}
 
     def invoke(self, label, command, kind='command', timeout=3600, extra=None):
         receipt = self.state / ('host-' + label + '.json')
-        argv = [sys.executable, str(EXECUTOR), '--cwd', str(ROOT), '--wrapper', str(ROOT / 'gradlew'),
+        argv = [sys.executable, str(HOSTED_EXECUTOR), '--cwd', str(ROOT), '--wrapper', str(ROOT / 'gradlew'),
                 '--purpose', label, '--kind', kind, '--receipt', str(receipt), '--timeout', str(timeout), '--', *command]
         require(self.safe, 'Previous command finalization unknown')
         self.safe = False
@@ -184,6 +188,7 @@ class Run:
             record = read(receipt)
             require(record.get('errors') == [] and record.get('ownedSurvivors') == [] and
                     record.get('stopExitCode') == 0 and record.get('sourceUnchanged') is True and
+                    record.get('ownership', {}).get('ownershipBoundary') == HOSTED_BOUNDARY and
                     record.get('sourceBefore') == record.get('sourceAfter') == self.context['source'],
                     'Command finalization/source unknown')
             self.safe = True

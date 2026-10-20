@@ -5,6 +5,8 @@ import plistlib
 import importlib.util
 from pathlib import Path
 import tempfile
+import types
+import os
 import unittest
 from unittest import mock
 import sys
@@ -14,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('apple_issue_validation', ROOT / 'scripts/run-apple-issue-validation.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+spec = importlib.util.spec_from_file_location('apple_issue_command', ROOT / 'scripts/run-apple-issue-command.py')
+command = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(command)
 SOURCE = {'commit': 'a' * 40, 'tree': 'b' * 40, 'status': '', 'diffSha256': 'c' * 64}
 
 
@@ -48,10 +53,11 @@ class Controls(unittest.TestCase):
 
     def test_receipt_requires_actual_command_same_source_and_clean_finalization(self):
         valid = {'finalExitCode': 0, 'productExitCode': 0, 'stopExitCode': 0, 'sourceUnchanged': True,
-                 'sourceBefore': SOURCE, 'sourceAfter': SOURCE, 'errors': [], 'ownedSurvivors': []}
+                 'sourceBefore': SOURCE, 'sourceAfter': SOURCE, 'errors': [], 'ownedSurvivors': [],
+                 'ownership': {'ownershipBoundary': module.HOSTED_BOUNDARY}}
         module.receipt_ok(valid, SOURCE)
         for key, value in [('productExitCode', None), ('stopExitCode', 1), ('sourceUnchanged', False),
-                           ('sourceAfter', {}), ('errors', ['failure']), ('ownedSurvivors', ['live'])]:
+                           ('sourceAfter', {}), ('errors', ['failure']), ('ownedSurvivors', ['live']), ('ownership', {})]:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 module.receipt_ok({**valid, key: value}, SOURCE)
 
@@ -176,7 +182,88 @@ class Controls(unittest.TestCase):
         self.assertIn('--report-glob \'build/apple-issue-validation/**/*\'', workflow)
         self.assertNotIn('continue-on-error', workflow)
         self.assertNotIn('pull_request_target', workflow)
+        self.assertNotIn('workflow_dispatch:', workflow)
+        self.assertIn('workflow_call:', workflow)
         self.assertNotIn('secrets.', workflow)
+
+
+class HostedCommandControls(unittest.TestCase):
+    def environment(self):
+        return {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted', 'GITHUB_REPOSITORY': 'p2pKit/P2pKit',
+                'GITHUB_SHA': 'a' * 40, 'GITHUB_WORKFLOW_SHA': 'a' * 40, 'GITHUB_JOB': 'native',
+                'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/ci.yml@refs/heads/synthetic'}
+
+    def test_adapter_requires_actual_hosted_source_bound_ci_native_context(self):
+        environment = self.environment()
+        with mock.patch.object(command.evidence.platform, 'system', return_value='Darwin'):
+            command.require_hosted_context(environment)
+            for mutation in ({'GITHUB_JOB': 'other'}, {'RUNNER_ENVIRONMENT': 'self-hosted'},
+                             {'GITHUB_ACTIONS': 'false'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40},
+                             {'GITHUB_REPOSITORY': 'other/repository'},
+                             {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/apple-issue-validation.yml@refs/heads/synthetic'},
+                             {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/ci.yml@'}):
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    command.require_hosted_context({**environment, **mutation})
+        with mock.patch.object(command.evidence.platform, 'system', return_value='Linux'), self.assertRaises(ValueError):
+            command.require_hosted_context(environment)
+
+    def test_adapter_changes_only_scope_factory_preserving_exact_argv_and_failure_exit(self):
+        executor = types.SimpleNamespace(main=mock.Mock(return_value=125), make_scope=None)
+        argv = ['--purpose', 'xcode-provenance', '--timeout', '900', '--', 'original']
+        with mock.patch.dict(os.environ, self.environment(), clear=True), \
+                mock.patch.object(command.evidence.platform, 'system', return_value='Darwin'), \
+                mock.patch.object(command, 'load_executor', return_value=executor):
+            self.assertEqual(125, command.main(argv))
+        self.assertIs(command.make_scope, executor.make_scope)
+        executor.main.assert_called_once_with(argv)
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(command, 'load_executor') as load, self.assertRaises(ValueError):
+            command.main(argv)
+        load.assert_not_called()
+
+    def test_adapter_inherits_all_existing_native_proofs_and_owned_cleanup(self):
+        for name in ('_ownership_proof', 'discover', 'spawn', 'drain', '_send', '_acquire', 'close'):
+            self.assertIs(getattr(command.HostedAppleScope, name), getattr(command.evidence._HostedDarwinScope, name))
+        scope = object.__new__(command.HostedAppleScope)
+        scope.outside_domain_observations = 3
+        original = {'backend': 'darwin-libproc-audit-token', 'discoveryErrors': [], 'ownershipProofs': ['original']}
+        with mock.patch.object(command.evidence._HostedDarwinScope, 'description', return_value=original):
+            description = scope.description()
+        self.assertEqual('original', description['ownershipProofs'][0])
+        self.assertEqual(module.HOSTED_BOUNDARY, description['ownershipBoundary'])
+        self.assertEqual(3, description['outsideDomainObservations'])
+        with mock.patch.dict(os.environ, self.environment(), clear=True), \
+                mock.patch.object(command.evidence.platform, 'system', return_value='Darwin'), \
+                mock.patch.object(command, 'HostedAppleScope', return_value=scope) as factory:
+            self.assertIs(scope, command.make_scope('job', 'invocation', 'state', 'home'))
+        factory.assert_called_once_with('job', 'invocation', 'state', 'home')
+
+    def test_driver_uses_adapter_for_leaf_and_nested_xcode_and_blocks_after_unknown_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary).resolve()
+            (state / 'context.json').write_text(json.dumps({'source': SOURCE}))
+            runner = module.Run(state, 'both')
+            self.assertEqual(str(module.HOSTED_EXECUTOR), runner.environment['P2PKIT_GRADLE_EXECUTOR'])
+            captured = []
+            def execute(argv, **kwargs):
+                captured.append((argv, kwargs))
+                receipt = Path(argv[argv.index('--receipt') + 1])
+                receipt.write_text(json.dumps({'errors': ['original cleanup failure'], 'ownedSurvivors': ['original'],
+                                               'stopExitCode': 0, 'sourceUnchanged': True,
+                                               'sourceBefore': SOURCE, 'sourceAfter': SOURCE,
+                                               'ownership': {'ownershipBoundary': module.HOSTED_BOUNDARY}}))
+                return 125
+            with mock.patch.object(module.subprocess, 'call', side_effect=execute):
+                with self.assertRaises(module.UnsafeRun):
+                    runner.invoke('swift-jvm-transfer', ['original', 'command'], timeout=900)
+                with self.assertRaises(ValueError):
+                    runner.invoke('must-not-run', ['next'])
+            self.assertEqual(1, len(captured))
+            argv, kwargs = captured[0]
+            self.assertEqual(str(module.HOSTED_EXECUTOR), argv[1])
+            self.assertEqual('900', argv[argv.index('--timeout') + 1])
+            self.assertEqual(['original', 'command'], argv[-2:])
+            self.assertEqual(str(module.HOSTED_EXECUTOR), kwargs['env']['P2PKIT_GRADLE_EXECUTOR'])
 
 
 if __name__ == '__main__':

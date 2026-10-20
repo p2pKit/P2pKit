@@ -1,6 +1,6 @@
 name: Focused Apple issue validation
 
-# Manual actual execution, not part of release qualification or physical credit.
+# Actual execution through the maintained ci.yml dispatcher, not release or physical credit.
 on:
   workflow_call:
     inputs:
@@ -9,14 +9,6 @@ on:
         required: false
         default: both
         type: string
-  workflow_dispatch:
-    inputs:
-      operation:
-        description: Actual native acceptance to execute
-        required: true
-        default: both
-        type: choice
-        options: [iphoneos-product, swift-jvm-transfer, both]
 
 permissions:
   contents: read
