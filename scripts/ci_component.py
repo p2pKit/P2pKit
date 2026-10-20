@@ -97,6 +97,8 @@ def commands(component):
             ('platform-contract', ['ruby', 'scripts/tests/check-platform-test-policy-test.rb']),
             ('version-encoding', bash + ['scripts/tests/check-application-release-version.sh']),
             *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
+                   'apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
+                   'tcp-nodelay-latency-test.py', 'run-rpc-qualification-test.py',
                    'dependency-update-test.py', 'embedded-jmdns-aar-test.py', 'intel-bonjour-environment-test.py',
                    'central-bundle-evidence-test.py', 'maven-recovery-test.py',
                    'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',

@@ -129,6 +129,8 @@ TASK_NAMES = frozenset({
     "wrapper", "layout", "links", "release-metadata", "ios-launcher-controls", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
+    "apple-issue-validation-test.py", "run-android-ui-validation-test.py",
+    "tcp-nodelay-latency-test.py", "run-rpc-qualification-test.py",
     "embedded-jmdns-aar-test.py", "embedded-jmdns-archive-controls", "intel-bonjour-environment-test.py",
     "central-gpg-lifecycle-controls",
     "central-bundle-evidence-test.py", "maven-recovery-test.py",

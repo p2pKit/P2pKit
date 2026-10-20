@@ -99,6 +99,20 @@ class ComponentTests(unittest.TestCase):
             evidence_spec.loader.exec_module(evidence)
         self.assertTrue(set(actual) <= evidence.TASK_NAMES)
 
+    def test_issue_acceptance_offline_controls_are_mandatory_source_tasks(self):
+        names = ('apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
+                 'tcp-nodelay-latency-test.py', 'run-rpc-qualification-test.py')
+        commands = C.commands('source')
+        evidence_spec = importlib.util.spec_from_file_location('issue_ci_evidence', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        for name in names:
+            self.assertEqual([argv for task, argv in commands if task == name],
+                             [[C.sys.executable, '-B', 'scripts/tests/' + name, '-v']])
+            self.assertTrue((ROOT / 'scripts/tests' / name).is_file())
+            self.assertIn(name, evidence.TASK_NAMES)
+
     def test_windows_packaging_runs_real_static_rpc_inspection_after_installer(self):
         commands = C.commands('desktop-windows')
         self.assertEqual(commands[-2], ('rpc-windows-package-inspection',
