@@ -89,6 +89,9 @@ def inspect_iphoneos(derived, output):
     executable = info.get('CFBundleExecutable')
     require(isinstance(executable, str) and re.fullmatch(r'[A-Za-z0-9_.-]+', executable), 'Invalid app executable')
     binaries = {'app': app / executable, 'embeddedFramework': app / 'Frameworks/P2pKitShared.framework/P2pKitShared'}
+    debug = app / (executable + '.debug.dylib')
+    if debug.exists():
+        binaries['appDebugDylib'] = debug
     result = {'schema': 1, 'result': 'PASS', 'product': str(app), 'derivedData': str(derived),
               'signed': False, 'deviceInstalled': False, 'binaries': {}}
     for name, binary in binaries.items():
@@ -100,8 +103,12 @@ def inspect_iphoneos(derived, output):
         result['binaries'][name] = {'sha256': digest(binary), 'bytes': binary.stat().st_size,
                                      'architectures': architectures, 'buildCommands': load}
     links = subprocess.check_output(['xcrun', 'otool', '-L', str(binaries['app'])], timeout=30).decode()
+    result['linkedLibraries'] = {'app': links}
+    if debug.exists():
+        require('@rpath/' + debug.name in links, 'App does not link its actual Debug dylib')
+        links = subprocess.check_output(['xcrun', 'otool', '-L', str(debug)], timeout=30).decode()
+        result['linkedLibraries']['appDebugDylib'] = links
     require('@rpath/P2pKitShared.framework/P2pKitShared' in links, 'App does not link the embedded framework')
-    result['linkedLibraries'] = links
     write(output, result)
 
 

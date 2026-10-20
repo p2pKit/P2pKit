@@ -120,6 +120,15 @@ class Controls(unittest.TestCase):
                 self.assertEqual(str(app), document['product'])
                 self.assertFalse(document['deviceInstalled'])
                 self.assertFalse(document['signed'])
+                debug = app / 'p2pkit-sample.debug.dylib'
+                debug.write_bytes(b'synthetic Debug dylib')
+                def native_debug(command, **kwargs):
+                    if command[1] == 'otool' and command[-1] == str(executable):
+                        return b'@rpath/p2pkit-sample.debug.dylib\n'
+                    return native(command, **kwargs)
+                with mock.patch.object(module.subprocess, 'check_output', side_effect=native_debug):
+                    module.inspect_iphoneos(directory, directory / 'debug-product.json')
+                    self.assertIn('appDebugDylib', json.loads((directory / 'debug-product.json').read_text())['binaries'])
                 binary.unlink()
                 with self.assertRaises(ValueError):
                     module.inspect_iphoneos(directory, directory / 'missing.json')
