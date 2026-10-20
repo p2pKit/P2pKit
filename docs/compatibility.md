@@ -62,10 +62,15 @@ and existing-consumer JVM/Android and KLIB checks. A new `copy()` method alone
 would not solve constructor evolution. Recompiling callers against the new
 source is not a binary-compatibility experiment.
 
-No constructor, builder, or compatibility promise is changed by this
-clarification. The choice of a future extension surface remains tracked in
-[#274](https://github.com/p2pKit/P2pKit/issues/274); the current constructor is
-not itself a runtime defect.
+The disposition for [#274](https://github.com/p2pKit/P2pKit/issues/274) is to
+retain the published constructor and current factory SPI. No new builder,
+`copy()`, or constructor shape is needed without a concrete extension use
+case; the present constructor is not itself a runtime defect. This does not
+freeze all future development: a future additive extension must preserve the
+existing entry points and satisfy the compatibility checks above. An explicit
+breaking change belongs in a new version under the project's compatibility
+policy, never in an existing published artifact. No public signature or
+compatibility promise is changed by this documentation.
 
 ## Public sealed hierarchies
 
