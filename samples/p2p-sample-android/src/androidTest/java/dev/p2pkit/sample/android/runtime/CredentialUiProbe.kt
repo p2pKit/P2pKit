@@ -382,18 +382,28 @@ internal class CredentialUiProbe(
             .put("targets", JSONArray(targets.map { it.toShortString() })).also { captures.put(it) }
     }
 
-    fun retire() {
-        credentialMain {
-            var failure: Throwable? = null
-            frames.forEach { frame ->
-                try { frame.retire() } catch (error: Throwable) { if (failure == null) failure = error }
+    suspend fun retire() {
+        var failure: Throwable? = null
+        try {
+            // A false unregister may mean the renderer already captured the callback.
+            // Release the main thread between bounded observations so it can execute.
+            credentialAwait {
+                val attempts = credentialMain { frames.map { frame -> runCatching { frame.retire() } } }
+                attempts.firstOrNull { it.isFailure }?.getOrThrow()
+                attempts.all { it.getOrThrow() }
             }
-            try {
+        } catch (error: Throwable) {
+            failure = error
+        }
+        try {
+            credentialMain {
                 check(activity.window.callback === callback)
                 activity.window.callback = originalCallback
-            } catch (error: Throwable) { if (failure == null) failure = error }
-            failure?.let { throw it }
+            }
+        } catch (error: Throwable) {
+            if (failure == null) failure = error
         }
+        failure?.let { throw it }
     }
 
     class Frame(val label: String, private val observer: ViewTreeObserver) {
@@ -411,11 +421,12 @@ internal class CredentialUiProbe(
             registered = true
             observer.registerFrameCommitCallback(callback)
         }
-        fun retire() {
-            if (registered && committed.get() == 0L) {
-                check(observer.unregisterFrameCommitCallback(callback) || committed.get() != 0L)
+        fun retire(): Boolean {
+            val retired = frameCommitRetired(registered, { committed.get() != 0L }) {
+                observer.unregisterFrameCommitCallback(callback)
             }
-            registered = false
+            if (retired) registered = false
+            return retired
         }
         fun json(): JSONObject = JSONObject().put("label", label).put("armedElapsedNanos", armed)
             .put("committedElapsedNanos", committed.get()).put("armCount", armCount)

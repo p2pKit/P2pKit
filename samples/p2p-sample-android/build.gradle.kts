@@ -31,6 +31,10 @@ android {
         buildConfig = true
     }
 
+    // Shared retirement logic is compiled only into host/device validation, never the app.
+    sourceSets.getByName("test").kotlin.srcDir("src/runtimeValidation/kotlin")
+    sourceSets.getByName("androidTest").kotlin.srcDir("src/runtimeValidation/kotlin")
+
     buildTypes {
         release {
             isMinifyEnabled = false

@@ -486,6 +486,23 @@ class AndroidUiAdmissionTests(unittest.TestCase):
         self.assertIn('INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"', source)
         self.assertNotIn("372", ui.CASES)
 
+    def test_frame_retirement_waits_off_main_and_preserves_cleanup_failures(self):
+        path = ui.ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime"
+        probe = (path / "CredentialUiProbe.kt").read_text()
+        retire = probe[probe.index("suspend fun retire()"):probe.index("class Frame(")]
+        self.assertLess(retire.index("credentialAwait {"), retire.index("credentialMain {"))
+        self.assertIn('frames.map { frame -> runCatching { frame.retire() } }', retire)
+        self.assertIn('attempts.firstOrNull { it.isFailure }?.getOrThrow()', retire)
+        self.assertIn('attempts.all { it.getOrThrow() }', retire)
+        self.assertLess(retire.index('failure = error'), retire.index('activity.window.callback = originalCallback'))
+        self.assertIn('failure?.let { throw it }', retire)
+        self.assertIn('if (retired) registered = false', probe)
+        self.assertIn('withTimeout(5_000)', probe)
+        source = (path / "CredentialUiInstrumentation.kt").read_text()
+        self.assertIn('withTimeout(10_000) { block() }', source)
+        for forbidden in ('invalidate(', 'requestLayout(', 'Thread.sleep(', 'waitForIdleSync('):
+            self.assertNotIn(forbidden, retire)
+
 
 if __name__ == "__main__":
     unittest.main()
