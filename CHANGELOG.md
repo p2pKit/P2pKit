@@ -11,6 +11,9 @@ Existing rc4 artifacts remain immutable. No rc5 publication is claimed here.
 
 - Correct Android, CLI and Desktop diagnostics that inferred an optional file
   feature from a secure connection without observing feature negotiation.
+- Preserve Android password sensitivity across join-result UI changes and mask
+  before submission while retaining failed-retry input. Rendered/lifecycle
+  acceptance remains separately tracked; this source repair is not a runtime pass.
 - Support verified lock-only dependency refreshes through the documented direct
   preparer, while preserving exact unchanged XML and verification-policy checks.
 - Canonicalize the optional RPC multicast diagnostic's Python interpreter before
