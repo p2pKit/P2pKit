@@ -64,3 +64,5 @@ puts "RESULT: PASS — #{checked} relative links across #{files.length} active M
 RUBY
 
 python3 -B "$ROOT/scripts/tests/check-validation-status-policy-test.py"
+python3 -B "$ROOT/scripts/check-operational-limits.py"
+python3 -B "$ROOT/scripts/tests/check-operational-limits-test.py"
