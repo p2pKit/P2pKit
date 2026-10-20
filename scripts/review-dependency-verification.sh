@@ -22,8 +22,8 @@ fail() {
     exit 1
 }
 
-# Explicitly scoped by the reviewed candidate adapter's generator subprocess.
-# Ordinary maintainer review retains its original requirement for new entries.
+# Scoped by the complete preparer after writer/strict checks (or explicitly by
+# its reviewed adapter). Standalone review still requires new artifact entries.
 ALLOW_UNCHANGED="${P2PKIT_DEPENDENCY_REVIEW_ALLOW_UNCHANGED-0}"
 [[ "$ALLOW_UNCHANGED" == 0 || "$ALLOW_UNCHANGED" == 1 ]] ||
     fail "invalid unchanged-review flag"
@@ -292,11 +292,14 @@ comm -13 "$work/base.entries" "$work/current.entries" >"$work/new.entries"
 if [[ ! -s "$work/new.entries" ]]; then
     [[ "$ALLOW_UNCHANGED" == 1 ]] || fail "no new verified artifacts relative to $BASE_REF"
     # Equality of just parsed checksum tuples is insufficient: trust settings,
-    # removals, metadata annotations and the complete original XML must match.
+    # removals, annotations, complete XML and the original policy must match.
     [[ -s "$work/current.entries" ]] &&
         cmp -s "$work/base.xml" "$ROOT/gradle/verification-metadata.xml" ||
         fail "unchanged review requires exact complete original verification metadata"
-    echo "RESULT: PASS — verification metadata is byte-identical to the base; no new artifacts require remote provenance review"
+    git -C "$ROOT" show "$BASE_REF:gradle/plugin-provenance-policy.txt" >"$work/base.policy" &&
+        cmp -s "$work/base.policy" "$provenance_policy" ||
+        fail "unchanged review requires exact original provenance policy"
+    echo "RESULT: PASS — verification metadata and provenance policy are byte-identical to the base; no new artifacts require remote provenance review"
     exit 0
 fi
 
