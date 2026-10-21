@@ -1657,11 +1657,17 @@ internal class P2pSessionImpl(
                 )
             }
             else -> {
-                // Buffered receive failures and non-suspending transport paths can
-                // beat cancellation. Once this route's epoch is cancelled, retain
-                // cancellation instead of reporting its teardown as a new failure.
+                // Local close claims Closing before sending CLOSE/cancelling the
+                // epoch. Buffered failures can therefore arrive while its reader
+                // is still active. Admit diagnostics only for the matching live
+                // epoch under the same lock as close/rearm/terminal claims.
                 // Typed security/protocol failures above keep their classification.
-                currentCoroutineContext().ensureActive()
+                val liveEpoch = connectionLock.withLock {
+                    currentCoroutineContext().ensureActive()
+                    terminalTransitionClaim == null && epochToken === epoch.epochToken &&
+                        _state.value == ConnectionState.Connected
+                }
+                if (!liveEpoch) return
                 if (!pongFailure) {
                     logger.warn("Session $id: routeEvents failed", e)
                     onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}", expectedEpoch = epoch)

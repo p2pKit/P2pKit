@@ -8,6 +8,9 @@ class SessionRouteCancellationAndroidHostTest {
     fun localCancellation() = SessionRouteCancellationTest().locallyCancelledRouteDoesNotReportBufferedCloseFailure()
 
     @Test
+    fun localClosing() = SessionRouteCancellationTest().locallyClosingActiveRouteDoesNotReportBufferedCloseFailure()
+
+    @Test
     fun activeReadFailure() =
         SessionRouteCancellationTest().sameCloseFailureInActiveRouteIsStillReportedAndFailsSession()
 

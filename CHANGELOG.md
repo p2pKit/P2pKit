@@ -5,8 +5,9 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 
 ## 0.8.0-rc6 — development release candidate (publication pending)
 
-- Preserve cancellation when a retired session router receives a buffered generic
-  close error; do not report normal teardown as a new `routeEvents failed` warning.
+- Preserve cancellation and local-close ownership when a session router receives
+  a buffered generic close error; do not report normal teardown as a new
+  `routeEvents failed` warning.
   Active transport errors, unclean remote EOF and typed authentication/protocol
   failures retain their existing handling. No warning allowlist or timeout change.
 - Add deterministic JVM and Android-host cancellation/active-error/EOF/security
