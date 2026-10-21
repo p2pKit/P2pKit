@@ -7,13 +7,13 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-EXCLUSION = 'excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.3.21")'
+EXCLUSION = 'excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.4.20")'
 EXPECTED = '''dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google {
             content {
-                excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.3.21")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.4.20")
             }
         }
         mavenCentral()
@@ -52,8 +52,8 @@ class RepositoryContentPolicyTest(unittest.TestCase):
             check_project_repositories(self.candidate(EXPECTED.replace(EXCLUSION, "")))
 
     def test_other_versions_and_modules_are_not_excluded(self):
-        for altered in (EXCLUSION.replace("2.3.21", "2.3.20"), EXCLUSION.replace("kotlin-metadata-jvm", "kotlin-stdlib"),
-                        EXCLUSION.replace("2.3.21", "2.3.21 ")):
+        for altered in (EXCLUSION.replace("2.4.20", "2.4.19"), EXCLUSION.replace("kotlin-metadata-jvm", "kotlin-stdlib"),
+                        EXCLUSION.replace("2.4.20", "2.4.20 ")):
             with self.subTest(altered=altered), self.assertRaises(ValueError):
                 check_project_repositories(self.candidate(EXPECTED.replace(EXCLUSION, altered)))
 
