@@ -1,6 +1,5 @@
 import SwiftUI
 import P2pKitShared
-import CryptoKit
 import Darwin
 
 /// UI-thread-only selectors shared by consent, cancellation, and watcher updates.
@@ -799,18 +798,6 @@ struct ContentView: View {
         return "\(n) B"
     }
 
-    private func sha256File(at url: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var hasher = CryptoKit.SHA256()
-        while true {
-            let chunk = try handle.read(upToCount: 64 * 1024) ?? Data()
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
     // MARK: - Actions
 
     private func consumeIgnoredStartActionForUITest() -> Bool {
@@ -1580,7 +1567,9 @@ struct ContentView: View {
                 guard cleanupComplete else { return "temporary cleanup incomplete" }
                 guard completed else { return nil }
                 do {
-                    let digest = try sha256File(at: dest)
+                    let digest = try await runLifecycle.prepare(run) {
+                        try SampleFilePreparation.sha256File(at: dest)
+                    }
                     diagnostics.fileHash(
                         peerId: "\(offer.peer.id)",
                         transferId: transfer.id,
@@ -1602,6 +1591,9 @@ struct ContentView: View {
                     diag("file", "durable receive committed sha256=\(digest)")
                     appendMessage("sha256 \(dest.lastPathComponent): \(digest)", kind: .info)
                 } catch {
+                    guard runLifecycle.acceptsWork(run), !Task.isCancelled, !(error is CancellationError) else {
+                        return nil
+                    }
                     diag("file", "sha256 read failed for selected file: \(SampleConsole.failure(error))")
                     appendMessage(
                         "sha256 unavailable for \(dest.lastPathComponent): \(error.localizedDescription)",
@@ -1675,25 +1667,25 @@ struct ContentView: View {
         }
 
         let size = preset.byteCount
-        var data = Data(count: size)
-        for i in 0..<size {
-            data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7)   // deterministic pattern
-        }
         let name = "ios-test-\(preset.rawValue.replacingOccurrences(of: " ", with: "-"))-\(Int(Date().timeIntervalSince1970)).bin"
-        let source = PreparedDataSource(data: data)
-        let digest = source.sha256Hex
-        diagnostics.record(TestDiagnosticRecord(
-            peerId: row.peerId,
-            connectionId: diagnostics.connectionId(for: row.peerId),
-            category: "file",
-            eventName: TestDiagnosticEventName.fileGenerated,
-            direction: .sent,
-            payloadSizeBytes: Int64(size),
-            details: ["name": name, "preset": preset.rawValue]
-        ))
-        diag("file", "sendFile (\(size) B) sha256=\(digest) -> \(SampleConsole.identifier(row.peerId))")
-        appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
         do {
+            let snapshot = try await runLifecycle.prepare(run) {
+                try SampleFilePreparation.preset(byteCount: size)
+            }
+            // prepare fences retirement/cancellation before any diagnostic or SDK action.
+            let source = PreparedDataSource(snapshot: snapshot)
+            let digest = source.sha256Hex
+            diagnostics.record(TestDiagnosticRecord(
+                peerId: row.peerId,
+                connectionId: diagnostics.connectionId(for: row.peerId),
+                category: "file",
+                eventName: TestDiagnosticEventName.fileGenerated,
+                direction: .sent,
+                payloadSizeBytes: Int64(size),
+                details: ["name": name, "preset": preset.rawValue]
+            ))
+            diag("file", "sendFile (\(size) B) sha256=\(digest) -> \(SampleConsole.identifier(row.peerId))")
+            appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
             let transfer = try await row.session.sendFile(
                 name: name,
                 mimeType: "application/octet-stream",
@@ -1738,7 +1730,7 @@ struct ContentView: View {
                 return nil
             }
         } catch {
-            guard runLifecycle.acceptsWork(run) else { return }
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled, !(error is CancellationError) else { return }
             diagnostics.transfer(
                 TestDiagnosticEventName.transferFailed,
                 peerId: row.peerId,
@@ -1772,7 +1764,7 @@ struct ContentView: View {
         direction: TransferRow.Direction,
         detail: String?,
         run: SampleRunLifecycle.Run,
-        onTerminal: @escaping (_ completed: Bool) -> String?
+        onTerminal: @escaping @MainActor (_ completed: Bool) async -> String?
     ) {
         guard runLifecycle.acceptsWork(run) else { return }
         let key = TransferKey(sessionId: sessionId, transferId: transfer.id)
@@ -1832,8 +1824,9 @@ struct ContentView: View {
                                 : (label.hasPrefix("Cancelled") ? .cancellation : .failure),
                             error: label == "Completed" ? nil : label
                         )
-                        let localFailure = onTerminal(label == "Completed")
                         cleanupCompleted = true
+                        let localFailure = await onTerminal(label == "Completed")
+                        guard self.runLifecycle.owns(run), !Task.isCancelled else { break }
                         let finalLabel = localFailure.map { "Failed: \($0)" } ?? label
                         SessionTransferEntries.update(key, in: &transfers) { $0.stateLabel = finalLabel }
                         let arrow = direction == .send ? "→" : "←"
@@ -1852,7 +1845,8 @@ struct ContentView: View {
             // onTerminal is UI/diagnostics only; SDK source/destination cleanup
             // already ran before Stop retires watchers. Never publish into B.
             if !cleanupCompleted && self.runLifecycle.owns(run) {
-                let localFailure = onTerminal(false)
+                let localFailure = await onTerminal(false)
+                guard self.runLifecycle.owns(run), !Task.isCancelled else { return }
                 if let localFailure {
                     let arrow = direction == .send ? "→" : "←"
                     appendMessage(
@@ -2412,11 +2406,11 @@ final class PreparedDataSource: NSObject, PreparedFileSource {
     let sha256: Sha256Digest
     let sha256Hex: String
 
-    init(data: Data) {
-        self.data = data
-        self.sizeBytes = Int64(data.count)
-        let digest = Array(CryptoKit.SHA256.hash(data: data))
-        self.sha256Hex = digest.map { String(format: "%02x", $0) }.joined()
+    init(snapshot: SampleFilePreparation.Snapshot) {
+        self.data = snapshot.data
+        self.sizeBytes = Int64(snapshot.data.count)
+        let digest = snapshot.digest
+        self.sha256Hex = snapshot.sha256Hex
         let bytes = KotlinByteArray(size: Int32(digest.count))
         for (index, byte) in digest.enumerated() {
             bytes.set(index: Int32(index), value: Int8(bitPattern: byte))

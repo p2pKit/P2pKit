@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 
 /// Main-actor ownership for one sample Start/Stop run. SDK cleanup is supplied
 /// by the real caller; invalidation must never substitute for stopping the kit.
@@ -45,6 +46,22 @@ final class SampleRunLifecycle: ObservableObject {
             let role: CollectionRole
             let collection: OwnedFlowCollection
             let retirement: Task<OwnedFlowCollection.Completion, Never>
+        }
+
+        fileprivate struct Preparation {
+            let cancel: () -> Void
+            let drain: () async -> Void
+        }
+        fileprivate var preparations: [UUID: Preparation] = [:]
+
+        fileprivate func cancelPreparations() {
+            preparations.values.forEach { $0.cancel() }
+        }
+
+        fileprivate func drainPreparations() async {
+            // Await actual worker retirement, not just cancellation acknowledgement.
+            let pending = Array(preparations.values)
+            for preparation in pending { await preparation.drain() }
         }
 
         private var tracingReleases: [() -> Void] = []
@@ -195,6 +212,34 @@ final class SampleRunLifecycle: ObservableObject {
         }
     }
 
+    /// Only Sendable snapshots cross the worker boundary; SDK/SwiftUI objects stay
+    /// on their existing actor. Stop owns every worker until its real return.
+    func prepare<Value: Sendable>(
+        _ run: Run,
+        operation: @escaping @Sendable () throws -> Value
+    ) async throws -> Value {
+        guard acceptsWork(run) else { throw CancellationError() }
+        try Task.checkCancellation()
+        let id = UUID()
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try operation()
+        }
+        run.preparations[id] = Run.Preparation(
+            cancel: { worker.cancel() },
+            drain: { _ = await worker.result }
+        )
+        defer { run.preparations[id] = nil }
+        let value = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        try Task.checkCancellation()
+        guard acceptsWork(run) else { throw CancellationError() }
+        return value
+    }
+
     /// Used by the permission probe: neither cancellation nor retirement is a
     /// completed delay. The injected delay also permits a bounded actor test.
     func afterDelay(
@@ -228,6 +273,8 @@ final class SampleRunLifecycle: ObservableObject {
         guard owns(run), phase == .starting else { return }
         phase = .stopping
         run.cancelObserverCollections()
+        run.cancelPreparations()
+        await run.drainPreparations()
         run.releaseTracing()
         await run.drainCollections()
         guard owns(run) else { return }
@@ -290,6 +337,7 @@ final class SampleRunLifecycle: ObservableObject {
         phase = .stopping
         cancelObservers()
         run.cancelObserverCollections()
+        run.cancelPreparations()
         let sdkResult: Result<Void, Error>
         do {
             try await operation()
@@ -297,6 +345,7 @@ final class SampleRunLifecycle: ObservableObject {
         } catch {
             sdkResult = .failure(error)
         }
+        await run.drainPreparations()
         // Keep tracing through the SDK cleanup attempt, then independently drain
         // every observer, including removed sessions, even when SDK Stop failed.
         run.releaseTracing()
