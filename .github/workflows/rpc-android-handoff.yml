@@ -60,7 +60,7 @@ jobs:
           printf 'RPC_ANDROID_HANDOFF_PARENT=%s\n' "$parent" >> "$GITHUB_ENV"
 
       - name: Install the native Gradle daemon toolchain
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '21'
@@ -70,7 +70,7 @@ jobs:
         run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
 
       - name: Install native Java 17 launcher and compiler
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '17'
@@ -97,7 +97,7 @@ jobs:
 
       - name: Retain only closed handoff evidence
         if: ${{ always() && steps.allocate.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-android-handoff-evidence-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/manifest.json
@@ -106,7 +106,7 @@ jobs:
 
       - name: Deliver only the two rechecked debug APKs and their source manifest
         if: ${{ steps.collect.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-android-debug-test-app-${{ github.sha }}-${{ github.run_attempt }}
           path: |
@@ -124,7 +124,7 @@ jobs:
 
       - name: Deliver the separate source-bound test driver, not mobile qualification
         if: ${{ steps.driver.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-mobile-jvm-test-driver-${{ github.sha }}-${{ github.run_attempt }}
           path: |

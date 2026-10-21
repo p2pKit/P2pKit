@@ -1,0 +1,16 @@
+// Resolve the standard Actions graph plugin during the complete dependency writer.
+// This does not apply the plugin, submit a snapshot, or alter project dependencies.
+// Keep the version aligned with the pinned gradle/actions dependency-submission.
+initscript {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal {
+            content {
+                includeModule('org.gradle', 'github-dependency-graph-gradle-plugin')
+            }
+        }
+    }
+    dependencies {
+        classpath 'org.gradle:github-dependency-graph-gradle-plugin:1.5.0'
+    }
+}

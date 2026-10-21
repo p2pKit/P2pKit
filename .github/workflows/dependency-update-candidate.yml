@@ -66,12 +66,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Configure Java 21 daemon toolchain
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
         with:
           distribution: temurin
           java-version: '21'
       - name: Configure Java 17 library toolchain
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
         with:
           distribution: temurin
           java-version: '17'
@@ -87,7 +87,7 @@ jobs:
           python3 -B scripts/ci_evidence.py --component dependency-update --timeout-seconds 10800 --source-root "$GITHUB_WORKSPACE/controller" --output-dir "$RUNNER_TEMP/dependency-evidence" --report-glob 'build/reports/dependency-update/**/*' -- python3 -B scripts/dependency_update.py --candidate "$GITHUB_WORKSPACE/candidate" --output "$RUNNER_TEMP/dependency-candidate"
       - name: Retain encrypted diagnostics including failed generation
         if: ${{ always() && steps.generate.outcome != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: dependency-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -99,7 +99,7 @@ jobs:
           overwrite: false
       - name: Retain review-only generated patch and source manifest
         if: ${{ success() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: dependency-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

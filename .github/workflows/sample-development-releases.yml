@@ -132,7 +132,7 @@ jobs:
       - name: Retain only public provenance, never private test transcripts
         id: evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sample-release-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -177,7 +177,7 @@ jobs:
         run: python3 -I -B -S scripts/publish-sample-release.py prepare-review --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256" --authority "$AUTHORITY" --recovery-run "$RECOVERY_RUN" --recovery-attempt "$RECOVERY_ATTEMPT" --recovery-artifact "$RECOVERY_ARTIFACT" --recovery-sha256 "$RECOVERY_SHA256"
       - name: Retain the immutable public review request, never private evidence
         id: evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sample-release-review-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -233,7 +233,7 @@ jobs:
       - name: Retain only public publication provenance
         id: evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sample-release-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

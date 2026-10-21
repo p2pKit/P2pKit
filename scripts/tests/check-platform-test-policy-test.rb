@@ -96,7 +96,7 @@ def check_platform_policy(v)
        diagnostic_steps.index(commands.find { |s| s['run'] == control }) <
        diagnostic_steps.index(commands.find { |s| s['run'] == observation }), 'Diagnostic source/control order changed')
   artifacts = diagnostic_steps.select { |step| step.fetch('uses', '').start_with?('actions/upload-artifact@') }
-  need(artifacts.size == 1 && artifacts[0]['uses'] == 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' &&
+  need(artifacts.size == 1 && artifacts[0]['uses'] == 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' &&
        artifacts[0]['if'] == '${{ always() }}' && artifacts[0].fetch('with') == {
          'name' => 'intel-bonjour-diagnostic-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
          'path' => '${{ runner.temp }}/rpc-intel-bonjour-diagnostic.json',
