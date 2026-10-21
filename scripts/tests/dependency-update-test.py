@@ -343,6 +343,15 @@ class UpdateTests(unittest.TestCase):
 
 
 class WorkflowRetentionTests(unittest.TestCase):
+    def test_plugin_provenance_tracks_active_catalog_not_historical_versions(self):
+        root = Path(__file__).resolve().parents[2]
+        version = re.findall(r'^cyclonedx = "([^"]+)"$',
+                             (root / "gradle/libs.versions.toml").read_text(), re.MULTILINE)
+        self.assertEqual(len(version), 1)
+        policies = [line.split("|") for line in (root / "gradle/plugin-provenance-policy.txt").read_text().splitlines()
+                    if line.startswith("org.cyclonedx|cyclonedx-gradle-plugin|")]
+        self.assertEqual([row[2] for row in policies], version)
+
     def test_submission_plugin_is_resolved_by_writer_without_applying_or_submitting(self):
         root = Path(__file__).resolve().parents[2]
         helper = "gradle/dependency-submission-verification.init.gradle"

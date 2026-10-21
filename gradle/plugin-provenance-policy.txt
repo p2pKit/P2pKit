@@ -1,3 +1,3 @@
 # group|module|version|GitHub repository|signer workflow|source ref|source digest
-org.cyclonedx|cyclonedx-gradle-plugin|3.4.0|CycloneDX/cyclonedx-gradle-plugin|CycloneDX/cyclonedx-gradle-plugin/.github/workflows/ci-publish.yaml|refs/tags/cyclonedx-gradle-plugin-3.4.0|84c4c20109d98f0898ff90170ecb08054787ca23
+# Active build-plugin provenance only; historical artifact hashes remain in verification-metadata.xml.
 org.cyclonedx|cyclonedx-gradle-plugin|3.4.1|CycloneDX/cyclonedx-gradle-plugin|CycloneDX/cyclonedx-gradle-plugin/.github/workflows/ci-publish.yaml|refs/tags/cyclonedx-gradle-plugin-3.4.1|cb3522fe4d78e573ef08bb6cc3bfd327ab2ddec6
