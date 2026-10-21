@@ -3,7 +3,15 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc6 — development release candidate (publication pending)
+## 0.8.0-rc6 — development release candidate (2026-10-21)
+
+Published and verified from immutable `v0.8.0-rc6`, source
+`3ef2c6155abd66292011c3775b30fb71d280e9c7`, with matching frozen APK/MSI/DMG/DEB.
+The original Maven workflow's final artifact upload failed after Central
+publication and remote checks passed; separate protected read-only recovery
+passed before application delivery. No Maven republishing or application rebuild
+occurred. See the [release record](docs/releases/0.8.0-rc6.md) for original failures,
+recovery evidence, approvals and all seven anonymous-download hashes.
 
 - Preserve cancellation and local-close ownership when a session router receives
   a buffered generic close error; do not report normal teardown as a new

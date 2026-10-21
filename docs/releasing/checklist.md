@@ -2,8 +2,8 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest completed release is
-[`0.8.0-rc5`](../releases/0.8.0-rc5.md). Current source `0.8.0-rc6` is not
-published until its own qualification and protected publication complete.
+[`0.8.0-rc6`](../releases/0.8.0-rc6.md). The original Maven evidence-upload
+failure remains recorded alongside the successful separate recovery.
 Its record binds the actual exact-source gates and verified public bytes;
 later source requires its own qualification.
 The incoming manual Windows/Android report remains a separate, limited result;
@@ -52,7 +52,7 @@ authorize a subsequent release or replace its qualification.
    reselect applications after Maven.
 10. Record the verified publication, update `LATEST_PUBLISHED_VERSION` and current
    documentation through a normal reviewed change. Open a next snapshot line only
-   when separately agreed; the rc5 bookkeeping selects no new version. Record the
+   when separately agreed; the rc6 bookkeeping selects no new version. Record the
    actual GitHub prerelease/release entry; do not create a duplicate sample release
    or rebuild published bytes. All earlier sample prereleases retain their own
    immutable bytes. Do not advance latest-published metadata before verification
