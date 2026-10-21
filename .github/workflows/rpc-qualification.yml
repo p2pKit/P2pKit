@@ -181,7 +181,7 @@ jobs:
       - name: Upload only the explicit public summary, never raw evidence or binaries
         if: ${{ always() && steps.allocate.outcome == 'success' }}
         timeout-minutes: 5
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-qualification-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}${{ matrix.investigation && format('-intel-{0}', matrix.investigation) || '' }}
           path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json
@@ -287,7 +287,7 @@ jobs:
 
       - name: Upload only source hashes and numeric offline results
         if: ${{ always() && steps.controls.outputs.summary != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-continuation-offline-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ steps.controls.outputs.summary }}
@@ -360,7 +360,7 @@ jobs:
           printf 'path=%s\n' "$RPC_INTEL_OBSERVATION" >> "$GITHUB_OUTPUT"
 
       - name: Retain bounded public toolchain metadata only
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-installed-intel-tools-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ steps.observe.outputs.path }}
@@ -418,7 +418,7 @@ jobs:
           test -z "$(git status --porcelain=v1)"
 
       - name: Preserve only the closed read-only observation
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-ubuntu24-kvm-observation-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ steps.observe.outputs.observation }}

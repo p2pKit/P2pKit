@@ -127,7 +127,7 @@ jobs:
 
       - name: Upload only sanitized evidence, never identities, keys, logs or binaries
         if: ${{ always() && steps.allocate.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpc-same-host-capacity-${{ github.sha }}-${{ github.run_attempt }}${{ (contains(github.event.head_commit.message, '[rpc-capacity-compare]') || contains(github.event.head_commit.message, '[rpc-capacity-ubuntu22]')) && format('-{0}', matrix.runner) || '' }}
           path: ${{ env.RPC_CAPACITY_PARENT }}/public/summary.json
