@@ -250,28 +250,52 @@ class IosLanRecoveryTest {
     @Test
     fun closeReleasesTheExactNativeListenerPort() = runBlocking {
         val transport = IosLanDataTransport(context("exact-port"), IosEndpointRegistry())
-        assertTrue(transport.start().isSuccess)
-        val releasedPort = assertNotNull(transport.tcpPort.value)
-        val occupiedV4 = p2pkit_test_bind_tcp_port(releasedPort.toUShort(), false)
-        val occupiedV6 = p2pkit_test_bind_tcp_port(releasedPort.toUShort(), true)
-        assertTrue(
-            occupiedV4 != 0 || occupiedV6 != 0,
-            "the live listener must own the exact port in at least one address family"
-        )
+        withTestResourceCleanup { cleanup ->
+            cleanup.own { transport.close() }
+            assertTrue(transport.start().isSuccess)
+            val releasedPort = assertNotNull(transport.tcpPort.value)
+            val occupiedV4 = p2pkit_test_bind_tcp_port(releasedPort.toUShort(), false)
+            val occupiedV6 = p2pkit_test_bind_tcp_port(releasedPort.toUShort(), true)
+            assertTrue(
+                occupiedV4 != 0 || occupiedV6 != 0,
+                "the live listener must own the exact port in at least one address family"
+            )
 
-        transport.close()
+            transport.close()
 
-        assertEquals(
-            0,
-            p2pkit_test_bind_tcp_port(releasedPort.toUShort(), false),
-            "close must release the exact IPv4 listener port before returning"
-        )
-        assertEquals(
-            0,
-            p2pkit_test_bind_tcp_port(releasedPort.toUShort(), true),
-            "close must release the exact IPv6 listener port before returning"
-        )
+            assertEquals(
+                0,
+                p2pkit_test_bind_tcp_port(releasedPort.toUShort(), false),
+                "close must release the exact IPv4 listener port before returning"
+            )
+            assertEquals(
+                0,
+                p2pkit_test_bind_tcp_port(releasedPort.toUShort(), true),
+                "close must release the exact IPv6 listener port before returning"
+            )
+        }
         Unit
+    }
+
+    @Test
+    fun setupFailureAfterStartStillReleasesTheExactNativeListenerPort() = runBlocking {
+        val transport = IosLanDataTransport(context("early-failure-cleanup"), IosEndpointRegistry())
+        var port: Int? = null
+        val primary = IllegalStateException("synthetic setup failure after native start")
+        val caught = runCatching {
+            withTestResourceCleanup { cleanup ->
+                cleanup.own { transport.close() }
+                assertTrue(transport.start().isSuccess)
+                port = assertNotNull(transport.tcpPort.value)
+                throw primary
+            }
+        }.exceptionOrNull()
+        assertSame(primary, caught)
+        assertNull(transport.tcpPort.value)
+        assertNull(transport.listener)
+        val releasedPort = assertNotNull(port)
+        assertEquals(0, p2pkit_test_bind_tcp_port(releasedPort.toUShort(), false))
+        assertEquals(0, p2pkit_test_bind_tcp_port(releasedPort.toUShort(), true))
     }
 
     @Test
