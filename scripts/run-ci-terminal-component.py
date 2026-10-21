@@ -290,7 +290,8 @@ def command(env, component=COMPONENT):
     if component == 'dependency-generate':
         return [str(ROOT / 'gradlew'), 'resolveAndLockAll', '--write-locks', '--write-verification-metadata',
                 'sha256', '--continue', '--no-configure-on-demand', '--no-daemon',
-                '--max-workers=2', '--no-parallel', '--console=plain']
+                '--max-workers=2', '--no-parallel', '--console=plain',
+                '--init-script', 'gradle/dependency-submission-verification.init.gradle']
     python = str(Path(sys.executable).resolve())
     return [python, '-B', str(ROOT / 'scripts/ci_evidence.py'), '--component', component,
             '--timeout-seconds', str(budget['command']), '--source-root', str(ROOT), '--output-dir',

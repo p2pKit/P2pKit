@@ -27,6 +27,7 @@ HELPERS = (
     "scripts/validate-gradle-plugin-marker.sh", "scripts/validate-gradle-plugin-metadata.py",
     "scripts/resolve-gradle-variant-artifact.py", "gradle/plugin-provenance-policy.txt",
     "scripts/dependency_update.py", "scripts/run-ci-terminal-component.py",
+    "gradle/dependency-submission-verification.init.gradle",
     "scripts/diagnostics/apple-terminal-context.m", "scripts/ci_evidence.py", "scripts/audit_processes.py",
     "scripts/audit_exec_gate.py",
     "scripts/with-darwin-terminal-context.py", "scripts/with-darwin-launchd-context.py",

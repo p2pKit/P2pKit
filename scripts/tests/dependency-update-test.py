@@ -343,6 +343,22 @@ class UpdateTests(unittest.TestCase):
 
 
 class WorkflowRetentionTests(unittest.TestCase):
+    def test_submission_plugin_is_resolved_by_writer_without_applying_or_submitting(self):
+        root = Path(__file__).resolve().parents[2]
+        helper = "gradle/dependency-submission-verification.init.gradle"
+        self.assertIn(helper, D.HELPERS)
+        source = "\n".join(line for line in (root / helper).read_text().splitlines()
+                           if not line.lstrip().startswith("//"))
+        self.assertEqual(re.findall(r"classpath '([^']+)'", source),
+                         ["org.gradle:github-dependency-graph-gradle-plugin:1.5.0"])
+        self.assertIn("mavenCentral()", source)
+        self.assertIn("gradlePluginPortal", source)
+        self.assertIn("includeModule('org.gradle', 'github-dependency-graph-gradle-plugin')", source)
+        self.assertNotRegex(source, r"\b(?:apply|allprojects|settingsEvaluated|System|exec)\b")
+        workflow = (root / ".github/workflows/dependency-submission.yml").read_text()
+        self.assertIn("gradle/actions/dependency-submission@3f5f9adaf7d9fecd50b5935e54106014257a94e6", workflow)
+        self.assertIn("additional-arguments: --dependency-verification strict", workflow)
+
     def test_failed_generation_retains_only_explicit_safe_evidence_files(self):
         workflow = (Path(__file__).resolve().parents[2] /
                     ".github/workflows/dependency-update-candidate.yml").read_text()
@@ -353,7 +369,7 @@ class WorkflowRetentionTests(unittest.TestCase):
             self.assertEqual(len(blocks), 1)
             block = blocks[0]
             self.assertIn("        if: ${{ always() && steps.generate.outcome != 'skipped' }}\n", block)
-            self.assertIn("        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a\n", block)
+            self.assertIn("        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9\n", block)
             paths = re.findall(r"^          path: \|\n((?:            [^\n]+\n)+)", block, re.MULTILINE)
             self.assertEqual(len(paths), 1)
             self.assertEqual(paths[0].splitlines(), [
@@ -455,7 +471,8 @@ class GeneratorPhaseTests(unittest.TestCase):
                 ("WRAPPER", ["scripts/check-gradle-wrapper.sh"]),
                 ("GENERATE", ["./gradlew", "resolveAndLockAll", "--write-locks", "--write-verification-metadata",
                               "sha256", "--continue", "--no-configure-on-demand", "--no-daemon",
-                              "--max-workers=2", "--no-parallel", "--console=plain"]),
+                              "--max-workers=2", "--no-parallel", "--console=plain",
+                              "--init-script", "gradle/dependency-submission-verification.init.gradle"]),
                 ("INTEGRITY", ["scripts/check-dependency-verification.sh"]),
                 ("STRICT", ["./gradlew", "verifyBuildPluginSecurityFloors", "help",
                             "--dependency-verification=strict", "--no-daemon", "--console=plain"]),
