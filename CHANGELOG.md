@@ -14,6 +14,8 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 - Include the merged, verified dependency maintenance from PR #481: CycloneDX
   3.4.1, kotlinx-io 0.9.1, SLF4J 2.0.19, updated build-tool dependencies and pinned
   Actions, with the complete generated lock/integrity graph.
+- Synchronize iOS UI-test keyboard input character by character and target the
+  actual sample Done control, retaining exact text and keyboard-dismissal checks.
 - Retain all current Windows RPC, installed-lifecycle and physical-device
   qualification limitations. This release does not claim those campaigns passed.
 

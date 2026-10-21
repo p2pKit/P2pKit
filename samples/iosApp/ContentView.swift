@@ -363,6 +363,7 @@ struct ContentView: View {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { focusedField = nil }
+                    .accessibilityIdentifier("sample-keyboard-done")
             }
         }
         .sheet(isPresented: $showDiagnostics) {
