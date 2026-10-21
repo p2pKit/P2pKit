@@ -3,6 +3,20 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc6 — development release candidate (publication pending)
+
+- Preserve cancellation when a retired session router receives a buffered generic
+  close error; do not report normal teardown as a new `routeEvents failed` warning.
+  Active transport errors, unclean remote EOF and typed authentication/protocol
+  failures retain their existing handling. No warning allowlist or timeout change.
+- Add deterministic JVM and Android-host cancellation/active-error/EOF/security
+  controls, retaining the real secure receive accounting and recovery tests.
+- Include the merged, verified dependency maintenance from PR #481: CycloneDX
+  3.4.1, kotlinx-io 0.9.1, SLF4J 2.0.19, updated build-tool dependencies and pinned
+  Actions, with the complete generated lock/integrity graph.
+- Retain all current Windows RPC, installed-lifecycle and physical-device
+  qualification limitations. This release does not claim those campaigns passed.
+
 ## 0.8.0-rc5 — development release candidate (2026-10-20)
 
 Published and verified on Maven Central from immutable `v0.8.0-rc5`, source
