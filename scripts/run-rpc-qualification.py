@@ -392,7 +392,7 @@ def swift_inventory(root):
                     cases.add(name)
         need(cases, "No source XCTest methods")
         result[target] = cases
-    need(len(result["p2pkit-sample-tests"]) == 88 and len(result["p2pkit-sample-uitests"]) == 10,
+    need(len(result["p2pkit-sample-tests"]) == 88 and len(result["p2pkit-sample-uitests"]) == 18,
          "Maintained Swift inventory requires review")
     return result
 

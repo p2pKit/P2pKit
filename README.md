@@ -326,8 +326,13 @@ and Intel simulator execution. Maven publication separately verified signed
 remote bytes and consumers; the sample publisher verified complete anonymous
 download hashes for all four applications and their public metadata.
 
-These results belong to release source `c8cca6db4d36dff61242c9e02b3bd0f4cb4eb5a9`,
+These results belong to release source `3ef2c6155abd66292011c3775b30fb71d280e9c7`,
 not to later documentation or feature commits.
+Post-release iOS test-harness maintenance distinguishes invalid keyboard-key
+geometry from actual hittability: an indeterminate key proves neither input
+readiness nor keyboard dismissal. The real English/German input and consent
+tests retain their assertions and deadlines; this test-only change does not
+modify the published `0.8.0-rc6` binaries.
 A resolved-graph SBOM is not a scan of every distributed binary; a successful
 build or simulator test is not a real-device or installed-application result.
 The `iosArm64` device target still needs external hardware for runtime testing.
