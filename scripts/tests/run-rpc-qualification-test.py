@@ -211,8 +211,16 @@ class AdmissionTests(unittest.TestCase):
 
     def test_actual_xctest_inventory_is_closed_and_nonempty(self):
         cases = q.swift_inventory(ROOT)
-        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 88, 'p2pkit-sample-uitests': 10})
+        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 88, 'p2pkit-sample-uitests': 18})
         self.assertEqual(cases['p2pkit-sample-uitests'], {
+            'KeyboardReadinessTests/testInvalidGeometryNeverInvokesHittabilityOrProvesDismissal()',
+            'KeyboardReadinessTests/testValidGeometryStillRequiresActualHittability()',
+            'KeyboardReadinessTests/testActuallyHittableKeyProvesReadiness()',
+            'KeyboardReadinessTests/testRemovedKeysNeverReadGeometryOrHittability()',
+            'KeyboardReadinessTests/testEmptyKeyInventoryIsNotHittable()',
+            'KeyboardReadinessTests/testUnknownKeyPreventsDismissalWithOtherNonhittableKeys()',
+            'KeyboardReadinessTests/testActualHittableKeyWinsRegardlessOfUnknownKeyOrder()',
+            'KeyboardReadinessTests/testTransitioningGeometryIsNeitherReadinessNorDismissal()',
             'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale()',
             'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale()',
             'ContentViewPresentationUITests/testFirstIncomingOfferRequiresConsentWithoutTransferHistory()',
@@ -228,14 +236,30 @@ class AdmissionTests(unittest.TestCase):
 
     def test_missing_or_duplicate_xctest_does_not_satisfy_updated_inventory(self):
         bounded = q.bounded
-        method = b'func testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry('
-        for replacement in (b'func nonTestMethod(', method + b') {}\n    ' + method):
-            def changed(path, maximum=q.MAX_FILE):
-                raw = bounded(path, maximum)
-                return raw.replace(method, replacement)
-            with self.subTest(replacement=replacement), patch.object(q, 'bounded', side_effect=changed):
-                with self.assertRaises(q.QualificationError):
-                    q.swift_inventory(ROOT)
+        for method in (b'func testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry(',
+                       b'func testInvalidGeometryNeverInvokesHittabilityOrProvesDismissal('):
+            for replacement in (b'func nonTestMethod(', method + b') {}\n    ' + method):
+                def changed(path, maximum=q.MAX_FILE):
+                    raw = bounded(path, maximum)
+                    return raw.replace(method, replacement)
+                with self.subTest(method=method, replacement=replacement), \
+                        patch.object(q, 'bounded', side_effect=changed):
+                    with self.assertRaises(q.QualificationError):
+                        q.swift_inventory(ROOT)
+
+    def test_keyboard_geometry_observer_is_used_for_input_and_actual_dismissal(self):
+        source = (ROOT / 'samples/iosApp/UITests/ContentViewPresentationUITests.swift').read_text()
+        self.assertIn('KeyboardReadiness.observe(', source)
+        self.assertIn('app.keyboards.keys.allElementsBoundByIndex', source)
+        self.assertIn('exists: { $0.exists }, frame: { $0.frame }, isHittable: { $0.isHittable }', source)
+        self.assertEqual(source.count('keyboardReadiness(in: app) == .hittable'), 2)
+        self.assertEqual(source.count('keyboardReadiness(in: app) == .notHittable'), 1)
+        self.assertNotIn('contains(where: \\.isHittable)', source)
+        self.assertNotIn('!keyboardReadiness', source)
+        self.assertIn('XCTWaiter.wait(for: [ready], timeout: 5)', source)
+        self.assertIn('XCTWaiter.wait(for: [dismissed], timeout: 5)', source)
+        self.assertIn('for character in text {\n            field.typeText(String(character))', source)
+        self.assertIn('app.buttons["sample-keyboard-done"]', source)
 
     def test_native_controls_reject_skipped_failed_or_partial_output(self):
         self.assertEqual(q.unittest_count('\nRan 122 tests in 190.25s\n\nOK\n'), 122)

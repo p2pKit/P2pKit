@@ -186,6 +186,14 @@ final class ContentViewPresentationUITests: XCTestCase {
     }
 
     @MainActor
+    private func keyboardReadiness(in app: XCUIApplication) -> KeyboardReadiness {
+        KeyboardReadiness.observe(
+            app.keyboards.keys.allElementsBoundByIndex,
+            exists: { $0.exists }, frame: { $0.frame }, isHittable: { $0.isHittable }
+        )
+    }
+
+    @MainActor
     private func enterText(_ text: String, into field: XCUIElement, in app: XCUIApplication) {
         // XCUITest's bulk event delivered only "127." from "127.0.0.1" on
         // a fresh hosted keyboard. Send each original character exactly once;
@@ -193,7 +201,7 @@ final class ContentViewPresentationUITests: XCTestCase {
         // Each typeText call synchronizes with the app before the next input.
         let ready = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                app.keyboards.keys.allElementsBoundByIndex.contains(where: \.isHittable)
+                self.keyboardReadiness(in: app) == .hittable
             },
             object: nil
         )
@@ -216,11 +224,11 @@ final class ContentViewPresentationUITests: XCTestCase {
         // A dismissed iOS keyboard can retain an accessibility Keyboard node.
         // The hosted failure recording showed the keyboard disappear while an
         // `exists == false` assertion still failed. Require real hittable keys
-        // before the single Done input, then no hittable keys in ANY keyboard;
-        // an always-nonhittable container or a stale firstMatch cannot pass.
-        let keyboardKeys = app.keyboards.keys
+        // before the single Done input, then no hittable or indeterminate keys
+        // in ANY keyboard. Invalid geometry cannot prove dismissal; an
+        // always-nonhittable container or a stale firstMatch cannot pass.
         XCTAssertTrue(
-            keyboardKeys.allElementsBoundByIndex.contains(where: \.isHittable),
+            keyboardReadiness(in: app) == .hittable,
             "A software keyboard key must actually be reachable before Done"
         )
         let done = app.buttons["sample-keyboard-done"]
@@ -231,7 +239,7 @@ final class ContentViewPresentationUITests: XCTestCase {
         done.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let dismissed = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                !keyboardKeys.allElementsBoundByIndex.contains(where: \.isHittable)
+                self.keyboardReadiness(in: app) == .notHittable
             },
             object: nil
         )
