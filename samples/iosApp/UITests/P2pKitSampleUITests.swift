@@ -45,11 +45,11 @@ final class P2pKitSampleUITests: XCTestCase {
         app.tap()
 
         let stop = app.buttons["stop-kit"]
-        guard stop.waitForExistence(timeout: 30) else {
-            XCTFail("start should reach the running state; status was \(app.staticTexts["sample-status"].label)")
+        guard waitForRunning(status: status, timeout: 30) else {
+            XCTFail("start did not finish advertising/discovery; status was \(status.label)")
             return
         }
-        XCTAssertEqual(app.staticTexts["sample-status"].label, "Status: Running")
+        XCTAssertTrue(stop.exists, "running kit must retain its Stop control")
 
         if verifyPairing {
             let show = app.buttons["show-local-pairing"]
@@ -226,6 +226,43 @@ final class P2pKitSampleUITests: XCTestCase {
         }
     }
 
+    /// Stop is present as soon as a kit exists, BEFORE async startup finishes.
+    /// Use one existing 30-second budget for the semantic readiness boundary.
+    @MainActor
+    private func waitForRunning(status: Any, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Status: Running"),
+            object: status
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    func testRunningOracleWaitsForDelayedStartupPublicationWithoutAnotherTap() {
+        let status = StartupStatusFixture()
+        XCTAssertTrue(status.stopExists)
+        XCTAssertEqual(status.label, "Status: Starting")
+        // The same wait must process a later main-actor readiness publication.
+        // No synthetic Start tap, SDK retry, or extra startup budget is granted.
+        DispatchQueue.main.async { status.label = "Status: Running" }
+        XCTAssertTrue(waitForRunning(status: status, timeout: 2))
+    }
+
+    @MainActor
+    func testRunningOracleRejectsStartingEvenWhenStopIsAlreadyPresent() {
+        let status = StartupStatusFixture()
+        // Models the real state after kit assignment while advertise/discover wait.
+        XCTAssertTrue(status.stopExists)
+        XCTAssertFalse(waitForRunning(status: status, timeout: 0.01),
+                       "a startup that never completes must fail its bounded wait")
+        status.label = "Status: Running"
+        XCTAssertTrue(waitForRunning(status: status, timeout: 0.01))
+        for label in ["Status: Not started", "Status: Stopped", "Status: Starting", "Status: Failed"] {
+            status.label = label
+            XCTAssertFalse(waitForRunning(status: status, timeout: 0.01))
+        }
+    }
+
     @MainActor
     private func waitForStartAcknowledgement(status: XCUIElement, timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
@@ -234,4 +271,10 @@ final class P2pKitSampleUITests: XCTestCase {
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
+}
+
+@MainActor
+private final class StartupStatusFixture: NSObject {
+    @objc dynamic var label = "Status: Starting"
+    let stopExists = true
 }

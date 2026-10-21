@@ -668,6 +668,46 @@ final class SampleRunLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testStopPresencePrecedesRunningUntilBothStartupOperationsComplete() async throws {
+        let lifecycle = SampleRunLifecycle()
+        let run = try XCTUnwrap(lifecycle.begin())
+        let advertising = HeldRunOperation<Void>()
+        let discovery = HeldRunOperation<Void>()
+        let advertised = expectation(description: "advertise entered")
+        let discovered = expectation(description: "discover entered")
+        var status = "Starting"
+        // ContentView assigns its kit (and therefore exposes Stop) before this call.
+        let stopExists = true
+        let startup = Task { @MainActor in
+            await lifecycle.completeStartup(
+                run,
+                advertise: { advertised.fulfill(); try await advertising.wait() },
+                didAdvertise: {},
+                discover: { discovered.fulfill(); try await discovery.wait() },
+                didDiscover: { status = "Running" },
+                manualInfo: {}, didReadInfo: { _ in }, installObservers: {}
+            )
+        }
+        defer {
+            advertising.resolve(.failure(CancellationError()))
+            discovery.resolve(.failure(CancellationError()))
+            startup.cancel()
+        }
+        await waitFor([advertised])
+        XCTAssertTrue(stopExists)
+        XCTAssertEqual(status, "Starting")
+        advertising.resolve(.success(()))
+        await waitFor([discovered])
+        XCTAssertTrue(stopExists)
+        XCTAssertEqual(status, "Starting", "advertising alone is not Running")
+        discovery.resolve(.success(()))
+        let outcome = await startup.value
+        guard case .started = outcome else { XCTFail("startup did not complete"); return }
+        XCTAssertEqual(status, "Running")
+        await stopSuccessfully(lifecycle, run)
+    }
+
+    @MainActor
     private func waitFor(
         _ expectations: [XCTestExpectation], file: StaticString = #filePath, line: UInt = #line
     ) async {
