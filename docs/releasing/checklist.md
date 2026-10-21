@@ -2,8 +2,9 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest completed release is
-[`0.8.0-rc4`](../releases/0.8.0-rc4.md); current source is the unpublished
-`0.8.0-rc5` candidate. The rc4 record binds its actual exact-source gates and public bytes.
+[`0.8.0-rc5`](../releases/0.8.0-rc5.md), also the current source version.
+Its record binds the actual exact-source gates and verified public bytes;
+later source requires its own qualification.
 The incoming manual Windows/Android report remains a separate, limited result;
 publication does not extend its installed-application coverage.
 Retain the [Windows qualification limits](../rpc/windows-release-scope.md),
@@ -50,9 +51,9 @@ authorize a subsequent release or replace its qualification.
    reselect applications after Maven.
 10. Record the verified publication, update `LATEST_PUBLISHED_VERSION` and current
    documentation through a normal reviewed change. Open a next snapshot line only
-   when separately agreed; the rc4 bookkeeping selects no new version. Record the
+   when separately agreed; the rc5 bookkeeping selects no new version. Record the
    actual GitHub prerelease/release entry; do not create a duplicate sample release
-   or rebuild published bytes. The rc3 and rc4 sample prereleases retain their own
+   or rebuild published bytes. All earlier sample prereleases retain their own
    immutable bytes. Do not advance latest-published metadata before verification
    or invent the next snapshot version.
 

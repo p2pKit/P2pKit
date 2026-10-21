@@ -3,10 +3,10 @@
 This directory separates current user and maintainer guidance from historical
 remediation records. Start with the repository [README](../README.md).
 
-Current development source is `0.8.0-SNAPSHOT`; the latest published release is
-[`0.8.0-rc2`](releases/0.8.0-rc2.md), including Maven libraries and development
-sample applications. Publication does not complete the remaining runtime and
-independent validation scopes.
+Current source and latest published versions are listed in the
+[repository README](../README.md); canonical version properties live in
+[`gradle.properties`](../gradle.properties). Publication does not complete
+the remaining runtime and independent validation scopes.
 
 ## Use and design
 
@@ -32,6 +32,7 @@ independent validation scopes.
 - [Validation evidence schema](validation/evidence-schema.md)
 - [Release checklist](releasing/checklist.md)
 - [Maven Central procedure](releasing/maven-central.md)
+- [`0.8.0-rc5` release evidence](releases/0.8.0-rc5.md)
 - [`0.8.0-rc2` release evidence](releases/0.8.0-rc2.md)
 - [`0.7.0-rc3` release evidence](releases/0.7.0-rc3.md)
 - [`0.7.0-rc2` release evidence](releases/0.7.0-rc2.md)
