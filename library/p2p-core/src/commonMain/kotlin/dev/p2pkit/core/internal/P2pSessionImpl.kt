@@ -1657,6 +1657,11 @@ internal class P2pSessionImpl(
                 )
             }
             else -> {
+                // Buffered receive failures and non-suspending transport paths can
+                // beat cancellation. Once this route's epoch is cancelled, retain
+                // cancellation instead of reporting its teardown as a new failure.
+                // Typed security/protocol failures above keep their classification.
+                currentCoroutineContext().ensureActive()
                 if (!pongFailure) {
                     logger.warn("Session $id: routeEvents failed", e)
                     onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}", expectedEpoch = epoch)
