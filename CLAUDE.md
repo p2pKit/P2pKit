@@ -2,8 +2,8 @@
 
 P2pKit is a Kotlin Multiplatform local-network P2P library for Android API 24+,
 JVM 17/Desktop, and iOS. Authenticated protocol v2 is the fail-closed default.
-The current source version is `0.8.0-rc6` (publication pending); the latest
-published release candidate remains `0.8.0-rc5`. Published artifacts are immutable.
+The current source and latest published release candidate are `0.8.0-rc6`.
+Published artifacts are immutable.
 
 ## Repository map
 
@@ -63,7 +63,7 @@ is ignored and must not become a source of truth.
 - `docs/testing/local.md` — automated checks.
 - `docs/validation/` — physical, hostile-network, independent, and audit execution handbooks.
 - `docs/releasing/checklist.md` — release process.
-- `docs/releases/0.8.0-rc5.md` — latest immutable publication evidence.
+- `docs/releases/0.8.0-rc6.md` — latest immutable publication evidence.
 
 Use the [canonical external-validation status table](docs/validation/README.md#current-status)
 for all six campaign states; do not promote them from compilation or simulator results.

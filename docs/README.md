@@ -32,6 +32,7 @@ the remaining runtime and independent validation scopes.
 - [Validation evidence schema](validation/evidence-schema.md)
 - [Release checklist](releasing/checklist.md)
 - [Maven Central procedure](releasing/maven-central.md)
+- [`0.8.0-rc6` release evidence](releases/0.8.0-rc6.md)
 - [`0.8.0-rc5` release evidence](releases/0.8.0-rc5.md)
 - [`0.8.0-rc2` release evidence](releases/0.8.0-rc2.md)
 - [`0.7.0-rc3` release evidence](releases/0.7.0-rc3.md)
