@@ -92,7 +92,7 @@ final class ContentViewPresentationUITests: XCTestCase {
             reveal(host, in: app, towardBottom: true)
             host.tap()
             dismissKeyboardIntroductionIfPresent(in: app)
-            host.typeText("127.0.0.1")
+            enterText("127.0.0.1", into: host, in: app)
             XCTAssertEqual(host.value as? String, "127.0.0.1")
             // The host keyboard can cover the adjacent Port field. End this
             // edit before revealing and tapping the next production control.
@@ -101,14 +101,14 @@ final class ContentViewPresentationUITests: XCTestCase {
             reveal(inputPort, in: app, towardBottom: true)
             inputPort.tap()
             dismissKeyboardIntroductionIfPresent(in: app)
-            inputPort.typeText(token)
+            enterText(token, into: inputPort, in: app)
             XCTAssertEqual(inputPort.value as? String, token, "Do not repair the displayed token before input")
             dismissKeyboard(in: app)
             let pairing = app.textFields["Peer pairing QR text (p2pkit:v2:…)"]
             reveal(pairing, in: app, towardBottom: true)
             pairing.tap()
             dismissKeyboardIntroductionIfPresent(in: app)
-            pairing.typeText("invalid-pairing-for-port-parser-probe")
+            enterText("invalid-pairing-for-port-parser-probe", into: pairing, in: app)
             dismissKeyboard(in: app)
             let dial = app.buttons["Dial manual peer"]
             reveal(dial, in: app, towardBottom: true)
@@ -186,6 +186,31 @@ final class ContentViewPresentationUITests: XCTestCase {
     }
 
     @MainActor
+    private func enterText(_ text: String, into field: XCUIElement, in app: XCUIApplication) {
+        // XCUITest's bulk event delivered only "127." from "127.0.0.1" on
+        // a fresh hosted keyboard. Send each original character exactly once;
+        // no paste, value injection, deletion, retry, or repaired port token.
+        // Each typeText call synchronizes with the app before the next input.
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                app.keyboards.keys.allElementsBoundByIndex.contains(where: \.isHittable)
+            },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+        for character in text {
+            field.typeText(String(character))
+        }
+        let entered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", text), object: field
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [entered], timeout: 5), .completed,
+            "Every original character must reach the actual production field"
+        )
+    }
+
+    @MainActor
     private func dismissKeyboard(in app: XCUIApplication) {
         dismissKeyboardIntroductionIfPresent(in: app)
         // A dismissed iOS keyboard can retain an accessibility Keyboard node.
@@ -198,10 +223,12 @@ final class ContentViewPresentationUITests: XCTestCase {
             keyboardKeys.allElementsBoundByIndex.contains(where: \.isHittable),
             "A software keyboard key must actually be reachable before Done"
         )
-        let done = app.buttons["Done"]
+        let done = app.buttons["sample-keyboard-done"]
         XCTAssertTrue(done.exists, "The production keyboard toolbar must provide Done")
         XCTAssertTrue(done.isHittable, "The keyboard toolbar must not be covered by system setup UI")
-        done.tap()
+        // Target the actual app toolbar, not a system button with the same label.
+        // A coordinate event exercises its visible hit target just like Start.
+        done.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let dismissed = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 !keyboardKeys.allElementsBoundByIndex.contains(where: \.isHittable)

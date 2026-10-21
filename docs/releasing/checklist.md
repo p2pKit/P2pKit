@@ -2,7 +2,8 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest completed release is
-[`0.8.0-rc5`](../releases/0.8.0-rc5.md), also the current source version.
+[`0.8.0-rc5`](../releases/0.8.0-rc5.md). Current source `0.8.0-rc6` is not
+published until its own qualification and protected publication complete.
 Its record binds the actual exact-source gates and verified public bytes;
 later source requires its own qualification.
 The incoming manual Windows/Android report remains a separate, limited result;
