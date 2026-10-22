@@ -117,6 +117,49 @@ class LegacyTaskTests(unittest.TestCase):
                 self.assertTrue(self.validate(report, files, api)["recentsReviewRequired"])
             self.assertEqual(legacy.LegacyCampaign(api).API, api)
 
+    def test_failure_scene_field_or_original_image_cannot_be_laundered_into_pass(self):
+        for api in (24, 32):
+            for key in ("failureScene", "failureSceneErrorType"):
+                report, files = fixture(api)
+                report[key] = {"purpose": "NOT_ACCEPTANCE"}
+                with self.subTest(api=api, key=key), self.assertRaises(ValueError): self.validate(report, files, api)
+            for name in ("failure-recents-scene.png", "failure-recents-scene.part"):
+                report, files = fixture(api)
+                files[name] = synthetic_png()
+                with self.subTest(api=api, name=name), self.assertRaises(ValueError): self.validate(report, files, api)
+
+    def test_failure_scene_is_separate_api32_only_and_preserves_original_failure_cleanup(self):
+        root = ROOT / "samples/p2p-sample-android/src"
+        source = (root / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        helper = (root / "runtimeValidation/kotlin/dev/p2pkit/sample/android/runtime/LegacyFailureScene.kt").read_text()
+        diagnostic = source.split("    private fun retainFailureScene(")[1].split("    private fun recentsState(")[0]
+        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 2)
+        self.assertEqual(diagnostic.count("uiAutomation.takeScreenshot()"), 1)
+        for forbidden in ("captures.put(", "captureAttempts.put(", "navigate(", "waitForIdle(", "Thread.sleep(",
+                          "clearCache(", "findLegacyRecentsCard(", "appObservations[", "failure ="):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn('api == 32 && stage == "actual-recents-original"', helper)
+        self.assertIn('completed == listOf("initial-secure-foreground") && !recentsScreenshotRequested', helper)
+        self.assertIn("LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT", helper)
+        self.assertLess(source.index('report.put("failure", diagnostic)'), source.index("retainFailureScene(error)"))
+        self.assertIn('catch (secondary: Throwable)', source)
+        self.assertIn('report.put("failureSceneErrorType", secondary.javaClass.name)', source)
+        self.assertIn('minOf(deadline, started + 5_000)', diagnostic)
+        self.assertIn('task.get(remaining, TimeUnit.MILLISECONDS)', diagnostic)
+        self.assertIn('finally { task.cancel(false) }', diagnostic)
+        self.assertIn('finally { @Suppress("DEPRECATION") root.recycle() }', diagnostic)
+        self.assertIn('finally { if (pixels !== bitmap) pixels.recycle() }', diagnostic)
+        self.assertIn('recycle = Bitmap::recycle', diagnostic)
+        self.assertIn('file.outputStream().use', diagnostic)
+        self.assertIn('receipt.remove("file")', diagnostic)
+        self.assertIn('"NOT_ACCEPTANCE"', diagnostic)
+        self.assertIn('file.renameTo(destination)', diagnostic)
+        self.assertIn('"partialOutputRemoved"', diagnostic)
+        self.assertEqual(helper.count("screenshot()"), 1)
+        self.assertIn('finally { bitmap?.let(recycle) }', helper)
+        self.assertIn('before == after', helper)
+        self.assertIn('now() < until', helper)
+
     def test_event_idle_is_required_inside_original_bound_not_pixel_or_animation_proof(self):
         for key, invalid in (("quietMillis", 501), ("returned", False), ("returned", 1),
                 ("maximumWaitMillis", 5001), ("maximumWaitMillis", 0), ("startedElapsedMillis", 94),
@@ -151,7 +194,7 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn('report.put("recentsQueryLastCompleted", JSONObject(query.toString()))', source)
         self.assertIn("if (primaryFailure == null) throw error", source)
         self.assertIn("sameAppCapture(appBefore, checkNotNull(appAfter))", source)
-        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+        self.assertEqual(source.split("    private fun retainFailureScene(")[0].count("uiAutomation.takeScreenshot()"), 1)
         self.assertNotIn("clearCache(", source)
 
     def test_observer_flags_must_preserve_exact_original_and_restore_even_after_failure(self):
@@ -248,7 +291,7 @@ class LegacyTaskTests(unittest.TestCase):
         source = (base / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
         self.assertEqual(source.count("uiAutomation.clearWindowContentFrameStats("), 1)
         self.assertEqual(source.count("view.invalidate()"), 1)
-        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+        self.assertEqual(source.split("    private fun retainFailureScene(")[0].count("uiAutomation.takeScreenshot()"), 1)
         self.assertIn("val node = view.createAccessibilityNodeInfo()", source)
         self.assertIn("root.windowId != owned.first", source)
         self.assertIn("val until = minOf(deadline, start + 5_000)", source)
@@ -307,7 +350,7 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("task.get(5, TimeUnit.SECONDS)", source)
         self.assertIn("finally { main { secureLegacyTaskWindow(replacement.window) } }", source)
         self.assertLess(source.index('stage = "actual-recents-original"'), source.index("clearFlags("))
-        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+        self.assertEqual(source.split("    private fun retainFailureScene(")[0].count("uiAutomation.takeScreenshot()"), 1)
 
     def test_navigation_requires_exactly_home_then_recents(self):
         for change in (lambda r: r.pop(), lambda r: r.append(r[0]), lambda r: r.reverse()):
@@ -442,7 +485,7 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("node.contentDescription?.toString() == publicAppLabel", observation)
         self.assertNotIn(".contains(publicAppLabel)", observation)
         self.assertNotIn("setServiceInfo", source)
-        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+        self.assertEqual(source.split("    private fun retainFailureScene(")[0].count("uiAutomation.takeScreenshot()"), 1)
         self.assertEqual(helper.count("checkLegacyCapture(now() <= deadline"), 2)
         self.assertNotIn("catch", helper.split("internal fun <T : Any>", 1)[1])
 

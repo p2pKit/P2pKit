@@ -150,7 +150,11 @@ nonblank Recents surface, and check that it does not expose the synthetic
 representation. Null alone, a blank/wrong screen, container/CRC checks and
 device-side pixel samples cannot substitute for that review or physical/OEM
 qualification. Previous failed runs remain failed; the diagnostic cannot
-satisfy any of the 14 release components.
+satisfy any of the 14 release components. An API32 Recents-admission failure may
+retain one separately labelled, ownership-bound `failure-recents-scene.png`
+within the remaining body budget (at most five seconds of diagnostic work).
+This private encrypted scene is `NOT_ACCEPTANCE`, never one of the seven
+observations or a retry; it cannot change the original failure or qualify privacy.
 
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window

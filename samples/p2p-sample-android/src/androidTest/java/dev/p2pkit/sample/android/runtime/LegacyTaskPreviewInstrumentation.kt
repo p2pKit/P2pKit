@@ -81,6 +81,11 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             (error as? LegacyCaptureFailure)?.let { diagnostic.put("code", it.code.name) }
             if (deadline > 0) diagnostic.put("bodyRemainingMillis", deadline - SystemClock.elapsedRealtime())
             report.put("failure", diagnostic)
+            try { retainFailureScene(error) }
+            catch (secondary: Throwable) {
+                // Even a diagnostic bookkeeping error must not escape or replace the original failure.
+                try { report.put("failureSceneErrorType", secondary.javaClass.name) } catch (_: Throwable) { }
+            }
         } finally {
             try {
                 main {
@@ -554,6 +559,133 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 attempt.put("operation", "COMPLETE")
             } finally { if (pixels !== bitmap) pixels.recycle() }
         } finally { bitmap?.recycle() }
+    }
+
+    /** Private failure evidence only. Never adds an acceptance capture or replaces the first failure. */
+    private fun retainFailureScene(primary: Throwable) {
+        val completed = (0 until captures.length()).map { captures.getJSONObject(it).getString("name") }
+        val requested = (0 until captureAttempts.length()).any { index ->
+            val attempt = captureAttempts.getJSONObject(index)
+            attempt.optString("name") == "actual-recents-original" &&
+                (attempt.optString("operation") == "GLOBAL_SCREENSHOT_REQUEST" || attempt.has("screenshotReturned"))
+        }
+        if (!needsLegacyFailureScene(Build.VERSION.SDK_INT, stage, primary, completed, requested)) return
+        val started = SystemClock.elapsedRealtime()
+        val until = minOf(deadline, started + 5_000)
+        val receipt = JSONObject().put("purpose", "NOT_ACCEPTANCE").put("api", 32)
+            .put("triggerStage", stage).put("triggerCode", (primary as LegacyCaptureFailure).code.name)
+            .put("primaryFailurePreserved", true).put("startedElapsedMillis", started)
+            .put("deadlineElapsedMillis", until).put("budgetMillis", 5_000).put("operation", "OWNER_BEFORE")
+            .put("lastCompletedAttempt", report.optJSONObject("recentsAdmission")?.optInt("lastCompletedAttempt"))
+        report.put("failureScene", receipt)
+        var pending: File? = null
+        var published: File? = null
+        var stateCount = 0
+        fun bounded() = checkLegacyCapture(SystemClock.elapsedRealtime() < until,
+            LegacyCaptureFailureCode.BODY_DEADLINE_EXCEEDED)
+        try {
+            captureLegacyFailureScene(until, SystemClock::elapsedRealtime, state = {
+                receipt.put("operation", if (stateCount == 0) "OWNER_BEFORE" else "OWNER_AFTER")
+                val observed = JSONObject()
+                receipt.put(if (stateCount++ == 0) "stateBefore" else "stateAfter", observed)
+                failureSceneState(until, observed).toString()
+            }, screenshot = {
+                receipt.put("operation", "DIAGNOSTIC_SCREENSHOT_REQUEST")
+                    .put("requestedElapsedMillis", SystemClock.elapsedRealtime())
+                val bitmap = uiAutomation.takeScreenshot()
+                try {
+                    receipt.put("screenshotReturned", true).put("screenshotAvailable", bitmap != null)
+                        .put("returnedElapsedMillis", SystemClock.elapsedRealtime())
+                    bitmap
+                } catch (error: Throwable) { bitmap?.recycle(); throw error }
+            }, retain = { bitmap ->
+                receipt.put("operation", "BITMAP_COPY")
+                val pixels = requireLegacyCaptureValue(bitmap.copy(Bitmap.Config.ARGB_8888, false),
+                    LegacyCaptureFailureCode.BITMAP_COPY_UNAVAILABLE)
+                try {
+                    bounded()
+                    checkLegacyCapture(pixels.width == bitmap.width && pixels.height == bitmap.height &&
+                        pixels.width > 0 && pixels.height > 0, LegacyCaptureFailureCode.BITMAP_COPY_UNAVAILABLE)
+                    receipt.put("sourceBitmapConfig", bitmap.config?.name ?: "UNKNOWN")
+                        .put("width", pixels.width).put("height", pixels.height).put("pixelReadback", "ARGB_8888_COPY")
+                    val directory = requireLegacyCaptureValue(output,
+                        LegacyCaptureFailureCode.OUTPUT_DIRECTORY_UNAVAILABLE)
+                    val file = File(directory, "failure-recents-scene.part")
+                    bounded()
+                    check(file.createNewFile())
+                    pending = file // Only this newly created private file is ever removed on failure.
+                    receipt.put("operation", "PNG_ENCODING")
+                    file.outputStream().use {
+                        bounded()
+                        checkLegacyCapture(pixels.compress(Bitmap.CompressFormat.PNG, 100, it),
+                            LegacyCaptureFailureCode.PNG_ENCODING_FAILED)
+                    }
+                    bounded()
+                } finally { if (pixels !== bitmap) pixels.recycle() }
+            }, recycle = Bitmap::recycle)
+            bounded()
+            val file = checkNotNull(pending)
+            val destination = File(file.parentFile, "failure-recents-scene.png")
+            check(!destination.exists() && file.renameTo(destination))
+            published = destination
+            bounded()
+            receipt.put("file", destination.name).put("operation", "DIAGNOSTIC_RETAINED")
+                .put("completedElapsedMillis", SystemClock.elapsedRealtime())
+        } catch (secondary: Throwable) {
+            receipt.remove("file")
+            receipt.put("failedOperation", receipt.optString("operation")).put("operation", "NOT_CAPTURED")
+                .put("failureType", secondary.javaClass.name)
+                .put("failedElapsedMillis", SystemClock.elapsedRealtime())
+            (secondary as? LegacyCaptureFailure)?.let { receipt.put("failureCode", it.code.name) }
+            receipt.put("partialOutputRemoved", listOfNotNull(pending, published).all { !it.exists() || it.delete() })
+        }
+    }
+
+    /** One fresh root and actual owned task per side; no task-card matching, polling or arbitrary text. */
+    private fun failureSceneState(until: Long, observed: JSONObject): JSONObject {
+        fun bounded() = checkLegacyCapture(SystemClock.elapsedRealtime() < until,
+            LegacyCaptureFailureCode.BODY_DEADLINE_EXCEEDED)
+        bounded()
+        val expected = captures.getJSONObject(0).getJSONObject("stateBefore")
+        val first = created.single()
+        val task = FutureTask {
+            check(first.taskId == expected.getInt("taskId") &&
+                System.identityHashCode(first) == expected.getInt("activity") && !first.isDestroyed &&
+                first in stopped && !first.hasWindowFocus() && secure(first))
+            val manager = targetContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val tasks = manager.appTasks
+            val info = checkNotNull(tasks.single().taskInfo)
+            val component = ComponentName(targetContext, MainActivity::class.java)
+            @Suppress("DEPRECATION") // Same API24-compatible original app-task identity; diagnostic is API32 only.
+            check(info.id == first.taskId && info.baseActivity == component && info.topActivity == component)
+            JSONObject().put("activity", System.identityHashCode(first)).put("taskId", first.taskId)
+                .put("secureFlag", true).put("stopped", true).put("windowFocused", false)
+                .put("ownedTaskCount", tasks.size).put("baseActivityMatches", true).put("topActivityMatches", true)
+        }
+        val remaining = until - SystemClock.elapsedRealtime()
+        checkLegacyCapture(remaining > 0, LegacyCaptureFailureCode.BODY_DEADLINE_EXCEEDED)
+        check(Handler(Looper.getMainLooper()).post(task))
+        val owner = try { task.get(remaining, TimeUnit.MILLISECONDS) } finally { task.cancel(false) }
+        bounded()
+        owner.keys().forEach { key -> observed.put(key, owner.get(key)) }
+        val candidate = uiAutomation.rootInActiveWindow
+        observed.put("rootAvailable", candidate != null)
+        val root = requireLegacyCaptureValue(candidate, LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+        try {
+            bounded()
+            val refreshed = root.refresh()
+            bounded()
+            val rectangle = Rect().also(root::getBoundsInScreen)
+            observed.put("refreshed", refreshed).put("windowId", root.windowId)
+                .put("providerMatches", root.packageName?.toString() == "com.google.android.apps.nexuslauncher")
+                .put("visible", root.isVisibleToUser)
+                .put("bounds", JSONArray(listOf(rectangle.left, rectangle.top, rectangle.right, rectangle.bottom)))
+            checkLegacyCapture(refreshed && observed.getBoolean("providerMatches") && root.isVisibleToUser &&
+                root.windowId >= 0 && rectangle.width() > 0 && rectangle.height() > 0,
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            bounded()
+            return observed
+        } finally { @Suppress("DEPRECATION") root.recycle() }
     }
 
     private fun recentsState(
