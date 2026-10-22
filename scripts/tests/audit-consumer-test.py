@@ -1552,10 +1552,13 @@ class ConsumerGateTest(unittest.TestCase):
             'LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"',
             'LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.6"') + "            ;;" + suffix)
         self.select_latest_published_fixture("0.8.0-rc7")
-        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},
-                               arguments=("--latest-published",))
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "P2PKIT_CONSUMER_WORK_DIR": str(self.work)},
+                               arguments=("--latest-published",), home=self.work / "gradle-home")
         self.assert_rejected(result, "wrong producer-private JmDNS expectation")
         self.assertFalse(self.calls("xcrun"))
+        self.assertEqual(1, len(self.calls("gradle")))
+        self.assert_ancestor_bindings(self.calls("curl") + self.calls("gradle"))
 
     def test_latest_published_rc7_rejects_relabelled_producer_metadata(self):
         self.select_latest_published_fixture("0.8.0-rc7")
@@ -1626,11 +1629,12 @@ class ConsumerGateTest(unittest.TestCase):
         cases = (
             "ConsumerGateTest.test_latest_published_selection_keeps_current_source_private_version",
             "ConsumerGateTest.test_latest_published_rc6_rejects_current_private_version_substitution",
+            "ConsumerGateTest.test_latest_published_rc7_rejects_old_private_version_substitution",
         )
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "-v", *cases],
                                 cwd=ROOT, env=environment, text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, self.output(result))
-        self.assertIn("Ran 2 tests in ", result.stderr)
+        self.assertIn("Ran 3 tests in ", result.stderr)
         for case in cases:
             self.assertIn(f'{case.rsplit(".", 1)[1]} (__main__.{case}) ... ok', result.stderr)
         self.assertTrue(result.stderr.rstrip().endswith("\nOK"), self.output(result))
