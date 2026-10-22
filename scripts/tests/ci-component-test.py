@@ -101,6 +101,7 @@ class ComponentTests(unittest.TestCase):
 
     def test_publication_deadlines_latest_contract_and_owned_jdk_controls_are_source_routed(self):
         expected = {
+            'check-rpc-hosted-validation-test.py': [C.sys.executable, '-B', 'scripts/tests/check-rpc-hosted-validation-test.py', '-v'],
             'central-http-test.py': [C.sys.executable, '-B', 'scripts/tests/central-http-test.py', '-v'],
             'kotlin-toolchain-controls': ['bash', 'scripts/tests/check-kotlin-toolchain-policy-test.sh'],
             'published-consumer-controls': [C.sys.executable, '-B', 'scripts/tests/audit-consumer-test.py',

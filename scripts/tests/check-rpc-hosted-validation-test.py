@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""Offline controls for feature-only hosted generation; no Java/network/Gradle."""
+"""Offline live-helper and maintained modular RPC routing controls.
 
+No Java/network/Gradle or installed-Windows qualification. The removed inline
+Desktop full/build-only experiment is not a contract for its modular replacement.
+"""
+
+import copy
 import importlib.util
 import json
 import os
@@ -20,21 +25,6 @@ hosted = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hosted)
 
 
-def check_desktop_rpc_path_filters(source):
-    """Narrow source tripwire for the maintained workflow, not a general YAML parser."""
-    section = source
-    for header in ("on:", "  pull_request:", "    paths:"):
-        indentation = len(header) - len(header.lstrip())
-        matches = re.findall(
-            rf"(?ms)^{re.escape(header)}\n(.*?)(?=^{' ' * indentation}\S|\Z)", section
-        )
-        if len(matches) != 1:
-            raise ValueError("Missing or duplicate Desktop pull-request paths section")
-        section = matches[0]
-    paths = re.findall(r'^      - "([^"\n]+)"\s*$', section, re.MULTILINE)
-    for required in ("library/p2p-rpc/**", "samples/p2p-sample-rpc/**"):
-        if paths.count(required) != 1:
-            raise ValueError("Missing or duplicate Desktop RPC path filter: " + required)
 
 
 def check_release_rpc_controls(source):
@@ -56,170 +46,6 @@ def check_release_rpc_controls(source):
         raise ValueError("RPC offline controls must execute exactly once in release preflight")
 
 
-def check_windows_build_only_selection(source):
-    """Narrow tripwire for this maintained workflow; not a general YAML/shell evaluator."""
-    def section(text, header):
-        indentation = len(header) - len(header.lstrip())
-        matches = re.findall(
-            rf"(?ms)^{re.escape(header)}\n(.*?)(?=^{' ' * indentation}\S|\Z)", text
-        )
-        if len(matches) != 1:
-            raise ValueError("Missing or duplicate Windows validation section: " + header)
-        return matches[0]
-
-    def field(text, indentation, key, expected):
-        values = re.findall(rf"^{' ' * indentation}{re.escape(key)}: (.+)$", text, re.MULTILINE)
-        if values != expected:
-            raise ValueError("Unexpected Windows validation field: " + key)
-
-    inputs = section(section(section(source, "on:"), "  workflow_dispatch:"), "    inputs:")
-    mode = section(inputs, "      rpc_windows_mode:")
-    for key, value in (("type", "choice"), ("required", "true"), ("default", "full"),
-                       ("options", "[full, build-only]")):
-        field(mode, 8, key, [value])
-    job = section(section(source, "jobs:"), "  rpc-windows:")
-    for forbidden in ("continue-on-error:", "secrets.", "environment:"):
-        if forbidden in job:
-            raise ValueError("Forbidden Windows validation bypass/authority: " + forbidden)
-    guard = ("    if: >-\n"
-             "      github.event_name == 'workflow_dispatch' && inputs.scope == 'rpc-windows' &&\n"
-             "      github.repository == 'p2pKit/P2pKit' &&\n"
-             "      github.ref == 'refs/heads/work/rpc-windows-validation-20261012'\n")
-    if job.count(guard) != 1:
-        raise ValueError("Windows validation must retain the exact manual test-branch guard")
-    field(job, 4, "runs-on", ["windows-2022"])
-    field(job, 6, "RPC_WINDOWS_VALIDATION_MODE", ["${{ inputs.rpc_windows_mode }}"])
-    if "'Windows RPC BUILD/JVM/POLICY UNITS - NOT profile runtime or release'" not in job:
-        raise ValueError("Build-only status must not claim native runtime or release")
-    steps = re.findall(r"(?ms)^      - name: .+?\n.*?(?=^      - name: |\Z)", job)
-
-    def step(identifier):
-        found = [value for value in steps if re.search(rf"^        id: {identifier}$", value, re.MULTILINE)]
-        if len(found) != 1:
-            raise ValueError("Missing or duplicate Windows validation step: " + identifier)
-        return found[0]
-
-    declaration = step("validation-scope")
-    field(declaration, 8, "if", [])
-    for required in ("-cnotin @('full', 'build-only')", "throw 'Unknown Windows validation mode'",
-                     "account feasibility: NOT_PERFORMED", "Native storage: NOT_PERFORMED",
-                     "Native policy execution is memory-only; no profile DLL or custody smoke executes.",
-                     "cannot satisfy the Windows native runtime or release gate."):
-        if required not in declaration:
-            raise ValueError("Missing explicit non-qualifying scope: " + required)
-    base = "./samples/p2p-sample-rpc/native/windows-profile/tests/windows/"
-    for identifier, filename in (("account-capabilities", "check-hosted-account-capabilities.ps1"),
-                                 ("account-admission", "check-hosted-account-admission.ps1")):
-        probe = step(identifier)
-        field(probe, 8, "if", ["${{ inputs.rpc_windows_mode != 'build-only' }}"])
-        if base + filename not in probe:
-            raise ValueError("Default full mode must retain the account probes")
-    native = step("native-build")
-    field(native, 8, "if", [])
-    if "        run: >-\n          " + base + "check-hosted-build.ps1\n" not in native:
-        raise ValueError("Actual native compiler command must remain unconditional")
-    units = step("native-policy-units")
-    field(units, 8, "if", [])
-    field(units, 8, "timeout-minutes", ["10"])
-    commands = ("        run: |\n          ./scripts/tests/check-rpc-policy-command-test.ps1 `\n"
-                "            -OutputDirectory (Join-Path $env:RUNNER_TEMP "
-                "'p2pkit-windows-validation/policy-command-controls')\n"
-                "          " + base + "check-hosted-policy-tests.ps1\n")
-    if commands not in units:
-        raise ValueError("Both helper controls and fixed native policy units must execute")
-    if "rpc_windows_mode" in units:
-        raise ValueError("Both modes must include pure native policy units")
-    refusal = step("standard-user-refusal")
-    field(refusal, 8, "if", [])
-    field(refusal, 8, "timeout-minutes", ["2"])
-    for required in ("check-standard-user-refusal-test.ps1", "check-hosted-standard-user-refusal.ps1"):
-        if base + required not in refusal:
-            raise ValueError("Missing explicit elevated refusal control")
-    for identifier, task in (("jvm-controls", ":p2p-sample-rpc:jvmTest"),
-                             ("native-file-pin", ":p2p-sample-rpc:verifyRpcWindowsPinnedImage"),
-                             ("desktop-controls", ":p2p-sample-desktop-ui:test"),
-                             ("rpc-library", ":p2p-rpc:jvmTest"),
-                             ("native-bytes", ":p2p-sample-rpc:verifyRpcWindowsProfileBytes")):
-        control = step(identifier)
-        condition = "${{ !cancelled() }}" if identifier != "native-bytes" else (
-            "${{ !cancelled() && steps.native-build.outcome == 'success' && "
-            "steps.jvm-controls.outcome == 'success' }}")
-        field(control, 8, "if", [condition])
-        for required in ("./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache",
-                         "--dependency-verification strict --warning-mode=fail", task,
-                         "if ($LASTEXITCODE -ne 0) { throw", "(git status --porcelain)"):
-            if required not in control:
-                raise ValueError("Missing strict independent Windows control: " + identifier)
-        if "rpc_windows_mode" in control:
-            raise ValueError("Build-only cannot omit compiler/JVM/byte validation")
-    # A fixed complete command, not a blacklist: no selectors, task exclusions, injected
-    # init scripts, shell conditions or pre-step filter changes may narrow applicable jvmTest.
-    jvm = """      - name: Run all applicable JVM contracts with strict dependency verification
-        id: jvm-controls
-        if: ${{ !cancelled() }}
-        timeout-minutes: 15
-        run: |
-          $ErrorActionPreference = 'Stop'
-          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
-            --dependency-verification strict --warning-mode=fail --console=plain `
-            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
-            '-Dorg.gradle.java.installations.auto-download=false' `
-            '-Pkotlin.compiler.execution.strategy=in-process' `
-            :p2p-sample-rpc:jvmTest
-          if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
-          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
-            throw 'Source changed during Windows validation'
-          }
-"""
-    if step("jvm-controls").rstrip("\n") != jvm.rstrip("\n"):
-        raise ValueError("Windows JVM controls must run the unfiltered applicable suite with the exact strict command")
-    byte_check = step("native-bytes")
-    for required in ("$receipt.source -cne $env:GITHUB_SHA", "$receipt.tree -cne $tree",
-                     "$receipt.nativeBuild -cne 'PASS'",
-                     "$receipt.scope -cne 'WINDOWS_NATIVE_BUILD_ONLY_NOT_RUNTIME_OR_RELEASE'"):
-        if required not in byte_check:
-            raise ValueError("Actual DLL receipt must remain source/build/scope-bound")
-    package_check = step("native-package")
-    field(package_check, 8, "if", ["${{ !cancelled() && steps.desktop-controls.outcome == 'success' }}"])
-    for required in (":p2p-sample-desktop-ui:createDistributable :p2p-sample-desktop-ui:packageMsi",
-                     "--dependency-verification strict --warning-mode=fail",
-                     "./scripts/verify-rpc-windows-app-image.py", "--source $env:GITHUB_SHA --tree $tree",
-                     "if ($LASTEXITCODE -ne 0) { throw", "(git status --porcelain)",
-                     "MSI BUILT, NOT INSTALLED. Native component STAGED, NOT LOADED."):
-        if required not in package_check:
-            raise ValueError("Missing existing-app packaging control: " + required)
-    for forbidden in ("msiexec", "System.load", "package-rpc-preview", "continue-on-error"):
-        if forbidden in package_check:
-            raise ValueError("Unexpected installation or alternate producer: " + forbidden)
-    payload = step("msi-payload")
-    field(payload, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' }}"])
-    field(payload, 8, "timeout-minutes", ["3"])
-    field(payload, 8, "run", [base + "check-hosted-msi-payload.ps1"])
-    runtime = step("runtime-readback")
-    field(runtime, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' }}"])
-    field(runtime, 8, "timeout-minutes", ["2"])
-    field(runtime, 8, "run", [base + "check-hosted-runtime-readback.ps1"])
-    preview = step("loader-preview")
-    field(preview, 8, "if", ["${{ !cancelled() }}"])
-    for required in (":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar", "check-rpc-windows-loader-jdk21.py",
-                     "check-runtime-preview-parser-test.ps1", "--java21 $env:RPC_WINDOWS_JDK21",
-                     "--java17 $env:JAVA_HOME", "--dependency-verification strict --warning-mode=fail",
-                     "if ($LASTEXITCODE -ne 0) { throw", "(git status --porcelain)"):
-        if required not in preview:
-            raise ValueError("Missing isolated preview control: " + required)
-    preview_runtime = step("loader-runtime-readback")
-    field(preview_runtime, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' && "
-                                       "steps.loader-preview.outcome == 'success' }}"])
-    field(preview_runtime, 8, "run", [base + "check-hosted-runtime-readback.ps1 -PreviewAdapter"])
-    for required in ("'-Pp2pkit.rpc.windows.previewAdapter=true'", "--output $receipt --preview-adapter",
-                     "$packageExit = $LASTEXITCODE", "if ($packageExit -ne 0) { throw",
-                     "./scripts/verify-rpc-windows-app-image.py --diagnostics-only",
-                     "--diagnostics (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/app-image-diagnostics')"):
-        if required not in package_check:
-            raise ValueError("Missing opt-in adapter packaging control: " + required)
-    artifact = "windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}"
-    if "          name: " + artifact + "\n" not in job:
-        raise ValueError("Windows evidence must distinguish selected mode/source/attempt")
 
 
 def check_windows_policy_units(source):
@@ -278,7 +104,167 @@ def check_windows_static_msi(source):
             raise ValueError("Unexpected static MSI action: " + value)
 
 
+def workflow(source):
+    # Use the same safe YAML parser as the repository's maintained Ruby policies;
+    # no extra Python package or general shell evaluator is introduced.
+    result = subprocess.run(['ruby', '-ryaml', '-rjson', '-e',
+        'puts JSON.generate(YAML.safe_load(STDIN.read, aliases: false))'],
+        input=source, text=True, capture_output=True, timeout=5)
+    if result.returncode:
+        raise ValueError('Invalid workflow YAML')
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict):
+        raise ValueError('Workflow must be a mapping')
+    return value
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def check_main_rpc_change_coverage(source):
+    document = workflow(source)
+    triggers = document.get('on', document.get('true', {}))
+    require('pull_request' in triggers and triggers['pull_request'] in (None, {}),
+            'Main RPC coverage must not filter pull-request paths')
+    require(triggers.get('push', {}).get('branches') == ['main'], 'Main push coverage missing')
+    require(document['jobs']['component']['uses'] == './.github/workflows/ci-component.yml',
+            'Main must retain the same-source component worker')
+
+
+def check_desktop_dispatch(source):
+    document = workflow(source)
+    triggers = document.get('on', document.get('true', {}))
+    require(set(triggers) == {'workflow_dispatch'}, 'Desktop wrapper must remain explicit dispatch')
+    inputs = triggers['workflow_dispatch']['inputs']
+    require(inputs == {'component': {'type': 'choice', 'default': 'all',
+            'options': ['all', 'desktop-linux', 'desktop-windows', 'desktop-macos']}},
+            'Desktop selector must retain all three maintained components')
+    require(document['permissions'] == {'contents': 'read', 'actions': 'read'},
+            'Desktop dispatch cannot acquire write credentials')
+    jobs = document['jobs']
+    require(set(jobs) == {'plan', 'component'}, 'Desktop dispatch cannot add a qualification or inline native job')
+    plan = jobs['plan']
+    require('if' not in plan and not plan.get('continue-on-error'), 'Desktop planning cannot be suppressed')
+    checkout, select = plan['steps']
+    require(re.fullmatch(r'actions/checkout@[0-9a-f]{40}', checkout['uses']) and
+            checkout['with'] == {'persist-credentials': False}, 'Same-event checkout cannot persist credentials or substitute refs')
+    expected = ('if [[ "$COMPONENT" == all ]]; then COMPONENT=desktop-linux,desktop-windows,desktop-macos; fi\n'
+                'echo "matrix=$(python3 -B scripts/ci_component.py --matrix "$COMPONENT")" >> "$GITHUB_OUTPUT"\n')
+    require(select == {'id': 'components', 'env': {'COMPONENT': '${{ inputs.component }}'}, 'run': expected},
+            'Desktop selection must execute the maintained component matrix')
+    require(jobs['component'] == {
+        'name': '${{ matrix.component }}', 'needs': 'plan',
+        'strategy': {'fail-fast': False, 'matrix': '${{ fromJSON(needs.plan.outputs.matrix) }}'},
+        'uses': './.github/workflows/ci-component.yml',
+        'with': {'component': '${{ matrix.component }}', 'runner': '${{ matrix.os }}',
+                 'minutes': '${{ matrix.minutes }}', 'job_minutes': '${{ matrix.job_minutes }}'},
+    }, 'Desktop must run the same-source worker without skipped peers or ignored failures')
+
+
+def component_commands():
+    spec = importlib.util.spec_from_file_location('rpc_modular_component', ROOT / 'scripts/ci_component.py')
+    component = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(component)
+    return {name: component.commands(name) for name in ('jvm-windows', 'desktop-windows')}
+
+
+def check_windows_modular_commands(commands):
+    # Actual command arrays, not echoed YAML task names. The admin development
+    # fixture and built MSI are not standard-user/installed provider acceptance.
+    wrapper = str(ROOT / 'gradlew.bat') if os.name == 'nt' else './gradlew'
+    flags = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
+             '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
+    jvm = [argv for task, argv in commands['jvm-windows'] if task == 'jvm-tests']
+    require(jvm == [[wrapper, *flags, '-Pp2pkit.rpc.windows.protectedDevelopmentFixture=true',
+        ':p2p-core:jvmTest', ':p2p-transport-lan:jvmTest', ':p2p-network-provisioning-desktop:test',
+        ':p2p-rpc:jvmTest', ':p2p-sample-rpc:jvmTest']], 'Windows JVM suite must remain complete, strict and unfiltered')
+    require(commands['desktop-windows'] == [
+        ('desktop-tests-and-installer', [wrapper, *flags, '-Pp2pkit.rpc.windows.previewAdapter=true',
+            ':p2p-sample-desktop:check', ':p2p-sample-desktop:installDist', ':p2p-sample-desktop-ui:test',
+            ':p2p-sample-desktop-ui:checkRuntime', ':p2p-sample-desktop-ui:hotRunArgfile',
+            ':p2p-sample-desktop-ui:createDistributable', ':p2p-sample-desktop-ui:packageMsi']),
+        ('rpc-windows-package-inspection', [sys.executable, '-B', 'scripts/inspect-rpc-windows-package.py']),
+        ('rpc-windows-runtime-readback', [sys.executable, '-B', 'scripts/check-rpc-windows-image-runtime.py']),
+    ], 'Windows must build the normal MSI, then inspect its image/payload and runtime without ignored failures')
+
+
 class HostedValidationTest(unittest.TestCase):
+    def test_maintained_main_covers_rpc_changes_without_desktop_path_filters(self):
+        check_main_rpc_change_coverage((ROOT / '.github/workflows/ci.yml').read_text())
+
+    def test_main_rpc_coverage_rejects_missing_or_filtered_pull_request_trigger(self):
+        source = (ROOT / '.github/workflows/ci.yml').read_text()
+        for replacement in ('', '  pull_request:\n    paths: [docs/**]\n',
+                            '  pull_request:\n    paths-ignore: [library/p2p-rpc/**]\n'):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                check_main_rpc_change_coverage(source.replace('  pull_request:\n', replacement, 1))
+        with self.assertRaises(ValueError):
+            check_main_rpc_change_coverage(source.replace('branches: [main]', 'branches: [other]', 1))
+
+    def test_manual_desktop_dispatch_uses_all_three_same_source_components(self):
+        check_desktop_dispatch((ROOT / '.github/workflows/desktop-cross-host.yml').read_text())
+
+    def test_desktop_dispatch_rejects_omissions_ref_substitution_credentials_and_false_qualification(self):
+        source = (ROOT / '.github/workflows/desktop-cross-host.yml').read_text()
+        mutations = (
+            ('default: all', 'default: desktop-windows'),
+            ('options: [all, desktop-linux, desktop-windows, desktop-macos]', 'options: [desktop-windows]'),
+            ('contents: read', 'contents: write'),
+            ('persist-credentials: false', 'persist-credentials: true'),
+            ('persist-credentials: false', 'persist-credentials: false\n          ref: another'),
+            ('fail-fast: false', 'fail-fast: true'),
+            ('    needs: plan', '    needs: plan\n    continue-on-error: true'),
+            ('    name: ${{ matrix.component }}', '    name: ${{ matrix.component }}\n    if: false'),
+            ('uses: ./.github/workflows/ci-component.yml', 'uses: other/repo/.github/workflows/ci-component.yml@main'),
+            ('COMPONENT=desktop-linux,desktop-windows,desktop-macos', 'COMPONENT=desktop-windows'),
+        )
+        for before, after in mutations:
+            self.assertIn(before, source)
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                check_desktop_dispatch(source.replace(before, after, 1))
+        with self.assertRaises(ValueError):
+            check_desktop_dispatch(source + '\n  qualify:\n    runs-on: ubuntu-latest\n    steps: []\n')
+
+    def test_windows_modular_jvm_msi_image_and_runtime_commands_remain_complete(self):
+        check_windows_modular_commands(component_commands())
+
+    def test_windows_modular_jvm_controls_reject_selectors_exclusions_and_bypasses(self):
+        original = component_commands()
+        for suffix in (['--tests', 'OneTest'], ['-x', ':p2p-sample-rpc:jvmTest'],
+                       ['--exclude-task', ':p2p-rpc:jvmTest'], ['--init-script', 'narrow.gradle'],
+                       ['--dry-run'], ['||', 'true']):
+            commands = copy.deepcopy(original)
+            next(argv for task, argv in commands['jvm-windows'] if task == 'jvm-tests').extend(suffix)
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                check_windows_modular_commands(commands)
+        for task in (':p2p-rpc:jvmTest', ':p2p-sample-rpc:jvmTest'):
+            commands = copy.deepcopy(original)
+            next(argv for label, argv in commands['jvm-windows'] if label == 'jvm-tests').remove(task)
+            with self.assertRaises(ValueError):
+                check_windows_modular_commands(commands)
+
+    def test_windows_modular_packaging_cannot_skip_inspection_reorder_or_use_alternate_producer(self):
+        original = component_commands()
+        for index in range(3):
+            commands = copy.deepcopy(original)
+            del commands['desktop-windows'][index]
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                check_windows_modular_commands(commands)
+        commands = copy.deepcopy(original)
+        commands['desktop-windows'].reverse()
+        with self.assertRaises(ValueError):
+            check_windows_modular_commands(commands)
+        for before, after in ((':p2p-sample-desktop-ui:packageMsi', ':p2p-sample-rpc:packageMsi'),
+                              ('strict', 'off'), (':p2p-sample-desktop-ui:test', '--dry-run')):
+            commands = copy.deepcopy(original)
+            argv = commands['desktop-windows'][0][1]
+            argv[argv.index(before)] = after
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                check_windows_modular_commands(commands)
+
+
     def test_static_msi_wrapper_stays_source_bound_and_nonexecuting(self):
         path = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-msi-payload.ps1"
         check_windows_static_msi(path.read_text())
@@ -298,28 +284,8 @@ class HostedValidationTest(unittest.TestCase):
                 self.assertIn(before, source)
                 check_windows_static_msi(source.replace(before, after))
 
-    def test_static_msi_workflow_requires_prior_image_pass(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        old = "${{ !cancelled() && steps.native-package.outcome == 'success' }}"
-        self.assertIn(old, source)
-        with self.assertRaises(ValueError):
-            check_windows_build_only_selection(source.replace(old, "${{ !cancelled() }}"))
 
-    def test_standard_user_negative_control_is_not_substituted_for_positive_account_probe(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        replacement = source.replace("check-hosted-standard-user-refusal.ps1", "check-hosted-account-admission.ps1")
-        with self.assertRaises(ValueError):
-            check_windows_build_only_selection(replacement)
 
-    def test_packaging_control_rejects_missing_validation_or_alternate_producer(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for before, after in ((":p2p-sample-desktop-ui:packageMsi", ":p2p-sample-rpc:packageMsi"),
-                              ("--source $env:GITHUB_SHA --tree $tree", "--source old --tree old"),
-                              ("MSI BUILT, NOT INSTALLED.", "MSI QUALIFIED."),
-                              ("./scripts/verify-rpc-windows-app-image.py", "./scripts/package-rpc-preview.py")):
-            with self.subTest(mutation=before), self.assertRaises(ValueError):
-                self.assertIn(before, source)
-                check_windows_build_only_selection(source.replace(before, after))
 
     def test_windows_policy_units_are_fixed_memory_only_asserting_and_bounded(self):
         path = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-policy-tests.ps1"
@@ -341,89 +307,10 @@ class HostedValidationTest(unittest.TestCase):
                 self.assertIn(before, source)
                 check_windows_policy_units(source.replace(before, after))
 
-    def test_windows_build_only_remains_explicit_and_nonqualifying(self):
-        check_windows_build_only_selection((ROOT / ".github/workflows/desktop-cross-host.yml").read_text())
 
-    def test_windows_build_only_rejects_probe_default_and_authority_bypasses(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        mutations = (
-            ("        default: full", "        default: build-only"),
-            ("        options: [full, build-only]", "        options: [build-only]"),
-            ("github.ref == 'refs/heads/work/rpc-windows-validation-20261012'", "true"),
-            ("    runs-on: windows-2022", "    runs-on: windows-latest"),
-            ("    runs-on: windows-2022", "    continue-on-error: true\n    runs-on: windows-2022"),
-            ("account feasibility: NOT_PERFORMED", "account feasibility: PASS"),
-            ("Native storage: NOT_PERFORMED", "Native storage: PASS"),
-            ("Native policy execution is memory-only;", "Only memory-policy unit EXEs execute;"),
-            ("'Windows RPC BUILD/JVM/POLICY UNITS - NOT profile runtime or release'", "'Windows RPC qualified'"),
-            ("windows-rpc-validation-${{ inputs.rpc_windows_mode }}-", "windows-rpc-validation-"),
-        )
-        for before, after in mutations:
-            with self.subTest(mutation=before), self.assertRaises(ValueError):
-                self.assertIn(before, source)
-                check_windows_build_only_selection(source.replace(before, after, 1))
-        for identifier in ("account-capabilities", "account-admission"):
-            old = "        id: " + identifier + "\n        if: ${{ inputs.rpc_windows_mode != 'build-only' }}"
-            for condition in ("", "        if: ${{ false }}", "        if: ${{ inputs.rpc_windows_mode == 'full' }}",
-                              "        continue-on-error: true\n        if: ${{ inputs.rpc_windows_mode != 'build-only' }}"):
-                with self.subTest(step=identifier, condition=condition), self.assertRaises(ValueError):
-                    self.assertIn(old, source)
-                    check_windows_build_only_selection(source.replace(old, "        id: " + identifier + "\n" + condition))
 
-    def test_windows_build_only_cannot_omit_or_weaken_existing_compiler_jvm_and_byte_controls(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for identifier in ("native-build", "native-policy-units", "jvm-controls", "native-file-pin", "desktop-controls",
-                           "rpc-library", "native-bytes"):
-            marker = "        id: " + identifier + "\n"
-            for suffix in ("        if: ${{ inputs.rpc_windows_mode != 'build-only' }}\n",
-                           "        continue-on-error: true\n"):
-                with self.subTest(step=identifier, suffix=suffix), self.assertRaises(ValueError):
-                    check_windows_build_only_selection(source.replace(marker, marker + suffix, 1))
-        for before, after in (("--dependency-verification strict --warning-mode=fail", "--dependency-verification off"),
-                              ("$receipt.source -cne $env:GITHUB_SHA", "$false"),
-                              ("$receipt.scope -cne 'WINDOWS_NATIVE_BUILD_ONLY_NOT_RUNTIME_OR_RELEASE'", "$false"),
-                              ("check-hosted-build.ps1", "check-hosted-build.ps1 || true")):
-            with self.subTest(mutation=before), self.assertRaises(ValueError):
-                check_windows_build_only_selection(source.replace(before, after, 1))
 
-    def test_windows_jvm_controls_reject_selectors_exclusions_and_filter_injection(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        task = "            :p2p-sample-rpc:jvmTest\n"
-        self.assertEqual(1, source.count(task))
-        suffixes = (
-            " --tests dev.p2pkit.sample.rpc.RpcDiscoveryCoordinatorTest",
-            " --tests=*WindowsProfile*",
-            " -x :p2p-sample-rpc:jvmTest",
-            " --exclude-task :p2p-sample-rpc:jvmTest",
-            " --init-script narrow-tests.gradle.kts",
-            " -I narrow-tests.gradle",
-            " -PtestFilter=WindowsProfileFilesTest",
-            " $filter",
-            " `\n            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest",
-        )
-        for suffix in suffixes:
-            with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, "unfiltered applicable suite"):
-                check_windows_build_only_selection(source.replace(task, task.rstrip("\n") + suffix + "\n", 1))
 
-    def test_windows_jvm_controls_reject_suppressed_duplicate_or_preconfigured_invocation(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        task = "            :p2p-sample-rpc:jvmTest\n"
-        for replacement in ("", task + task, task.replace(":p2p", "# :p2p")):
-            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
-                check_windows_build_only_selection(source.replace(task, replacement, 1))
-        command = "          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `\n"
-        injections = (
-            "          $env:GRADLE_OPTS = '-I narrow-tests.gradle'\n",
-            """          Add-Content build.gradle.kts 'tasks.withType<Test> { filter.includeTestsMatching("One") }'\n""",
-            "          if ($false) {\n",
-        )
-        for injection in injections:
-            with self.subTest(injection=injection), self.assertRaisesRegex(ValueError, "unfiltered applicable suite"):
-                check_windows_build_only_selection(source.replace(command, injection + command, 1))
-        marker = "        id: jvm-controls\n"
-        environment = "        env:\n          GRADLE_OPTS: '-I narrow-tests.gradle'\n"
-        with self.assertRaisesRegex(ValueError, "unfiltered applicable suite"):
-            check_windows_build_only_selection(source.replace(marker, marker + environment, 1))
 
     def test_complete_release_gate_runs_rpc_offline_controls(self):
         check_release_rpc_controls((ROOT / "scripts/run-release-gate.sh").read_text())
@@ -487,33 +374,8 @@ class HostedValidationTest(unittest.TestCase):
             with self.subTest(replacement=replacement), self.assertRaises(ValueError):
                 check_release_rpc_controls(source)
 
-    def test_desktop_cross_host_covers_both_rpc_only_change_paths(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        check_desktop_rpc_path_filters(source)
 
-    def test_omitting_either_rpc_path_fails_desktop_coverage(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for required in ("library/p2p-rpc/**", "samples/p2p-sample-rpc/**"):
-            with self.subTest(path=required):
-                line = f'      - "{required}"\n'
-                self.assertEqual(source.count(line), 1)
-                with self.assertRaisesRegex(ValueError, "Desktop RPC path filter"):
-                    check_desktop_rpc_path_filters(source.replace(line, "", 1))
 
-    def test_comments_or_other_workflow_sections_cannot_rescue_missing_rpc_paths(self):
-        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for required in ("library/p2p-rpc/**", "samples/p2p-sample-rpc/**"):
-            with self.subTest(path=required):
-                line = f'      - "{required}"\n'
-                missing = source.replace(line, "", 1)
-                candidates = (
-                    source.replace(line, "      # " + line.strip() + "\n", 1),
-                    missing + '\nnot-a-trigger:\n    paths:\n' + line,
-                    missing.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n    paths:\n" + line, 1),
-                )
-                for candidate in candidates:
-                    with self.assertRaisesRegex(ValueError, "Desktop RPC path filter"):
-                        check_desktop_rpc_path_filters(candidate)
 
     def test_complete_writer_is_not_replaced_by_a_partial_graph(self):
         commands = hosted.generator_commands()
