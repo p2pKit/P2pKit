@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.android.runtime
 
+import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -688,8 +689,12 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         } finally { @Suppress("DEPRECATION") root.recycle() }
     }
 
+    private data class EducationObservation(val owner: JSONObject, val popup: JSONObject?)
+
     private fun recentsState(
-        until: Long, query: JSONObject? = null, guard: (LegacyRecentsGuard) -> Unit,
+        until: Long, query: JSONObject? = null,
+        educationObserver: ((EducationObservation) -> Unit)? = null,
+        guard: (LegacyRecentsGuard) -> Unit,
     ): JSONObject? {
         fun pending(value: LegacyRecentsGuard): JSONObject? { guard(value); return null }
         query?.put("phase", "OWNED_TASK")
@@ -715,6 +720,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         query?.put("phase", "ACTIVE_ROOT")
         val root = uiAutomation.rootInActiveWindow ?: return pending(LegacyRecentsGuard.ROOT_MISSING)
         val nodes = mutableListOf<LegacyRecentsNode>()
+        val educationNodes = mutableListOf<LegacyEducationNode>()
         var treeComplete = false
         var primaryFailure: Throwable? = null
         try {
@@ -748,6 +754,21 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     node.text?.toString() == publicAppLabel, node.contentDescription?.toString() == publicAppLabel,
                     node.collectionItemInfo != null,
                     recentsCloseAction != 0 && node.actionList.any { it.id == recentsCloseAction })
+                if (educationObserver != null) {
+                    val resource = when (node.viewIdResourceName) {
+                        "$recentsProvider:id/text" -> LegacyEducationResource.TEXT
+                        "$recentsProvider:id/arrow" -> LegacyEducationResource.ARROW
+                        else -> LegacyEducationResource.OTHER
+                    }
+                    val kind = when (node.className?.toString()) {
+                        "android.widget.TextView" -> LegacyEducationClass.TEXT_VIEW
+                        "android.view.View" -> LegacyEducationClass.VIEW
+                        "android.widget.LinearLayout" -> LegacyEducationClass.LINEAR_LAYOUT
+                        else -> LegacyEducationClass.OTHER
+                    }
+                    educationNodes += LegacyEducationNode(nodes.last(), resource, kind,
+                        node.text?.toString() == LEGACY_RECENTS_EDUCATION_TEXT)
+                }
                 query?.put("visitedNodeCount", nodes.size)
                 checkLegacyCapture(node.childCount <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
                 for (childIndex in 0 until node.childCount) {
@@ -766,6 +787,35 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             treeComplete = complete
             query?.put("treeComplete", complete)?.put("phase", "CARD_SELECTION")
             if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)
+            if (educationObserver != null) {
+                val popup = findLegacyRecentsEducation(educationNodes)
+                query?.put("educationPredicates", JSONObject()
+                    .put("complete", true).put("nodes", educationNodes.size)
+                    .put("textIds", educationNodes.count { it.resource == LegacyEducationResource.TEXT })
+                    .put("arrowIds", educationNodes.count { it.resource == LegacyEducationResource.ARROW })
+                    .put("exactTexts", educationNodes.count { it.exactText })
+                    .put("textClasses", educationNodes.count { it.kind == LegacyEducationClass.TEXT_VIEW })
+                    .put("arrowClasses", educationNodes.count { it.kind == LegacyEducationClass.VIEW })
+                    .put("parentClasses", educationNodes.count { it.kind == LegacyEducationClass.LINEAR_LAYOUT })
+                    .put("owned", educationNodes.count { it.observation.owned })
+                    .put("visible", educationNodes.count { it.observation.visible })
+                    .put("rootContained", educationNodes.count {
+                        val b = it.observation.bounds
+                        b[0] < b[2] && b[1] < b[3] && bounds.contains(b[0], b[1], b[2], b[3])
+                    }).put("knownPopup", popup != null))
+                val popupJson = popup?.let {
+                    JSONObject().put("parentBounds", JSONArray(nodes[it.parent].bounds))
+                        .put("textBounds", JSONArray(nodes[it.text].bounds))
+                        .put("arrowBounds", JSONArray(nodes[it.arrow].bounds))
+                        .put("exactText", true).put("exactIds", true).put("expectedClasses", true)
+                        .put("unique", true).put("rootContained", true).put("complete", true)
+                }
+                val observedOwner = JSONObject(owner.toString()).put("package", recentsProvider)
+                    .put("windowId", root.windowId)
+                    .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+                educationObserver(EducationObservation(observedOwner, popupJson))
+                if (popup != null) return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
+            }
             val card = findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)
                 ?: return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
             fun rectangle(index: Int) = JSONArray(nodes[index].bounds)
@@ -814,6 +864,11 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         report.put("recentsAdmission", admission)
         attempt.put("operation", "RECENTS_ROOT_ADMISSION")
         val progress = LegacyRecentsProgress()
+        val dismissal = LegacyEducationDismissal()
+        val education = if (Build.VERSION.SDK_INT == 32) JSONObject().put("schema", 1).put("api", 32)
+            .put("operation", "OBSERVING").put("observations", 0).also { report.put("recentsEducation", it) }
+            else null
+        var educationObservations = 0
         val state = awaitLegacyRecentsState(until, SystemClock::elapsedRealtime, { Thread.sleep(20) }) {
             progress.begin()
             admission.put("attempts", progress.attempt).put("operation", "OBSERVING")
@@ -821,7 +876,11 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 .put("startedElapsedMillis", SystemClock.elapsedRealtime())
             report.put("recentsQueryCurrent", query)
             var returnedGuard: LegacyRecentsGuard? = null
-            val value = recentsState(until, query) { returnedGuard = it }
+            var educationObservation: EducationObservation? = null
+            val educationObserver: ((EducationObservation) -> Unit)? = if (education != null) {
+                { observation -> educationObservation = observation }
+            } else null
+            val value = recentsState(until, query, educationObserver) { returnedGuard = it }
             val guard = checkNotNull(returnedGuard)
             progress.completed(guard)
             query.put("phase", "RETURNED").put("guard", guard.name)
@@ -830,6 +889,39 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 .put("lastCompletedAttempt", progress.lastCompletedAttempt)
                 .put("guardCounts", JSONObject(progress.guardCounts.mapKeys { it.key.name }))
             report.put("recentsQueryLastCompleted", JSONObject(query.toString()))
+            educationObservation?.let { observed ->
+                val ledger = checkNotNull(education)
+                ledger.put("observations", ++educationObservations)
+                if (observed.popup != null && !dismissal.requested) {
+                    ledger.put("before", JSONObject().put("attempt", progress.attempt)
+                        .put("observedElapsedMillis", SystemClock.elapsedRealtime())
+                        .put("owner", observed.owner).put("popup", observed.popup))
+                    val request = JSONObject().put("action", "BACK").put("platformAction", 1)
+                    ledger.put("request", request).put("operation", "REQUESTING")
+                    dismissal.request(until, SystemClock::elapsedRealtime) {
+                        request.put("requestedElapsedMillis", SystemClock.elapsedRealtime())
+                        // Only this positively identified API32 education popup may request BACK once.
+                        try {
+                            val accepted = uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                            request.put("returned", true).put("accepted", accepted)
+                                .put("returnedElapsedMillis", SystemClock.elapsedRealtime())
+                            accepted
+                        } catch (error: Throwable) {
+                            request.put("failureType", error.javaClass.name)
+                            throw error
+                        }
+                    }
+                    ledger.put("operation", "AWAITING_REAL_CARD")
+                }
+                if (value != null) {
+                    check(observed.popup == null)
+                    ledger.put("operation", if (dismissal.requested) "DISMISSED" else "NONE_REQUIRED")
+                        .put("after", JSONObject().put("attempt", progress.attempt)
+                            .put("observedElapsedMillis", SystemClock.elapsedRealtime())
+                            .put("popupAbsent", true).put("systemWindow", value))
+                }
+            }
+            if (education != null && value != null) checkNotNull(educationObservation)
             value
         }
         admission.put("completedElapsedMillis", SystemClock.elapsedRealtime()).put("operation", "READY")

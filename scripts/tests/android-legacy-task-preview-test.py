@@ -90,6 +90,9 @@ def fixture(api=24, unavailable=False):
             for event, activity in (("created", 1), ("stopped", 1), ("created", 2), ("destroyed", 1), ("destroyed", 2))])
     if api == 32:
         report["recentsProviderLookup"] = dict(operation="COMPLETE", packageMatches=True, distinctUid=True)
+        report["recentsEducation"] = dict(schema=1, api=32, operation="NONE_REQUIRED", observations=2,
+            after=dict(attempt=2, observedElapsedMillis=108, popupAbsent=True,
+                       systemWindow=copy.deepcopy(captures[1]["systemWindowBefore"])))
     # Clearly synthetic parser inputs, not captured images or proof of visual privacy.
     files["result.json"] = json.dumps(report).encode()
     return report, files
@@ -116,6 +119,97 @@ class LegacyTaskTests(unittest.TestCase):
                 report, files = fixture(api, unavailable)
                 self.assertTrue(self.validate(report, files, api)["recentsReviewRequired"])
             self.assertEqual(legacy.LegacyCampaign(api).API, api)
+
+    def education_fixture(self):
+        report, files = fixture(32)
+        admission = report["recentsAdmission"]
+        admission.update(attempts=3, lastCompletedAttempt=3,
+                         guardCounts={"ROOT_MISSING": 1, "CARD_NOT_IDENTIFIED": 1, "READY": 1})
+        ledger = report["recentsEducation"]
+        ledger.update(operation="DISMISSED", observations=2)
+        ledger["after"]["attempt"] = 3
+        system = report["captures"][1]["systemWindowBefore"]
+        ledger["before"] = dict(attempt=2, observedElapsedMillis=106,
+            owner={key: copy.deepcopy(val) for key, val in system.items() if key != "taskCard"},
+            popup=dict(parentBounds=[1, 1, 10, 7], textBounds=[1, 1, 10, 5], arrowBounds=[12, 8, 14, 10],
+                exactText=True, exactIds=True, expectedClasses=True, unique=True, rootContained=True, complete=True))
+        ledger["request"] = dict(action="BACK", platformAction=1, requestedElapsedMillis=106,
+            returnedElapsedMillis=107, returned=True, accepted=True)
+        return report, files
+
+    def test_exact_optional_education_action_requires_popup_absence_and_original_card(self):
+        report, files = self.education_fixture()
+        self.assertTrue(self.validate(report, files, 32)["recentsReviewRequired"])
+        for key, invalid in (("popupAbsent", False), ("popupAbsent", 1), ("attempt", 2),
+                             ("observedElapsedMillis", 5099), ("systemWindow", {})):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["after"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+        report, files = self.education_fixture()
+        del report["captures"][1]["systemWindowBefore"]["taskCard"]
+        with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_api_boundary_and_extra_or_missing_education_requests_fail_closed(self):
+        report, files = fixture(32)
+        del report["recentsEducation"]
+        with self.assertRaises(ValueError): self.validate(report, files, 32)
+        report, files = fixture(24)
+        report["recentsEducation"] = fixture(32)[0]["recentsEducation"]
+        with self.assertRaises(ValueError): self.validate(report, files, 24)
+        for key, invalid in (("api", 24), ("schema", True), ("observations", 0), ("observations", 4),
+                             ("operation", "REQUESTING"), ("extraBack", True)):
+            report, files = self.education_fixture()
+            report["recentsEducation"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+        report, files = fixture(32)
+        report["recentsEducation"]["request"] = self.education_fixture()[0]["recentsEducation"]["request"]
+        with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_wrong_false_throwing_duplicate_or_late_back_cannot_qualify(self):
+        for key, invalid in (("action", "HOME"), ("platformAction", 2), ("platformAction", True),
+                             ("accepted", False), ("returned", False), ("accepted", 1),
+                             ("requestedElapsedMillis", 104), ("returnedElapsedMillis", 5099),
+                             ("failureType", "synthetic"), ("secondRequest", {})):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["request"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_popup_before_must_be_exact_unique_complete_and_same_owned_root(self):
+        for key in ("exactText", "exactIds", "expectedClasses", "unique", "rootContained", "complete"):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["before"]["popup"][key] = False
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+        for key, invalid in (("textBounds", [0, 0, 20, 20]), ("arrowBounds", [-1, 1, 4, 4]),
+                             ("parentBounds", [0, 0, 0, 0])):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["before"]["popup"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+        for key, invalid in (("windowId", 99), ("taskId", 99), ("secureFlag", False), ("package", "foreign")):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["before"]["owner"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_education_action_is_only_initial_admission_never_after_capture_or_failure_scene(self):
+        root = ROOT / "samples/p2p-sample-android/src"
+        source = (root / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        helper = (root / "runtimeValidation/kotlin/dev/p2pkit/sample/android/runtime/LegacyRecentsEducation.kt").read_text()
+        admission = source.split("    private fun admittedRecentsState(")[1].split("    private fun captureState(")[0]
+        read_only = source.split("    private fun recentsState(")[1].split("    private fun admittedRecentsState(")[0]
+        failure = source.split("    private fun retainFailureScene(")[1].split("    private fun recentsState(")[0]
+        self.assertEqual(source.count("AccessibilityService.GLOBAL_ACTION_BACK"), 1)
+        self.assertIn("AccessibilityService.GLOBAL_ACTION_BACK", admission)
+        self.assertNotIn("performGlobalAction", read_only)
+        self.assertNotIn("performGlobalAction", failure)
+        self.assertIn("if (observed.popup != null && !dismissal.requested)", admission)
+        self.assertIn("Build.VERSION.SDK_INT == 32", admission)
+        self.assertIn("dismissal.request(until, SystemClock::elapsedRealtime)", admission)
+        self.assertIn('if (value != null)', admission)
+        self.assertIn('check(observed.popup == null)', admission)
+        self.assertLess(helper.index("requested = true"), helper.index("val accepted = perform()"))
+        self.assertEqual(helper.count("perform()"), 1)
+        self.assertIn("if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)", read_only)
+        self.assertIn("findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)", read_only)
+        self.assertNotIn("contains(LEGACY_RECENTS_EDUCATION_TEXT)", source)
 
     def test_failure_scene_field_or_original_image_cannot_be_laundered_into_pass(self):
         for api in (24, 32):
@@ -467,8 +561,10 @@ class LegacyTaskTests(unittest.TestCase):
         observation = source.split("    private fun recentsState(", 1)[1].split("    private fun admittedRecentsState(", 1)[0]
         self.assertIn("val until = minOf(deadline, started + 5_000)", poll)
         self.assertIn("return state // No second root acquisition", poll)
-        self.assertEqual(poll.count("recentsState(until, query)"), 1)
-        self.assertNotIn("catch", poll)
+        self.assertEqual(poll.count("recentsState(until, query, educationObserver)"), 1)
+        self.assertEqual(poll.count("catch (error: Throwable)"), 1)
+        self.assertLess(poll.index("val value = recentsState"), poll.index("try {"))
+        self.assertIn('request.put("failureType", error.javaClass.name)\n                            throw error', poll)
         self.assertEqual(observation.count("catch (error: Throwable)"), 2)
         self.assertIn("primaryFailure = error\n            throw error", observation)
         self.assertIn("if (primaryFailure == null) throw error", observation)

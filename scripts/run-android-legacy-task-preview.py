@@ -133,6 +133,63 @@ def validate_presentation(item, state):
          "Interactive window does not contain actual View/samples")
 
 
+def validate_recents_education(value, api, admission, system):
+    """Optional API32 setup input, never an alternative to the original task-card/image oracles."""
+    ledger = value.get("recentsEducation")
+    if api == 24:
+        need("recentsEducation" not in value, "API24 must not run education actions")
+        return
+    need(isinstance(ledger, dict) and ledger.get("schema") == 1 and type(ledger["schema"]) is int and
+         ledger.get("api") == 32 and type(ledger["api"]) is int and
+         ledger.get("operation") in ("NONE_REQUIRED", "DISMISSED") and
+         type(ledger.get("observations")) is int and 0 < ledger["observations"] <= admission["attempts"],
+         "Missing completed API32 education precondition")
+    dismissed = ledger["operation"] == "DISMISSED"
+    need(set(ledger) == {"schema", "api", "operation", "observations", "after"} |
+         ({"before", "request"} if dismissed else set()), "Unexpected education action ledger")
+    after = ledger["after"]
+    need(isinstance(after, dict) and set(after) ==
+         {"attempt", "observedElapsedMillis", "popupAbsent", "systemWindow"} and
+         type(after["attempt"]) is int and after["attempt"] == admission["attempts"] and
+         type(after["observedElapsedMillis"]) is int and
+         admission["startedElapsedMillis"] <= after["observedElapsedMillis"] <= admission["completedElapsedMillis"] and
+         after["popupAbsent"] is True and isinstance(system, dict) and after["systemWindow"] == system,
+         "Education acknowledgement lacks later complete popup-absent real-card admission")
+    if not dismissed:
+        return
+    before, request = ledger["before"], ledger["request"]
+    need(isinstance(before, dict) and set(before) == {"attempt", "observedElapsedMillis", "owner", "popup"} and
+         type(before["attempt"]) is int and 0 < before["attempt"] < after["attempt"] and
+         type(before["observedElapsedMillis"]) is int and
+         before["owner"] == {key: val for key, val in system.items() if key != "taskCard"},
+         "Education BACK lacks the same actual owned task/root before and after")
+    popup = before["popup"]
+    need(isinstance(popup, dict) and set(popup) ==
+         {"parentBounds", "textBounds", "arrowBounds", "exactText", "exactIds", "expectedClasses", "unique",
+          "rootContained", "complete"} and
+         all(popup[key] is True for key in ("exactText", "exactIds", "expectedClasses", "unique", "rootContained", "complete")),
+         "Education action was not positively admitted by the exact complete structured selector")
+    bounds = system.get("bounds")
+    need(isinstance(bounds, list) and len(bounds) == 4 and all(type(x) is int for x in bounds),
+         "Missing education root geometry")
+    for key in ("parentBounds", "textBounds", "arrowBounds"):
+        rect = popup[key]
+        need(isinstance(rect, list) and len(rect) == 4 and all(type(x) is int for x in rect) and
+             rect[0] < rect[2] and rect[1] < rect[3], "Invalid education geometry")
+        if key != "parentBounds":
+            need(bounds[0] <= rect[0] < rect[2] <= bounds[2] and bounds[1] <= rect[1] < rect[3] <= bounds[3],
+                 "Education text/arrow not contained in the actual root")
+    need(isinstance(request, dict) and set(request) ==
+         {"action", "platformAction", "requestedElapsedMillis", "returnedElapsedMillis", "returned", "accepted"} and
+         request["action"] == "BACK" and type(request["platformAction"]) is int and request["platformAction"] == 1 and
+         request["returned"] is True and request["accepted"] is True and
+         all(type(request[key]) is int for key in ("requestedElapsedMillis", "returnedElapsedMillis")) and
+         admission["startedElapsedMillis"] <= before["observedElapsedMillis"] <= request["requestedElapsedMillis"] <=
+         request["returnedElapsedMillis"] <= after["observedElapsedMillis"] <= admission["deadlineElapsedMillis"] and
+         admission["guardCounts"].get("CARD_NOT_IDENTIFIED", 0) > 0,
+         "Wrong, repeated, failed or late education BACK request")
+
+
 def validate_report(raw, token, source, tree, api, files):
     value = owner.decode_json(raw)
     need(not any(key in value for key in ("failureScene", "failureSceneErrorType")) and
@@ -219,6 +276,7 @@ def validate_report(raw, token, source, tree, api, files):
     need(all(type(x) is int for x in (start, finish, deadline)) and
          previous <= start <= finish <= deadline <= start + 5000 and finish <= captures[1]["elapsedMillis"],
          "Recents root admission exceeded its original bound or was reordered")
+    validate_recents_education(value, api, admission, captures[1].get("systemWindowBefore"))
     # Accepted system requests are not proof: all actual lifecycle/window/image checks below still apply.
     expected_files = {"result.json"}
     for index, item in enumerate(captures):

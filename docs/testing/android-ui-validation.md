@@ -155,6 +155,15 @@ retain one separately labelled, ownership-bound `failure-recents-scene.png`
 within the remaining body budget (at most five seconds of diagnostic work).
 This private encrypted scene is `NOT_ACCEPTANCE`, never one of the seven
 observations or a retry; it cannot change the original failure or qualify privacy.
+On API32 only, initial Recents admission may dismiss the image's known education
+popup with one separately recorded public BACK request. It requires the exact
+owned text/arrow structure and full fixture phrase, not a substring or locale
+fallback. The request and a subsequent complete popup-absent, genuine TaskView
+admission must fit the original five seconds. BACK acknowledgement is not screen
+proof; changed/unsupported popup structure or unsuccessful dismissal still fails.
+API24 keeps only HOME/RECENTS, and strict post-capture/failure observers never
+perform this setup action. Original TaskView, pixel and seven-observation oracles
+remain mandatory.
 
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window
