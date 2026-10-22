@@ -3,6 +3,60 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc7 — development candidate (unpublished)
+
+Release qualification and publication are pending. Latest published artifacts
+remain `0.8.0-rc6`; this source does not retroactively change their evidence.
+
+### Runtime and data ownership
+
+- Retain application-message payload/backlog ownership across prompt cancellation
+  (#488), Android URI sources across hashing cancellation (#487), queued inbound
+  sockets/admission leases when collectors cancel (#489), and Android receive
+  reservations before wrapper handoff (#492).
+- Withdraw the old JmDNS handle's peers during whole-link rebind (#490), and keep
+  Android optional SAF descriptor/size lookup off Main (#491).
+- Replace filename-only sample cleanup with exclusively leased staging and proven
+  abandoned-owner reconciliation (#495). Completed files keep their legitimate
+  names; concurrent writers retain their staging. Add backward-compatible JVM
+  and Android durable-destination overloads for an app-owned staging directory,
+  and bind the Android sample to its Android factory rather than a JVM facade.
+- Bound remote service-type/DNS-cache retention in the modified private JmDNS
+  producer `.410.7` (#503), retaining source/patch/license/SBOM provenance. This is
+  resource bounding, **not** a fix for hostile discovery-budget squatting (#120).
+- Move large iOS sample preset generation/hash/readback off MainActor; Stop
+  cancels and joins owned preparation before allowing replacement (#497).
+- Protect the Android sample's API24–32 window with `FLAG_SECURE` for its full
+  lifetime (#479). This intentionally also disables foreground screenshots,
+  recording and non-secure displays on those APIs; API33+ keeps its existing
+  task-preview-only policy. Actual legacy Recents review remains required.
+
+### Tests, tooling and release reliability
+
+- Retain native process ownership instead of signalling a potentially recycled
+  process-group number during platform cleanup (#494).
+- Require actual Running status in the iOS startup UI test (#498); retire Apple
+  fixtures after setup/assertion failures (#502), and always join SessionStore
+  test readers after mutation failures (#500).
+- Bound Central HTTP phases by the original publisher-job deadline without
+  retrying ambiguous uploads (#493); admit exact historical published-consumer
+  contracts including their original private JmDNS version (#496).
+- Align documented local release preflight and RPC controls with the maintained
+  modular CI graph (#501), and correct stale current-operation guidance (#499).
+- Add an independently selectable API24/API32 task-preview witness. Its genuine
+  captures must be reviewed; a green harness is not privacy/OEM acceptance.
+
+### Remaining limitations
+
+High-severity discovery admission issue #120 remains open: untrusted advertised
+addresses/fingerprints do not establish a fair or trusted origin. Added tests
+retain this limitation and verify the existing explicitly pinned manual route;
+they do not claim a hostile-LAN repair. Independent interoperability (#133),
+physical/OEM/AWDL/Doze/network campaigns, actual iPhone backup observations (#291),
+and remaining installed Windows W01–W11 coverage (#462) remain incomplete. This
+candidate is not stable/production READY. No failed test or historical release
+attempt is promoted to a pass by these repairs.
+
 ## 0.8.0-rc6 — development release candidate (2026-10-21)
 
 Published and verified from immutable `v0.8.0-rc6`, source

@@ -143,7 +143,7 @@ def commands(component):
         packaging = {'desktop-linux': 'packageDeb', 'desktop-windows': 'packageMsi',
                      'desktop-macos': 'packageDmg'}[component]
         # Stage the existing experimental JDK21 adapter in the normal MSI.
-        # This build option does not enable the deliberately disabled provider.
+        # This packaging option is not installed-provider/lifecycle qualification.
         options = ['-Pp2pkit.rpc.windows.previewAdapter=true'] if component == 'desktop-windows' and \
             (ROOT / 'samples/p2p-sample-rpc').is_dir() else []
         return ([supervisor] if component == 'desktop-macos' else []) + [('desktop-tests-and-installer', gradle + options + [
