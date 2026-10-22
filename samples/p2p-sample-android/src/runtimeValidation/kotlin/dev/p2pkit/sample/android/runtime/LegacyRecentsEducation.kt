@@ -3,7 +3,7 @@ package dev.p2pkit.sample.android.runtime
 /** Exact controlled-image fixture, not a substring/locale fallback or task authentication. */
 internal const val LEGACY_RECENTS_EDUCATION_TEXT = "Select text and images to copy, share, and more"
 
-internal enum class LegacyEducationResource { OTHER, TEXT, ARROW }
+internal enum class LegacyEducationResource { OTHER, TEXT, ARROW, DRAG_LAYER }
 internal enum class LegacyEducationClass { OTHER, TEXT_VIEW, VIEW, LINEAR_LAYOUT }
 internal data class LegacyEducationNode(
     val observation: LegacyRecentsNode,
@@ -11,7 +11,11 @@ internal data class LegacyEducationNode(
     val kind: LegacyEducationClass = LegacyEducationClass.OTHER,
     val exactText: Boolean = false,
 )
-internal data class LegacyEducationPopup(val parent: Int, val text: Int, val arrow: Int)
+internal enum class LegacyEducationParentProjection { DIRECT_LINEAR_LAYOUT, DRAG_LAYER_ACCESSIBILITY }
+internal data class LegacyEducationPopup(
+    val parent: Int, val text: Int, val arrow: Int,
+    val projection: LegacyEducationParentProjection = LegacyEducationParentProjection.DIRECT_LINEAR_LAYOUT,
+)
 internal enum class LegacyEducationPresence { ABSENT, IDENTIFIED, REFUSED }
 internal data class LegacyEducationSelection(val presence: LegacyEducationPresence, val popup: LegacyEducationPopup?)
 
@@ -23,7 +27,8 @@ internal fun selectLegacyRecentsEducation(nodes: List<LegacyEducationNode>): Leg
         val parent = nodes[index].observation.parent
         parent == null || parent !in 0 until index
     }) return refused
-    if (nodes.none { it.resource != LegacyEducationResource.OTHER || it.exactText }) {
+    if (nodes.none { it.resource == LegacyEducationResource.TEXT ||
+            it.resource == LegacyEducationResource.ARROW || it.exactText }) {
         return LegacyEducationSelection(LegacyEducationPresence.ABSENT, null)
     }
     val popup = findLegacyRecentsEducation(nodes) ?: return refused
@@ -37,6 +42,10 @@ internal fun findLegacyRecentsEducation(nodes: List<LegacyEducationNode>): Legac
         val parent = nodes[index].observation.parent
         parent == null || parent !in 0 until index
     }) return null
+    // Even a malformed/hidden extra marker prevents input; uniqueness is over the entire complete tree.
+    if (nodes.count { it.resource == LegacyEducationResource.TEXT } != 1 ||
+        nodes.count { it.resource == LegacyEducationResource.ARROW } != 1 ||
+        nodes.count { it.exactText } != 1) return null
     fun positive(bounds: List<Int>) = bounds.size == 4 && bounds[0] < bounds[2] && bounds[1] < bounds[3]
     fun valid(index: Int): Boolean {
         var current: Int? = index
@@ -59,13 +68,20 @@ internal fun findLegacyRecentsEducation(nodes: List<LegacyEducationNode>): Legac
         if (text.resource != LegacyEducationResource.TEXT || text.kind != LegacyEducationClass.TEXT_VIEW ||
             !text.exactText) return@mapNotNull null
         val parent = text.observation.parent ?: return@mapNotNull null
-        if (nodes[parent].kind != LegacyEducationClass.LINEAR_LAYOUT) return@mapNotNull null
+        val projection = when {
+            // BaseDragLayer may expose a non-important popup's children directly, despite the include flag.
+            nodes[parent].resource == LegacyEducationResource.DRAG_LAYER ->
+                LegacyEducationParentProjection.DRAG_LAYER_ACCESSIBILITY
+            nodes[parent].kind == LegacyEducationClass.LINEAR_LAYOUT ->
+                LegacyEducationParentProjection.DIRECT_LINEAR_LAYOUT
+            else -> return@mapNotNull null
+        }
         val arrow = nodes.indices.singleOrNull { nodes[it].observation.parent == parent &&
             nodes[it].resource == LegacyEducationResource.ARROW && nodes[it].kind == LegacyEducationClass.VIEW }
             ?: return@mapNotNull null
         if (!valid(index) || !valid(arrow) || !inRoot(index) || !inRoot(arrow)) return@mapNotNull null
         // The decorative arrow may be translated outside its parent's box, but never outside this root.
-        LegacyEducationPopup(parent, index, arrow)
+        LegacyEducationPopup(parent, index, arrow, projection)
     }.singleOrNull()
 }
 

@@ -30,6 +30,67 @@ class LegacyRecentsEducationTest {
     }
 
     @Test
+    fun exactDragLayerProjectionWorksWithoutInventingLinearLayoutParent() {
+        for (kind in listOf(LegacyEducationClass.OTHER, LegacyEducationClass.LINEAR_LAYOUT)) {
+            val nodes = fixture().toMutableList().also {
+                it[1] = it[1].copy(resource = LegacyEducationResource.DRAG_LAYER, kind = kind)
+            }
+            val selected = selectLegacyRecentsEducation(nodes)
+            assertEquals(LegacyEducationPresence.IDENTIFIED, selected.presence)
+            assertEquals(LegacyEducationPopup(1, 2, 3,
+                LegacyEducationParentProjection.DRAG_LAYER_ACCESSIBILITY), selected.popup)
+        }
+    }
+
+    @Test
+    fun projectedPopupRequiresExactActualSharedOwnedParentNotCommonAncestor() {
+        val projected = fixture().toMutableList().also {
+            it[1] = it[1].copy(resource = LegacyEducationResource.DRAG_LAYER, kind = LegacyEducationClass.OTHER)
+        }
+        for (invalid in listOf(
+            projected.toMutableList().also { it[1] = it[1].copy(resource = LegacyEducationResource.OTHER) },
+            projected.toMutableList().also {
+                it[3] = it[3].copy(observation = it[3].observation.copy(parent = 0))
+            },
+            projected.toMutableList().also {
+                it[1] = it[1].copy(observation = it[1].observation.copy(owned = false))
+            },
+            projected.toMutableList().also {
+                it[1] = it[1].copy(observation = it[1].observation.copy(visible = false))
+            })) {
+            assertEquals(LegacyEducationPresence.REFUSED, selectLegacyRecentsEducation(invalid).presence)
+            assertNull(findLegacyRecentsEducation(invalid))
+        }
+    }
+
+    @Test
+    fun extraMalformedMarkersRefuseEvenWhenOneValidPairAndCardExist() {
+        for (extra in listOf(
+            fixture()[2].copy(kind = LegacyEducationClass.OTHER, exactText = false),
+            fixture()[3].copy(observation = fixture()[3].observation.copy(parent = 0, owned = false)),
+            fixture()[3].copy(observation = fixture()[3].observation.copy(visible = false)),
+            LegacyEducationNode(LegacyRecentsNode(0), exactText = true))) {
+            val nodes = fixture() + extra + listOf(
+                LegacyEducationNode(LegacyRecentsNode(0, descriptionMatches = true,
+                    taskCollectionItem = true, closeAction = true)),
+                LegacyEducationNode(LegacyRecentsNode(5, LegacyRecentsResource.SNAPSHOT)))
+            assertNotNull(findLegacyRecentsCard(32, nodes.map { it.observation }))
+            assertNull(findLegacyRecentsEducation(nodes))
+            assertEquals(LegacyEducationPresence.REFUSED, selectLegacyRecentsEducation(nodes).presence)
+        }
+    }
+
+    @Test
+    fun dragLayerIsOnlyAContainerAndNeverAnAbsenceBlockingMarker() {
+        val nodes = listOf(fixture()[0], fixture()[1].copy(resource = LegacyEducationResource.DRAG_LAYER))
+        assertEquals(LegacyEducationPresence.ABSENT, selectLegacyRecentsEducation(nodes).presence)
+        for (marker in listOf(fixture()[2], fixture()[3],
+            LegacyEducationNode(LegacyRecentsNode(1), exactText = true))) {
+            assertEquals(LegacyEducationPresence.REFUSED, selectLegacyRecentsEducation(nodes + marker).presence)
+        }
+    }
+
+    @Test
     fun wrongTextResourceOrClassCannotAdmitInput() {
         for (node in listOf(fixture()[2].copy(exactText = false),
             fixture()[2].copy(resource = LegacyEducationResource.OTHER),

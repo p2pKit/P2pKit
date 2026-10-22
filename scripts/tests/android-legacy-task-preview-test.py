@@ -133,7 +133,9 @@ class LegacyTaskTests(unittest.TestCase):
         ledger["before"] = dict(attempt=2, observedElapsedMillis=106,
             owner={key: copy.deepcopy(val) for key, val in system.items() if key != "taskCard"},
             popup=dict(parentBounds=[1, 1, 10, 7], textBounds=[1, 1, 10, 5], arrowBounds=[12, 8, 14, 10],
-                exactText=True, exactIds=True, expectedClasses=True, unique=True, rootContained=True, complete=True))
+                exactText=True, exactIds=True, expectedClasses=True, unique=True, rootContained=True, complete=True,
+                parentProjection="DIRECT_LINEAR_LAYOUT", dragLayerResourceMatch=False,
+                markerCounts=dict(textIds=1, arrowIds=1, exactTexts=1)))
         ledger["request"] = dict(action="BACK", platformAction=1, requestedElapsedMillis=106,
             returnedElapsedMillis=107, returned=True, accepted=True)
         return report, files
@@ -193,6 +195,39 @@ class LegacyTaskTests(unittest.TestCase):
             report["recentsEducation"]["request"][key] = invalid
             with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
 
+    def test_only_exact_closed_parent_projection_pairs_can_admit_back(self):
+        for projection, match in (("DIRECT_LINEAR_LAYOUT", False), ("DRAG_LAYER_ACCESSIBILITY", True)):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["before"]["popup"].update(parentProjection=projection,
+                                                                 dragLayerResourceMatch=match)
+            self.assertTrue(self.validate(report, files, 32)["recentsReviewRequired"])
+        for projection, match in (("DIRECT_LINEAR_LAYOUT", True), ("DRAG_LAYER_ACCESSIBILITY", False),
+                                   ("FRAME_LAYOUT", True), ("COMMON_ANCESTOR", True),
+                                   ("DIRECT_LINEAR_LAYOUT", 0), ("DRAG_LAYER_ACCESSIBILITY", 1)):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["before"]["popup"].update(parentProjection=projection,
+                                                                 dragLayerResourceMatch=match)
+            with self.subTest(projection=projection, match=match), self.assertRaises(ValueError):
+                self.validate(report, files, 32)
+        for missing in ("parentProjection", "dragLayerResourceMatch"):
+            report, files = self.education_fixture()
+            del report["recentsEducation"]["before"]["popup"][missing]
+            with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_back_requires_global_typed_one_marker_counts(self):
+        for key in ("textIds", "arrowIds", "exactTexts"):
+            for invalid in (0, 2, True, 1.0, "1"):
+                report, files = self.education_fixture()
+                report["recentsEducation"]["before"]["popup"]["markerCounts"][key] = invalid
+                with self.subTest(key=key, invalid=invalid), self.assertRaises(ValueError):
+                    self.validate(report, files, 32)
+            report, files = self.education_fixture()
+            del report["recentsEducation"]["before"]["popup"]["markerCounts"][key]
+            with self.assertRaises(ValueError): self.validate(report, files, 32)
+        report, files = self.education_fixture()
+        del report["recentsEducation"]["before"]["popup"]["markerCounts"]
+        with self.assertRaises(ValueError): self.validate(report, files, 32)
+
     def test_popup_before_must_be_exact_unique_complete_and_same_owned_root(self):
         for key in ("exactText", "exactIds", "expectedClasses", "unique", "rootContained", "complete"):
             report, files = self.education_fixture()
@@ -225,6 +260,9 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn('if (value != null)', admission)
         self.assertIn('check(observed.presence == LegacyEducationPresence.ABSENT && observed.popup == null)', admission)
         self.assertIn('if (selection.presence != LegacyEducationPresence.ABSENT)', read_only)
+        self.assertIn('"$recentsProvider:id/drag_layer" -> LegacyEducationResource.DRAG_LAYER', read_only)
+        self.assertIn('it.resource == LegacyEducationResource.TEXT ||', helper)
+        self.assertNotIn('it.resource != LegacyEducationResource.OTHER ||', helper)
         self.assertLess(helper.index("requested = true"), helper.index("val accepted = perform()"))
         self.assertEqual(helper.count("perform()"), 1)
         self.assertIn("if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)", read_only)

@@ -760,6 +760,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     val resource = when (node.viewIdResourceName) {
                         "$recentsProvider:id/text" -> LegacyEducationResource.TEXT
                         "$recentsProvider:id/arrow" -> LegacyEducationResource.ARROW
+                        "$recentsProvider:id/drag_layer" -> LegacyEducationResource.DRAG_LAYER
                         else -> LegacyEducationResource.OTHER
                     }
                     val kind = when (node.className?.toString()) {
@@ -796,6 +797,18 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     .put("textIds", educationNodes.count { it.resource == LegacyEducationResource.TEXT })
                     .put("arrowIds", educationNodes.count { it.resource == LegacyEducationResource.ARROW })
                     .put("exactTexts", educationNodes.count { it.exactText })
+                val textMarker = educationNodes.singleOrNull { it.resource == LegacyEducationResource.TEXT }
+                val arrowMarker = educationNodes.singleOrNull { it.resource == LegacyEducationResource.ARROW }
+                val sameParent = textMarker?.observation?.parent != null &&
+                    textMarker.observation.parent == arrowMarker?.observation?.parent
+                val sharedParent = if (sameParent) educationNodes[checkNotNull(textMarker?.observation?.parent)]
+                    else null
+                val association = JSONObject().put("textMarkerUnique", textMarker != null)
+                    .put("arrowMarkerUnique", arrowMarker != null).put("textExact", textMarker?.exactText == true)
+                    .put("textClassMatches", textMarker?.kind == LegacyEducationClass.TEXT_VIEW)
+                    .put("arrowClassMatches", arrowMarker?.kind == LegacyEducationClass.VIEW)
+                    .put("sameParent", sameParent).put("sharedParentResource", sharedParent?.resource?.name ?: "NONE")
+                    .put("sharedParentClass", sharedParent?.kind?.name ?: "NONE")
                 query?.put("educationPredicates", JSONObject()
                     .put("complete", true).put("nodes", educationNodes.size)
                     .put("textIds", educationNodes.count { it.resource == LegacyEducationResource.TEXT })
@@ -809,13 +822,20 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     .put("rootContained", educationNodes.count {
                         val b = it.observation.bounds
                         b[0] < b[2] && b[1] < b[3] && bounds.contains(b[0], b[1], b[2], b[3])
-                    }).put("knownPopup", popup != null).put("presence", selection.presence.name))
+                    }).put("knownPopup", popup != null).put("presence", selection.presence.name)
+                    .put("markerAssociation", association))
                 val popupJson = popup?.let {
                     JSONObject().put("parentBounds", JSONArray(nodes[it.parent].bounds))
                         .put("textBounds", JSONArray(nodes[it.text].bounds))
                         .put("arrowBounds", JSONArray(nodes[it.arrow].bounds))
                         .put("exactText", true).put("exactIds", true).put("expectedClasses", true)
                         .put("unique", true).put("rootContained", true).put("complete", true)
+                        .put("parentProjection", it.projection.name)
+                        .put("dragLayerResourceMatch", educationNodes[it.parent].resource ==
+                            LegacyEducationResource.DRAG_LAYER)
+                        .put("markerCounts", JSONObject().put("textIds", absence.getInt("textIds"))
+                            .put("arrowIds", absence.getInt("arrowIds"))
+                            .put("exactTexts", absence.getInt("exactTexts")))
                 }
                 val observedOwner = JSONObject(owner.toString()).put("package", recentsProvider)
                     .put("windowId", root.windowId)

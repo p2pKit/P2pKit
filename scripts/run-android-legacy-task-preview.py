@@ -171,9 +171,16 @@ def validate_recents_education(value, api, admission, system):
     popup = before["popup"]
     need(isinstance(popup, dict) and set(popup) ==
          {"parentBounds", "textBounds", "arrowBounds", "exactText", "exactIds", "expectedClasses", "unique",
-          "rootContained", "complete"} and
+          "rootContained", "complete", "parentProjection", "dragLayerResourceMatch", "markerCounts"} and
          all(popup[key] is True for key in ("exactText", "exactIds", "expectedClasses", "unique", "rootContained", "complete")),
          "Education action was not positively admitted by the exact complete structured selector")
+    need((popup["parentProjection"] == "DIRECT_LINEAR_LAYOUT" and popup["dragLayerResourceMatch"] is False) or
+         (popup["parentProjection"] == "DRAG_LAYER_ACCESSIBILITY" and popup["dragLayerResourceMatch"] is True),
+         "Education parent is not an exact supported accessibility projection")
+    counts = popup["markerCounts"]
+    need(isinstance(counts, dict) and set(counts) == {"textIds", "arrowIds", "exactTexts"} and
+         all(type(counts[key]) is int and counts[key] == 1 for key in counts),
+         "Education input requires globally unique associated markers")
     bounds = system.get("bounds")
     need(isinstance(bounds, list) and len(bounds) == 4 and all(type(x) is int for x in bounds),
          "Missing education root geometry")
