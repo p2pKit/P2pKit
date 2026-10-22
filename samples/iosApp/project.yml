@@ -54,6 +54,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample
         PRODUCT_MODULE_NAME: P2pKitSample
+        SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/SampleTransferPOSIX.h"
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: Info.plist

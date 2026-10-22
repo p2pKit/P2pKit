@@ -132,6 +132,9 @@ class IosProjectGenerationTest(unittest.TestCase):
 
     def test_generation_preserves_provenance_and_local_network_declarations(self):
         project_text = (self.generated / "project.pbxproj").read_text()
+        self.assertEqual(2, project_text.count(
+            'SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/SampleTransferPOSIX.h";'))
+        self.assertTrue((self.project / "SampleTransferPOSIX.h").is_file())
         phases = [
             json.loads(match[1])
             for match in re.finditer(r'shellScript = ("(?:\\.|[^"\\])*?");', project_text)

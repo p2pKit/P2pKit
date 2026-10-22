@@ -1,6 +1,18 @@
 import Foundation
 import Darwin
 
+/// Keep the SDK C functions distinct from their same-named imported structs.
+/// The return value and errno belong to the original stat/flock call.
+enum SampleTransferPOSIX {
+    static func fileStatus(_ path: String, _ information: UnsafeMutablePointer<stat>) -> Int32 {
+        path.withCString { p2pkit_sample_file_status($0, information) }
+    }
+
+    static func lockFile(_ descriptor: Int32, _ operation: Int32) -> Int32 {
+        p2pkit_sample_lock_file(descriptor, operation)
+    }
+}
+
 /// Only recorded, OS-unlocked staging directories may be reclaimed. Inbox
 /// filenames and legacy sibling parts never confer deletion authority.
 enum SampleTransferStaging {
@@ -24,7 +36,7 @@ enum SampleTransferStaging {
             throw failure
         }
         do {
-            guard Darwin.flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { throw posixError() }
+            guard SampleTransferPOSIX.lockFile(descriptor, LOCK_EX | LOCK_NB) == 0 else { throw posixError() }
             let record = directory.appendingPathComponent("ownership")
             try Data((magic + token + "\n").utf8).write(to: record, options: .withoutOverwriting)
             active.insert(directory.path)
@@ -75,7 +87,7 @@ enum SampleTransferStaging {
             let descriptor = Darwin.open(lockURL.path, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
             guard descriptor >= 0 else { throw posixError() }
             defer { Darwin.close(descriptor) }
-            if Darwin.flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if SampleTransferPOSIX.lockFile(descriptor, LOCK_EX | LOCK_NB) != 0 {
                 if errno == EWOULDBLOCK { continue }
                 throw posixError()
             }

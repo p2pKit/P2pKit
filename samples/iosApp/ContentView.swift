@@ -2578,8 +2578,8 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         self.stagingLease = lease
         var targetInfo = stat()
         var stagingInfo = stat()
-        guard Darwin.stat(directory.path, &targetInfo) == 0,
-              Darwin.stat(lease.directory.path, &stagingInfo) == 0,
+        guard SampleTransferPOSIX.fileStatus(directory.path, &targetInfo) == 0,
+              SampleTransferPOSIX.fileStatus(lease.directory.path, &stagingInfo) == 0,
               targetInfo.st_dev == stagingInfo.st_dev else {
             try? lease.retire()
             throw destinationError("staging and target must be on the same filesystem")

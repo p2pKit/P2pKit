@@ -24,6 +24,14 @@ final class SampleTransferStagingTests: XCTestCase {
         let target = try XCTUnwrap(claimUniqueDestination(
             in: inbox, rawName: "report.p2pkit-part", fileManager: FileManager.default
         ))
+        var information = stat()
+        XCTAssertEqual(SampleTransferPOSIX.fileStatus(target.path, &information), 0)
+        XCTAssertEqual(information.st_mode & S_IFMT, S_IFREG)
+        let missing = inbox.appendingPathComponent("not-created")
+        let missingResult = SampleTransferPOSIX.fileStatus(missing.path, &information)
+        let missingError = errno
+        XCTAssertEqual(missingResult, -1)
+        XCTAssertEqual(missingError, ENOENT)
         let destination = try AtomicFileTransferDestination(target: target)
         let payload = Data("completed received content".utf8)
         let bytes = KotlinByteArray(size: Int32(payload.count))
@@ -71,12 +79,16 @@ final class SampleTransferStagingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(descriptor, 0)
         guard descriptor >= 0 else { return }
         defer { Darwin.close(descriptor) }
-        XCTAssertEqual(Darwin.flock(descriptor, LOCK_EX | LOCK_NB), 0)
+        let invalidResult = SampleTransferPOSIX.lockFile(-1, LOCK_EX | LOCK_NB)
+        let invalidError = errno
+        XCTAssertEqual(invalidResult, -1)
+        XCTAssertEqual(invalidError, EBADF)
+        XCTAssertEqual(SampleTransferPOSIX.lockFile(descriptor, LOCK_EX | LOCK_NB), 0)
         let part = directory.appendingPathComponent(".active.p2pkit-part")
         try Data("live".utf8).write(to: part)
         try SampleTransferStaging.reconcile(in: inbox)
         XCTAssertEqual(try Data(contentsOf: part), Data("live".utf8))
-        XCTAssertEqual(Darwin.flock(descriptor, LOCK_UN), 0)
+        XCTAssertEqual(SampleTransferPOSIX.lockFile(descriptor, LOCK_UN), 0)
         try SampleTransferStaging.reconcile(in: inbox)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
