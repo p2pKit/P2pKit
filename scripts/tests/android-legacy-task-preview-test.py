@@ -48,7 +48,13 @@ def fixture(api=24, unavailable=False):
         else:
             visible = True
             system = dict(activity=1, taskId=7, secureFlag=True, stopped=True, windowFocused=False,
-                          package="synthetic.system.ui", windowId=10, bounds=[0, 0, 16, 16])
+                          package="com.android.systemui" if api == 24 else "com.google.android.apps.nexuslauncher",
+                          windowId=10, bounds=[0, 0, 16, 16], ownedTaskCount=1,
+                          baseActivityMatches=True, topActivityMatches=True,
+                          taskCard=dict(kind="SYSTEM_UI_TASK_TITLE" if api == 24 else "QUICKSTEP_TASK_DESCRIPTION",
+                              exactPublicLabelMatch=True, uniqueStructuredCard=True, cardBounds=[0, 0, 16, 16],
+                              labelBounds=[1, 1, 15, 3] if api == 24 else [0, 0, 16, 16],
+                              snapshotBounds=[0, 3, 16, 16]))
             item.update(pixelVariation=True, systemWindowBefore=system, systemWindowAfter=copy.deepcopy(system))
         if unavailable and name not in legacy.POSITIVE and name != "actual-recents-original":
             item = {key: item[key] for key in ("name", "elapsedMillis", "stateBefore", "stateAfter")}
@@ -59,6 +65,11 @@ def fixture(api=24, unavailable=False):
     report = dict(case="479", token=TOKEN, sourceCommit=SOURCE, declaredSourceTree=TREE,
         api=api, targetSdk=37, captureObservationSchema=2, outcome=legacy.owner.PASS,
         syntheticOnly=True, recentsReviewRequired=True, cleanup="OWNED_ACTIVITIES_DESTROYED", taskId=7,
+        recentsObserver=dict(provider="com.android.systemui" if api == 24 else "com.google.android.apps.nexuslauncher",
+            publicAppLabel="P2pKit Sample", requiredFlagsPresent=True, serviceFlags=18,
+            closeActionId=0 if api == 24 else 1001, maxNodes=256, maxDepth=24),
+        recentsAdmission=dict(startedElapsedMillis=105, deadlineElapsedMillis=5105, completedElapsedMillis=108,
+            budgetMillis=5000, attempts=2, operation="READY", lastRootGuard="READY"),
         navigationRequests=[dict(action=action, platformAction=platform, requestedElapsedMillis=start,
             returnedElapsedMillis=start + 1, returned=True, accepted=True, operation="GLOBAL_ACTION_RETURNED")
             for action, platform, start in (("HOME", 2, 101), ("RECENTS", 3, 103))],
@@ -128,7 +139,7 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("if (pixels !== bitmap) pixels.recycle()", capture)
         self.assertIn("finally { bitmap?.recycle() }", capture)
         self.assertIn("bitmap.copy(Bitmap.Config.ARGB_8888, false)", capture)
-        self.assertIn("root.refresh() && root.isVisibleToUser", source)
+        self.assertIn("if (!root.refresh()) return pending(LegacyRecentsGuard.ROOT_REFRESH_FAILED)", source)
         self.assertIn("checkLegacyCapture(!visible, LegacyCaptureFailureCode.SCREENSHOT_UNAVAILABLE)", policy)
         self.assertIn("value.matches == null", policy)
         self.assertIn("value.matches.all { it == visible }", policy)
@@ -211,6 +222,68 @@ class LegacyTaskTests(unittest.TestCase):
         report, files = fixture()
         report["captures"][1]["pixelVariation"] = False
         with self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_complete_admission_requires_bound_guard_and_actual_time_order(self):
+        for key, bad in (("operation", "PENDING"), ("lastRootGuard", "CARD_NOT_IDENTIFIED"),
+                ("attempts", 0), ("attempts", True), ("budgetMillis", 5001),
+                ("startedElapsedMillis", 103), ("completedElapsedMillis", 5106),
+                ("completedElapsedMillis", 111), ("deadlineElapsedMillis", 5106)):
+            report, files = fixture()
+            report["recentsAdmission"][key] = bad
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        report.pop("recentsAdmission")
+        with self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_recents_observer_identity_flags_and_limits_are_mandatory(self):
+        for api in (24, 32):
+            for key, bad in (("provider", "synthetic.home"), ("publicAppLabel", "P2pKit Sample other"),
+                    ("requiredFlagsPresent", False), ("serviceFlags", 2), ("maxNodes", 257),
+                    ("maxDepth", 25), ("closeActionId", -1)):
+                report, files = fixture(api)
+                report["recentsObserver"][key] = bad
+                with self.subTest(api=api, key=key), self.assertRaises(ValueError): self.validate(report, files, api)
+
+    def test_card_correlation_cannot_replace_task_ownership_or_use_partial_matching(self):
+        for key, bad in (("ownedTaskCount", 2), ("ownedTaskCount", True), ("baseActivityMatches", False),
+                         ("topActivityMatches", False), ("package", "synthetic.foreign")):
+            report, files = fixture()
+            for side in ("systemWindowBefore", "systemWindowAfter"): report["captures"][1][side][key] = bad
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+        for key, bad in (("exactPublicLabelMatch", False), ("uniqueStructuredCard", False),
+                         ("kind", "HOME_ICON"), ("cardBounds", [-1, 0, 16, 16]),
+                         ("snapshotBounds", [0, 0, 0, 16]), ("labelBounds", [0, 0, 17, 16])):
+            report, files = fixture()
+            for side in ("systemWindowBefore", "systemWindowAfter"):
+                report["captures"][1][side]["taskCard"][key] = bad
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_root_poll_preserves_same_state_once_capture_and_fatal_owner_guards(self):
+        base = ROOT / "samples/p2p-sample-android/src"
+        source = (base / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        helper = (base / "runtimeValidation/kotlin/dev/p2pkit/sample/android/runtime/LegacyRecentsAdmission.kt").read_text()
+        poll = source.split("    private fun admittedRecentsState(", 1)[1].split("    private fun captureState(", 1)[0]
+        observation = source.split("    private fun recentsState(", 1)[1].split("    private fun admittedRecentsState(", 1)[0]
+        self.assertIn("val until = minOf(deadline, started + 5_000)", poll)
+        self.assertIn("return state // No second root acquisition", poll)
+        self.assertEqual(poll.count("recentsState(until)"), 1)
+        self.assertNotIn("catch", poll)
+        self.assertNotIn("catch", observation)
+        self.assertIn("val systemBefore = if (view == null) admittedRecentsState(attempt) else null", source)
+        self.assertIn("systemBefore.toString() == systemAfter?.toString()", source)
+        self.assertIn("first in stopped && !first.hasWindowFocus() && secure(first)", observation)
+        self.assertIn("info.baseActivity == component && info.topActivity == component", observation)
+        self.assertIn("nodes.size < 256 && depth <= 24", observation)
+        self.assertIn('finally { @Suppress("DEPRECATION") child.recycle() }', observation)
+        self.assertIn('finally { @Suppress("DEPRECATION") root.recycle() }', observation)
+        self.assertIn("if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)", observation)
+        self.assertIn("node.text?.toString() == publicAppLabel", observation)
+        self.assertIn("node.contentDescription?.toString() == publicAppLabel", observation)
+        self.assertNotIn(".contains(publicAppLabel)", observation)
+        self.assertNotIn("setServiceInfo", source)
+        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+        self.assertEqual(helper.count("checkLegacyCapture(now() <= deadline"), 2)
+        self.assertNotIn("catch", helper.split("internal fun <T : Any>", 1)[1])
 
     def test_missing_duplicate_reordered_captures_refused(self):
         for change in (lambda c: c.pop(), lambda c: c.append(c[0]), lambda c: c.reverse()):

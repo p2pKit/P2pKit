@@ -1,9 +1,12 @@
 package dev.p2pkit.sample.android.runtime
 
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.Application
 import android.app.Instrumentation
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -19,6 +22,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.p2pkit.core.BuildInfo
@@ -50,6 +54,9 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
     private var stage = "admission"
     private var deadline = 0L
     private var token = ""
+    private var recentsProvider = ""
+    private var recentsCloseAction = 0
+    private var publicAppLabel = ""
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -110,6 +117,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         }
     }
 
+    @SuppressLint("DiscouragedApi") // Read the actual system provider action resource; never guess its numeric ID.
     private fun exercise() {
         check(args.keySet() == setOf("case", "token", "sourceCommit", "sourceTree"))
         check(args.getString("case") == "479")
@@ -157,15 +165,28 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         await { main { first in stopped && !first.hasWindowFocus() } }
         stage = "home-secure"
         check(main { secure(first) })
+        stage = "recents-observer-admission"
+        val requiredFlags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+            AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        val serviceFlags = uiAutomation.serviceInfo.flags
+        check(serviceFlags and requiredFlags == requiredFlags)
+        publicAppLabel = application.applicationInfo.loadLabel(application.packageManager).toString()
+        check(publicAppLabel == "P2pKit Sample")
+        recentsProvider = if (Build.VERSION.SDK_INT == 24) "com.android.systemui"
+            else "com.google.android.apps.nexuslauncher"
+        if (Build.VERSION.SDK_INT == 32) {
+            recentsCloseAction = application.packageManager.getResourcesForApplication(recentsProvider)
+                .getIdentifier("accessibility_close", "string", recentsProvider)
+            check(recentsCloseAction != 0)
+        }
+        report.put("recentsObserver", JSONObject().put("provider", recentsProvider)
+            .put("publicAppLabel", publicAppLabel).put("requiredFlagsPresent", true).put("serviceFlags", serviceFlags)
+            .put("closeActionId", recentsCloseAction).put("maxNodes", 256).put("maxDepth", 24))
         stage = "recents-request"
         navigate(LegacyNavigationAction.RECENTS)
         stage = "actual-recents-original"
         // Capture the actual system window, not a fabricated task bitmap. Its task-card identity and
         // absence of the synthetic phrase/pattern must also be independently reviewed in the original PNG.
-        await { uiAutomation.rootInActiveWindow?.let { root ->
-            try { root.packageName?.toString() != application.packageName && root.isVisibleToUser }
-            finally { @Suppress("DEPRECATION") root.recycle() }
-        } == true }
         capture(stage, null, null, null)
         report.put("taskId", firstTask)
 
@@ -238,7 +259,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             attempt.put("stateBefore", stateJson(it))
             checkLegacyCaptureState(it, secure = !checkNotNull(visible))
         }
-        val systemBefore = if (view == null) recentsState() else null
+        val systemBefore = if (view == null) admittedRecentsState(attempt) else null
         systemBefore?.let { attempt.put("systemWindowBefore", it) }
         attempt.put("operation", "GLOBAL_SCREENSHOT_REQUEST")
         val bitmap = uiAutomation.takeScreenshot()
@@ -246,7 +267,11 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             attempt.put("screenshotReturned", true).put("screenshotAvailable", bitmap != null)
             val after = view?.let { captureState(checkNotNull(activity), it) }
             after?.let { attempt.put("stateAfter", stateJson(it)) }
-            val systemAfter = if (view == null) recentsState() else null
+            val systemAfter = if (view == null) requireLegacyCaptureValue(
+                recentsState(minOf(deadline, SystemClock.elapsedRealtime() + 5_000)) {
+                    attempt.put("recentsAfterRootGuard", it.name)
+                }, LegacyCaptureFailureCode.CAPTURE_STATE_INVALID,
+            ) else null
             if (systemBefore != null) {
                 attempt.put("systemWindowAfter", systemAfter)
                 checkLegacyCapture(systemBefore.toString() == systemAfter?.toString(),
@@ -317,28 +342,102 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         } finally { bitmap?.recycle() }
     }
 
-    private fun recentsState(): JSONObject {
+    private fun recentsState(until: Long, guard: (LegacyRecentsGuard) -> Unit): JSONObject? {
+        fun pending(value: LegacyRecentsGuard): JSONObject? { guard(value); return null }
         val first = created.first()
         val owner = main {
             checkLegacyCapture(!first.isDestroyed && first in stopped && !first.hasWindowFocus() && secure(first),
                 LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            val manager = targetContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val tasks = manager.appTasks
+            val info = tasks.singleOrNull()?.taskInfo
+            val component = ComponentName(targetContext, MainActivity::class.java)
+            @Suppress("DEPRECATION") // Public API24 task identity, same contract as moveToFront.
+            val exactTask = info != null && info.id == first.taskId &&
+                info.baseActivity == component && info.topActivity == component
+            checkLegacyCapture(exactTask, LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            val label = info?.taskDescription?.label
+            checkLegacyCapture(label.isNullOrEmpty() || label == publicAppLabel,
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
             JSONObject().put("activity", System.identityHashCode(first)).put("taskId", first.taskId)
                 .put("secureFlag", true).put("stopped", true).put("windowFocused", false)
+                .put("ownedTaskCount", tasks.size).put("baseActivityMatches", true).put("topActivityMatches", true)
         }
-        val root = requireLegacyCaptureValue(uiAutomation.rootInActiveWindow,
-            LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+        val root = uiAutomation.rootInActiveWindow ?: return pending(LegacyRecentsGuard.ROOT_MISSING)
         try {
-            checkLegacyCapture(root.refresh() && root.isVisibleToUser,
-                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
-            val packageName = root.packageName?.toString()
-            checkLegacyCapture(!packageName.isNullOrEmpty() && packageName != targetContext.packageName,
-                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            if (!root.refresh()) return pending(LegacyRecentsGuard.ROOT_REFRESH_FAILED)
+            if (!root.isVisibleToUser) return pending(LegacyRecentsGuard.ROOT_NOT_VISIBLE)
+            if (root.packageName?.toString() != recentsProvider) return pending(LegacyRecentsGuard.ROOT_PACKAGE_INVALID)
             val bounds = Rect().also(root::getBoundsInScreen)
-            checkLegacyCapture(bounds.width() > 0 && bounds.height() > 0 && root.windowId >= 0,
-                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
-            return owner.put("package", packageName).put("windowId", root.windowId)
+            if (bounds.width() <= 0 || bounds.height() <= 0 || root.windowId < 0) {
+                return pending(LegacyRecentsGuard.ROOT_GEOMETRY_INVALID)
+            }
+            val nodes = mutableListOf<LegacyRecentsNode>()
+            var complete = true
+            fun visit(node: AccessibilityNodeInfo, parent: Int?, depth: Int) {
+                checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+                    LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+                checkLegacyCapture(nodes.size < 256 && depth <= 24,
+                    LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
+                if (parent != null && !node.refresh()) { complete = false; return }
+                val rectangle = Rect().also(node::getBoundsInScreen)
+                val index = nodes.size
+                val kind = when (node.viewIdResourceName) {
+                    "$recentsProvider:id/title" -> LegacyRecentsResource.TITLE
+                    "$recentsProvider:id/task_view_bar" -> LegacyRecentsResource.HEADER
+                    "$recentsProvider:id/task_view_thumbnail" -> LegacyRecentsResource.THUMBNAIL
+                    "$recentsProvider:id/snapshot" -> LegacyRecentsResource.SNAPSHOT
+                    else -> LegacyRecentsResource.OTHER
+                }
+                nodes += LegacyRecentsNode(parent, kind,
+                    node.packageName?.toString() == recentsProvider && node.windowId == root.windowId,
+                    node.isVisibleToUser, listOf(rectangle.left, rectangle.top, rectangle.right, rectangle.bottom),
+                    node.text?.toString() == publicAppLabel, node.contentDescription?.toString() == publicAppLabel,
+                    node.collectionItemInfo != null,
+                    recentsCloseAction != 0 && node.actionList.any { it.id == recentsCloseAction })
+                checkLegacyCapture(node.childCount <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
+                for (childIndex in 0 until node.childCount) {
+                    checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+                        LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+                    val child = node.getChild(childIndex)
+                    if (child == null) { complete = false; return }
+                    try { visit(child, index, depth + 1) }
+                    finally { @Suppress("DEPRECATION") child.recycle() }
+                    if (!complete) return
+                }
+            }
+            visit(root, null, 0)
+            checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+                LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+            if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)
+            val card = findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)
+                ?: return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
+            fun rectangle(index: Int) = JSONArray(nodes[index].bounds)
+            val anchor = JSONObject().put("kind", if (Build.VERSION.SDK_INT == 24) "SYSTEM_UI_TASK_TITLE"
+                else "QUICKSTEP_TASK_DESCRIPTION").put("exactPublicLabelMatch", true)
+                .put("cardBounds", rectangle(card.card)).put("labelBounds", rectangle(card.label))
+                .put("snapshotBounds", rectangle(card.snapshot)).put("uniqueStructuredCard", true)
+            guard(LegacyRecentsGuard.READY)
+            return owner.put("package", recentsProvider).put("windowId", root.windowId)
                 .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+                .put("taskCard", anchor)
         } finally { @Suppress("DEPRECATION") root.recycle() }
+    }
+
+    private fun admittedRecentsState(attempt: JSONObject): JSONObject {
+        val started = SystemClock.elapsedRealtime()
+        val until = minOf(deadline, started + 5_000)
+        val admission = JSONObject().put("startedElapsedMillis", started).put("deadlineElapsedMillis", until)
+            .put("budgetMillis", 5_000).put("attempts", 0).put("operation", "PENDING")
+        report.put("recentsAdmission", admission)
+        attempt.put("operation", "RECENTS_ROOT_ADMISSION")
+        var count = 0
+        val state = awaitLegacyRecentsState(until, SystemClock::elapsedRealtime, { Thread.sleep(20) }) {
+            admission.put("attempts", ++count).put("operation", "OBSERVING").remove("lastRootGuard")
+            recentsState(until) { admission.put("lastRootGuard", it.name) }
+        }
+        admission.put("completedElapsedMillis", SystemClock.elapsedRealtime()).put("operation", "READY")
+        return state // No second root acquisition before the one original screenshot.
     }
 
     private fun captureState(activity: MainActivity, view: PatternView): LegacyCaptureState = main {

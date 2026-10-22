@@ -122,6 +122,27 @@ def validate_report(raw, token, source, tree, api, files):
         previous = finish
     need(type(captures[1].get("elapsedMillis")) is int and previous <= captures[1]["elapsedMillis"],
          "Recents capture did not follow the actual navigation requests")
+    observer = value.get("recentsObserver")
+    provider = "com.android.systemui" if api == 24 else "com.google.android.apps.nexuslauncher"
+    need(isinstance(observer, dict) and set(observer) ==
+         {"provider", "publicAppLabel", "requiredFlagsPresent", "serviceFlags", "closeActionId", "maxNodes", "maxDepth"} and
+         observer["provider"] == provider and observer["publicAppLabel"] == "P2pKit Sample" and
+         observer["requiredFlagsPresent"] is True and type(observer["serviceFlags"]) is int and
+         observer["serviceFlags"] & 18 == 18 and type(observer["closeActionId"]) is int and
+         (observer["closeActionId"] == 0 if api == 24 else observer["closeActionId"] > 0) and
+         observer["maxNodes"] == 256 and observer["maxDepth"] == 24, "Unbound Recents semantic observer")
+    admission = value.get("recentsAdmission")
+    need(isinstance(admission, dict) and set(admission) ==
+         {"startedElapsedMillis", "deadlineElapsedMillis", "completedElapsedMillis", "budgetMillis",
+          "attempts", "operation", "lastRootGuard"} and
+         admission["operation"] == admission["lastRootGuard"] == "READY" and
+         type(admission["attempts"]) is int and admission["attempts"] > 0 and admission["budgetMillis"] == 5000,
+         "Missing complete bounded Recents admission")
+    start, finish, deadline = (admission[key] for key in
+        ("startedElapsedMillis", "completedElapsedMillis", "deadlineElapsedMillis"))
+    need(all(type(x) is int for x in (start, finish, deadline)) and
+         previous <= start <= finish <= deadline <= start + 5000 and finish <= captures[1]["elapsedMillis"],
+         "Recents root admission exceeded its original bound or was reordered")
     # Accepted system requests are not proof: all actual lifecycle/window/image checks below still apply.
     expected_files = {"result.json"}
     for index, item in enumerate(captures):
@@ -143,17 +164,33 @@ def validate_report(raw, token, source, tree, api, files):
                  "Recents must be a nonuniform original system screenshot, not an app rendering")
             system = item.get("systemWindowBefore")
             need(isinstance(system, dict) and set(system) ==
-                 {"activity", "taskId", "secureFlag", "stopped", "windowFocused", "package", "windowId", "bounds"} and
+                 {"activity", "taskId", "secureFlag", "stopped", "windowFocused", "package", "windowId", "bounds",
+                  "ownedTaskCount", "baseActivityMatches", "topActivityMatches", "taskCard"} and
                  system == item.get("systemWindowAfter") and type(system.get("activity")) is int and
                  system["activity"] == created[0] and type(system.get("taskId")) is int and
                  system["taskId"] == value["taskId"] and system["secureFlag"] is True and
                  system["stopped"] is True and system["windowFocused"] is False and
-                 isinstance(system["package"], str) and system["package"] and system["package"] != PACKAGE and
+                 system["package"] == provider and type(system["ownedTaskCount"]) is int and
+                 system["ownedTaskCount"] == 1 and system["baseActivityMatches"] is True and
+                 system["topActivityMatches"] is True and
                  type(system["windowId"]) is int and system["windowId"] >= 0,
                  "Unbound or changed system window during Recents capture")
             bounds = system["bounds"]
             need(isinstance(bounds, list) and len(bounds) == 4 and all(type(x) is int for x in bounds) and
                  bounds[2] > bounds[0] and bounds[3] > bounds[1], "Missing actual system window bounds")
+            card = system["taskCard"]
+            need(isinstance(card, dict) and set(card) ==
+                 {"kind", "exactPublicLabelMatch", "uniqueStructuredCard", "cardBounds", "labelBounds", "snapshotBounds"}
+                 and card["kind"] == ("SYSTEM_UI_TASK_TITLE" if api == 24 else "QUICKSTEP_TASK_DESCRIPTION") and
+                 card["exactPublicLabelMatch"] is True and card["uniqueStructuredCard"] is True,
+                 "Missing unique structured intended-task correlation")
+            for key, outer in (("cardBounds", bounds), ("labelBounds", card["cardBounds"]),
+                               ("snapshotBounds", card["cardBounds"])):
+                rectangle = card[key]
+                need(isinstance(rectangle, list) and len(rectangle) == 4 and
+                     all(type(x) is int for x in rectangle) and
+                     outer[0] <= rectangle[0] < rectangle[2] <= outer[2] and
+                     outer[1] <= rectangle[1] < rectangle[3] <= outer[3], "Task-card anchor is hidden or out of bounds")
         if kind == "UNAVAILABLE":
             need(visible is False and set(item) ==
                  {"name", "elapsedMillis", "observation", "stateBefore", "stateAfter"},
