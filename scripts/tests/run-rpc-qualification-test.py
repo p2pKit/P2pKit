@@ -211,7 +211,20 @@ class AdmissionTests(unittest.TestCase):
 
     def test_actual_xctest_inventory_is_closed_and_nonempty(self):
         cases = q.swift_inventory(ROOT)
-        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 88, 'p2pkit-sample-uitests': 18})
+        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 99, 'p2pkit-sample-uitests': 20})
+        self.assertLessEqual({
+            'SampleFilePreparationTests/testFullBoundaryPresetRunsOffMainAndKeepsIntegrity()',
+            'SampleFilePreparationTests/testGenerationAndReadbackCheckCancellationBetweenChunks()',
+            'SampleFilePreparationTests/testLateSuccessfulWorkerAndCallerCancellationCannotPublish()',
+            'SampleFilePreparationTests/testPresetKeepsExactBytesAndDigestAcrossChunkBoundaries()',
+            'SampleFilePreparationTests/testStopSchedulesDuringLargePreparationAndJoinsBeforeAllowingReplacement()',
+            'SampleRunLifecycleTests/testStopPresencePrecedesRunningUntilBothStartupOperationsComplete()',
+            'SampleTransferStagingTests/testIndependentDescriptorLockPreventsReclamationWithoutLocalRegistry()',
+            'SampleTransferStagingTests/testLiveLeaseSurvivesAndOnlyReleasedRecordedPartIsReclaimed()',
+            'SampleTransferStagingTests/testOlderReceivedNamespaceNameDoesNotDisableNewClaims()',
+            'SampleTransferStagingTests/testPublishedMatchingFilenameSurvivesLifecycleReconciliation()',
+            'SampleTransferStagingTests/testUnknownEntriesAndSymlinksCannotConferCleanupAuthority()',
+        }, cases['p2pkit-sample-tests'])
         self.assertEqual(cases['p2pkit-sample-uitests'], {
             'KeyboardReadinessTests/testInvalidGeometryNeverInvokesHittabilityOrProvesDismissal()',
             'KeyboardReadinessTests/testValidGeometryStillRequiresActualHittability()',
@@ -232,13 +245,36 @@ class AdmissionTests(unittest.TestCase):
             'P2pKitSampleUITests/testLateStartAcknowledgementDuringDiagnosticsDoesNotRetry()',
             'P2pKitSampleUITests/testLateStartAcknowledgementDuringReadinessDoesNotRetry()',
             'P2pKitSampleUITests/testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry()',
+            'P2pKitSampleUITests/testRunningOracleWaitsForDelayedStartupPublicationWithoutAnotherTap()',
+            'P2pKitSampleUITests/testRunningOracleRejectsStartingEvenWhenStopIsAlreadyPresent()',
         })
 
     def test_missing_or_duplicate_xctest_does_not_satisfy_updated_inventory(self):
         bounded = q.bounded
-        for method in (b'func testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry(',
-                       b'func testInvalidGeometryNeverInvokesHittabilityOrProvesDismissal('):
-            for replacement in (b'func nonTestMethod(', method + b') {}\n    ' + method):
+        # Preserve old UI/keyboard/unit refusals and exercise every new case.
+        # Renaming to another test preserves the count and must still fail.
+        methods = (
+            'testOnlyUnacknowledgedReadyStartGetsOneBoundedRetry',
+            'testInvalidGeometryNeverInvokesHittabilityOrProvesDismissal',
+            'testActualExportFailurePreservesPriorArchiveAndSuccessCountAndAllowsRetry',
+            'testFullBoundaryPresetRunsOffMainAndKeepsIntegrity',
+            'testGenerationAndReadbackCheckCancellationBetweenChunks',
+            'testLateSuccessfulWorkerAndCallerCancellationCannotPublish',
+            'testPresetKeepsExactBytesAndDigestAcrossChunkBoundaries',
+            'testStopSchedulesDuringLargePreparationAndJoinsBeforeAllowingReplacement',
+            'testStopPresencePrecedesRunningUntilBothStartupOperationsComplete',
+            'testIndependentDescriptorLockPreventsReclamationWithoutLocalRegistry',
+            'testLiveLeaseSurvivesAndOnlyReleasedRecordedPartIsReclaimed',
+            'testOlderReceivedNamespaceNameDoesNotDisableNewClaims',
+            'testPublishedMatchingFilenameSurvivesLifecycleReconciliation',
+            'testUnknownEntriesAndSymlinksCannotConferCleanupAuthority',
+            'testRunningOracleWaitsForDelayedStartupPublicationWithoutAnotherTap',
+            'testRunningOracleRejectsStartingEvenWhenStopIsAlreadyPresent',
+        )
+        for name in methods:
+            method = ('func ' + name + '(').encode()
+            for replacement in (b'func nonTestMethod(', method + b') {}\n    ' + method,
+                                b'func testUnreviewedReplacement('):
                 def changed(path, maximum=q.MAX_FILE):
                     raw = bounded(path, maximum)
                     return raw.replace(method, replacement)
