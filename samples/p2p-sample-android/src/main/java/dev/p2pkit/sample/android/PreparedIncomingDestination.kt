@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.android
 
 import dev.p2pkit.core.transfer.FileTransferDestination
+import dev.p2pkit.core.transfer.durableFileDestination
 import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import java.io.File
 import java.io.IOException
@@ -15,7 +16,7 @@ internal data class PreparedIncomingDestination(
 
 /** Retain an unpublished reservation even when prompt cancellation drops the IO block's return. */
 internal suspend fun prepareIncomingDestination(
-    wrap: (File) -> FileTransferDestination = ::reservedFileDestination,
+    wrap: (File) -> FileTransferDestination = ::androidReservedFileDestination,
     allocate: () -> IncomingFileLocation,
 ): PreparedIncomingDestination {
     var location: IncomingFileLocation? = null
@@ -53,3 +54,9 @@ internal suspend fun prepareIncomingDestination(
         throw failure
     }
 }
+
+/** The shared diagnostics JAR's default is JVM-only; bind Android's facade here. */
+private fun androidReservedFileDestination(target: File): FileTransferDestination =
+    reservedFileDestination(target) { destination, staging ->
+        durableFileDestination(destination, staging, 64L * 1024 * 1024)
+    }
