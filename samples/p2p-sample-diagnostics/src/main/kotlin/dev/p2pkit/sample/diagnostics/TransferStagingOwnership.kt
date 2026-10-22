@@ -26,8 +26,8 @@ internal object TransferStagingOwnership {
     // POSIX implementations that can release this process's original file lock.
     private val active = mutableSetOf<String>()
 
-    fun claim(inbox: File): Lease = synchronized(monitor) {
-        val root = root(inbox)
+    fun claim(inbox: File, isPlainPath: (File) -> Boolean = ::isPlainJvmStagingPath): Lease = synchronized(monitor) {
+        val root = root(inbox, isPlainPath)
         val token = UUID.randomUUID().toString()
         val directory = File(root, token)
         if (!directory.mkdir()) throw IOException("Could not claim transfer staging directory")
@@ -45,7 +45,7 @@ internal object TransferStagingOwnership {
                 output.fd.sync()
             }
             active.add(directory.path)
-            Lease(directory, handle, lock)
+            Lease(directory, handle, lock, isPlainPath)
         } catch (failure: Throwable) {
             try { lock?.release() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
             try { handle?.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
@@ -59,26 +59,30 @@ internal object TransferStagingOwnership {
         }
     }
 
-    fun reconcile(inbox: File) = synchronized(monitor) {
+    fun reconcile(inbox: File, isPlainPath: (File) -> Boolean = ::isPlainJvmStagingPath) = synchronized(monitor) {
+        // The caller's trusted inbox can include OS aliases (notably Android).
+        // Resolve that existing boundary once; never canonicalize a subsequently
+        // discovered namespace/UUID/record/lease/part before its no-follow check.
         val parent = inbox.canonicalFile
+        requirePlainDirectory(parent, isPlainPath)
         val roots = parent.listFiles() ?: throw IOException("Could not list transfer inbox")
         for (root in roots.filter { isRootName(it.name) }) {
             // A pre-upgrade received file can legitimately have this name.
-            if (isPlainFile(root)) continue
-            requirePlainDirectory(root)
-            reconcileRoot(root)
+            if (isPlainFile(root, isPlainPath)) continue
+            requirePlainDirectory(root, isPlainPath)
+            reconcileRoot(root, isPlainPath)
         }
     }
 
-    private fun reconcileRoot(root: File) {
+    private fun reconcileRoot(root: File, isPlainPath: (File) -> Boolean) {
         val entries = root.listFiles() ?: throw IOException("Could not list transfer staging namespace")
         for (directory in entries) {
-            if (!isPlainDirectory(directory) || directory.path in active) continue
+            if (!isPlainDirectory(directory, isPlainPath) || directory.path in active) continue
             val token = directory.name
             if (runCatching { UUID.fromString(token).toString() }.getOrNull() != token) continue
             val record = File(directory, RECORD)
             val lockFile = File(directory, LOCK)
-            if (!isPlainFile(record) || !isPlainFile(lockFile)) continue
+            if (!isPlainFile(record, isPlainPath) || !isPlainFile(lockFile, isPlainPath)) continue
             val expected = (MAGIC + token + "\n").toByteArray(Charsets.UTF_8)
             if (!matchesRecord(record, expected)) continue
             // Opening an existing, validated file does not confer ownership; only
@@ -87,7 +91,7 @@ internal object TransferStagingOwnership {
                 val lock = try { handle.channel.tryLock() } catch (_: OverlappingFileLockException) { null }
                 if (lock != null) {
                     val reconciled = lock.use {
-                        if (safeContents(directory)) {
+                        if (safeContents(directory, isPlainPath)) {
                             deleteParts(directory)
                             deleteChecked(record)
                             true
@@ -106,14 +110,14 @@ internal object TransferStagingOwnership {
         }
     }
 
-    private fun root(inbox: File): File {
+    private fun root(inbox: File, isPlainPath: (File) -> Boolean): File {
         val parent = inbox.canonicalFile
-        requirePlainDirectory(parent)
+        requirePlainDirectory(parent, isPlainPath)
         for (index in 0..1000) {
             val root = File(parent, if (index == 0) ROOT else "$ROOT.$index")
             if (!root.mkdir() && !root.exists()) throw IOException("Could not create transfer staging namespace")
-            if (isPlainFile(root)) continue // Preserve accepted filenames, including older completed payloads.
-            requirePlainDirectory(root)
+            if (isPlainFile(root, isPlainPath)) continue // Preserve older completed payloads with this name.
+            requirePlainDirectory(root, isPlainPath)
             return root
         }
         throw IOException("Could not claim an available staging namespace")
@@ -122,10 +126,14 @@ internal object TransferStagingOwnership {
     private fun isRootName(name: String): Boolean = name == ROOT ||
         name.removePrefix("$ROOT.").toIntOrNull()?.let { it in 1..1000 && name == "$ROOT.$it" } == true
 
-    private fun isPlainDirectory(file: File): Boolean = file.isDirectory && file.canonicalFile == file.absoluteFile
-    private fun isPlainFile(file: File): Boolean = file.isFile && file.canonicalFile == file.absoluteFile
-    private fun requirePlainDirectory(file: File) {
-        if (!isPlainDirectory(file)) throw IOException("Staging namespace is not a plain directory")
+    private fun isPlainDirectory(file: File, isPlainPath: (File) -> Boolean): Boolean =
+        isPlainPath(file) && file.isDirectory && file.canonicalFile == file.absoluteFile
+
+    private fun isPlainFile(file: File, isPlainPath: (File) -> Boolean): Boolean =
+        isPlainPath(file) && file.isFile && file.canonicalFile == file.absoluteFile
+
+    private fun requirePlainDirectory(file: File, isPlainPath: (File) -> Boolean) {
+        if (!isPlainDirectory(file, isPlainPath)) throw IOException("Staging namespace is not a plain directory")
     }
 
     private fun isPart(file: File): Boolean = file.name.startsWith(".p2pkit-") && file.name.endsWith(".part")
@@ -145,8 +153,8 @@ internal object TransferStagingOwnership {
         }
     }
 
-    private fun safeContents(directory: File): Boolean = directory.listFiles()?.all {
-        isPlainFile(it) && (it.name == RECORD || it.name == LOCK || isPart(it))
+    private fun safeContents(directory: File, isPlainPath: (File) -> Boolean): Boolean = directory.listFiles()?.all {
+        isPlainFile(it, isPlainPath) && (it.name == RECORD || it.name == LOCK || isPart(it))
     } == true
 
     private fun deleteParts(directory: File) {
@@ -161,14 +169,15 @@ internal object TransferStagingOwnership {
     internal class Lease internal constructor(
         val directory: File,
         private val handle: RandomAccessFile,
-        private val lock: FileLock
+        private val lock: FileLock,
+        private val isPlainPath: (File) -> Boolean
     ) {
         private var retired = false
 
         /** Call only after the delegate has closed its writer, including failed-open cleanup. */
         fun retire() = synchronized(monitor) {
             if (retired) return@synchronized
-            if (!safeContents(directory)) throw IOException("Unexpected entry in owned staging directory")
+            if (!safeContents(directory, isPlainPath)) throw IOException("Unexpected entry in owned staging directory")
             deleteParts(directory)
             deleteChecked(File(directory, RECORD))
             if (lock.isValid) lock.release()

@@ -57,6 +57,6 @@ internal suspend fun prepareIncomingDestination(
 
 /** The shared diagnostics JAR's default is JVM-only; bind Android's facade here. */
 private fun androidReservedFileDestination(target: File): FileTransferDestination =
-    reservedFileDestination(target) { destination, staging ->
+    reservedFileDestination(target, ::isPlainAndroidStagingPath) { destination, staging ->
         durableFileDestination(destination, staging, 64L * 1024 * 1024)
     }

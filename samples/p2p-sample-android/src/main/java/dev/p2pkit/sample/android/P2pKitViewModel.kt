@@ -55,7 +55,6 @@ import dev.p2pkit.sample.diagnostics.DiagnosticRecorder
 import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
 import dev.p2pkit.sample.diagnostics.SessionTransferKey
 import dev.p2pkit.sample.diagnostics.SessionTransferList
-import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
 import dev.p2pkit.sample.diagnostics.secureV2ConnectionRecord
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
@@ -1471,7 +1470,7 @@ class P2pKitViewModel internal constructor(
             prepareIncomingDestination {
                 val location = incomingFileDirectory(ctx.getExternalFilesDir(null), pending.peerName) { ctx.filesDir }
                 val saveDir = location.file.also { it.mkdirs() }
-                cleanupStaleTransferPartsOnce(saveDir)
+                cleanupAndroidStaleTransferPartsOnce(saveDir)
                 val allocatableBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val storage = ctx.getSystemService(StorageManager::class.java)
                         ?: error("storage service unavailable")

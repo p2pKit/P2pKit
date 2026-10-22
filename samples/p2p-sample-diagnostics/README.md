@@ -14,6 +14,15 @@ directories and symlinks do not grant deletion authority. The parent inbox must
 remain application-controlled; this is not a sandbox against hostile same-user
 filesystem mutation.
 
+The supplied trusted inbox is canonicalized as before (including Android's OS
+storage aliases). Every discovered owned-namespace, UUID, record, lease and part
+is then checked without following links, including its original path prefixes,
+before record/lease/payload access or deletion. Canonical-path equality alone is not a
+Windows no-link check. JVM uses NIO `NOFOLLOW_LINKS` attributes and rejects
+symbolic/special entries; Android explicitly supplies `Os.lstat` (API21+) and
+does not invoke the JVM NIO adapter on API24. These are snapshot checks, not a
+race-proof sandbox against a privileged actor replacing paths after validation.
+
 **No filename-only migration cleanup is safe.** Legacy sibling `.p2pkit-*.part`
 and `*.p2pkit-part` files are left untouched: they can be valid completed payloads
 or another version/process's live transfer. Incomplete claims lacking their

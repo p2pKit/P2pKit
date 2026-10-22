@@ -2,9 +2,13 @@ package dev.p2pkit.sample.android
 
 import android.system.ErrnoException
 import android.system.OsConstants
-import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
+import android.system.StructStat
+import android.system.StructTimespec
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.StandardCopyOption
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -41,7 +45,7 @@ class AndroidIncomingDestinationTest {
                 val parts = directory.walkTopDown().filter { it.isFile && it.name.endsWith(".part") }.toList()
                 assertEquals(2, parts.size)
                 assertTrue(parts.any { it != existing && it.parentFile != directory })
-                cleanupStaleTransferPartsOnce(directory)
+                cleanupAndroidStaleTransferPartsOnce(directory)
                 assertTrue(parts.all { it.exists() }, "live leased staging must survive cleanup")
                 prepared.destination.abort(null)
                 assertFalse(prepared.location.file.exists())
@@ -70,9 +74,57 @@ class AndroidIncomingDestinationTest {
                 assertTrue(failure.message.orEmpty().startsWith("open failed"))
                 assertContentEquals(bytes, prepared.location.file.readBytes())
                 prepared.destination.abort(null)
-                cleanupStaleTransferPartsOnce(directory)
+                cleanupAndroidStaleTransferPartsOnce(directory)
                 assertContentEquals(bytes, prepared.location.file.readBytes())
                 assertEquals(listOf(prepared.location.file), directory.walkTopDown().filter { it.isFile }.toList())
+            } finally { prepared.destination.abort(null) }
+        }
+    }
+
+    @Test
+    fun androidAdapterRejectsRealLinksAndOriginalLinkedAncestors() = runBlocking {
+        withDirectory { directory ->
+            val target = File(directory, "target").also { check(it.mkdir()) }
+            val file = File(target, "file").also { it.writeText("keep") }
+            val link = File(directory, "link")
+            Files.createSymbolicLink(link.toPath(), target.toPath())
+            assertTrue(isPlainAndroidStagingPath(target))
+            assertTrue(isPlainAndroidStagingPath(file))
+            assertFalse(isPlainAndroidStagingPath(link))
+            assertFalse(isPlainAndroidStagingPath(File(link, "file")))
+            assertFalse(isPlainAndroidStagingPath(File(link, "../target")))
+            assertFalse(isPlainAndroidStagingPath(File(file, "child")))
+            assertFalse(isPlainAndroidStagingPath(File(directory, "missing")))
+            assertEquals("keep", file.readText())
+        }
+    }
+
+    @Test
+    fun androidCleanupRefusesLinkedNamespaceWithoutTouchingItsReferent() = runBlocking {
+        withDirectory { directory ->
+            val outside = File(directory, "outside").also { check(it.mkdir()) }
+            val payload = File(outside, ".p2pkit-keep.part").also { it.writeText("keep") }
+            val root = File(directory, ".p2pkit-transfer-staging-v1")
+            Files.createSymbolicLink(root.toPath(), outside.toPath())
+            assertFailsWith<IOException> { cleanupAndroidStaleTransferPartsOnce(directory) }
+            assertEquals("keep", payload.readText())
+            assertTrue(FileMovingLinux.seen.any { it == root.path })
+        }
+    }
+
+    @Test
+    fun actualDefaultFactoryAndTerminalCleanupUseExplicitAndroidInspector() = runBlocking {
+        withDirectory { directory ->
+            val prepared = prepareIncomingDestination {
+                IncomingFileLocation(uniqueDestination(directory, "target"), "test-private")
+            }
+            try {
+                prepared.destination.openSink()
+                cleanupAndroidStaleTransferPartsOnce(directory)
+                prepared.destination.abort(null)
+                assertFalse(prepared.location.file.exists())
+                assertTrue(FileMovingLinux.seen.any { File(it).name == "ownership" })
+                assertTrue(FileMovingLinux.seen.any { File(it).name == "lease" })
             } finally { prepared.destination.abort(null) }
         }
     }
@@ -87,16 +139,39 @@ class AndroidIncomingDestinationTest {
 
     private suspend fun withDirectory(block: suspend (File) -> Unit) {
         val directory = Files.createTempDirectory("android-real-destination-").toFile().canonicalFile
+        FileMovingLinux.seen.clear()
         try { block(directory) } finally { check(directory.deleteRecursively()) }
     }
 
-    /** API35's instrumented Linux.rename is a no-op. Model only that syscall with host atomic IO. */
+    /** Host syscall seams: API35 rename is a no-op; default ShadowLinux.lstat incorrectly follows links. */
     @Implements(className = "libcore.io.Linux", isInAndroidSdk = false)
     class FileMovingLinux : ShadowLinux() {
         @Implementation
         protected fun rename(oldPath: String, newPath: String) {
             Files.move(File(oldPath).toPath(), File(newPath).toPath(),
                 StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        }
+
+        @Implementation
+        protected override fun lstat(path: String): StructStat {
+            seen += path
+            val attrs = try {
+                Files.readAttributes(File(path).toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            } catch (_: IOException) {
+                throw ErrnoException("lstat", OsConstants.ENOENT)
+            }
+            val mode = when {
+                attrs.isSymbolicLink -> OsConstants.S_IFLNK
+                attrs.isDirectory -> OsConstants.S_IFDIR
+                attrs.isRegularFile -> OsConstants.S_IFREG
+                else -> OsConstants.S_IFIFO
+            }
+            val time = StructTimespec(0, 0)
+            return StructStat(0, 0, mode, 1, 0, 0, 0, attrs.size(), time, time, time, 0, 0)
+        }
+
+        companion object {
+            val seen: MutableList<String> = mutableListOf()
         }
     }
 }

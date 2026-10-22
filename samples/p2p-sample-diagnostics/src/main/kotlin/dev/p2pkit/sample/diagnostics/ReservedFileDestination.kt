@@ -13,12 +13,16 @@ private val cleanupMonitor = Any()
 private val cleanedDirectories: MutableSet<String> = mutableSetOf()
 
 /** Reconcile proven abandoned sample-owned staging; never sweep received filenames. */
-public fun cleanupStaleTransferPartsOnce(directory: File) {
+public fun cleanupStaleTransferPartsOnce(directory: File): Unit =
+    cleanupStaleTransferPartsOnce(directory, ::isPlainJvmStagingPath)
+
+/** Android supplies an API24-compatible no-follow inspector, not the JVM adapter. */
+public fun cleanupStaleTransferPartsOnce(directory: File, isPlainPath: (File) -> Boolean) {
     val canonicalPath = directory.canonicalPath
     synchronized(cleanupMonitor) {
         if (!cleanedDirectories.add(canonicalPath)) return
         try {
-            TransferStagingOwnership.reconcile(directory)
+            TransferStagingOwnership.reconcile(directory, isPlainPath)
         } catch (failure: Throwable) {
             cleanedDirectories.remove(canonicalPath)
             throw failure
@@ -47,8 +51,19 @@ public fun reservedFileDestination(target: File): FileTransferDestination =
 public fun reservedFileDestination(
     target: File,
     createDestination: (target: File, stagingDirectory: File) -> FileTransferDestination
+): FileTransferDestination = reservedFileDestination(target, ::isPlainJvmStagingPath, createDestination)
+
+/**
+ * Select both platform adapters explicitly. [isPlainPath] must inspect every
+ * original path component without following links, rejecting special entries
+ * and non-directory ancestors. It is retained for terminal lease cleanup too.
+ */
+public fun reservedFileDestination(
+    target: File,
+    isPlainPath: (File) -> Boolean,
+    createDestination: (target: File, stagingDirectory: File) -> FileTransferDestination
 ): FileTransferDestination {
-    val lease = TransferStagingOwnership.claim(checkNotNull(target.absoluteFile.parentFile))
+    val lease = TransferStagingOwnership.claim(checkNotNull(target.absoluteFile.parentFile), isPlainPath)
     try {
         return RetainedReservedFileDestination(
             target,
