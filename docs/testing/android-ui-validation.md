@@ -125,7 +125,16 @@ while a secure layer is visible. Such a protected observation records
 cannot replace either positive-control PNG or the real Recents PNG. Both
 positive images must contain the known synthetic pattern, with unchanged
 window/view/geometry and before/after state binding around every app capture.
-A returned protected bitmap must exclude the sampled pattern.
+A returned protected bitmap must exclude the sampled pattern. Before each app
+capture, the witness binds the actual View's accessibility window to the fresh
+active app root, clears its frame statistics once, invalidates once and observes
+a new draw plus a defined post-invalidation presented-frame timestamp within
+the same five-second admission bound. Missing statistics fail without a CPU-only
+fallback. This timing observation is not unique buffer identity or pixel proof;
+each original screenshot and the unchanged positive/protected/positive controls
+remain decisive. The debug target declares visibility of only the API32 Nexus
+Recents provider for its actual action-resource lookup; missing resources still
+fail, and release package visibility is unchanged.
 
 `HARNESS_PASS_PENDING_REVIEW` still is not issue closure: independent review
 must decode the originals, identify the intended task card on a genuine

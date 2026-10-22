@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 import unittest
 import zlib
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("legacy_task", ROOT / "scripts/run-android-legacy-task-preview.py")
@@ -41,10 +42,16 @@ def fixture(api=24, unavailable=False):
             visible = name in legacy.POSITIVE
             identity = 1 if index in (0, 2) else 2
             state = dict(activity=identity, window=identity + 10, view=identity + 20, taskId=7,
-                         viewWidth=16, viewHeight=16, viewDraws=1,
+                         viewWidth=16, viewHeight=16, viewDraws=2,
                          samplePoints=[[2, 4], [6, 4], [10, 4], [14, 4]],
                          owned=True, viewAttached=True, windowFocused=True, secureFlag=not visible)
-            item.update(sampleMatches=[visible] * 4, stateBefore=state, stateAfter=copy.deepcopy(state))
+            root = dict(windowId=identity + 30, package=legacy.PACKAGE, bounds=[0, 0, 16, 17], viewBounds=[0, 0, 16, 16])
+            presentation = dict(startedElapsedMillis=95 + index * 10, deadlineElapsedMillis=5095 + index * 10,
+                completedElapsedMillis=99 + index * 10, budgetMillis=5000, operation="READY", lastRootGuard="READY", root=root,
+                baselineDraws=1, clearReturned=True, invalidatedNano=1000, polls=2, frameCount=2, observedDraws=2,
+                queriedNano=1300, frameIndex=1, postedNano=990, readyNano=1100, presentedNano=1200)
+            item.update(sampleMatches=[visible] * 4, stateBefore=state, stateAfter=copy.deepcopy(state),
+                        presentation=presentation, activeRootAfter=copy.deepcopy(root))
         else:
             visible = True
             system = dict(activity=1, taskId=7, secureFlag=True, stopped=True, windowFocused=False,
@@ -57,13 +64,13 @@ def fixture(api=24, unavailable=False):
                               snapshotBounds=[0, 3, 16, 16]))
             item.update(pixelVariation=True, systemWindowBefore=system, systemWindowAfter=copy.deepcopy(system))
         if unavailable and name not in legacy.POSITIVE and name != "actual-recents-original":
-            item = {key: item[key] for key in ("name", "elapsedMillis", "stateBefore", "stateAfter")}
+            item = {key: item[key] for key in ("name", "elapsedMillis", "stateBefore", "stateAfter", "presentation", "activeRootAfter")}
             item["observation"] = "UNAVAILABLE"
         else:
             files[name + ".png"] = synthetic_png(visible)
         captures.append(item)
     report = dict(case="479", token=TOKEN, sourceCommit=SOURCE, declaredSourceTree=TREE,
-        api=api, targetSdk=37, captureObservationSchema=2, outcome=legacy.owner.PASS,
+        api=api, targetSdk=37, captureObservationSchema=3, outcome=legacy.owner.PASS,
         syntheticOnly=True, recentsReviewRequired=True, cleanup="OWNED_ACTIVITIES_DESTROYED", taskId=7,
         recentsObserver=dict(provider="com.android.systemui" if api == 24 else "com.google.android.apps.nexuslauncher",
             publicAppLabel="P2pKit Sample", requiredFlagsPresent=True, serviceFlags=18,
@@ -75,6 +82,8 @@ def fixture(api=24, unavailable=False):
             for action, platform, start in (("HOME", 2, 101), ("RECENTS", 3, 103))],
         captures=captures, lifecycle=[dict(event=event, activity=activity, taskId=7, secureFlag=True)
             for event, activity in (("created", 1), ("stopped", 1), ("created", 2), ("destroyed", 1), ("destroyed", 2))])
+    if api == 32:
+        report["recentsProviderLookup"] = dict(operation="COMPLETE", packageMatches=True, distinctUid=True)
     # Clearly synthetic parser inputs, not captured images or proof of visual privacy.
     files["result.json"] = json.dumps(report).encode()
     return report, files
@@ -101,6 +110,68 @@ class LegacyTaskTests(unittest.TestCase):
                 report, files = fixture(api, unavailable)
                 self.assertTrue(self.validate(report, files, api)["recentsReviewRequired"])
             self.assertEqual(legacy.LegacyCampaign(api).API, api)
+
+    def test_presentation_requires_original_complete_non_stale_receipt(self):
+        for key, invalid in (("clearReturned", False), ("clearReturned", 1), ("operation", "CPU_DRAW"),
+                ("presentedNano", -1), ("presentedNano", 999), ("presentedNano", 1301),
+                ("frameCount", 0), ("frameCount", 1025), ("frameIndex", 2), ("observedDraws", 1),
+                ("baselineDraws", 2), ("completedElapsedMillis", 5100), ("polls", 0)):
+            report, files = fixture()
+            report["captures"][0]["presentation"][key] = invalid
+            with self.subTest(key=key, invalid=invalid), self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        del report["captures"][0]["presentation"]
+        with self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_presentation_identity_geometry_and_bracket_remain_exact(self):
+        for key, invalid in (("windowId", -1), ("package", "other.package"), ("viewBounds", [0, 0, 15, 16]),
+                ("bounds", [0, 0, 15, 16])):
+            report, files = fixture()
+            report["captures"][0]["presentation"]["root"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        for key in ("presentation", "activeRootAfter"):
+            target = report["captures"][5][key]
+            (target["root"] if key == "presentation" else target)["windowId"] += 1
+        with self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_provider_lookup_cannot_claim_filtered_or_missing_package_is_ready(self):
+        for value in (None, {}, dict(operation="PACKAGE_RESOURCES", packageMatches=True, distinctUid=True),
+                dict(operation="COMPLETE", packageMatches=False, distinctUid=True)):
+            report, files = fixture(32)
+            report["recentsProviderLookup"] = value
+            with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_named_provider_visibility_is_only_in_debug_target_manifest(self):
+        base = ROOT / "samples/p2p-sample-android/src"
+        android = "{http://schemas.android.com/apk/res/android}"
+        debug = ET.parse(base / "debug/AndroidManifest.xml").getroot()
+        self.assertEqual([n.attrib for n in debug.findall("queries/package")],
+            [{android + "name": "com.google.android.apps.nexuslauncher"}])
+        self.assertEqual(len(debug.findall("queries")), 1)
+        self.assertEqual(len(list(debug.find("queries"))), 1)
+        for variant in ("main", "androidTest"):
+            manifest = ET.parse(base / variant / "AndroidManifest.xml").getroot()
+            self.assertFalse(manifest.findall("queries"))
+        for variant in ("main", "debug", "androidTest"):
+            self.assertNotIn("QUERY_ALL_PACKAGES", (base / variant / "AndroidManifest.xml").read_text())
+
+    def test_native_presentation_is_once_only_and_does_not_replace_pixels(self):
+        base = ROOT / "samples/p2p-sample-android/src"
+        source = (base / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        self.assertEqual(source.count("uiAutomation.clearWindowContentFrameStats("), 1)
+        self.assertEqual(source.count("view.invalidate()"), 1)
+        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+        self.assertIn("val node = view.createAccessibilityNodeInfo()", source)
+        self.assertIn("root.windowId != owned.first", source)
+        self.assertIn("val until = minOf(deadline, start + 5_000)", source)
+        self.assertIn('finally { @Suppress("DEPRECATION") node.recycle() }', source)
+        self.assertIn("sameAppCapture(appBefore, checkNotNull(appAfter))", source)
+        self.assertNotIn("Choreographer", source)
+        self.assertNotIn("adoptShellPermissionIdentity", source)
+        self.assertLess(source.index('record.put("sampleMatches", JSONArray(matches))'),
+            source.index("checkLegacyCaptureObservation(observation, visible = checkNotNull(visible))",
+                         source.index('record.put("sampleMatches", JSONArray(matches))')))
 
     def test_identity_failure_cleanup_and_false_ready_rejected(self):
         for key, invalid in (("sourceCommit", "d" * 40), ("declaredSourceTree", "d" * 40),

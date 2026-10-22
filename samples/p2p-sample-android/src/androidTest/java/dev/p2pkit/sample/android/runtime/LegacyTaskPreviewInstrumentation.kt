@@ -138,7 +138,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             .put("sourceBinding", "host must bind clean checkout/tree, installed APK hashes and original run")
             .put("api", Build.VERSION.SDK_INT).put("fingerprint", Build.FINGERPRINT).put("pid", Process.myPid())
             .put("targetSdk", application.applicationInfo.targetSdkVersion)
-            .put("syntheticOnly", true).put("captureObservationSchema", 2).put("bodyObservationBudgetMillis", 90_000)
+            .put("syntheticOnly", true).put("captureObservationSchema", 3).put("bodyObservationBudgetMillis", 90_000)
             .put("perMainCallAndAwaitMillis", 5_000)
         deadline = SystemClock.elapsedRealtime() + 90_000
         stage = "real-activity-launch"
@@ -175,9 +175,17 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         recentsProvider = if (Build.VERSION.SDK_INT == 24) "com.android.systemui"
             else "com.google.android.apps.nexuslauncher"
         if (Build.VERSION.SDK_INT == 32) {
-            recentsCloseAction = application.packageManager.getResourcesForApplication(recentsProvider)
-                .getIdentifier("accessibility_close", "string", recentsProvider)
+            val lookup = JSONObject().put("operation", "PACKAGE_INFO")
+            report.put("recentsProviderLookup", lookup)
+            @Suppress("DEPRECATION") // API24-compatible overload; exact single debug visibility declaration.
+            val providerInfo = application.packageManager.getApplicationInfo(recentsProvider, 0)
+            check(providerInfo.packageName == recentsProvider && providerInfo.uid != Process.myUid())
+            lookup.put("packageMatches", true).put("distinctUid", true).put("operation", "PACKAGE_RESOURCES")
+            val resources = application.packageManager.getResourcesForApplication(providerInfo)
+            lookup.put("operation", "ACTION_RESOURCE")
+            recentsCloseAction = resources.getIdentifier("accessibility_close", "string", recentsProvider)
             check(recentsCloseAction != 0)
+            lookup.put("operation", "COMPLETE")
         }
         report.put("recentsObserver", JSONObject().put("provider", recentsProvider)
             .put("publicAppLabel", publicAppLabel).put("requiredFlagsPresent", true).put("serviceFlags", serviceFlags)
@@ -199,7 +207,6 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         }
         await { main { first.hasWindowFocus() && created.size == 1 } }
         check(main { secure(first) && first.taskId == firstTask })
-        redraw(pattern)
         capture(stage, first, pattern, false)
 
         stage = "real-activity-recreation"
@@ -214,16 +221,13 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         // an unprotected window. Only this synthetic replacement-view content may be captured.
         stage = "synthetic-unprotected-positive-control"
         main { replacement.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
-        redraw(replacementPattern)
         capture(stage, replacement, replacementPattern, true)
         stage = "reapplied-production-secure-policy"
         main { secureLegacyTaskWindow(replacement.window) }
-        redraw(replacementPattern)
         capture(stage, replacement, replacementPattern, false)
         stage = "synthetic-unprotected-closing-control"
         try {
             main { replacement.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
-            redraw(replacementPattern)
             capture(stage, replacement, replacementPattern, true)
         } finally { main { secureLegacyTaskWindow(replacement.window) } }
         checkLegacyCaptureBracket(
@@ -241,9 +245,114 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         return view
     }
 
-    private fun redraw(view: PatternView) {
-        val before = main { view.draws.also { view.invalidate() } }
-        await { main { view.draws > before } }
+    private data class AppCaptureSample(val state: LegacyCaptureState, val root: JSONObject)
+
+    /** The ID comes from the actual owned View, not a guessed first window or a fabricated node. */
+    private fun appCaptureSample(
+        activity: MainActivity, view: PatternView, visible: Boolean, guard: (String) -> Unit,
+    ): AppCaptureSample? {
+        fun pending(reason: String): AppCaptureSample? { guard(reason); return null }
+        val state = captureState(activity, view)
+        checkLegacyCaptureState(state, secure = !visible)
+        val owned = main {
+            val node = view.createAccessibilityNodeInfo()
+            try {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                Triple(node.windowId, bounds, node.packageName?.toString() == targetContext.packageName)
+            } finally { @Suppress("DEPRECATION") node.recycle() }
+        }
+        checkLegacyCapture(owned.third, LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+        val root = uiAutomation.rootInActiveWindow ?: return pending("ROOT_MISSING")
+        try {
+            if (!root.refresh()) return pending("ROOT_REFRESH_FAILED")
+            if (!root.isVisibleToUser) return pending("ROOT_NOT_VISIBLE")
+            if (root.windowId < 0 || root.windowId != owned.first) return pending("ROOT_WINDOW_MISMATCH")
+            if (root.packageName?.toString() != targetContext.packageName) return pending("ROOT_PACKAGE_MISMATCH")
+            val bounds = Rect().also(root::getBoundsInScreen)
+            val viewBounds = owned.second
+            if (viewBounds.width() != state.width || viewBounds.height() != state.height ||
+                !bounds.contains(viewBounds) || state.points.any { (x, y) -> !viewBounds.contains(x, y) }) {
+                return pending("ROOT_GEOMETRY_MISMATCH")
+            }
+            guard("READY")
+            return AppCaptureSample(state, JSONObject().put("windowId", root.windowId)
+                .put("package", targetContext.packageName)
+                .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+                .put("viewBounds", JSONArray(listOf(viewBounds.left, viewBounds.top,
+                    viewBounds.right, viewBounds.bottom))))
+        } finally { @Suppress("DEPRECATION") root.recycle() }
+    }
+
+    private fun sameAppCapture(first: AppCaptureSample, second: AppCaptureSample): Boolean =
+        first.state.copy(draws = second.state.draws) == second.state && first.root.toString() == second.root.toString()
+
+    private fun admittedAppCapture(
+        activity: MainActivity, view: PatternView, visible: Boolean, attempt: JSONObject,
+    ): AppCaptureSample {
+        val start = SystemClock.elapsedRealtime()
+        val until = minOf(deadline, start + 5_000)
+        val receipt = JSONObject().put("startedElapsedMillis", start).put("deadlineElapsedMillis", until)
+            .put("budgetMillis", 5_000).put("operation", "ACTIVE_OWNED_ROOT")
+        attempt.put("presentation", receipt)
+        fun bounded() = checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+            LegacyCaptureFailureCode.PRESENTATION_ADMISSION_TIMEOUT)
+        var baseline: AppCaptureSample
+        while (true) {
+            bounded()
+            val sample = appCaptureSample(activity, view, visible) { receipt.put("lastRootGuard", it) }
+            bounded()
+            if (sample != null) { baseline = sample; break }
+            Thread.sleep(20)
+        }
+        receipt.put("root", baseline.root).put("baselineDraws", baseline.state.draws)
+        var invalidatedNano = 0L
+        var polls = 0
+        return awaitLegacyPresentation(until, SystemClock::elapsedRealtime,
+            clear = {
+                receipt.put("operation", "CLEAR_FRAME_STATS")
+                uiAutomation.clearWindowContentFrameStats(baseline.root.getInt("windowId")).also {
+                    receipt.put("clearReturned", it)
+                }
+            },
+            redraw = {
+                receipt.put("operation", "INVALIDATE_ONCE")
+                main {
+                    bounded()
+                    checkLegacyCapture(!activity.isDestroyed && view.isAttachedToWindow &&
+                        activity.hasWindowFocus() && view.hasWindowFocus() && secure(activity) == !visible,
+                        LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+                    invalidatedNano = System.nanoTime()
+                    view.invalidate()
+                }
+                receipt.put("invalidatedNano", invalidatedNano)
+            },
+            observe = {
+                receipt.put("operation", "OBSERVE_PRESENTATION").put("polls", ++polls)
+                val sample = requireLegacyCaptureValue(appCaptureSample(activity, view, visible) {
+                    receipt.put("lastRootGuard", it)
+                },
+                    LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+                checkLegacyCapture(sameAppCapture(baseline, sample), LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+                val stats = requireLegacyCaptureValue(
+                    uiAutomation.getWindowContentFrameStats(baseline.root.getInt("windowId")),
+                    LegacyCaptureFailureCode.PRESENTATION_STATS_UNAVAILABLE)
+                val queriedNano = System.nanoTime()
+                checkLegacyCapture(stats.frameCount in 0..1024,
+                    LegacyCaptureFailureCode.PRESENTATION_FRAME_LIMIT_EXCEEDED)
+                val frames = (0 until stats.frameCount).map { index -> LegacyPresentedFrame(index,
+                    stats.getFramePostedTimeNano(index), stats.getFrameReadyTimeNano(index),
+                    stats.getFramePresentedTimeNano(index)) }
+                val frame = findLegacyPresentedFrame(frames, invalidatedNano, queriedNano)
+                receipt.put("frameCount", stats.frameCount).put("observedDraws", sample.state.draws)
+                    .put("queriedNano", queriedNano)
+                if (frame == null || sample.state.draws <= baseline.state.draws) null else {
+                    bounded()
+                    receipt.put("frameIndex", frame.index).put("postedNano", frame.posted)
+                        .put("readyNano", frame.ready).put("presentedNano", frame.presented)
+                        .put("operation", "READY").put("completedElapsedMillis", SystemClock.elapsedRealtime())
+                    sample
+                }
+            }, pause = { Thread.sleep(20) })
     }
 
     private fun capture(name: String, activity: MainActivity?, view: PatternView?, visible: Boolean?) {
@@ -254,19 +363,29 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         captureAttempts.put(attempt)
         checkLegacyCapture(SystemClock.elapsedRealtime() <= deadline, LegacyCaptureFailureCode.BODY_DEADLINE_EXCEEDED)
         attempt.put("operation", "SAMPLE_GEOMETRY")
-        val before = view?.let { captureState(checkNotNull(activity), it) }
+        val appBefore = view?.let { admittedAppCapture(checkNotNull(activity), it, checkNotNull(visible), attempt) }
+        val before = appBefore?.state
         before?.let {
             attempt.put("stateBefore", stateJson(it))
             checkLegacyCaptureState(it, secure = !checkNotNull(visible))
         }
         val systemBefore = if (view == null) admittedRecentsState(attempt) else null
         systemBefore?.let { attempt.put("systemWindowBefore", it) }
+        checkLegacyCapture(SystemClock.elapsedRealtime() <= deadline, LegacyCaptureFailureCode.BODY_DEADLINE_EXCEEDED)
         attempt.put("operation", "GLOBAL_SCREENSHOT_REQUEST")
         val bitmap = uiAutomation.takeScreenshot()
         try {
             attempt.put("screenshotReturned", true).put("screenshotAvailable", bitmap != null)
-            val after = view?.let { captureState(checkNotNull(activity), it) }
+            val appAfter = view?.let { requireLegacyCaptureValue(
+                appCaptureSample(checkNotNull(activity), it, checkNotNull(visible)) { guard ->
+                    attempt.put("activeRootAfterGuard", guard)
+                },
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID) }
+            if (appBefore != null) checkLegacyCapture(sameAppCapture(appBefore, checkNotNull(appAfter)),
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            val after = appAfter?.state
             after?.let { attempt.put("stateAfter", stateJson(it)) }
+            appAfter?.let { attempt.put("activeRootAfter", it.root) }
             val systemAfter = if (view == null) requireLegacyCaptureValue(
                 recentsState(minOf(deadline, SystemClock.elapsedRealtime() + 5_000)) {
                     attempt.put("recentsAfterRootGuard", it.name)
@@ -280,6 +399,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             val record = JSONObject().put("name", name).put("elapsedMillis", SystemClock.elapsedRealtime())
             if (before != null) record.put("stateBefore", stateJson(before))
                 .put("stateAfter", stateJson(checkNotNull(after)))
+                .put("presentation", attempt.getJSONObject("presentation"))
+                .put("activeRootAfter", checkNotNull(appAfter).root)
             if (systemBefore != null) record.put("systemWindowBefore", systemBefore)
                 .put("systemWindowAfter", systemAfter)
             if (bitmap == null) {
@@ -326,8 +447,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     }
                     val observation = LegacyCaptureObservation(before, checkNotNull(after),
                         pixels.width to pixels.height, matches)
-                    checkLegacyCaptureObservation(observation, visible = checkNotNull(visible))
                     record.put("sampleMatches", JSONArray(matches))
+                    checkLegacyCaptureObservation(observation, visible = checkNotNull(visible))
                     appObservations[name] = observation
                 } else {
                     val firstPixel = pixels.getPixel(0, 0)
