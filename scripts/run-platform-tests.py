@@ -552,36 +552,157 @@ def ordinary_simulator_binding(profile, arch, source):
     return {"raw": binding_raw, "path": str(path), "originals": originals, "start": start_raw, "prelaunch": prelaunch_raw}
 
 
+class ProcessOwner:
+    """Retain before launch: a Popen PID/PGID is not a process lifetime capability.
+
+    The maintained native backends follow controlled descendants even after the
+    leader is reaped. The separate local marker preserves the exact canonical
+    context consumed by Gradle's ordinary-simulator evidence checks.
+    """
+    def __init__(self):
+        self.scope, self.child = None, None
+        self.attempted, self.retired, self.drained = False, False, False
+        self.launch_error, self.retirement_error = None, None
+
+    def start(self, argv, *, cwd, stdout=None, stderr=None):
+        if self.attempted or self.retired:
+            raise audit_processes.OwnershipError("Platform process owner is single-use")
+        self.attempted = True
+        # Defer handled cancellation until both the scope and returned child are
+        # retained. A supplier can raise after registering a child in its scope.
+        pending = []
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        def defer(signum, _frame):
+            pending.append(signum)
+        try:
+            try:
+                for sig, handler in handlers.items():
+                    if callable(handler):
+                        signal.signal(sig, defer)
+                invocation = uuid.uuid4().hex
+                environment = audit_processes.local_ownership_environment(dict(os.environ), invocation)
+                self.scope = audit_processes.make_local_scope(environment.get(audit_processes.JOB_ENV, invocation),
+                    invocation, environment.get(audit_processes.STATE_ENV, str(cwd)),
+                    environment.get("GRADLE_USER_HOME", str(Path.home() / ".gradle")))
+                if stdout == subprocess.PIPE and stderr == subprocess.PIPE:
+                    outputs = {}  # Original bounded capture owns these two readers.
+                else:
+                    if stdout == subprocess.PIPE or stderr == subprocess.PIPE:
+                        raise audit_processes.OwnershipError("Platform capture requires both output pipes")
+                    output = 1 if stdout is None else stdout
+                    outputs = {"stdout": output, "stderr": output if stderr == subprocess.STDOUT else
+                               2 if stderr is None else stderr}
+                self.child = self.scope.spawn(argv, str(cwd), environment, **outputs)
+            finally:
+                for sig, handler in handlers.items():
+                    if callable(handler):
+                        signal.signal(sig, handler)
+            for sig in pending:
+                handlers[sig](sig, None)
+        except BaseException as error:
+            self.launch_error = error
+            raise
+
+    @property
+    def pid(self):
+        return None if self.child is None else self.child.pid
+
+    @property
+    def returncode(self):
+        return None if self.child is None else self.child.returncode
+
+    @property
+    def stdout(self):
+        return None if self.child is None else self.child.stdout
+
+    @property
+    def stderr(self):
+        return None if self.child is None else self.child.stderr
+
+    def poll(self):
+        return None if self.child is None else self.child.poll()
+
+    def wait(self, timeout=None):
+        if self.child is None:
+            raise audit_processes.OwnershipError("Platform child was not returned")
+        return self.child.wait(timeout=timeout)
+
+    def retire(self):
+        if self.retired:
+            return self.drained
+        self.retired = True  # Withdraw close duties before any fallible native call.
+        if self.scope is None:
+            self.drained = self.launch_error is None or not audit_processes.retirement_details(self.launch_error)
+            return self.drained  # No child was attempted before the scope returned.
+        children, readers = [], []
+        end, cancellation = None, None
+        def remember(error):
+            nonlocal cancellation
+            if self.retirement_error is None:
+                self.retirement_error = error
+            if not isinstance(error, Exception) and cancellation is None:
+                cancellation = error
+        if self.launch_error is not None and audit_processes.retirement_details(self.launch_error):
+            remember(self.launch_error)
+        try:
+            end = time.monotonic() + TERMINATION_GRACE_SECONDS + TERMINATION_KILL_SECONDS
+        except BaseException as error:
+            remember(error)
+        try:
+            children = list(self.scope.leaders)
+            if self.child is not None and not any(child is self.child for child in children):
+                children.append(self.child)
+            for child in children:
+                for name in ("stdout", "stderr"):
+                    try:
+                        stream = getattr(child, name)
+                        # Failed pre-exec admission can already retire readers.
+                        if stream is not None and getattr(stream, "closed", False) is not True and \
+                                not any(stream is old for old in readers):
+                            readers.append(stream)
+                    except BaseException as error:
+                        remember(error)
+            if end is None:
+                raise audit_processes.OwnershipError("Platform retirement clock unavailable")
+            live = self.scope.drain(TERMINATION_GRACE_SECONDS, TERMINATION_KILL_SECONDS, deadline=end)
+            if live or self.scope.discovery_errors or getattr(self.scope, "pending_discoveries", None):
+                raise audit_processes.OwnershipError("Platform descendants were not proven retired")
+            for child in children:
+                if child.poll() is None:
+                    raise audit_processes.OwnershipError("Platform leader exit was not observed")
+        except BaseException as error:
+            remember(error)
+        # A failed drain or one failed close must not skip independent handles or
+        # readers. These are only returned pipe readers, never borrowed sinks.
+        for resource in [self.scope, *readers]:
+            try:
+                resource.close()
+            except BaseException as error:
+                remember(error)
+        if end is not None:
+            try:
+                if time.monotonic() >= end:
+                    remember(audit_processes.OwnershipError("Platform retirement exceeded its original deadline"))
+            except BaseException as error:
+                remember(error)
+        self.drained = self.retirement_error is None
+        if cancellation is not None:
+            if cancellation is self.retirement_error:
+                raise cancellation
+            raise cancellation from self.retirement_error
+        return self.drained
+
+
 def terminate_process(process):
-    """Drain an owned process group even after its leader exits; never kill other groups."""
+    """Drain only a retained native owner, never a caller-supplied numeric group."""
     if process is None:
         return True
-    # Every caller uses start_new_session=True, so this PID is the owned PGID.
-    # Leader completion alone says nothing about workers still in that group.
-    try:
-        for sig, timeout in ((signal.SIGTERM, TERMINATION_GRACE_SECONDS), (signal.SIGKILL, TERMINATION_KILL_SECONDS)):
-            os.killpg(process.pid, sig)
-            deadline = time.monotonic() + timeout
-            while True:
-                process.poll()  # Reap the leader too; a zombie can keep the group present.
-                try:
-                    os.killpg(process.pid, 0)
-                except PermissionError:
-                    # Darwin may report EPERM while a killed group's members are
-                    # exiting but not yet reaped. This is uncertainty, not drain:
-                    # keep the same deadline and require a later actual ESRCH.
-                    pass
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                time.sleep(min(0.05, remaining))
-    except ProcessLookupError:
-        process.poll()
-        return True
-    except OSError as error:
-        print(f"FATAL: Could not drain owned process group {process.pid}: {error}", file=sys.stderr)
+    if type(process) is not ProcessOwner:
+        print("FATAL: Process cleanup lacks its original native owner", file=sys.stderr)
         return False
-    print(f"FATAL: Owned process group {process.pid} was not proven absent within TERM/KILL deadlines", file=sys.stderr)
+    if process.retire():
+        return True
+    print("FATAL: Owned descendants/handles were not retired within TERM/KILL deadlines", file=sys.stderr)
     return False
 
 
@@ -589,12 +710,13 @@ def stop_gradle():
     process = None
     code = 1
     try:
-        process = subprocess.Popen([str(ROOT / "gradlew"), "--stop"], cwd=ROOT, start_new_session=True)
+        process = ProcessOwner()
+        process.start([str(ROOT / "gradlew"), "--stop"], cwd=ROOT)
         code = process.wait(timeout=90)
     except subprocess.TimeoutExpired:
         print("FATAL: Gradle stop timed out", file=sys.stderr)
         code = 124
-    except OSError as error:
+    except (OSError, audit_processes.OwnershipError) as error:
         print(f"FATAL: Could not stop Gradle: {error}", file=sys.stderr)
     finally:
         if not terminate_process(process):
@@ -648,8 +770,8 @@ def _intel_capture_phase(directory, label, argv):
             for sig, handler in launch_handlers.items():
                 if callable(handler):
                     signal.signal(sig, defer)
-            process = subprocess.Popen(argv, cwd=ROOT, start_new_session=True,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = ProcessOwner()
+            process.start(argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         finally:
             for sig, handler in launch_handlers.items():
                 if callable(handler):
@@ -690,11 +812,6 @@ def _intel_capture_phase(directory, label, argv):
         try:
             drained = terminate_process(process)
         finally:
-            if process is not None:
-                for name in buffers:
-                    stream = getattr(process, name)
-                    if stream is not None:
-                        stream.close()
             row = {"schema": 1, "label": label, "argv": argv, "cwd": str(ROOT), "startedUtc": began,
                    "finishedUtc": datetime.now(timezone.utc).isoformat(),
                    "exitCode": None if process is None else process.returncode, "timedOut": timed_out,
@@ -780,18 +897,18 @@ class IntelSimulatorOwner:
                 already_shutdown = before["state"] == "Shutdown"
                 if before["state"] != "Booted":
                     errors.append("INTEL_RETIRE_BEFORE_STATE")
-            except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            except (OSError, ValueError, TypeError, KeyError, RecursionError, audit_processes.OwnershipError):
                 errors.append("INTEL_RETIRE_BEFORE_FAILED")
             if not already_shutdown:
                 try:
                     self.phase("intel-shutdown")
-                except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                except (OSError, ValueError, TypeError, KeyError, RecursionError, audit_processes.OwnershipError):
                     errors.append("INTEL_SHUTDOWN_FAILED")
             try:
                 after = simulator.terminal_device(self.phase("intel-retire-after"), self.selected)
                 if after["state"] != "Shutdown":
                     errors.append("INTEL_SHUTDOWN_NOT_OBSERVED")
-            except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            except (OSError, ValueError, TypeError, KeyError, RecursionError, audit_processes.OwnershipError):
                 errors.append("INTEL_RETIRE_AFTER_FAILED")
         else:
             errors.append("INTEL_BOOT_NOT_ATTEMPTED")
@@ -864,11 +981,12 @@ def run(profile):
             invocation_raw = (json.dumps(source, indent=2) + "\n").encode("utf-8")
             _intel_write(directory / "invocation.json", invocation_raw)
         gradle_attempted = True
-        process = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
+        process = ProcessOwner()
+        process.start(command, cwd=ROOT)
         code = process.wait()
     except KeyboardInterrupt:
         errors.append("Platform test invocation interrupted")
-    except OSError as error:
+    except (OSError, audit_processes.OwnershipError) as error:
         code = 1
         errors.append("INTEL_PREPARATION_OR_LAUNCH_IO" if profile == "ios-x64" else
                       f"Could not start/wait for Gradle: {error}")
@@ -893,7 +1011,7 @@ def run(profile):
                 if intel is not None:
                     try:
                         errors.extend(intel.retire())
-                    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                    except (OSError, ValueError, TypeError, KeyError, RecursionError, audit_processes.OwnershipError):
                         errors.append("INTEL_RETIREMENT_FAILED")
             finally:
                 for sig, handler in previous.items():

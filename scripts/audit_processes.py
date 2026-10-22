@@ -36,6 +36,10 @@ CHAIN_ENV = "P2PKIT_AUDIT_OWNERSHIP_CHAIN"
 DOMAINS_ENV = "P2PKIT_AUDIT_OWNERSHIP_DOMAINS"
 STATE_ENV = "P2PKIT_AUDIT_STATE_DIR"
 PIPE_ENV = "P2PKIT_AUDIT_DARWIN_PIPES"
+# Inner command owners must not rewrite a caller's evidence-bound audit domain.
+# This independent marker has the same controlled-inheritance (not hostile-child
+# containment) scope; native signals still require pidfds/audit tokens/Jobs.
+LOCAL_CHAIN_ENV = "P2PKIT_AUDIT_LOCAL_OWNERSHIP_CHAIN"
 MAX_PROCESS_BYTES = 8 * 1024 * 1024
 MAX_PROCESSES = 65536
 MAX_PROCESS_FDS = 65536
@@ -332,6 +336,29 @@ def ownership_environment(base: dict[str, str], job: str, invocation: str,
     return result
 
 
+def local_ownership_chain(value: str) -> list[str]:
+    if not isinstance(value, str):
+        raise OwnershipError("Invalid local ownership chain type")
+    if not value:
+        return []
+    if not re.fullmatch(r"[0-9a-f]{32}(?::[0-9a-f]{32}){0,31}", value):
+        raise OwnershipError("Malformed or excessive local ownership chain")
+    parts = value.split(":")
+    if len(set(parts)) != len(parts):
+        raise OwnershipError("Duplicate local ownership identity")
+    return parts
+
+
+def local_ownership_environment(base: dict[str, str], invocation: str) -> dict[str, str]:
+    """Append only an inner-command marker; canonical context stays byte-identical."""
+    if not isinstance(invocation, str) or not re.fullmatch(r"[0-9a-f]{32}", invocation):
+        raise OwnershipError("Invalid local ownership identity")
+    parts = local_ownership_chain(base.get(LOCAL_CHAIN_ENV, ""))
+    if len(parts) >= 32 or invocation in parts or invocation in base.get(CHAIN_ENV, "").split(":"):
+        raise OwnershipError("Duplicate or excessive local ownership nesting")
+    return {**base, LOCAL_CHAIN_ENV: ":".join([*parts, invocation])}
+
+
 def parse_procargs2(raw: bytes) -> dict[bytes, bytes]:
     """Parse bounded Darwin KERN_PROCARGS2; never return or retain argv."""
     if not 5 <= len(raw) <= MAX_PROCESS_BYTES:
@@ -356,7 +383,7 @@ def parse_procargs2(raw: bytes) -> dict[bytes, bytes]:
 def parse_environment(raw: bytes) -> dict[bytes, bytes]:
     if len(raw) > MAX_PROCESS_BYTES:
         raise OwnershipError("Process environment exceeds the bounded parser")
-    selected = {key.encode() for key in (JOB_ENV, CHAIN_ENV, DOMAINS_ENV, STATE_ENV, "GRADLE_USER_HOME")}
+    selected = {key.encode() for key in (JOB_ENV, CHAIN_ENV, DOMAINS_ENV, STATE_ENV, "GRADLE_USER_HOME", LOCAL_CHAIN_ENV)}
     result: dict[bytes, bytes] = {}
     for entry in raw.split(b"\0"):
         if not entry:
@@ -1047,7 +1074,7 @@ class DarwinScope(PosixScope):
             raise OwnershipError("Invalid Darwin inherited pipe bindings") from error
         if not isinstance(records, list) or len(records) > 32:
             raise OwnershipError("Invalid Darwin inherited pipe binding count")
-        chain = env.get(CHAIN_ENV, "").split(":")
+        chain = env.get(CHAIN_ENV, "").split(":") + local_ownership_chain(env.get(LOCAL_CHAIN_ENV, ""))
         verified, seen, descriptors = [], set(), set()
         for record in records:
             if not isinstance(record, dict) or set(record) != {"id", "fd", "digest"} or \
@@ -2256,6 +2283,32 @@ class WindowsScope:
 
 def make_scope(job: str, invocation: str, state: str, home: str) -> PosixScope | WindowsScope:
     kind = {"Linux": LinuxScope, "Darwin": DarwinScope, "Windows": WindowsScope}.get(platform.system())
+    if kind is None:
+        raise OwnershipError("Unsupported native process-ownership backend")
+    return kind(job, invocation, state, home)
+
+
+class _LocalOwnership:
+    def _ours(self, environment: dict[bytes, bytes]) -> bool:
+        value = environment.get(LOCAL_CHAIN_ENV.encode())
+        if value is None or self.invocation.encode() not in value.split(b":"):
+            return False
+        try:
+            return self.invocation in local_ownership_chain(value.decode("ascii"))
+        except UnicodeError as error:
+            raise OwnershipError("Invalid local ownership encoding") from error
+
+
+class LocalLinuxScope(_LocalOwnership, LinuxScope):
+    """Same pidfd ownership, with an independent inner-command marker."""
+
+
+class LocalDarwinScope(_LocalOwnership, DarwinScope):
+    """Same gated launch, pipe/parent proofs and real audit-token signaling."""
+
+
+def make_local_scope(job: str, invocation: str, state: str, home: str) -> PosixScope | WindowsScope:
+    kind = {"linux": LocalLinuxScope, "darwin": LocalDarwinScope, "win32": WindowsScope}.get(sys.platform)
     if kind is None:
         raise OwnershipError("Unsupported native process-ownership backend")
     return kind(job, invocation, state, home)

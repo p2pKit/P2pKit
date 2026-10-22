@@ -724,7 +724,7 @@ class HostedValidationTest(unittest.TestCase):
         child = SimpleNamespace(Popen=Mock(return_value=process), STDOUT=hosted.subprocess.STDOUT)
         clock = SimpleNamespace(monotonic=Mock(side_effect=[0.0, observed, observed + 0.001]),
                                 sleep=Mock(side_effect=AssertionError("Unexpected fake polling retry")))
-        helper = SimpleNamespace(terminate_process=Mock(return_value=drained))
+        helper = SimpleNamespace(ProcessOwner=Mock(return_value=process), terminate_process=Mock(return_value=drained))
         def execute():
             with patch.object(hosted, "platform_runner", return_value=helper), \
                     patch.object(hosted, "subprocess", child), patch.object(hosted, "time", clock):
@@ -732,9 +732,11 @@ class HostedValidationTest(unittest.TestCase):
         return execute, child, helper, process, log, clock
 
     def assert_terminal_cleanup(self, child, helper, process, log, clock):
-        child.Popen.assert_called_once_with(["not-executed"], cwd=hosted.ROOT,
-                                           stdout=log.open.return_value.__enter__.return_value,
-                                           stderr=hosted.subprocess.STDOUT, start_new_session=True)
+        child.Popen.assert_not_called()
+        helper.ProcessOwner.assert_called_once_with()
+        process.start.assert_called_once_with(["not-executed"], cwd=hosted.ROOT,
+                                              stdout=log.open.return_value.__enter__.return_value,
+                                              stderr=hosted.subprocess.STDOUT)
         log.open.assert_called_once_with("xb")
         log.open.return_value.__exit__.assert_called_once()
         helper.terminate_process.assert_called_once_with(process)
@@ -790,6 +792,17 @@ class HostedValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(OSError, "synthetic stat failure"):
             execute()
         self.assert_terminal_cleanup(*fakes)
+
+    def test_partial_launch_still_retires_the_original_owner_without_hiding_failure(self):
+        for drained in (True, False):
+            execute, child, helper, process, log, clock = self.terminal_fixture(1.0, drained=drained)
+            failure = OSError("synthetic partial native launch")
+            process.start.side_effect = failure
+            with self.subTest(drained=drained), self.assertRaises(OSError) as caught:
+                execute()
+            self.assertIs(caught.exception, failure)
+            process.poll.assert_not_called()
+            self.assert_terminal_cleanup(child, helper, process, log, clock)
 
     def test_python_fixture_exit_and_deadline_are_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
