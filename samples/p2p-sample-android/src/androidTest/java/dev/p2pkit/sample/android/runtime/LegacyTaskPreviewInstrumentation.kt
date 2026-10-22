@@ -689,7 +689,9 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         } finally { @Suppress("DEPRECATION") root.recycle() }
     }
 
-    private data class EducationObservation(val owner: JSONObject, val popup: JSONObject?)
+    private data class EducationObservation(
+        val owner: JSONObject, val popup: JSONObject?, val presence: LegacyEducationPresence, val absence: JSONObject,
+    )
 
     private fun recentsState(
         until: Long, query: JSONObject? = null,
@@ -788,7 +790,12 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             query?.put("treeComplete", complete)?.put("phase", "CARD_SELECTION")
             if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)
             if (educationObserver != null) {
-                val popup = findLegacyRecentsEducation(educationNodes)
+                val selection = selectLegacyRecentsEducation(educationNodes)
+                val popup = selection.popup
+                val absence = JSONObject().put("complete", true)
+                    .put("textIds", educationNodes.count { it.resource == LegacyEducationResource.TEXT })
+                    .put("arrowIds", educationNodes.count { it.resource == LegacyEducationResource.ARROW })
+                    .put("exactTexts", educationNodes.count { it.exactText })
                 query?.put("educationPredicates", JSONObject()
                     .put("complete", true).put("nodes", educationNodes.size)
                     .put("textIds", educationNodes.count { it.resource == LegacyEducationResource.TEXT })
@@ -802,7 +809,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     .put("rootContained", educationNodes.count {
                         val b = it.observation.bounds
                         b[0] < b[2] && b[1] < b[3] && bounds.contains(b[0], b[1], b[2], b[3])
-                    }).put("knownPopup", popup != null))
+                    }).put("knownPopup", popup != null).put("presence", selection.presence.name))
                 val popupJson = popup?.let {
                     JSONObject().put("parentBounds", JSONArray(nodes[it.parent].bounds))
                         .put("textBounds", JSONArray(nodes[it.text].bounds))
@@ -813,8 +820,10 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 val observedOwner = JSONObject(owner.toString()).put("package", recentsProvider)
                     .put("windowId", root.windowId)
                     .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
-                educationObserver(EducationObservation(observedOwner, popupJson))
-                if (popup != null) return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
+                educationObserver(EducationObservation(observedOwner, popupJson, selection.presence, absence))
+                if (selection.presence != LegacyEducationPresence.ABSENT) {
+                    return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
+                }
             }
             val card = findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)
                 ?: return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
@@ -914,11 +923,11 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     ledger.put("operation", "AWAITING_REAL_CARD")
                 }
                 if (value != null) {
-                    check(observed.popup == null)
+                    check(observed.presence == LegacyEducationPresence.ABSENT && observed.popup == null)
                     ledger.put("operation", if (dismissal.requested) "DISMISSED" else "NONE_REQUIRED")
                         .put("after", JSONObject().put("attempt", progress.attempt)
                             .put("observedElapsedMillis", SystemClock.elapsedRealtime())
-                            .put("popupAbsent", true).put("systemWindow", value))
+                            .put("popupAbsent", true).put("absence", observed.absence).put("systemWindow", value))
                 }
             }
             if (education != null && value != null) checkNotNull(educationObservation)

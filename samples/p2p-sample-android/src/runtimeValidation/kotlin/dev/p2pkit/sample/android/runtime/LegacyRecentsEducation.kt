@@ -12,6 +12,23 @@ internal data class LegacyEducationNode(
     val exactText: Boolean = false,
 )
 internal data class LegacyEducationPopup(val parent: Int, val text: Int, val arrow: Int)
+internal enum class LegacyEducationPresence { ABSENT, IDENTIFIED, REFUSED }
+internal data class LegacyEducationSelection(val presence: LegacyEducationPresence, val popup: LegacyEducationPopup?)
+
+/** Refusing an ambiguous/invalid positive selector is not evidence that the known popup is absent. */
+internal fun selectLegacyRecentsEducation(nodes: List<LegacyEducationNode>): LegacyEducationSelection {
+    val refused = LegacyEducationSelection(LegacyEducationPresence.REFUSED, null)
+    if (nodes.isEmpty() || nodes.size > 256 || nodes[0].observation.parent != null) return refused
+    if (nodes.indices.drop(1).any { index ->
+        val parent = nodes[index].observation.parent
+        parent == null || parent !in 0 until index
+    }) return refused
+    if (nodes.none { it.resource != LegacyEducationResource.OTHER || it.exactText }) {
+        return LegacyEducationSelection(LegacyEducationPresence.ABSENT, null)
+    }
+    val popup = findLegacyRecentsEducation(nodes) ?: return refused
+    return LegacyEducationSelection(LegacyEducationPresence.IDENTIFIED, popup)
+}
 
 /** Only a complete owned structured popup permits an input; never changes the real TaskView matcher. */
 internal fun findLegacyRecentsEducation(nodes: List<LegacyEducationNode>): LegacyEducationPopup? {

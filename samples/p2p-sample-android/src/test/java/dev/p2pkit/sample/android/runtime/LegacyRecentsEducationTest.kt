@@ -25,6 +25,7 @@ class LegacyRecentsEducationTest {
     @Test
     fun exactStructuredPopupAllowsTranslatedArrowWithinRoot() {
         assertEquals(LegacyEducationPopup(1, 2, 3), findLegacyRecentsEducation(fixture()))
+        assertEquals(LegacyEducationPresence.IDENTIFIED, selectLegacyRecentsEducation(fixture()).presence)
         assertEquals("Select text and images to copy, share, and more", LEGACY_RECENTS_EDUCATION_TEXT)
     }
 
@@ -136,10 +137,40 @@ class LegacyRecentsEducationTest {
         var clock = 0L
         val realCard = Any()
         val result = awaitLegacyRecentsState(5, { clock }, { clock++ }) {
-            assertNull(findLegacyRecentsEducation(emptyList()))
+            assertEquals(LegacyEducationPresence.ABSENT,
+                selectLegacyRecentsEducation(listOf(fixture()[0])).presence)
             if (clock == 2L) realCard else null
         }
         assertSame(realCard, result)
         assertFalse(dismissal.requested)
+    }
+
+    @Test
+    fun refusedOrAmbiguousPopupCannotBecomeAbsenceEvenWithRealCard() {
+        val refused = listOf(fixture().dropLast(1), fixture() + fixture()[2],
+            fixture().toMutableList().also { it[2] = it[2].copy(kind = LegacyEducationClass.OTHER) },
+            fixture().toMutableList().also {
+                it[2] = it[2].copy(observation = it[2].observation.copy(visible = false))
+            })
+        for (popup in refused) {
+            val withCard = popup + listOf(
+                LegacyEducationNode(LegacyRecentsNode(0, descriptionMatches = true,
+                    taskCollectionItem = true, closeAction = true)),
+                LegacyEducationNode(LegacyRecentsNode(popup.size, LegacyRecentsResource.SNAPSHOT)))
+            val realCard = assertNotNull(findLegacyRecentsCard(32, withCard.map { it.observation }))
+            var clock = 0L
+            assertFailsWith<LegacyCaptureFailure> {
+                awaitLegacyRecentsState(5, { clock }, { clock++ }) {
+                    val selection = selectLegacyRecentsEducation(withCard)
+                    assertEquals(LegacyEducationPresence.REFUSED, selection.presence)
+                    assertNull(selection.popup) // No input can be admitted either.
+                    if (selection.presence == LegacyEducationPresence.ABSENT) realCard else null
+                }
+            }
+        }
+        for (invalid in listOf(emptyList(), List(257) { fixture()[0] },
+            listOf(fixture()[0], fixture()[0]))) {
+            assertEquals(LegacyEducationPresence.REFUSED, selectLegacyRecentsEducation(invalid).presence)
+        }
     }
 }

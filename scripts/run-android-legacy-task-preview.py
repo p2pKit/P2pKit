@@ -149,12 +149,17 @@ def validate_recents_education(value, api, admission, system):
          ({"before", "request"} if dismissed else set()), "Unexpected education action ledger")
     after = ledger["after"]
     need(isinstance(after, dict) and set(after) ==
-         {"attempt", "observedElapsedMillis", "popupAbsent", "systemWindow"} and
+         {"attempt", "observedElapsedMillis", "popupAbsent", "absence", "systemWindow"} and
          type(after["attempt"]) is int and after["attempt"] == admission["attempts"] and
          type(after["observedElapsedMillis"]) is int and
          admission["startedElapsedMillis"] <= after["observedElapsedMillis"] <= admission["completedElapsedMillis"] and
          after["popupAbsent"] is True and isinstance(system, dict) and after["systemWindow"] == system,
          "Education acknowledgement lacks later complete popup-absent real-card admission")
+    absence = after["absence"]
+    need(isinstance(absence, dict) and set(absence) == {"complete", "textIds", "arrowIds", "exactTexts"} and
+         absence["complete"] is True and
+         all(type(absence[key]) is int and absence[key] == 0 for key in ("textIds", "arrowIds", "exactTexts")),
+         "Refused or ambiguous known-popup markers are not observed absence")
     if not dismissed:
         return
     before, request = ledger["before"], ledger["request"]

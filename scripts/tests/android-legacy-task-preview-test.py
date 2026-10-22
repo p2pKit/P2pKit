@@ -92,6 +92,7 @@ def fixture(api=24, unavailable=False):
         report["recentsProviderLookup"] = dict(operation="COMPLETE", packageMatches=True, distinctUid=True)
         report["recentsEducation"] = dict(schema=1, api=32, operation="NONE_REQUIRED", observations=2,
             after=dict(attempt=2, observedElapsedMillis=108, popupAbsent=True,
+                       absence=dict(complete=True, textIds=0, arrowIds=0, exactTexts=0),
                        systemWindow=copy.deepcopy(captures[1]["systemWindowBefore"])))
     # Clearly synthetic parser inputs, not captured images or proof of visual privacy.
     files["result.json"] = json.dumps(report).encode()
@@ -153,6 +154,7 @@ class LegacyTaskTests(unittest.TestCase):
         report, files = fixture(32)
         del report["recentsEducation"]
         with self.assertRaises(ValueError): self.validate(report, files, 32)
+
         report, files = fixture(24)
         report["recentsEducation"] = fixture(32)[0]["recentsEducation"]
         with self.assertRaises(ValueError): self.validate(report, files, 24)
@@ -164,6 +166,23 @@ class LegacyTaskTests(unittest.TestCase):
         report, files = fixture(32)
         report["recentsEducation"]["request"] = self.education_fixture()[0]["recentsEducation"]["request"]
         with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_real_card_cannot_replace_complete_typed_marker_absence(self):
+        for dismissed in (False, True):
+            for key, invalid in (("complete", False), ("complete", 1), ("textIds", 1), ("textIds", False),
+                                 ("arrowIds", 2), ("arrowIds", 0.0), ("exactTexts", 1), ("exactTexts", True)):
+                report, files = self.education_fixture() if dismissed else fixture(32)
+                report["recentsEducation"]["after"]["absence"][key] = invalid
+                with self.subTest(dismissed=dismissed, key=key), self.assertRaises(ValueError):
+                    self.validate(report, files, 32)
+            for missing in ("complete", "textIds", "arrowIds", "exactTexts"):
+                report, files = self.education_fixture() if dismissed else fixture(32)
+                del report["recentsEducation"]["after"]["absence"][missing]
+                with self.subTest(dismissed=dismissed, missing=missing), self.assertRaises(ValueError):
+                    self.validate(report, files, 32)
+            report, files = self.education_fixture() if dismissed else fixture(32)
+            del report["recentsEducation"]["after"]["absence"]
+            with self.assertRaises(ValueError): self.validate(report, files, 32)
 
     def test_wrong_false_throwing_duplicate_or_late_back_cannot_qualify(self):
         for key, invalid in (("action", "HOME"), ("platformAction", 2), ("platformAction", True),
@@ -204,7 +223,8 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("Build.VERSION.SDK_INT == 32", admission)
         self.assertIn("dismissal.request(until, SystemClock::elapsedRealtime)", admission)
         self.assertIn('if (value != null)', admission)
-        self.assertIn('check(observed.popup == null)', admission)
+        self.assertIn('check(observed.presence == LegacyEducationPresence.ABSENT && observed.popup == null)', admission)
+        self.assertIn('if (selection.presence != LegacyEducationPresence.ABSENT)', read_only)
         self.assertLess(helper.index("requested = true"), helper.index("val accepted = perform()"))
         self.assertEqual(helper.count("perform()"), 1)
         self.assertIn("if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)", read_only)
