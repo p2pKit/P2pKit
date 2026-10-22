@@ -57,11 +57,12 @@ FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
 TERMINATION_GRACE_SECONDS = 15
 TERMINATION_KILL_SECONDS = 5
-# Darwin's observed fresh census costs exhaust the original 15+5s reserve.
-# Use measured operational headroom (45+45s), not a future native latency bound;
-# unchanged ownership checks still require three timely quiet censuses per phase.
-DARWIN_TERMINATION_GRACE_SECONDS = 45
-DARWIN_TERMINATION_KILL_SECONDS = 45
+# Hosted run 39753819318/1 spent 75.5s in TERM with only two timely quiet
+# censuses. Reserve 120+120s operational headroom instead of 45+45s,
+# not a future native latency bound. The one absolute end includes final closes;
+# three timely quiet censuses are still required within a single phase.
+DARWIN_TERMINATION_GRACE_SECONDS = 120
+DARWIN_TERMINATION_KILL_SECONDS = 120
 INTEL_BOOTSTATUS_SECONDS = 600
 INTEL_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_V1"
 INTEL_RETIREMENT_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_RETIREMENT_V1"

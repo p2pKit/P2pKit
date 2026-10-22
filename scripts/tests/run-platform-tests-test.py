@@ -449,7 +449,7 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
         self.assertEqual(120, GATE.simulator.SECONDS)
         self.assertEqual((15, 5), (GATE.TERMINATION_GRACE_SECONDS, GATE.TERMINATION_KILL_SECONDS))
         for label in IntelEvidenceFixture.prepare + IntelEvidenceFixture.retire:
-            ceiling = 690 if label == "intel-bootstatus" else 210
+            ceiling = 840 if label == "intel-bootstatus" else 360
             durations = (300, ceiling, ceiling + 1) if label == "intel-bootstatus" else (ceiling, ceiling + 1)
             for duration in durations:
                 fixture = IntelEvidenceFixture()
@@ -582,7 +582,7 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
             self.assess(fixture)
         fixture = IntelEvidenceFixture()
         row = fixture.rows["intel-boot"]
-        row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) + timedelta(seconds=211)).isoformat()
+        row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) + timedelta(seconds=361)).isoformat()
         with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
             self.assess(fixture)
 
@@ -1862,8 +1862,9 @@ class ProcessOwnerModels(unittest.TestCase):
         scope.active_drain, scope.drain_reconciliations = None, []
         scope.known, scope.handles = {}, {}
         clock = [100.]
+        costs = iter(census_seconds) if isinstance(census_seconds, tuple) else None
         def discover():
-            clock[0] += census_seconds
+            clock[0] += next(costs) if costs is not None else census_seconds
             return []
         scope.discover = mock.Mock(side_effect=discover)
         scope.close = mock.Mock()
@@ -1885,9 +1886,9 @@ class ProcessOwnerModels(unittest.TestCase):
                     stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_KILL_SECONDS", 5, create=True))
                 self.assertIs(GATE.terminate_process(owner), not old_policy)
             record = scope.drain_reconciliations[0]
-            self.assertEqual((15, 5) if old_policy else (45, 45),
+            self.assertEqual((15, 5) if old_policy else (120, 120),
                              (record["graceSeconds"], record["killWaitSeconds"]))
-            self.assertEqual(120 if old_policy else 190, record["absoluteDeadlineMonotonic"])
+            self.assertEqual(120 if old_policy else 340, record["absoluteDeadlineMonotonic"])
             rows = owner.drain_state["darwinDrain"]["phases"]
             self.assertEqual([2, 0] if old_policy else [3], [row["quietEnd"] for row in rows])
             self.assertEqual(3, scope.discover.call_count)
@@ -1897,8 +1898,39 @@ class ProcessOwnerModels(unittest.TestCase):
             else:
                 self.assertEqual("retired", record["outcome"])
 
+    def test_hosted_wall_cost_requires_three_timely_censuses_in_one_phase(self):
+        # Run 39753819318/1 recorded a 75.527819s TERM phase with only two timely
+        # quiet censuses, then a 19.247416s KILL phase with only one. These supplied
+        # per-call costs reproduce those aggregate wall spans, NOT unretained
+        # individual native timings, CPU costs, or a future-host latency bound.
+        costs = (20., 20., 35.327819, 9., 10.147416)
+        for old_policy in (True, False):
+            owner, scope, timer = self.darwin_owner(costs)
+            with self.subTest(old_policy=old_policy), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(self.native, "time", timer))
+                stack.enter_context(mock.patch.object(GATE, "time", timer))
+                if old_policy:
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_GRACE_SECONDS", 45))
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_KILL_SECONDS", 45))
+                self.assertIs(GATE.terminate_process(owner), not old_policy)
+            record = scope.drain_reconciliations[0]
+            rows = owner.drain_state["darwinDrain"]["phases"]
+            self.assertEqual((45, 45) if old_policy else (120, 120),
+                             (record["graceSeconds"], record["killWaitSeconds"]))
+            self.assertEqual(190 if old_policy else 340, record["absoluteDeadlineMonotonic"])
+            self.assertEqual([2, 1] if old_policy else [3], [row["quietEnd"] for row in rows])
+            self.assertEqual([1, 1] if old_policy else [0], [row["late"] for row in rows])
+            self.assertEqual(5 if old_policy else 3, scope.discover.call_count)
+            self.assertAlmostEqual(75.527819, rows[0]["phaseSeconds"], places=6)
+            if old_policy:
+                self.assertAlmostEqual(19.247416, rows[1]["phaseSeconds"], places=6)
+                self.assertEqual("DRAIN_NOT_QUIET", owner.retirement_diagnostic()["reason"])
+            else:
+                self.assertEqual("retired", record["outcome"])
+            scope.signal_all.assert_not_called(); scope.close.assert_called_once_with()
+
     def test_darwin_two_plus_two_and_late_third_do_not_establish_retirement(self):
-        owner, scope, timer = self.darwin_owner(15.)
+        owner, scope, timer = self.darwin_owner(40.)
         with mock.patch.object(self.native, "time", timer), mock.patch.object(GATE, "time", timer):
             self.assertFalse(GATE.terminate_process(owner))
         rows = owner.drain_state["darwinDrain"]["phases"]
@@ -1914,7 +1946,7 @@ class ProcessOwnerModels(unittest.TestCase):
                    GATE.ci_evidence._HostedLocalDarwinScope, self.native.LocalLinuxScope, self.native.WindowsScope)
         for cls in classes:
             darwin = issubclass(cls, self.native.DarwinScope)
-            grace, kill = (45, 45) if darwin else (15, 5)
+            grace, kill = (120, 120) if darwin else (15, 5)
             end = 100 + grace + kill
             for observed in (end - .001, end, end + 1):
                 owner, _, child = self.owner()
@@ -1974,7 +2006,7 @@ class ProcessOwnerModels(unittest.TestCase):
                 else:
                     self.assertFalse(GATE.terminate_process(owner))
                 self.assertFalse(GATE.terminate_process(owner), "Never renew an unsuccessful retirement")
-            scope.drain.assert_called_once_with(45, 45, deadline=190)
+            scope.drain.assert_called_once_with(120, 120, deadline=340)
             for resource in (scope, child.stdout, child.stderr):
                 resource.close.assert_called_once_with()
 
@@ -2284,8 +2316,8 @@ class ProcessOwnerModels(unittest.TestCase):
                 scope.drain.assert_called_once(); scope.close.assert_called_once()
 
     def test_actual_darwin_drain_metrics_are_projected_before_close_without_new_observations(self):
-        # Over the entire new 90s reserve: still zero timely observations.
-        for census_seconds in (0., 91.):
+        # Over the entire 240s reserve: still zero timely observations.
+        for census_seconds in (0., 241.):
             owner, _, child = self.owner()
             scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
             scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
