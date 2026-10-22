@@ -1647,6 +1647,13 @@ class DriverLifecycleTest(unittest.TestCase):
                             "Fake Gradle did not reap its original worker")
 
 
+def fixture_retirement_budget():
+    # The finite self-created worker controls retain their original short TERM
+    # and KILL budgets on either native backend; never change production policy.
+    return mock.patch.multiple(GATE, TERMINATION_GRACE_SECONDS=0.2, TERMINATION_KILL_SECONDS=5,
+                               DARWIN_TERMINATION_GRACE_SECONDS=0.2, DARWIN_TERMINATION_KILL_SECONDS=5)
+
+
 def retire_fixture_owners(owners, rescue):
     """Attempt every original owner, then an independent retained rescue scope."""
     first = None
@@ -1700,7 +1707,7 @@ def owned_process_fixture(environment=None):
         try:
             yield launch, rescue
         finally:
-            with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0.2):
+            with fixture_retirement_budget():
                 retire_fixture_owners(owners, rescue)
 
 
@@ -1920,6 +1927,24 @@ class ProcessOwnerModels(unittest.TestCase):
                     self.assertIs(GATE.terminate_process(owner), observed < end)
                 scope.drain.assert_called_once_with(grace, kill, deadline=end)
                 scope.close.assert_called_once_with(); child.poll.assert_called_once_with()
+
+    def test_live_fixture_budget_stays_short_on_both_actual_backend_types(self):
+        constants = ("TERMINATION_GRACE_SECONDS", "TERMINATION_KILL_SECONDS",
+                     "DARWIN_TERMINATION_GRACE_SECONDS", "DARWIN_TERMINATION_KILL_SECONDS")
+        before = tuple(getattr(GATE, key) for key in constants)
+        for cls in (self.native.LocalDarwinScope, self.native.LocalLinuxScope):
+            owner, _, child = self.owner()
+            scope = cls.__new__(cls)
+            scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+            scope.drain, scope.close = mock.Mock(return_value=[]), mock.Mock()
+            owner.scope = scope
+            with self.subTest(backend=cls.__name__), fixture_retirement_budget(), \
+                    mock.patch.object(time, "monotonic", return_value=100):
+                self.assertEqual((0.2, 5, 0.2, 5), tuple(getattr(GATE, key) for key in constants))
+                self.assertTrue(GATE.terminate_process(owner))
+            scope.drain.assert_called_once_with(0.2, 5, deadline=105.2)
+            scope.close.assert_called_once_with()
+            self.assertEqual(before, tuple(getattr(GATE, key) for key in constants))
 
     def test_darwin_reserve_cannot_convert_unknown_cancellation_or_close_failure_to_success(self):
         for failed in ("live", "denied", "pending", "leader", "cancel", "scope", "stdout", "stderr"):
@@ -2363,7 +2388,7 @@ class OwnedProcessGroupTest(unittest.TestCase):
             # Keep the exact main-owner native signal path but record its input
             # currency. No extra native signal is issued by this observer.
             with mock.patch.object(leader.scope, "_send", wraps=leader.scope._send) as send, \
-                    mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0.2):
+                    fixture_retirement_budget():
                 drained = GATE.terminate_process(leader)
             self.assertTrue(drained)
             worker_signals = [call.args[2] for call in send.call_args_list
