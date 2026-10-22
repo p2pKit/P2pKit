@@ -24,9 +24,11 @@ fail() {
     exit 1
 }
 
+source "$ROOT/scripts/central-http.sh"
+
 http_code() {
     local url="$1" output="$2"
-    curl --silent --show-error --location \
+    central_http 120 --silent --show-error --location \
         --output "$output" --write-out '%{http_code}' "$url"
 }
 
@@ -65,7 +67,9 @@ fi
     usage >&2
     exit 2
 }
-command -v curl >/dev/null 2>&1 || fail "curl is required"
+for command in curl python3; do
+    command -v "$command" >/dev/null 2>&1 || fail "$command is required"
+done
 MODE="$1"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-central-check.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -75,6 +79,7 @@ case "$MODE" in
         [[ $# -eq 1 ]] || fail "absent mode does not accept a bundle"
         [[ $use_latest_published -eq 0 ]] || fail "absent mode must check VERSION_NAME, not an existing release"
         [[ "$VERSION" != *-SNAPSHOT ]] || fail "snapshot VERSION_NAME=$VERSION cannot be a release collision target"
+        central_phase_start 300
         collision=0
         for artifact in "${ARTIFACTS[@]}"; do
             url="$CENTRAL_REPOSITORY/$GROUP_PATH/$artifact/$VERSION/$artifact-$VERSION.pom"
@@ -120,9 +125,13 @@ case "$MODE" in
             poll_seconds="${P2PKIT_CENTRAL_POLL_SECONDS:-0}"
             max_polls="${P2PKIT_CENTRAL_MAX_POLLS:-5}"
         fi
+        [[ "$poll_seconds" =~ ^[0-9]+$ && "$max_polls" =~ ^[1-9][0-9]*$ ]] ||
+            fail "invalid Central polling configuration"
+        central_phase_start 1800
         probe="$CENTRAL_REPOSITORY/$GROUP_PATH/p2p-core/$VERSION/p2p-core-$VERSION.pom"
         available=0
         for ((poll = 1; poll <= max_polls; poll++)); do
+            central_phase_active || break
             set +e
             code="$(http_code "$probe" "$WORK_DIR/probe.pom")"
             curl_status=$?
@@ -135,17 +144,20 @@ case "$MODE" in
                 fail "Maven Central propagation probe returned HTTP $code"
             fi
             if (( poll < max_polls )); then
-                sleep "$poll_seconds"
+                central_phase_sleep "$poll_seconds"
             fi
         done
         [[ $available -eq 1 ]] || fail "published coordinates did not propagate within the bounded window"
 
+        # A separate fifteen-minute total window covers the complete byte roster.
+        central_phase_start 900
         checked=0
         mismatched=0
         while IFS= read -r file; do
             case "$file" in
                 *.md5|*.sha1|*.sha256|*.sha512) continue ;;
             esac
+            central_phase_active || fail "published byte verification exceeded its bounded window"
             relative="${file#"$EXTRACTED/"}"
             remote="$WORK_DIR/remote-$checked"
             set +e
