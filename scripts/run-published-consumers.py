@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Run only the protected publisher's fixed, complete remote-consumer tail.
+"""Run the protected publisher's fixed consumers, or admit its HTTP deadline.
 
 No signing, upload, retry, version override or publication authority. Private
 captures stay on the ephemeral worker; successful execution returns only a
-source-bound public summary. The original job clock includes earlier stages.
+source-bound public summary (or deadline only). The original job clock includes
+earlier stages; HTTP deadline admission never starts a consumer command.
 """
+import argparse
 import importlib.util
 import os
 from pathlib import Path
 import tempfile
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,9 +20,12 @@ R = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(R)
 P, F = R.P, R.F
 JOB_SECONDS = 150 * 60
+HTTP_RETENTION_SECONDS = 5 * 60
+HTTP_UPLOAD_SECONDS = 5 * 60
 
 
-def publication_context(api, environment):
+def publication_context(api, environment, *, retention_seconds=60):
+    P.need(retention_seconds in (60, HTTP_RETENTION_SECONDS), "Invalid publisher retention reserve")
     context = F.hosted_context(environment, "revalidate")
     P.need(environment.get("RUNNER_OS") == "macOS" and environment.get("RUNNER_ARCH") == "X64",
            "Published consumers require the reviewed Intel macOS job")
@@ -40,9 +46,21 @@ def publication_context(api, environment):
     P.need(job.get("run_id") == context["id"] and job.get("run_attempt") == context["attempt"] and
            job.get("head_sha") == context["source"] and job.get("status") == "in_progress" and
            job.get("conclusion") is None and job.get("completed_at") is None and
-           start <= now < start + JOB_SECONDS - 60,
+           start <= now < start + JOB_SECONDS - retention_seconds,
            "Publisher consumer job is stale or outside its original deadline")
-    return invocation, {"commit": context["source"], "tree": tree}, monotonic_now + start + JOB_SECONDS - 60 - now
+    return invocation, {"commit": context["source"], "tree": tree}, monotonic_now + start + JOB_SECONDS - retention_seconds - now
+
+
+def http_deadline(api, environment, purpose):
+    """Read-only original-job admission; never uploads or runs consumers."""
+    P.need(purpose in ("upload", "verify"), "Unknown publisher HTTP phase")
+    _, _, deadline = publication_context(api, environment, retention_seconds=HTTP_RETENTION_SECONDS)
+    # Do not begin an irreversible request when even its bounded transfer cannot
+    # fit before retention. Verification may use the smaller remaining window.
+    required = HTTP_UPLOAD_SECONDS if purpose == "upload" else 0
+    P.need(deadline - time.monotonic() > required,
+           "Publisher has insufficient original-job HTTP/retention headroom")
+    return deadline
 
 
 def execute(api, environment):
@@ -67,15 +85,26 @@ def execute(api, environment):
     return result
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--http-deadline", choices=("upload", "verify"),
+                        help="Only admit fixed Central HTTP work against the original publisher job clock")
+    args = parser.parse_args(argv)
     os.umask(0o077)
     try:
-        result = execute(R.ReadOnlyApi(os.environ.get("GH_TOKEN", "")), os.environ)
+        api = R.ReadOnlyApi(os.environ.get("GH_TOKEN", ""))
+        if args.http_deadline:
+            print(f"{http_deadline(api, os.environ, args.http_deadline):.6f}")
+            return 0
+        result = execute(api, os.environ)
         print(result["result"])
         return 0
     except (ValueError, KeyError, TypeError, OSError, RuntimeError):
         # No private exception args, credential/path values or consumer output.
-        print("PUBLISHED_CONSUMERS_FAILED: retained private originals; publication is not repeated")
+        if args.http_deadline:
+            print("PUBLISHER_HTTP_DEADLINE_REFUSED: no new HTTP work; publication is not repeated", file=sys.stderr)
+        else:
+            print("PUBLISHED_CONSUMERS_FAILED: retained private originals; publication is not repeated")
         return 1
 
 

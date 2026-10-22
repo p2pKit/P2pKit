@@ -860,6 +860,37 @@ class PublishedConsumerControls(unittest.TestCase):
         self.assertEqual({"commit": SOURCE, "tree": TREE}, source)
         self.assertEqual(8860.0, deadline)
 
+    def test_http_deadline_uses_original_clock_and_reserves_five_minutes(self):
+        self.assertEqual(U.http_deadline(self.api, self.env, "upload"), 8620.0)
+        self.assertEqual(U.http_deadline(self.api, self.env, "verify"), 8620.0)
+        with mock.patch.object(U.time, "time", return_value=1000.0), \
+                mock.patch.object(U.time, "monotonic", return_value=920.0):
+            # Re-admission later in this same job cannot renew any HTTP budget.
+            self.assertEqual(U.http_deadline(self.api, self.env, "verify"), 8620.0)
+
+    def test_near_deadline_refuses_upload_but_clips_read_only_verification(self):
+        with mock.patch.object(U.time, "time", return_value=8401.0):
+            with self.assertRaisesRegex(ValueError, "HTTP/retention headroom"):
+                U.http_deadline(self.api, self.env, "upload")
+            self.assertEqual(U.http_deadline(self.api, self.env, "verify"), 319.0)
+        for purpose in ("upload", "verify"):
+            with mock.patch.object(U.time, "time", return_value=8700.0), self.assertRaises(ValueError):
+                U.http_deadline(self.api, self.env, purpose)
+
+    def test_http_admission_reuses_exact_job_binding_and_never_launches_consumers(self):
+        for fields in ({"head_sha": CONTROLLER}, {"run_attempt": 3}, {"status": "completed"},
+                       {"conclusion": "failure"}, {"completed_at": "1970-01-01T00:01:30Z"}):
+            self.api.pages.return_value = [{**self.job, **fields}]
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                U.http_deadline(self.api, self.env, "upload")
+        self.api.pages.return_value = [self.job]
+        with mock.patch.object(U.R, "ReadOnlyApi", return_value=self.api), \
+                mock.patch.dict(U.os.environ, self.env), mock.patch.object(U, "execute") as execute, \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(U.main(["--http-deadline", "upload"]), 0)
+            self.assertEqual(output.getvalue(), "8620.000000\n")
+            execute.assert_not_called()
+
     def test_stale_wrong_source_attempt_or_completed_job_is_rejected(self):
         for fields in ({"head_sha": CONTROLLER}, {"run_attempt": 3}, {"run_id": 102},
                        {"status": "completed"}, {"conclusion": "success"}, {"completed_at": "1970-01-01T00:01:30Z"},

@@ -89,6 +89,7 @@ AUTHORIZATION="Authorization: Bearer $BEARER_TOKEN"
 
 # One transfer, at most five minutes; timeout remains an ambiguous upload.
 central_phase_start 300
+central_phase_active || fail "publisher HTTP window expired before upload; no upload attempted"
 record_event "upload_started" "LOCAL" "$DEPLOYMENT_NAME"
 set +e
 UPLOAD_HTTP_CODE="$(

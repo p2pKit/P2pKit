@@ -133,6 +133,7 @@ jobs:
 
       - name: Revalidate approved release and credentials
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -146,6 +147,8 @@ jobs:
           scripts/check-release-metadata.sh
           scripts/check-maven-release-environment.sh
           scripts/check-maven-namespace-access.sh
+          P2PKIT_CENTRAL_JOB_DEADLINE="$(python3 -I -B -S scripts/run-published-consumers.py --http-deadline verify)"
+          export P2PKIT_CENTRAL_JOB_DEADLINE
           scripts/check-maven-central-version.sh absent
 
       - name: Build and inspect signed Central bundle
@@ -202,10 +205,14 @@ jobs:
 
       - name: Upload once and wait for publication
         env:
+          # Read-only actual job clock; no renewed 150-minute window.
+          GH_TOKEN: ${{ github.token }}
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
         run: |
           VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
+          P2PKIT_CENTRAL_JOB_DEADLINE="$(python3 -I -B -S scripts/run-published-consumers.py --http-deadline upload)"
+          export P2PKIT_CENTRAL_JOB_DEADLINE
           scripts/publish-central-portal-bundle.sh \
             "build/central/p2pkit-$VERSION-central-bundle.zip" \
             build/reports/maven-central
@@ -234,6 +241,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
+          P2PKIT_CENTRAL_JOB_DEADLINE="$(python3 -I -B -S scripts/run-published-consumers.py --http-deadline verify)"
+          export P2PKIT_CENTRAL_JOB_DEADLINE
           scripts/check-maven-central-version.sh published \
             "build/central/p2pkit-$VERSION-central-bundle.zip"
           python3 -I -B -S scripts/run-published-consumers.py

@@ -11,7 +11,17 @@ if os.environ.get('P2PKIT_CENTRAL_TEST_MODE') == '1':
     if not math.isfinite(override) or not 0 < override <= seconds:
         raise SystemExit('invalid Central phase budget')
     seconds = override
-print(time.monotonic() + seconds)
+now = time.monotonic()
+deadline = now + seconds
+job_deadline = os.environ.get('P2PKIT_CENTRAL_JOB_DEADLINE')
+if os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_JOB') == 'publish-release' and not job_deadline:
+    raise SystemExit('publisher requires original-job HTTP deadline')
+if job_deadline is not None:
+    bound = float(job_deadline)
+    if not math.isfinite(bound) or bound <= 0 or bound > now + 150 * 60:
+        raise SystemExit('invalid publisher HTTP deadline')
+    deadline = min(deadline, bound)
+print(deadline)
 PY
     )" || fail "invalid Central phase budget"
 }

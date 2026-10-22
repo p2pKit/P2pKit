@@ -58,9 +58,28 @@ module ModularCI
       require!(setup && java == %w[21 17], 'Publication/recovery must prepare the reviewed consumer tools')
       consumer_command = environment == 'maven-central' ?
         'python3 -I -B -S scripts/run-published-consumers.py' : 'scripts/maven_recovery.py verify-consumers '
-      consumer = steps.index { |step| step['run'].to_s.include?(consumer_command) }
+      consumer = steps.index { |step| environment == 'maven-central' ?
+        step['run'].to_s.lines.map(&:strip).count(consumer_command) == 1 : step['run'].to_s.include?(consumer_command) }
       require!(consumer && setup < consumer && !steps[consumer]['if'] && !steps[consumer]['continue-on-error'],
                'Complete remote consumers must remain required after supported setup')
+    end
+    publication = publisher.fetch('publish-release')
+    require!(publication['timeout-minutes'] == 150, 'Publisher HTTP clock must match the actual job timeout')
+    {
+      'Revalidate approved release and credentials' => ['verify', 'scripts/check-maven-central-version.sh absent'],
+      'Upload once and wait for publication' => ['upload', 'scripts/publish-central-portal-bundle.sh \\'],
+      'Verify immutable remote bytes and consumers' => ['verify', 'scripts/check-maven-central-version.sh published \\'],
+    }.each do |name, (purpose, command)|
+      selected = publication.fetch('steps').select { |step| step['name'] == name }
+      require!(selected.length == 1, 'Publisher HTTP step must be unique')
+      step = selected.first
+      clock = 'P2PKIT_CENTRAL_JOB_DEADLINE="$(python3 -I -B -S scripts/run-published-consumers.py --http-deadline ' + purpose + ')"'
+      lines = step['run'].to_s.lines.map(&:strip)
+      index = lines.index(clock)
+      require!(index && lines.count(clock) == 1 &&
+               lines[index, 3] == [clock, 'export P2PKIT_CENTRAL_JOB_DEADLINE', command] &&
+               step.dig('env', 'GH_TOKEN') == '${{ github.token }}' && !step['if'] && !step['continue-on-error'],
+               'Publisher HTTP work must admit and retain the original-job deadline before requests')
     end
     %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic].each do |diagnostic|
       require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),

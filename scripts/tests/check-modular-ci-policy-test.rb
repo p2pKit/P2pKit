@@ -85,7 +85,21 @@ class ModularPolicyTests < Minitest::Test
 
   def test_publisher_remote_consumers_cannot_revert_to_unqualified_cli_context
     altered('.github/workflows/publish-maven-central.yml',
-            'python3 -I -B -S scripts/run-published-consumers.py', 'scripts/check-published-consumers.sh')
+            "          python3 -I -B -S scripts/run-published-consumers.py\n", "          scripts/check-published-consumers.sh\n")
+  end
+  def test_publisher_http_requires_original_job_clock_before_each_stage
+    path = '.github/workflows/publish-maven-central.yml'
+    original = File.read(File.join(ROOT, path))
+    ['Revalidate approved release and credentials', 'Upload once and wait for publication',
+     'Verify immutable remote bytes and consumers'].each do |name|
+      section = original[/^      - name: #{Regexp.escape(name)}\n.*?(?=^      - name:|\z)/m]
+      clock = section.lines.find { |line| line.include?('--http-deadline ') }
+      altered(path, section, section.sub(clock, ''))
+      altered(path, section, section.sub('export P2PKIT_CENTRAL_JOB_DEADLINE', 'true'))
+      altered(path, section, section.sub('GH_TOKEN: ${{ github.token }}', 'GH_TOKEN: literal'))
+      altered(path, section, section.sub(clock, clock.sub('--http-deadline ', '--not-a-clock ')))
+    end
+    altered(path, 'timeout-minutes: 150', 'timeout-minutes: 120')
   end
   def test_writer_cannot_select_floating_or_native_toolchain_baseline
     altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-15-intel', 'runs-on: macos-latest')

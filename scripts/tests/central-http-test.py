@@ -182,6 +182,35 @@ class CentralHttpTests(unittest.TestCase):
         self.assertIn('could not check Maven Central', result.stderr)
         self.assertIn('28', result.stderr)
 
+    def test_original_job_deadline_clips_stalled_request_not_a_new_phase_window(self):
+        server = self.peer('status')
+        self.env['P2PKIT_CENTRAL_PHASE_SECONDS'] = '2'
+        self.env['P2PKIT_CENTRAL_REQUEST_SECONDS'] = '1'
+        self.env['P2PKIT_CENTRAL_JOB_DEADLINE'] = str(time.monotonic() + 0.8)
+        result = self.run_script('publish-central-portal-bundle.sh', self.bundle, self.root / 'evidence')
+        self.assertIn('bounded polling window', result.stderr)
+        self.assertEqual(sum('/upload?' in p for p in server.paths), 1)
+        self.assertEqual(sum('/status?' in p for p in server.paths), 1)
+        calls = [json.loads(line) for line in (self.root / 'calls.jsonl').read_text().splitlines()]
+        self.assertLess(float(calls[-1][calls[-1].index('--max-time') + 1]), 0.8)
+        self.assertEqual(self.events()[-1]['event'], 'publication_timeout')
+
+    def test_expired_original_job_never_starts_upload(self):
+        self.peer('delay')
+        self.env['P2PKIT_CENTRAL_JOB_DEADLINE'] = str(time.monotonic() - 1)
+        result = self.run_script('publish-central-portal-bundle.sh', self.bundle, self.root / 'evidence')
+        self.assertIn('no upload attempted', result.stderr)
+        self.assertEqual(self.events(), [])
+        self.assertFalse((self.root / 'calls.jsonl').exists())
+
+    def test_hosted_publisher_cannot_omit_original_job_clock(self):
+        self.peer('delay')
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_JOB='publish-release')
+        self.env.pop('P2PKIT_CENTRAL_JOB_DEADLINE', None)
+        result = self.run_script('publish-central-portal-bundle.sh', self.bundle, self.root / 'evidence')
+        self.assertIn('requires original-job HTTP deadline', result.stderr)
+        self.assertFalse((self.root / 'calls.jsonl').exists())
+
     def test_expired_phase_does_not_start_curl_and_zero_override_is_rejected(self):
         self.env['P2PKIT_CENTRAL_PHASE_SECONDS'] = '0'
         self.peer('delay')
