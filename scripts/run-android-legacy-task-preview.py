@@ -135,6 +135,9 @@ def validate_presentation(item, state):
 
 def validate_report(raw, token, source, tree, api, files):
     value = owner.decode_json(raw)
+    need(not any(key in value for key in ("failureScene", "failureSceneErrorType")) and
+         not any(name in files for name in ("failure-recents-scene.png", "failure-recents-scene.part")),
+         "Failure-only scene diagnostics cannot qualify a successful witness")
     need(api in IMAGES and value.get("api") == api and value.get("case") == "479" and
          value.get("token") == token and value.get("sourceCommit") == source and
          value.get("declaredSourceTree") == tree and value.get("targetSdk") == 37 and
