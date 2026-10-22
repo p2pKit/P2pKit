@@ -20,6 +20,11 @@ on:
         default: both
         type: choice
         options: [both, '317', '324']
+      android_legacy_api:
+        description: Legacy task-preview diagnostic API only (not qualification)
+        default: both
+        type: choice
+        options: [both, '24', '32']
       qualification_selection:
         description: Optional exact-source selection JSON to aggregate previously successful components without rebuilding
         default: ''
@@ -81,6 +86,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/android-legacy-task-preview.yml
+    with:
+      api: ${{ inputs.android_legacy_api }}
   android-permission-diagnostic:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.component == 'android-permission-diagnostic' }}
     permissions:

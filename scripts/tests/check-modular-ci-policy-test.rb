@@ -83,6 +83,39 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', consumers,', ',')
   end
 
+  def test_legacy_api_choice_and_direct_forward_contract_accepted
+    ci = ModularCI.load(File.join(ROOT, '.github/workflows/ci.yml'))
+    triggers = ci.fetch('on') { ci.fetch(true) }
+    selector = triggers.dig('workflow_dispatch', 'inputs', 'android_legacy_api')
+    assert_equal %w[both 24 32], selector.fetch('options')
+    assert_equal 'both', selector.fetch('default')
+    assert_equal({'api' => '${{ inputs.android_legacy_api }}'}, ci.dig('jobs', 'android-legacy-task-preview', 'with'))
+    assert ModularCI.check(ROOT)
+  end
+  def test_legacy_api_input_cannot_be_missing_unbounded_or_redefaulted
+    path = '.github/workflows/ci.yml'
+    original = File.read(File.join(ROOT, path))
+    section = original[/^      android_legacy_api:\n.*?(?=^      [a-z]|\z)/m]
+    assert section
+    ['', section.sub('type: choice', 'type: string'), section.sub('default: both', "default: '24'"),
+     *["[both, '24']", "[both, '32']", "['24', '32']", "[both, '24', '32', '35']"].map { |options|
+       section.sub("[both, '24', '32']", options)
+     }].each do |replacement|
+      error = altered(path, section, replacement)
+      assert_match(/Issue diagnostic selector must remain bounded/, error.message)
+    end
+  end
+  def test_legacy_api_forwarding_cannot_be_missing_changed_or_silently_defaulted
+    original = "    with:\n      api: ${{ inputs.android_legacy_api }}\n"
+    ['', original.sub('api:', 'command:'), original.sub('inputs.android_legacy_api', 'inputs.android_case'),
+     original.sub('${{ inputs.android_legacy_api }}', 'both'),
+     original.sub('${{ inputs.android_legacy_api }}', "${{ inputs.android_legacy_api || 'both' }}"),
+     original + "      command: arbitrary\n"].each do |replacement|
+      error = altered('.github/workflows/ci.yml', original, replacement)
+      assert_match(/Issue diagnostic must remain explicit, same-source/, error.message)
+    end
+  end
+
   def test_publisher_remote_consumers_cannot_revert_to_unqualified_cli_context
     altered('.github/workflows/publish-maven-central.yml',
             "          python3 -I -B -S scripts/run-published-consumers.py\n", "          scripts/check-published-consumers.sh\n")

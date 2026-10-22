@@ -1,23 +1,54 @@
 name: Android legacy task-preview privacy
 on:
   workflow_call:
+    inputs:
+      api:
+        description: Legacy diagnostic API selection, not qualification
+        type: string
+        default: both
   workflow_dispatch:
+    inputs:
+      api:
+        description: Legacy diagnostic API selection, not qualification
+        type: choice
+        default: both
+        options: [both, '24', '32']
 permissions:
   contents: read
 concurrency:
   group: android-legacy-task-preview-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  select-api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          LEGACY_API: ${{ inputs.api }}
+        shell: python3 -I -B -S {0}
+        run: |
+          import json
+          import os
+
+          selection = os.environ["LEGACY_API"]
+          if selection not in ("both", "24", "32"):
+              raise SystemExit("api must be exactly both, 24, or 32")
+          rows = [
+              {"api": 24, "image": "system-images;android-24;default;x86_64"},
+              {"api": 32, "image": "system-images;android-32;google_apis;x86_64"},
+          ]
+          matrix = {"include": [row for row in rows if selection == "both" or str(row["api"]) == selection]}
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
   legacy-task-preview:
+    needs: select-api
     name: Legacy task-preview API${{ matrix.api }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - api: 24
-            image: system-images;android-24;default;x86_64
-          - api: 32
-            image: system-images;android-32;google_apis;x86_64
+      matrix: ${{ fromJSON(needs.select-api.outputs.matrix) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     defaults:

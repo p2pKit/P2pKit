@@ -96,18 +96,22 @@ module ModularCI
      'android-ui-diagnostic' => ['android-ui-validation', 'case', 'android_case',
                                 %w[both 317 324]],
      'android-permission-diagnostic' => ['android-permission-validation', nil, nil, nil],
-     'android-legacy-task-preview' => ['android-legacy-task-preview', nil, nil, nil]}.each do |name, (workflow, argument, input, options)|
+     'android-legacy-task-preview' => ['android-legacy-task-preview', 'api', 'android_legacy_api',
+                                     %w[both 24 32]]}.each do |name, (workflow, argument, input, options)|
       if input
         selector = triggers.dig('workflow_dispatch', 'inputs', input)
         require!(selector && selector['type'] == 'choice' && selector['default'] == 'both' &&
                  selector['options'] == options, 'Issue diagnostic selector must remain bounded')
+        # Legacy defaults are declared inputs; explicit empty/invalid values must reach its rejecting selector.
+        forwarded = name == 'android-legacy-task-preview' ? "${{ inputs.#{input} }}" :
+                                                          "${{ inputs.#{input} || 'both' }}"
       end
       job = jobs.fetch(name)
       require!(job.keys.sort == (input ? %w[if permissions uses with] : %w[if permissions uses]) &&
                job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.component == '#{name}' }}" &&
                job['permissions'] == {'contents' => 'read'} &&
                job['uses'] == "./.github/workflows/#{workflow}.yml" &&
-               job['with'] == (input ? {argument => "${{ inputs.#{input} || 'both' }}"} : nil),
+               job['with'] == (input ? {argument => forwarded} : nil),
                'Issue diagnostic must remain explicit, same-source and without secrets or publication rights')
       %w[plan component].each do |stage|
         require!(jobs.fetch(stage).fetch('if').include?("inputs.component != '#{name}'"),

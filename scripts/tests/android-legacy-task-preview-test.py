@@ -581,13 +581,104 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("  push:", workflow)
-        for api, image in legacy.IMAGES.items():
-            self.assertIn(f"api: {api}", workflow)
-            self.assertIn(f"image: {image}", workflow)
+        call = workflow.split("  workflow_call:\n", 1)[1].split("  workflow_dispatch:\n", 1)[0]
+        dispatch = workflow.split("  workflow_dispatch:\n", 1)[1].split("permissions:\n", 1)[0]
+        for section, kind in ((call, "string"), (dispatch, "choice")):
+            self.assertEqual(section.count("      api:\n"), 1)
+            self.assertIn(f"        type: {kind}\n", section)
+            self.assertIn("        default: both\n", section)
+        self.assertIn("        options: [both, '24', '32']\n", dispatch)
+        choice = main.split("      android_legacy_api:\n", 1)[1].split("      qualification_selection:\n", 1)[0]
+        self.assertIn("        default: both\n", choice)
+        self.assertIn("        type: choice\n", choice)
+        self.assertIn("        options: [both, '24', '32']\n", choice)
+        caller = main.split("  android-legacy-task-preview:\n", 1)[1].split("  android-permission-diagnostic:\n", 1)[0]
+        self.assertIn("if: ${{ github.event_name == 'workflow_dispatch' && inputs.component == 'android-legacy-task-preview' }}", caller)
+        self.assertIn("uses: ./.github/workflows/android-legacy-task-preview.yml\n", caller)
+        self.assertIn("    with:\n      api: ${{ inputs.android_legacy_api }}\n", caller)
+        self.assertIn("  legacy-task-preview:\n    needs: select-api\n", workflow)
+        self.assertIn("      matrix: ${{ fromJSON(needs.select-api.outputs.matrix) }}\n", workflow)
+        self.assertIn("name: Legacy task-preview API${{ matrix.api }}", workflow)
+        self.assertIn("name: android-legacy-api${{ matrix.api }}-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
         self.assertIn("retention-days: 14", workflow)
         self.assertIn("--report-glob 'build/reports/android-legacy-task-preview-api*/**/*'", workflow)
         self.assertIn("uses: ./.github/workflows/android-legacy-task-preview.yml", main)
         self.assertEqual(main.count("inputs.component != 'android-legacy-task-preview'"), 4)
+
+
+class LegacyApiSelectionTests(unittest.TestCase):
+    INVALID = ("", " ", "BOTH", "024", "24.0", "24,32", "35", "32\n", "both\nmatrix={}",
+               "24; touch injected", "$(touch injected)", "${{ inputs.api }}")
+
+    def selection_body(self):
+        workflow = (ROOT / ".github/workflows/android-legacy-task-preview.yml").read_text()
+        parts = workflow.split("  select-api:\n")
+        self.assertEqual(len(parts), 2)
+        job = parts[1].split("  legacy-task-preview:\n", 1)[0]
+        self.assertIn("    runs-on: ubuntu-24.04\n", job)
+        self.assertIn("    timeout-minutes: 5\n", job)
+        self.assertIn("      matrix: ${{ steps.matrix.outputs.matrix }}\n", job)
+        self.assertIn("      - id: matrix\n", job)
+        self.assertIn("          LEGACY_API: ${{ inputs.api }}\n", job)
+        self.assertIn("        shell: python3 -I -B -S {0}\n", job)
+        self.assertNotIn("uses:", job)
+        parts = job.split("        run: |\n")
+        self.assertEqual(len(parts), 2)
+        body = textwrap.dedent(parts[1])
+        self.assertNotIn("${{", body)  # Untrusted input is environment data, never source interpolation.
+        return body
+
+    def run_selection(self, selection, existing=None):
+        body = self.selection_body()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "github-output"
+            if existing is not None:
+                output.write_bytes(existing)
+            env = {"GITHUB_OUTPUT": str(output)}
+            if selection is not None:
+                env["LEGACY_API"] = selection
+            result = subprocess.run([sys.executable, "-I", "-B", "-S", "-c", body], cwd=root, env=env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            return result, output.read_bytes() if output.exists() else None, {p.name for p in root.iterdir()}
+
+    def test_actual_inline_matrix_selects_exact_fixed_rows(self):
+        rows = [{"api": 24, "image": "system-images;android-24;default;x86_64"},
+                {"api": 32, "image": "system-images;android-32;google_apis;x86_64"}]
+        for selection, expected in (("both", rows), ("24", rows[:1]), ("32", rows[1:])):
+            with self.subTest(selection=selection):
+                result, output, files = self.run_selection(selection)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((result.stdout, result.stderr), (b"", b""))
+                self.assertEqual(files, {"github-output"})
+                self.assertEqual(output, ("matrix=" + json.dumps({"include": expected}, separators=(",", ":")) + "\n").encode())
+
+    def test_invalid_empty_and_injected_selection_emits_no_output(self):
+        for selection in self.INVALID:
+            with self.subTest(selection=selection):
+                result, output, files = self.run_selection(selection)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertIn(b"api must be exactly both, 24, or 32", result.stderr)
+                self.assertIsNone(output)
+                self.assertEqual(files, set())
+
+    def test_invalid_selection_preserves_existing_output(self):
+        original = b"unrelated=unchanged\n"
+        for selection in self.INVALID:
+            with self.subTest(selection=selection):
+                result, output, files = self.run_selection(selection, existing=original)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(output, original)
+                self.assertEqual(files, {"github-output"})
+
+    def test_missing_selection_is_not_silently_defaulted(self):
+        result, output, files = self.run_selection(None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertIsNone(output)
+        self.assertEqual(files, set())
 
 
 class LegacySdkInstallTests(unittest.TestCase):
