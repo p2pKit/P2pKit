@@ -149,6 +149,24 @@ class ComponentTests(unittest.TestCase):
 
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])
+
+    def test_windows_installer_executes_all_diagnostics_ownership_tests_once(self):
+        task = ':p2p-sample-diagnostics:test'
+        with tempfile.TemporaryDirectory(prefix='ci-diagnostics-routing-') as temporary:
+            # Diagnostics is an existing sample, independent of optional RPC.
+            with patch.object(C, 'ROOT', Path(temporary)):
+                for rpc_present in (False, True):
+                    if rpc_present:
+                        (Path(temporary) / 'samples/p2p-sample-rpc').mkdir(parents=True)
+                    for component in ('desktop-windows', 'desktop-linux', 'desktop-macos'):
+                        command = dict(C.commands(component))['desktop-tests-and-installer']
+                        self.assertEqual(command.count(task), int(component == 'desktop-windows'))
+                        self.assertNotIn('--tests', command)
+                        self.assertIn(':p2p-sample-desktop:check', command)
+                        self.assertIn(':p2p-sample-desktop-ui:test', command)
+                        if component == 'desktop-windows':
+                            self.assertLess(command.index(task), command.index(':p2p-sample-desktop-ui:packageMsi'))
+
     def test_unknown_duplicate_empty_refused(self):
         for value in ['', 'android,android', 'bogus', 'source,']:
             with self.subTest(value=value), self.assertRaises(ValueError): C.matrix(value)

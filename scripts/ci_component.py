@@ -146,7 +146,11 @@ def commands(component):
         # This packaging option is not installed-provider/lifecycle qualification.
         options = ['-Pp2pkit.rpc.windows.previewAdapter=true'] if component == 'desktop-windows' and \
             (ROOT / 'samples/p2p-sample-rpc').is_dir() else []
-        return ([supervisor] if component == 'desktop-macos' else []) + [('desktop-tests-and-installer', gradle + options + [
+        # The shared inbox reconciler has filesystem-specific link semantics.
+        # Its process/ownership tests must run on Windows, not merely compile
+        # as a dependency of the Desktop application.
+        diagnostics = [':p2p-sample-diagnostics:test'] if component == 'desktop-windows' else []
+        return ([supervisor] if component == 'desktop-macos' else []) + [('desktop-tests-and-installer', gradle + options + diagnostics + [
             ':p2p-sample-desktop:check', ':p2p-sample-desktop:installDist', ':p2p-sample-desktop-ui:test',
             ':p2p-sample-desktop-ui:checkRuntime', ':p2p-sample-desktop-ui:hotRunArgfile',
             ':p2p-sample-desktop-ui:createDistributable', ':p2p-sample-desktop-ui:' + packaging])] + (
