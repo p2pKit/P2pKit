@@ -211,7 +211,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_actual_xctest_inventory_is_closed_and_nonempty(self):
         cases = q.swift_inventory(ROOT)
-        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 99, 'p2pkit-sample-uitests': 20})
+        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 99, 'p2pkit-sample-uitests': 24})
         self.assertLessEqual({
             'SampleFilePreparationTests/testFullBoundaryPresetRunsOffMainAndKeepsIntegrity()',
             'SampleFilePreparationTests/testGenerationAndReadbackCheckCancellationBetweenChunks()',
@@ -234,6 +234,10 @@ class AdmissionTests(unittest.TestCase):
             'KeyboardReadinessTests/testUnknownKeyPreventsDismissalWithOtherNonhittableKeys()',
             'KeyboardReadinessTests/testActualHittableKeyWinsRegardlessOfUnknownKeyOrder()',
             'KeyboardReadinessTests/testTransitioningGeometryIsNeitherReadinessNorDismissal()',
+            'KeyboardReadinessTests/testInputCountersReuseOriginalGuardsWithoutExtraQueries()',
+            'KeyboardReadinessTests/testInputUnknownAndNonhittableKeysNeverProduceReadiness()',
+            'KeyboardReadinessTests/testInputRemovedOrEmptyInventoryDoesNotReadFramesOrHitTests()',
+            'KeyboardReadinessTests/testInputObservationDoesNotReusePriorSuccessfulKeyOrCounters()',
             'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale()',
             'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale()',
             'ContentViewPresentationUITests/testFirstIncomingOfferRequiresConsentWithoutTransferHistory()',
@@ -270,6 +274,10 @@ class AdmissionTests(unittest.TestCase):
             'testUnknownEntriesAndSymlinksCannotConferCleanupAuthority',
             'testRunningOracleWaitsForDelayedStartupPublicationWithoutAnotherTap',
             'testRunningOracleRejectsStartingEvenWhenStopIsAlreadyPresent',
+            'testInputCountersReuseOriginalGuardsWithoutExtraQueries',
+            'testInputUnknownAndNonhittableKeysNeverProduceReadiness',
+            'testInputRemovedOrEmptyInventoryDoesNotReadFramesOrHitTests',
+            'testInputObservationDoesNotReusePriorSuccessfulKeyOrCounters',
         )
         for name in methods:
             method = ('func ' + name + '(').encode()
@@ -287,8 +295,10 @@ class AdmissionTests(unittest.TestCase):
         source = (ROOT / 'samples/iosApp/UITests/ContentViewPresentationUITests.swift').read_text()
         self.assertIn('KeyboardReadiness.observe(', source)
         self.assertIn('app.keyboards.keys.allElementsBoundByIndex', source)
+        self.assertIn('KeyboardReadiness.observeInput(', source)
+        self.assertIn('return lastObservation?.state == .hittable', source)
         self.assertIn('exists: { $0.exists }, frame: { $0.frame }, isHittable: { $0.isHittable }', source)
-        self.assertEqual(source.count('keyboardReadiness(in: app) == .hittable'), 2)
+        self.assertEqual(source.count('keyboardReadiness(in: app) == .hittable'), 1)
         self.assertEqual(source.count('keyboardReadiness(in: app) == .notHittable'), 1)
         self.assertNotIn('contains(where: \\.isHittable)', source)
         self.assertNotIn('!keyboardReadiness', source)
@@ -296,6 +306,68 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('XCTWaiter.wait(for: [dismissed], timeout: 5)', source)
         self.assertIn('for character in text {\n            field.typeText(String(character))', source)
         self.assertIn('app.buttons["sample-keyboard-done"]', source)
+
+    def test_input_identity_binding_cannot_change_indexed_done_or_positive_admission(self):
+        source = (ROOT / 'samples/iosApp/UITests/ContentViewPresentationUITests.swift').read_text()
+
+        def check(candidate):
+            observer, rest = candidate.split('private func keyboardReadiness(in app: XCUIApplication)', 1)[1].split(
+                'private func enterText(', 1)
+            input_body, done = rest.split('private func dismissKeyboard(in app: XCUIApplication)', 1)
+            self.assertEqual(observer.count('allElementsBoundByIndex'), 1)
+            self.assertNotIn('allElementsBoundByAccessibilityElement', observer + done)
+            self.assertEqual(input_body.count('allElementsBoundByAccessibilityElement'), 1)
+            self.assertNotIn('allElementsBoundByIndex', input_body)
+            self.assertIn('return lastObservation?.state == .hittable', input_body)
+            self.assertIn('XCTWaiter.wait(for: [ready], timeout: 5)', input_body)
+            self.assertIn('XCTAssertEqual(readinessResult, .completed)', input_body)
+            self.assertIn('keyboardReadiness(in: app) == .hittable', done)
+            self.assertIn('keyboardReadiness(in: app) == .notHittable', done)
+            self.assertIn('XCTWaiter.wait(for: [dismissed], timeout: 5)', done)
+            self.assertEqual(candidate.count('exists: { $0.exists }, frame: { $0.frame }, isHittable: { $0.isHittable }'), 2)
+
+        check(source)
+        # Source controls only: neither XCTest nor a keyboard is executed here.
+        for old, new in (
+                ('allElementsBoundByAccessibilityElement', 'allElementsBoundByIndex'),
+                ('allElementsBoundByIndex', 'allElementsBoundByAccessibilityElement'),
+                ('return lastObservation?.state == .hittable', 'return lastObservation?.state != .notHittable'),
+                ('[ready], timeout: 5', '[ready], timeout: 10'),
+                ('[dismissed], timeout: 5', '[dismissed], timeout: 10'),
+                ('isHittable: { $0.isHittable }', 'isHittable: { _ in true }')):
+            with self.subTest(mutation=old), self.assertRaises(AssertionError):
+                check(source.replace(old, new))
+
+    def test_input_failure_diagnostics_only_use_cached_guarded_observation(self):
+        source = (ROOT / 'samples/iosApp/UITests/ContentViewPresentationUITests.swift').read_text()
+        helper = (ROOT / 'samples/iosApp/UITests/KeyboardReadiness.swift').read_text()
+
+        def check(candidate, observation):
+            failure = candidate.split('if readinessResult != .completed {', 1)[1].split(
+                'XCTAssertEqual(readinessResult, .completed)', 1)[0]
+            self.assertIn('readinessResult.rawValue', failure)
+            self.assertIn('lastObservation?.diagnostic', failure)
+            self.assertIn('$0.isFinite && $0 >= 0', failure)
+            for forbidden in ('app.', 'field.', '.frame', '.exists', '.isHittable', 'XCTWaiter', 'observeInput('):
+                self.assertNotIn(forbidden, failure)
+            wrapped = observation.split('static func observeInput<Key>(', 1)[1]
+            self.assertEqual(wrapped.count('observe(keys,'), 1)
+            self.assertEqual(wrapped.count('exists(key)'), 1)
+            self.assertEqual(wrapped.count('isHittable(key)'), 1)
+            self.assertIn('frame: frame', wrapped)
+            self.assertNotIn('frame(key)', wrapped)
+            self.assertIn('invalidGeometry: existing - hitTests', wrapped)
+            self.assertIn('var examined = 0, existing = 0, hitTests = 0, hittable = 0', wrapped)
+
+        check(source, helper)
+        for candidate, observation in (
+                (source.replace('lastObservation?.diagnostic', 'app.keyboards.debugDescription'), helper),
+                (source.replace('$0.isFinite && $0 >= 0', 'true'), helper),
+                (source, helper.replace('let present = exists(key)', 'let present = exists(key) && exists(key)')),
+                (source, helper.replace('let reachable = isHittable(key)', 'let reachable = isHittable(key) || isHittable(key)')),
+                (source, helper.replace('frame: frame, isHittable:', 'frame: { frame($0); return frame($0) }, isHittable:'))):
+            with self.subTest(candidate=candidate is source, observation=observation is helper), self.assertRaises(AssertionError):
+                check(candidate, observation)
 
     def test_native_controls_reject_skipped_failed_or_partial_output(self):
         self.assertEqual(q.unittest_count('\nRan 122 tests in 190.25s\n\nOK\n'), 122)
