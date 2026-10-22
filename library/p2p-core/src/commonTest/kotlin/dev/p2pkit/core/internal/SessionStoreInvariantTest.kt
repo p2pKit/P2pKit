@@ -9,19 +9,27 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.StatefulTestFailure
 import dev.p2pkit.core.testfixtures.assertCannotAdd
 import dev.p2pkit.core.testfixtures.assertCannotClear
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.io.RawSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -29,6 +37,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Enforcement tests for [SessionStore]'s `strictInvariants` mode (#19).
@@ -78,16 +87,9 @@ class SessionStoreInvariantTest {
         val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
         val peer = syntheticPeer("peer-concurrent", "Concurrent")
         val probe = StubSession(peer = peer, id = "probe")
-        val finished = CompletableDeferred<Unit>()
+        val readers = ConcurrentRegistrationReaders(store, probe)
 
-        coroutineScope {
-            val readers = List(4) {
-                launch(Dispatchers.Default) {
-                    while (!finished.isCompleted) {
-                        store.registrationOf(probe)
-                    }
-                }
-            }
+        readers.run {
             repeat(2_000) { index ->
                 val candidate = StubSession(peer = peer, id = "session-$index")
                 assertIs<RegisterOutcome.Accepted>(
@@ -101,12 +103,92 @@ class SessionStoreInvariantTest {
                 assertEquals(candidate.id, store.registrationOf(candidate).activeSessionId)
                 store.removeIfMatches(peer.id, candidate)
             }
-            finished.complete(Unit)
-            readers.forEach { it.join() }
         }
 
+        assertTrue(readers.allReadersFinished)
         assertEquals(null, store.registrationOf(probe).activeSessionId)
         assertTrue(store.sessions.value.isEmpty())
+    }
+
+    @Test
+    fun concurrentReadersRetireAndPreserveMutationFailureAfterEntering() = runTest(timeout = 5.seconds) {
+        val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
+        val probe = StubSession(peer = syntheticPeer("peer-failure", "Failure"), id = "probe")
+        val readers = ConcurrentRegistrationReaders(store, probe)
+        // Retain exact identity without disabling coroutine stack-trace recovery for ordinary failures.
+        val expected = StatefulTestFailure("injected mutation failure after a reader entered")
+
+        val failure = assertFailsWith<StatefulTestFailure> {
+            readers.run {
+                assertTrue(readers.entered.isCompleted)
+                throw expected
+            }
+        }
+
+        assertSame(expected, failure, "reader retirement must preserve the original mutation failure")
+        assertSame(expected.identityToken, failure.identityToken)
+        assertTrue(readers.allReadersFinished, "all four owned jobs must finish, including queued readers")
+        assertEquals(null, store.registrationOf(probe).activeSessionId)
+        assertTrue(store.sessions.value.isEmpty())
+    }
+
+    @Test
+    fun parentCancellationRetiresConcurrentReadersAfterEntering() = runTest(timeout = 5.seconds) {
+        val store = SessionStore(P2pLogger.NoOp, strictInvariants = true)
+        val probe = StubSession(peer = syntheticPeer("peer-cancel", "Cancel"), id = "probe")
+        val readers = ConcurrentRegistrationReaders(store, probe)
+        val mutationEntered = CompletableDeferred<Unit>()
+        val completed = CompletableDeferred<Throwable?>()
+        val parent = launch {
+            readers.run {
+                mutationEntered.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        parent.invokeOnCompletion { completed.complete(it) }
+        try {
+            mutationEntered.await()
+            assertTrue(readers.entered.isCompleted)
+            val cancellation = CancellationException("cancel concurrent mutation after a reader entered")
+            parent.cancel(cancellation)
+            parent.join()
+
+            assertSame(cancellation, completed.await())
+            assertTrue(readers.allReadersFinished, "parent cancellation must retire all four owned readers")
+            assertEquals(null, store.registrationOf(probe).activeSessionId)
+            assertTrue(store.sessions.value.isEmpty())
+        } finally {
+            withContext(NonCancellable) { parent.cancelAndJoin() }
+        }
+    }
+
+    private class ConcurrentRegistrationReaders(private val store: SessionStore, private val probe: P2pSession) {
+        val entered = CompletableDeferred<Unit>()
+        private val finished = CompletableDeferred<Unit>()
+        private var readers: List<Job> = emptyList()
+        val allReadersFinished: Boolean
+            get() = readers.size == 4 && readers.all { it.isCompleted }
+
+        suspend fun run(mutate: suspend () -> Unit) = coroutineScope {
+            readers = List(4) {
+                launch(Dispatchers.Default) {
+                    while (isActive && !finished.isCompleted) {
+                        store.registrationOf(probe)
+                        entered.complete(Unit)
+                    }
+                }
+            }
+            try {
+                // A real read must happen before mutation/fault injection. Waiting for all four
+                // would starve on a Default dispatcher with fewer than four worker threads.
+                entered.await()
+                mutate()
+            } finally {
+                finished.complete(Unit)
+                readers.forEach { it.cancel() }
+                withContext(NonCancellable) { readers.forEach { it.join() } }
+            }
+        }
     }
 
     @Test
