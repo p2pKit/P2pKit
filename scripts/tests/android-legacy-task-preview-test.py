@@ -66,6 +66,9 @@ def fixture(api=24, unavailable=False):
                               exactPublicLabelMatch=True, uniqueStructuredCard=True, cardBounds=[0, 0, 16, 16],
                               labelBounds=[1, 1, 15, 3] if api == 24 else [0, 0, 16, 16],
                               snapshotBounds=[0, 3, 16, 16]))
+            if api == 32:
+                system["taskCard"].update(observationScope="OWNED_OVERVIEW_PANEL_COMPLETE_SUBTREE",
+                                          paneBounds=[0, 0, 16, 16])
             item.update(pixelVariation=True, systemWindowBefore=system, systemWindowAfter=copy.deepcopy(system))
         if unavailable and name not in legacy.POSITIVE and name != "actual-recents-original":
             item = {key: item[key] for key in ("name", "elapsedMillis", "stateBefore", "stateAfter", "presentation", "activeRootAfter")}
@@ -90,9 +93,10 @@ def fixture(api=24, unavailable=False):
             for event, activity in (("created", 1), ("stopped", 1), ("created", 2), ("destroyed", 1), ("destroyed", 2))])
     if api == 32:
         report["recentsProviderLookup"] = dict(operation="COMPLETE", packageMatches=True, distinctUid=True)
-        report["recentsEducation"] = dict(schema=1, api=32, operation="NONE_REQUIRED", observations=2,
-            after=dict(attempt=2, observedElapsedMillis=108, popupAbsent=True,
-                       absence=dict(complete=True, textIds=0, arrowIds=0, exactTexts=0),
+        report["recentsEducation"] = dict(schema=2, api=32, operation="NO_INPUT_CAPTURE_PENDING_VISUAL_REVIEW", observations=2,
+            after=dict(attempt=2, observedElapsedMillis=108,
+                       popupAbsence="NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED",
+                       positiveSelectorPresence="NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED",
                        systemWindow=copy.deepcopy(captures[1]["systemWindowBefore"])))
     # Clearly synthetic parser inputs, not captured images or proof of visual privacy.
     files["result.json"] = json.dumps(report).encode()
@@ -127,25 +131,25 @@ class LegacyTaskTests(unittest.TestCase):
         admission.update(attempts=3, lastCompletedAttempt=3,
                          guardCounts={"ROOT_MISSING": 1, "CARD_NOT_IDENTIFIED": 1, "READY": 1})
         ledger = report["recentsEducation"]
-        ledger.update(operation="DISMISSED", observations=2)
+        ledger.update(operation="BACK_RETURNED_CAPTURE_PENDING_VISUAL_REVIEW", observations=2)
         ledger["after"]["attempt"] = 3
         system = report["captures"][1]["systemWindowBefore"]
         ledger["before"] = dict(attempt=2, observedElapsedMillis=106,
             owner={key: copy.deepcopy(val) for key, val in system.items() if key != "taskCard"},
             popup=dict(parentBounds=[1, 1, 10, 7], textBounds=[1, 1, 10, 5], arrowBounds=[12, 8, 14, 10],
                 exactText=True, exactIds=True, expectedClasses=True, unique=True, rootContained=True, complete=True,
-                parentProjection="DIRECT_LINEAR_LAYOUT", dragLayerResourceMatch=False,
-                markerCounts=dict(textIds=1, arrowIds=1, exactTexts=1)))
+                selectionScope="POSITIVE_ROOT_SCOPED_MARKERS", parentProjection="DIRECT_LINEAR_LAYOUT",
+                dragLayerResourceMatch=False, markerCounts=dict(textIds=1, arrowIds=1, exactTexts=1)))
         ledger["request"] = dict(action="BACK", platformAction=1, requestedElapsedMillis=106,
             returnedElapsedMillis=107, returned=True, accepted=True)
         ledger["observerRefresh"] = dict(operation="SAME_SERVICE_INFO_CALL_RETURNED", startedElapsedMillis=107,
             returnedElapsedMillis=107, completedElapsedMillis=108, flagsBefore=82, flagsAfter=82, setterReturned=True)
         return report, files
 
-    def test_exact_optional_education_action_requires_popup_absence_and_original_card(self):
+    def test_exact_optional_education_action_requires_pending_visual_review_and_original_card(self):
         report, files = self.education_fixture()
         self.assertTrue(self.validate(report, files, 32)["recentsReviewRequired"])
-        for key, invalid in (("popupAbsent", False), ("popupAbsent", 1), ("attempt", 2),
+        for key, invalid in (("popupAbsence", "ABSENT"), ("popupAbsence", True), ("attempt", 2),
                              ("observedElapsedMillis", 5099), ("systemWindow", {})):
             report, files = self.education_fixture()
             report["recentsEducation"]["after"][key] = invalid
@@ -171,22 +175,62 @@ class LegacyTaskTests(unittest.TestCase):
         report["recentsEducation"]["request"] = self.education_fixture()[0]["recentsEducation"]["request"]
         with self.assertRaises(ValueError): self.validate(report, files, 32)
 
-    def test_real_card_cannot_replace_complete_typed_marker_absence(self):
+    def test_unknown_or_refused_popup_is_never_promoted_to_observed_absence(self):
         for dismissed in (False, True):
-            for key, invalid in (("complete", False), ("complete", 1), ("textIds", 1), ("textIds", False),
-                                 ("arrowIds", 2), ("arrowIds", 0.0), ("exactTexts", 1), ("exactTexts", True)):
+            for key, invalid in (("popupAbsence", "ABSENT"), ("popupAbsence", True),
+                                 ("popupAbsence", "NONE_REQUIRED"), ("positiveSelectorPresence", "IDENTIFIED"),
+                                 ("positiveSelectorPresence", "ABSENT"), ("positiveSelectorPresence", None)):
                 report, files = self.education_fixture() if dismissed else fixture(32)
-                report["recentsEducation"]["after"]["absence"][key] = invalid
+                report["recentsEducation"]["after"][key] = invalid
                 with self.subTest(dismissed=dismissed, key=key), self.assertRaises(ValueError):
                     self.validate(report, files, 32)
-            for missing in ("complete", "textIds", "arrowIds", "exactTexts"):
+            for missing in ("popupAbsence", "positiveSelectorPresence"):
                 report, files = self.education_fixture() if dismissed else fixture(32)
-                del report["recentsEducation"]["after"]["absence"][missing]
+                del report["recentsEducation"]["after"][missing]
                 with self.subTest(dismissed=dismissed, missing=missing), self.assertRaises(ValueError):
                     self.validate(report, files, 32)
+            for legacy in ("DISMISSED", "NONE_REQUIRED"):
+                report, files = self.education_fixture() if dismissed else fixture(32)
+                report["recentsEducation"]["operation"] = legacy
+                with self.subTest(legacy=legacy), self.assertRaises(ValueError): self.validate(report, files, 32)
             report, files = self.education_fixture() if dismissed else fixture(32)
-            del report["recentsEducation"]["after"]["absence"]
+            report["recentsEducation"]["after"]["positiveSelectorPresence"] = "REFUSED"
+            self.assertTrue(self.validate(report, files, 32)["recentsReviewRequired"])
+            report["recentsReviewRequired"] = False
             with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_actual_complete_owned_overview_scope_is_required_on_both_sides_of_capture(self):
+        for key, invalid in (("observationScope", "ACTIVE_SYSTEM_UI_TREE"), ("observationScope", True),
+                             ("paneBounds", [0, 0, 0, 16]), ("paneBounds", [0, 0, 16, 17]),
+                             ("paneBounds", [1, 1, 16, 16]), ("paneBounds", [False, 0, 16, 16])):
+            for side in ("systemWindowBefore", "systemWindowAfter"):
+                report, files = fixture(32)
+                report["captures"][1][side]["taskCard"][key] = invalid
+                # Matching records still cannot pass wrong scope/geometry.
+                if side == "systemWindowBefore":
+                    report["captures"][1]["systemWindowAfter"] = copy.deepcopy(report["captures"][1][side])
+                    report["recentsEducation"]["after"]["systemWindow"] = copy.deepcopy(report["captures"][1][side])
+                with self.subTest(key=key, side=side), self.assertRaises(ValueError):
+                    self.validate(report, files, 32)
+        for missing in ("observationScope", "paneBounds"):
+            report, files = fixture(32)
+            for value in (report["captures"][1]["systemWindowBefore"], report["captures"][1]["systemWindowAfter"],
+                          report["recentsEducation"]["after"]["systemWindow"]):
+                del value["taskCard"][missing]
+            with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_education_receipt_joins_do_not_treat_booleans_or_floats_as_integer_identity(self):
+        for key, invalid in (("taskId", 7.0), ("windowId", 10.0), ("secureFlag", 1),
+                             ("bounds", [False, 0, 16, 16])):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["before"]["owner"][key] = invalid
+            with self.subTest(before=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+            report, files = self.education_fixture()
+            report["recentsEducation"]["after"]["systemWindow"][key] = invalid
+            with self.subTest(after=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+        report, files = fixture(32)
+        report["recentsEducation"]["after"]["systemWindow"]["taskCard"]["paneBounds"][0] = False
+        with self.assertRaises(ValueError): self.validate(report, files, 32)
 
     def test_wrong_false_throwing_duplicate_or_late_back_cannot_qualify(self):
         for key, invalid in (("action", "HOME"), ("platformAction", 2), ("platformAction", True),
@@ -216,7 +260,7 @@ class LegacyTaskTests(unittest.TestCase):
             del report["recentsEducation"]["before"]["popup"][missing]
             with self.assertRaises(ValueError): self.validate(report, files, 32)
 
-    def test_back_requires_global_typed_one_marker_counts(self):
+    def test_back_requires_positive_root_scoped_typed_one_marker_counts(self):
         for key in ("textIds", "arrowIds", "exactTexts"):
             for invalid in (0, 2, True, 1.0, "1"):
                 report, files = self.education_fixture()
@@ -230,7 +274,7 @@ class LegacyTaskTests(unittest.TestCase):
         del report["recentsEducation"]["before"]["popup"]["markerCounts"]
         with self.assertRaises(ValueError): self.validate(report, files, 32)
 
-    def test_popup_before_must_be_exact_unique_complete_and_same_owned_root(self):
+    def test_popup_before_must_be_exact_unique_positive_selector_and_same_owned_root(self):
         for key in ("exactText", "exactIds", "expectedClasses", "unique", "rootContained", "complete"):
             report, files = self.education_fixture()
             report["recentsEducation"]["before"]["popup"][key] = False
@@ -240,6 +284,10 @@ class LegacyTaskTests(unittest.TestCase):
             report, files = self.education_fixture()
             report["recentsEducation"]["before"]["popup"][key] = invalid
             with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files, 32)
+        for scope in (None, "GLOBAL_TREE_COMPLETE", True):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["before"]["popup"]["selectionScope"] = scope
+            with self.assertRaises(ValueError): self.validate(report, files, 32)
         for key, invalid in (("windowId", 99), ("taskId", 99), ("secureFlag", False), ("package", "foreign")):
             report, files = self.education_fixture()
             report["recentsEducation"]["before"]["owner"][key] = invalid
@@ -260,8 +308,10 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("Build.VERSION.SDK_INT == 32", admission)
         self.assertIn("dismissal.request(until, SystemClock::elapsedRealtime,", admission)
         self.assertIn('if (value != null)', admission)
-        self.assertIn('check(observed.presence == LegacyEducationPresence.ABSENT && observed.popup == null)', admission)
-        self.assertIn('if (selection.presence != LegacyEducationPresence.ABSENT)', read_only)
+        self.assertIn('check(observed.presence != LegacyEducationPresence.IDENTIFIED && observed.popup == null)', admission)
+        self.assertIn('if (observed.popup != null) return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)', read_only)
+        self.assertNotIn('put("popupAbsent", true)', source)
+        self.assertIn('put("popupAbsence", "NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED")', admission)
         self.assertIn('"$recentsProvider:id/drag_layer" -> LegacyEducationResource.DRAG_LAYER', read_only)
         self.assertIn('it.resource == LegacyEducationResource.TEXT ||', helper)
         self.assertNotIn('it.resource != LegacyEducationResource.OTHER ||', helper)
@@ -270,6 +320,39 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)", read_only)
         self.assertIn("findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)", read_only)
         self.assertNotIn("contains(LEGACY_RECENTS_EDUCATION_TEXT)", source)
+
+    def test_api32_positive_pane_scope_never_skips_an_incomplete_required_child(self):
+        source = (ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        observation = source.split("    private fun recentsState(", 1)[1].split("    private fun observeRecentsEducation(", 1)[0]
+        self.assertIn('paneCandidates = root.findAccessibilityNodeInfosByViewId("$recentsProvider:id/overview_panel")', observation)
+        self.assertIn('if (paneCandidates.size != 1)', observation)
+        self.assertIn('val refreshed = pane.refresh()', observation)
+        for binding in ('pane.packageName?.toString() != recentsProvider', 'pane.windowId != root.windowId',
+                        'pane.className?.toString() != "android.widget.ListView"', '!bounds.contains(paneBounds)'):
+            self.assertIn(binding, observation)
+        self.assertIn('} else root', observation)
+        self.assertIn('visit(traversalRoot, null, 0, -1)', observation)
+        self.assertIn('if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)', observation)
+        self.assertIn('if (child == null)', observation)
+        self.assertIn('if (parent != null && !node.refresh())', observation)
+        self.assertNotIn('continue', observation)
+        self.assertIn('paneCandidates.forEach { @Suppress("DEPRECATION") it.recycle() }', observation)
+        # Both calls use this scope; the second call remains one-shot and cannot issue setup input.
+        capture = source.split('    private fun capture(', 1)[1].split('    private fun retainFailureScene(', 1)[0]
+        self.assertEqual(capture.count('recentsState('), 1)
+        self.assertIn('systemBefore.toString() == systemAfter?.toString()', capture)
+
+    def test_positive_popup_lookup_requires_actual_shared_parent_and_never_claims_global_absence(self):
+        source = (ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        lookup = source.split('    private fun observeRecentsEducation(', 1)[1].split('    private fun unrefreshedNode(', 1)[0]
+        for required in ('root.findAccessibilityNodeInfosByViewId(', 'root.findAccessibilityNodeInfosByText(',
+                         'val refreshed = candidate.refresh()', 'parent != arrowParent', 'ancestor != drag',
+                         'texts.single() != exactTexts.single()', 'selectLegacyRecentsEducationCandidates(nodes)',
+                         'acquired.forEach { @Suppress("DEPRECATION") it.recycle() }'):
+            self.assertIn(required, lookup)
+        self.assertNotIn('LegacyEducationPresence.ABSENT', lookup)
+        self.assertNotIn('performGlobalAction', lookup)
+        self.assertIn('NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED', lookup)
 
     def test_observer_refresh_must_be_timely_unchanged_and_only_after_acknowledged_back(self):
         for key, invalid in (("operation", "CACHE_FIXED"), ("setterReturned", False), ("setterReturned", 1),

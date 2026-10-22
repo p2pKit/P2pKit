@@ -22,6 +22,144 @@ class LegacyRecentsEducationTest {
             LegacyEducationResource.ARROW, LegacyEducationClass.VIEW),
     )
 
+    private fun candidateFixture(): List<LegacyEducationNode> = fixture().toMutableList().also {
+        it[0] = it[0].copy(resource = LegacyEducationResource.DRAG_LAYER)
+    }
+
+    @Test
+    fun positiveCandidateSelectorsRequireActualSharedDragLayerOrItsDirectLinearLayout() {
+        val direct = selectLegacyRecentsEducationCandidates(candidateFixture())
+        assertEquals(LegacyEducationPresence.IDENTIFIED, direct.presence)
+        assertEquals(LegacyEducationPopup(1, 2, 3), direct.popup)
+        val nodes = candidateFixture()
+        val projected = listOf(nodes[0],
+            nodes[2].copy(observation = nodes[2].observation.copy(parent = 0)),
+            nodes[3].copy(observation = nodes[3].observation.copy(parent = 0)))
+        val selection = selectLegacyRecentsEducationCandidates(projected)
+        assertEquals(LegacyEducationPresence.IDENTIFIED, selection.presence)
+        assertEquals(LegacyEducationPopup(0, 1, 2,
+            LegacyEducationParentProjection.DRAG_LAYER_ACCESSIBILITY), selection.popup)
+    }
+
+    @Test
+    fun noPositiveCandidatesNeverBecomeCompleteTreeAbsenceOrAuthorizeInput() {
+        val dismissal = LegacyEducationDismissal()
+        var actions = 0
+        for (nodes in listOf(emptyList(), listOf(candidateFixture()[0]), candidateFixture().take(2))) {
+            val selection = selectLegacyRecentsEducationCandidates(nodes)
+            assertEquals(LegacyEducationPresence.NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED, selection.presence)
+            assertNull(selection.popup)
+            if (selection.presence == LegacyEducationPresence.IDENTIFIED) {
+                dismissal.request(5, { 0 }) { actions++; true }
+            }
+        }
+        assertEquals(0, actions)
+        assertFalse(dismissal.requested)
+        // Historical complete-tree model absence is deliberately not a candidate-query conclusion.
+        assertEquals(LegacyEducationPresence.ABSENT,
+            selectLegacyRecentsEducation(listOf(candidateFixture()[0])).presence)
+    }
+
+    @Test
+    fun partialOrAmbiguousPositiveCandidatesNeverAuthorizeInputOrProveAbsence() {
+        val nodes = candidateFixture()
+        val invalid = listOf(
+            nodes.dropLast(1),
+            nodes.take(2) + nodes[3],
+            nodes + nodes[2],
+            nodes + nodes[3],
+            nodes + LegacyEducationNode(LegacyRecentsNode(0), exactText = true),
+            nodes + nodes[2].copy(kind = LegacyEducationClass.OTHER, exactText = false),
+            nodes + nodes[3].copy(observation = nodes[3].observation.copy(owned = false)),
+            nodes + nodes[0].copy(observation = nodes[0].observation.copy(parent = 0)),
+            nodes + LegacyEducationNode(LegacyRecentsNode(0)),
+        )
+        val dismissal = LegacyEducationDismissal()
+        var actions = 0
+        for (candidate in invalid) {
+            val selection = selectLegacyRecentsEducationCandidates(candidate)
+            assertEquals(LegacyEducationPresence.REFUSED, selection.presence)
+            assertNull(selection.popup)
+            if (selection.presence == LegacyEducationPresence.IDENTIFIED) {
+                dismissal.request(5, { 0 }) { actions++; true }
+            }
+        }
+        assertEquals(0, actions)
+        assertFalse(dismissal.requested)
+    }
+
+    @Test
+    fun candidateParentProofCannotUseAnUnidentifiedDragLayerOrOnlyACommonAncestor() {
+        val nodes = candidateFixture()
+        val nested = listOf(nodes[0], LegacyEducationNode(LegacyRecentsNode(0)),
+            nodes[1].copy(observation = nodes[1].observation.copy(parent = 1)),
+            nodes[2].copy(observation = nodes[2].observation.copy(parent = 2)),
+            nodes[3].copy(observation = nodes[3].observation.copy(parent = 2)))
+        for (candidate in listOf(fixture(), nested, nodes.toMutableList().also {
+            it[3] = it[3].copy(observation = it[3].observation.copy(parent = 0))
+        }, nodes.toMutableList().also {
+            it[1] = it[1].copy(kind = LegacyEducationClass.OTHER)
+        })) {
+            val selection = selectLegacyRecentsEducationCandidates(candidate)
+            assertEquals(LegacyEducationPresence.REFUSED, selection.presence)
+            assertNull(selection.popup)
+        }
+    }
+
+    @Test
+    fun candidateOwnershipVisibilityGeometryAndExactMarkersRemainMandatory() {
+        val nodes = candidateFixture()
+        for (index in nodes.indices) {
+            for (invalid in listOf(nodes[index].observation.copy(owned = false),
+                nodes[index].observation.copy(visible = false),
+                nodes[index].observation.copy(bounds = listOf(0, 0, 0, 0)))) {
+                val candidate = nodes.toMutableList().also { it[index] = it[index].copy(observation = invalid) }
+                assertEquals(LegacyEducationPresence.REFUSED,
+                    selectLegacyRecentsEducationCandidates(candidate).presence)
+            }
+        }
+        for (invalid in listOf(nodes[2].copy(exactText = false),
+            nodes[2].copy(kind = LegacyEducationClass.OTHER),
+            nodes[2].copy(resource = LegacyEducationResource.OTHER),
+            nodes[2].copy(observation = nodes[2].observation.copy(bounds = listOf(90, 90, 110, 110))))) {
+            val candidate = nodes.toMutableList().also { it[2] = invalid }
+            assertEquals(LegacyEducationPresence.REFUSED,
+                selectLegacyRecentsEducationCandidates(candidate).presence)
+        }
+    }
+
+    @Test
+    fun malformedCandidateGraphsCannotEscapeTheFiniteParentBound() {
+        val nodes = candidateFixture()
+        val invalid = listOf(List(257) { nodes[0] }, listOf(nodes[0], nodes[0]),
+            nodes.toMutableList().also { it[0] = it[0].copy(observation = it[0].observation.copy(parent = 1)) },
+            nodes.toMutableList().also { it[1] = it[1].copy(observation = it[1].observation.copy(parent = 2)) },
+            nodes.toMutableList().also { it[3] = it[3].copy(observation = it[3].observation.copy(parent = -1)) })
+        for (candidate in invalid) {
+            val selection = selectLegacyRecentsEducationCandidates(candidate)
+            assertEquals(LegacyEducationPresence.REFUSED, selection.presence)
+            assertNull(selection.popup)
+        }
+    }
+
+    @Test
+    fun repeatedPositiveCandidateObservationsNeverRearmTheSingleInput() {
+        val dismissal = LegacyEducationDismissal()
+        var actions = 0
+        val nodes = candidateFixture()
+        for (candidate in listOf(emptyList(), nodes.dropLast(1), nodes, nodes + nodes[2], nodes)) {
+            val selection = selectLegacyRecentsEducationCandidates(candidate)
+            assertTrue(selection.presence != LegacyEducationPresence.ABSENT)
+            if (selection.presence == LegacyEducationPresence.IDENTIFIED && !dismissal.requested) {
+                dismissal.request(5, { 0 }) { actions++; true }
+            }
+        }
+        assertEquals(1, actions)
+        assertTrue(dismissal.requested)
+        assertFailsWith<IllegalStateException> { dismissal.request(5, { 0 }) { actions++; true } }
+        assertEquals(1, actions)
+    }
+
     @Test
     fun exactStructuredPopupAllowsTranslatedArrowWithinRoot() {
         assertEquals(LegacyEducationPopup(1, 2, 3), findLegacyRecentsEducation(fixture()))

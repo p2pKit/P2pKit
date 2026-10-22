@@ -16,10 +16,15 @@ internal data class LegacyEducationPopup(
     val parent: Int, val text: Int, val arrow: Int,
     val projection: LegacyEducationParentProjection = LegacyEducationParentProjection.DIRECT_LINEAR_LAYOUT,
 )
-internal enum class LegacyEducationPresence { ABSENT, IDENTIFIED, REFUSED }
+internal enum class LegacyEducationPresence {
+    ABSENT, IDENTIFIED, REFUSED, NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED,
+}
 internal data class LegacyEducationSelection(val presence: LegacyEducationPresence, val popup: LegacyEducationPopup?)
 
-/** Refusing an ambiguous/invalid positive selector is not evidence that the known popup is absent. */
+/**
+ * Complete-tree model only: callers must independently establish traversal completeness.
+ * Query candidates must use selectLegacyRecentsEducationCandidates and cannot establish absence.
+ */
 internal fun selectLegacyRecentsEducation(nodes: List<LegacyEducationNode>): LegacyEducationSelection {
     val refused = LegacyEducationSelection(LegacyEducationPresence.REFUSED, null)
     if (nodes.isEmpty() || nodes.size > 256 || nodes[0].observation.parent != null) return refused
@@ -35,14 +40,54 @@ internal fun selectLegacyRecentsEducation(nodes: List<LegacyEducationNode>): Leg
     return LegacyEducationSelection(LegacyEducationPresence.IDENTIFIED, popup)
 }
 
-/** Only a complete owned structured popup permits an input; never changes the real TaskView matcher. */
+/**
+ * Selects a positive query-candidate graph, not a complete Launcher tree. The caller must bind the
+ * unique root-scoped resource/text query results and refresh every supplied node and actual parent.
+ * The graph may start at the actual DragLayer; active-root ownership is a separate caller proof.
+ * Missing candidates never prove absence, and unused query results must not be silently discarded.
+ */
+internal fun selectLegacyRecentsEducationCandidates(nodes: List<LegacyEducationNode>): LegacyEducationSelection {
+    val notEstablished = LegacyEducationSelection(
+        LegacyEducationPresence.NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED, null,
+    )
+    val refused = LegacyEducationSelection(LegacyEducationPresence.REFUSED, null)
+    if (nodes.isEmpty()) return notEstablished
+    if (nodes.size > 256 || nodes[0].observation.parent != null) return refused
+    if (nodes.indices.drop(1).any { index ->
+        val parent = nodes[index].observation.parent
+        parent == null || parent !in 0 until index
+    }) return refused
+    if (nodes.none { it.resource == LegacyEducationResource.TEXT ||
+            it.resource == LegacyEducationResource.ARROW || it.exactText }) return notEstablished
+    val popup = findLegacyRecentsEducation(nodes) ?: return refused
+    val dragLayer = nodes.indices.singleOrNull { nodes[it].resource == LegacyEducationResource.DRAG_LAYER }
+        ?: return refused
+    val parentMatches = when (popup.projection) {
+        LegacyEducationParentProjection.DRAG_LAYER_ACCESSIBILITY -> popup.parent == dragLayer
+        LegacyEducationParentProjection.DIRECT_LINEAR_LAYOUT ->
+            nodes[popup.parent].observation.parent == dragLayer
+    }
+    if (!parentMatches) return refused
+    val used = mutableSetOf<Int>()
+    for (index in listOf(popup.text, popup.arrow)) {
+        var current: Int? = index
+        while (current != null) {
+            used += current
+            current = nodes[current].observation.parent
+        }
+    }
+    if (used.size != nodes.size) return refused
+    return LegacyEducationSelection(LegacyEducationPresence.IDENTIFIED, popup)
+}
+
+/** Only a fully validated owned positive structure permits input; never changes the real TaskView matcher. */
 internal fun findLegacyRecentsEducation(nodes: List<LegacyEducationNode>): LegacyEducationPopup? {
     if (nodes.isEmpty() || nodes.size > 256 || nodes[0].observation.parent != null) return null
     if (nodes.indices.drop(1).any { index ->
         val parent = nodes[index].observation.parent
         parent == null || parent !in 0 until index
     }) return null
-    // Even a malformed/hidden extra marker prevents input; uniqueness is over the entire complete tree.
+    // Even a malformed/hidden extra supplied marker prevents input; callers define the evidence scope.
     if (nodes.count { it.resource == LegacyEducationResource.TEXT } != 1 ||
         nodes.count { it.resource == LegacyEducationResource.ARROW } != 1 ||
         nodes.count { it.exactText } != 1) return null

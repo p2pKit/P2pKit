@@ -146,8 +146,11 @@ fail, and release package visibility is unchanged.
 
 `HARNESS_PASS_PENDING_REVIEW` still is not issue closure: independent review
 must decode the originals, identify the intended task card on a genuine
-nonblank Recents surface, and check that it does not expose the synthetic
-representation. Null alone, a blank/wrong screen, container/CRC checks and
+nonblank Recents surface, and check the **entire snapshot rectangle** bound by
+the before/after task-card observations. That region must be fully visible and
+unobscured, with no synthetic phrase or pattern. An overlay, clipping, uncertain
+card identity or an indistinguishable blank screen leaves acceptance incomplete;
+a generic blank rectangle alone is not proof. Null alone, a blank/wrong screen, container/CRC checks and
 device-side pixel samples cannot substitute for that review or physical/OEM
 qualification. Previous failed runs remain failed; the diagnostic cannot
 satisfy any of the 14 release components. An API32 Recents-admission failure may
@@ -155,15 +158,40 @@ retain one separately labelled, ownership-bound `failure-recents-scene.png`
 within the remaining body budget (at most five seconds of diagnostic work).
 This private encrypted scene is `NOT_ACCEPTANCE`, never one of the seven
 observations or a retry; it cannot change the original failure or qualify privacy.
-On API32 only, initial Recents admission may dismiss the image's known education
-popup with one separately recorded public BACK request. It requires the exact
-owned text/arrow structure and full fixture phrase, not a substring or locale
-fallback. The request and a subsequent complete popup-absent, genuine TaskView
-admission must fit the original five seconds. BACK acknowledgement is not screen
-proof; changed/unsupported popup structure or unsuccessful dismissal still fails.
-API24 keeps only HOME/RECENTS, and strict post-capture/failure observers never
-perform this setup action. Original TaskView, pixel and seven-observation oracles
-remain mandatory.
+On API32, the semantic card domain is the unique, root-scoped
+`com.google.android.apps.nexuslauncher:id/overview_panel`, with its actual
+`android.widget.ListView` accessibility class. Its refreshed provider/window and
+bounds must match the active root. **Every advertised descendant of that pane**
+is traversed before and after the original screenshot; missing or unrefreshable
+children, ambiguous cards, foreign owners, overflow or changed geometry still
+refuse. This is not a claim to have enumerated unrelated Launcher/Workspace UI.
+
+This scope corrects an overbroad diagnostic assumption. The pinned
+[AOSP Workspace implementation](https://android.googlesource.com/platform/packages/apps/Launcher3/+/android-12.1.0_r1/src/com/android/launcher3/Workspace.java#1577)
+deliberately returns an empty accessibility node when hidden in Overview.
+The [Recents pane](https://android.googlesource.com/platform/packages/apps/Launcher3/+/android-12.1.0_r1/quickstep/src/com/android/quickstep/views/RecentsView.java#4314)
+is a separate task-card domain. The reference source demonstrates why a full
+Launcher DFS is inappropriate; it does **not** identify the failed node or prove
+the installed Google Launcher has those exact bytes. Earlier full-tree failures
+remain failures. No failed child is skipped inside a supposedly complete pane.
+
+Initial admission may still send one public BACK only after positively matching
+the root-scoped text/arrow IDs, exact full fixture phrase, actual shared parent
+and owned DragLayer. Missing/ambiguous lookups never authorize input. The request
+and later real TaskView admission must fit the unchanged five seconds; false,
+thrown or late requests fail. API24 keeps only HOME/RECENTS, and post-capture or
+failure observers never perform this setup action.
+
+Education receipt schema 2 deliberately retires schema 1's **automated global
+popup-absence assertion**. Public empty ID/text lookup results do not distinguish
+absence from failed lookup. It records `NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED`,
+never `ABSENT`, `DISMISSED` or `NONE_REQUIRED`. A still-positively identified popup
+prevents capture; otherwise the exact original image must pass the independent
+whole-snapshot review above. Harness success remains `HARNESS_PASS_PENDING_REVIEW`,
+not privacy acceptance. Original TaskView, all seven observations, positive /
+protected / positive pixels, deadlines, source bindings and cleanup remain
+mandatory. This explicit observer-contract correction changes neither production
+privacy policy nor the scope of API24's previously accepted runtime evidence.
 
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window

@@ -690,7 +690,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
     }
 
     private data class EducationObservation(
-        val owner: JSONObject, val popup: JSONObject?, val presence: LegacyEducationPresence, val absence: JSONObject,
+        val owner: JSONObject, val popup: JSONObject?, val presence: LegacyEducationPresence,
     )
 
     private fun recentsState(
@@ -722,7 +722,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         query?.put("phase", "ACTIVE_ROOT")
         val root = uiAutomation.rootInActiveWindow ?: return pending(LegacyRecentsGuard.ROOT_MISSING)
         val nodes = mutableListOf<LegacyRecentsNode>()
-        val educationNodes = mutableListOf<LegacyEducationNode>()
+        var paneCandidates = emptyList<AccessibilityNodeInfo>()
         var treeComplete = false
         var primaryFailure: Throwable? = null
         try {
@@ -733,7 +733,40 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             if (bounds.width() <= 0 || bounds.height() <= 0 || root.windowId < 0) {
                 return pending(LegacyRecentsGuard.ROOT_GEOMETRY_INVALID)
             }
-            query?.put("phase", "TREE_VISIT")?.put("visitedNodeCount", 0)
+            // A whole Launcher DFS is not the task-card domain: Workspace deliberately exposes an
+            // unrefreshable empty node in Overview. Never skip that node and call the global tree complete.
+            // The API32 card domain is the positively selected, complete owned overview_panel instead.
+            val api32 = Build.VERSION.SDK_INT == 32
+            if (api32) {
+                val observed = observeRecentsEducation(root, bounds, owner, until, query)
+                educationObserver?.invoke(observed)
+                if (observed.popup != null) return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
+            }
+            val traversalRoot = if (api32) {
+                query?.put("phase", "OVERVIEW_LOOKUP")
+                checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+                    LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+                paneCandidates = root.findAccessibilityNodeInfosByViewId("$recentsProvider:id/overview_panel")
+                query?.put("overviewMatches", paneCandidates.size)
+                checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+                    LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+                if (paneCandidates.size != 1) return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
+                val pane = paneCandidates.single()
+                val refreshed = pane.refresh()
+                checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+                    LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+                if (!refreshed) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)
+                val paneBounds = Rect().also(pane::getBoundsInScreen)
+                if (pane.viewIdResourceName != "$recentsProvider:id/overview_panel" ||
+                    pane.className?.toString() != "android.widget.ListView" || !pane.isVisibleToUser ||
+                    pane.packageName?.toString() != recentsProvider || pane.windowId != root.windowId ||
+                    paneBounds.isEmpty || !bounds.contains(paneBounds)) {
+                    return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
+                }
+                pane
+            } else root
+            query?.put("treeScope", if (api32) "OWNED_OVERVIEW_PANEL_COMPLETE_SUBTREE" else "ACTIVE_SYSTEM_UI_TREE")
+                ?.put("phase", "TREE_VISIT")?.put("visitedNodeCount", 0)
             var complete = true
             fun incomplete(reason: String, parent: Int, childIndex: Int, depth: Int, childCount: Int?) {
                 if (educationObserver != null && query != null && !query.has("incomplete")) {
@@ -752,9 +785,14 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     complete = false
                     incomplete("NODE_REFRESH_FALSE", parent, childIndex, depth, null)
                     if (educationObserver != null && query != null) {
-                        // Local cached fields identify the refused node; they never admit it to the tree.
+                        // Local cached fields describe the refused node; they never admit it to the tree.
                         query.getJSONObject("incomplete").put("cachedNode", unrefreshedNode(node, root.windowId))
                     }
+                    return
+                }
+                if (api32 && (node.packageName?.toString() != recentsProvider || node.windowId != root.windowId)) {
+                    complete = false
+                    incomplete("NODE_OWNER_MISMATCH", parent ?: -1, childIndex, depth, null)
                     return
                 }
                 val rectangle = Rect().also(node::getBoundsInScreen)
@@ -772,22 +810,6 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     node.text?.toString() == publicAppLabel, node.contentDescription?.toString() == publicAppLabel,
                     node.collectionItemInfo != null,
                     recentsCloseAction != 0 && node.actionList.any { it.id == recentsCloseAction })
-                if (educationObserver != null) {
-                    val resource = when (node.viewIdResourceName) {
-                        "$recentsProvider:id/text" -> LegacyEducationResource.TEXT
-                        "$recentsProvider:id/arrow" -> LegacyEducationResource.ARROW
-                        "$recentsProvider:id/drag_layer" -> LegacyEducationResource.DRAG_LAYER
-                        else -> LegacyEducationResource.OTHER
-                    }
-                    val kind = when (node.className?.toString()) {
-                        "android.widget.TextView" -> LegacyEducationClass.TEXT_VIEW
-                        "android.view.View" -> LegacyEducationClass.VIEW
-                        "android.widget.LinearLayout" -> LegacyEducationClass.LINEAR_LAYOUT
-                        else -> LegacyEducationClass.OTHER
-                    }
-                    educationNodes += LegacyEducationNode(nodes.last(), resource, kind,
-                        node.text?.toString() == LEGACY_RECENTS_EDUCATION_TEXT)
-                }
                 query?.put("visitedNodeCount", nodes.size)
                 val childCount = node.childCount
                 checkLegacyCapture(childCount <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
@@ -805,67 +827,12 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     if (!complete) return
                 }
             }
-            visit(root, null, 0, -1)
+            visit(traversalRoot, null, 0, -1)
             checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
                 LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
             treeComplete = complete
             query?.put("treeComplete", complete)?.put("phase", "CARD_SELECTION")
             if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)
-            if (educationObserver != null) {
-                val selection = selectLegacyRecentsEducation(educationNodes)
-                val popup = selection.popup
-                val absence = JSONObject().put("complete", true)
-                    .put("textIds", educationNodes.count { it.resource == LegacyEducationResource.TEXT })
-                    .put("arrowIds", educationNodes.count { it.resource == LegacyEducationResource.ARROW })
-                    .put("exactTexts", educationNodes.count { it.exactText })
-                val textMarker = educationNodes.singleOrNull { it.resource == LegacyEducationResource.TEXT }
-                val arrowMarker = educationNodes.singleOrNull { it.resource == LegacyEducationResource.ARROW }
-                val sameParent = textMarker?.observation?.parent != null &&
-                    textMarker.observation.parent == arrowMarker?.observation?.parent
-                val sharedParent = if (sameParent) educationNodes[checkNotNull(textMarker.observation.parent)]
-                    else null
-                val association = JSONObject().put("textMarkerUnique", textMarker != null)
-                    .put("arrowMarkerUnique", arrowMarker != null).put("textExact", textMarker?.exactText == true)
-                    .put("textClassMatches", textMarker?.kind == LegacyEducationClass.TEXT_VIEW)
-                    .put("arrowClassMatches", arrowMarker?.kind == LegacyEducationClass.VIEW)
-                    .put("sameParent", sameParent).put("sharedParentResource", sharedParent?.resource?.name ?: "NONE")
-                    .put("sharedParentClass", sharedParent?.kind?.name ?: "NONE")
-                query?.put("educationPredicates", JSONObject()
-                    .put("complete", true).put("nodes", educationNodes.size)
-                    .put("textIds", educationNodes.count { it.resource == LegacyEducationResource.TEXT })
-                    .put("arrowIds", educationNodes.count { it.resource == LegacyEducationResource.ARROW })
-                    .put("exactTexts", educationNodes.count { it.exactText })
-                    .put("textClasses", educationNodes.count { it.kind == LegacyEducationClass.TEXT_VIEW })
-                    .put("arrowClasses", educationNodes.count { it.kind == LegacyEducationClass.VIEW })
-                    .put("parentClasses", educationNodes.count { it.kind == LegacyEducationClass.LINEAR_LAYOUT })
-                    .put("owned", educationNodes.count { it.observation.owned })
-                    .put("visible", educationNodes.count { it.observation.visible })
-                    .put("rootContained", educationNodes.count {
-                        val b = it.observation.bounds
-                        b[0] < b[2] && b[1] < b[3] && bounds.contains(b[0], b[1], b[2], b[3])
-                    }).put("knownPopup", popup != null).put("presence", selection.presence.name)
-                    .put("markerAssociation", association))
-                val popupJson = popup?.let {
-                    JSONObject().put("parentBounds", JSONArray(nodes[it.parent].bounds))
-                        .put("textBounds", JSONArray(nodes[it.text].bounds))
-                        .put("arrowBounds", JSONArray(nodes[it.arrow].bounds))
-                        .put("exactText", true).put("exactIds", true).put("expectedClasses", true)
-                        .put("unique", true).put("rootContained", true).put("complete", true)
-                        .put("parentProjection", it.projection.name)
-                        .put("dragLayerResourceMatch", educationNodes[it.parent].resource ==
-                            LegacyEducationResource.DRAG_LAYER)
-                        .put("markerCounts", JSONObject().put("textIds", absence.getInt("textIds"))
-                            .put("arrowIds", absence.getInt("arrowIds"))
-                            .put("exactTexts", absence.getInt("exactTexts")))
-                }
-                val observedOwner = JSONObject(owner.toString()).put("package", recentsProvider)
-                    .put("windowId", root.windowId)
-                    .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
-                educationObserver(EducationObservation(observedOwner, popupJson, selection.presence, absence))
-                if (selection.presence != LegacyEducationPresence.ABSENT) {
-                    return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
-                }
-            }
             val card = findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)
                 ?: return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
             fun rectangle(index: Int) = JSONArray(nodes[index].bounds)
@@ -873,6 +840,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 else "QUICKSTEP_TASK_DESCRIPTION").put("exactPublicLabelMatch", true)
                 .put("cardBounds", rectangle(card.card)).put("labelBounds", rectangle(card.label))
                 .put("snapshotBounds", rectangle(card.snapshot)).put("uniqueStructuredCard", true)
+            if (api32) anchor.put("observationScope", "OWNED_OVERVIEW_PANEL_COMPLETE_SUBTREE")
+                .put("paneBounds", rectangle(0))
             guard(LegacyRecentsGuard.READY)
             return owner.put("package", recentsProvider).put("windowId", root.windowId)
                 .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
@@ -886,8 +855,128 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             } catch (error: Throwable) {
                 // Diagnostic failure cannot replace the original query/ownership/budget failure.
                 if (primaryFailure == null) throw error
-            } finally { @Suppress("DEPRECATION") root.recycle() }
+            } finally {
+                try { paneCandidates.forEach { @Suppress("DEPRECATION") it.recycle() } }
+                finally { @Suppress("DEPRECATION") root.recycle() }
+            }
         }
+    }
+
+    /**
+     * Positive, root-scoped setup selector only. Public empty lookup results cannot prove absence.
+     * The original screenshot still needs independent review of the ENTIRE unobscured task snapshot.
+     */
+    private fun observeRecentsEducation(
+        root: AccessibilityNodeInfo, bounds: Rect, owner: JSONObject, until: Long, query: JSONObject?,
+    ): EducationObservation {
+        val acquired = mutableListOf<AccessibilityNodeInfo>()
+        fun bounded() = checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
+            LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+        val observedOwner = JSONObject(owner.toString()).put("package", recentsProvider).put("windowId", root.windowId)
+            .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+        fun unknown(presence: LegacyEducationPresence =
+            LegacyEducationPresence.NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED): EducationObservation {
+            query?.put("educationPresence", presence.name)
+            return EducationObservation(observedOwner, null, presence)
+        }
+        fun owned(node: AccessibilityNodeInfo): Boolean {
+            val rectangle = Rect().also(node::getBoundsInScreen)
+            return node.packageName?.toString() == recentsProvider && node.windowId == root.windowId &&
+                node.isVisibleToUser && !rectangle.isEmpty && bounds.contains(rectangle)
+        }
+        fun refresh(candidates: List<AccessibilityNodeInfo>): Boolean {
+            for (candidate in candidates) {
+                bounded()
+                val refreshed = candidate.refresh()
+                bounded()
+                if (!refreshed || !owned(candidate)) return false
+            }
+            return true
+        }
+        fun find(resource: String): List<AccessibilityNodeInfo> {
+            bounded()
+            val found = root.findAccessibilityNodeInfosByViewId("$recentsProvider:id/$resource")
+            acquired.addAll(found)
+            bounded()
+            checkLegacyCapture(acquired.size <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
+            return found
+        }
+        try {
+            query?.put("phase", "POSITIVE_EDUCATION_LOOKUP")
+            val texts = find("text")
+            val arrows = find("arrow")
+            bounded()
+            val matchingText = root.findAccessibilityNodeInfosByText(LEGACY_RECENTS_EDUCATION_TEXT)
+            acquired.addAll(matchingText)
+            bounded()
+            checkLegacyCapture(acquired.size <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
+            query?.put("educationTextIdMatches", texts.size)?.put("educationArrowIdMatches", arrows.size)
+            if (!refresh(texts + arrows + matchingText)) return unknown(LegacyEducationPresence.REFUSED)
+            val exactTexts = matchingText.filter { it.text?.toString() == LEGACY_RECENTS_EDUCATION_TEXT }
+            query?.put("educationExactTextMatches", exactTexts.size)
+            if (texts.size != 1 || arrows.size != 1 || exactTexts.size != 1 || texts.single() != exactTexts.single()) {
+                return unknown()
+            }
+            val dragLayers = find("drag_layer")
+            if (dragLayers.size != 1 || !refresh(dragLayers)) return unknown(LegacyEducationPresence.REFUSED)
+            val drag = dragLayers.single()
+            if (drag.viewIdResourceName != "$recentsProvider:id/drag_layer") {
+                return unknown(LegacyEducationPresence.REFUSED)
+            }
+            bounded()
+            val parent = texts.single().parent?.also(acquired::add)
+            bounded()
+            val arrowParent = arrows.single().parent?.also(acquired::add)
+            bounded()
+            if (parent == null || arrowParent == null || parent != arrowParent ||
+                !refresh(listOf(parent, arrowParent))) return unknown(LegacyEducationPresence.REFUSED)
+            val parentIndex = if (parent == drag) 0 else {
+                val ancestor = parent.parent?.also(acquired::add)
+                bounded()
+                if (ancestor == null || ancestor != drag || !refresh(listOf(ancestor))) {
+                    return unknown(LegacyEducationPresence.REFUSED)
+                }
+                1
+            }
+            fun observed(node: AccessibilityNodeInfo, parent: Int?): LegacyEducationNode {
+                val rectangle = Rect().also(node::getBoundsInScreen)
+                val value = LegacyRecentsNode(parent, owned = owned(node), visible = node.isVisibleToUser,
+                    bounds = listOf(rectangle.left, rectangle.top, rectangle.right, rectangle.bottom))
+                val resource = when (node.viewIdResourceName) {
+                    "$recentsProvider:id/text" -> LegacyEducationResource.TEXT
+                    "$recentsProvider:id/arrow" -> LegacyEducationResource.ARROW
+                    "$recentsProvider:id/drag_layer" -> LegacyEducationResource.DRAG_LAYER
+                    else -> LegacyEducationResource.OTHER
+                }
+                val kind = when (node.className?.toString()) {
+                    "android.widget.TextView" -> LegacyEducationClass.TEXT_VIEW
+                    "android.view.View" -> LegacyEducationClass.VIEW
+                    "android.widget.LinearLayout" -> LegacyEducationClass.LINEAR_LAYOUT
+                    else -> LegacyEducationClass.OTHER
+                }
+                return LegacyEducationNode(value, resource, kind,
+                    node.text?.toString() == LEGACY_RECENTS_EDUCATION_TEXT)
+            }
+            val nodes = mutableListOf(observed(drag, null))
+            if (parentIndex == 1) nodes += observed(parent, 0)
+            nodes += observed(texts.single(), parentIndex)
+            nodes += observed(arrows.single(), parentIndex)
+            val selection = selectLegacyRecentsEducationCandidates(nodes)
+            val popup = selection.popup ?: return unknown(selection.presence)
+            query?.put("educationPresence", selection.presence.name)
+            val popupJson = JSONObject().put("parentBounds", JSONArray(nodes[popup.parent].observation.bounds))
+                .put("textBounds", JSONArray(nodes[popup.text].observation.bounds))
+                .put("arrowBounds", JSONArray(nodes[popup.arrow].observation.bounds))
+                .put("exactText", true).put("exactIds", true).put("expectedClasses", true)
+                .put("unique", true).put("rootContained", true).put("complete", true)
+                .put("selectionScope", "POSITIVE_ROOT_SCOPED_MARKERS")
+                .put("parentProjection", popup.projection.name)
+                .put("dragLayerResourceMatch", nodes[popup.parent].resource == LegacyEducationResource.DRAG_LAYER)
+                .put("markerCounts", JSONObject().put("textIds", texts.size).put("arrowIds", arrows.size)
+                    .put("exactTexts", exactTexts.size))
+            bounded()
+            return EducationObservation(observedOwner, popupJson, selection.presence)
+        } finally { acquired.forEach { @Suppress("DEPRECATION") it.recycle() } }
     }
 
     /** No remote calls or arbitrary strings: this may be obsolete and is never selection evidence. */
@@ -948,7 +1037,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         attempt.put("operation", "RECENTS_ROOT_ADMISSION")
         val progress = LegacyRecentsProgress()
         val dismissal = LegacyEducationDismissal()
-        val education = if (Build.VERSION.SDK_INT == 32) JSONObject().put("schema", 1).put("api", 32)
+        val education = if (Build.VERSION.SDK_INT == 32) JSONObject().put("schema", 2).put("api", 32)
             .put("operation", "OBSERVING").put("observations", 0).also { report.put("recentsEducation", it) }
             else null
         var educationObservations = 0
@@ -998,11 +1087,13 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     ledger.put("operation", "AWAITING_REAL_CARD")
                 }
                 if (value != null) {
-                    check(observed.presence == LegacyEducationPresence.ABSENT && observed.popup == null)
-                    ledger.put("operation", if (dismissal.requested) "DISMISSED" else "NONE_REQUIRED")
+                    check(observed.presence != LegacyEducationPresence.IDENTIFIED && observed.popup == null)
+                    ledger.put("operation", if (dismissal.requested) "BACK_RETURNED_CAPTURE_PENDING_VISUAL_REVIEW"
+                        else "NO_INPUT_CAPTURE_PENDING_VISUAL_REVIEW")
                         .put("after", JSONObject().put("attempt", progress.attempt)
                             .put("observedElapsedMillis", SystemClock.elapsedRealtime())
-                            .put("popupAbsent", true).put("absence", observed.absence).put("systemWindow", value))
+                            .put("popupAbsence", "NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED")
+                            .put("positiveSelectorPresence", observed.presence.name).put("systemWindow", value))
                 }
             }
             if (education != null && value != null) checkNotNull(educationObservation)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import sys
@@ -134,44 +135,45 @@ def validate_presentation(item, state):
 
 
 def validate_recents_education(value, api, admission, system):
-    """Optional API32 setup input, never an alternative to the original task-card/image oracles."""
+    """Positive-only API32 setup; unknown popup state requires original whole-snapshot review."""
     ledger = value.get("recentsEducation")
     if api == 24:
         need("recentsEducation" not in value, "API24 must not run education actions")
         return
-    need(isinstance(ledger, dict) and ledger.get("schema") == 1 and type(ledger["schema"]) is int and
+    need(isinstance(ledger, dict) and ledger.get("schema") == 2 and type(ledger["schema"]) is int and
          ledger.get("api") == 32 and type(ledger["api"]) is int and
-         ledger.get("operation") in ("NONE_REQUIRED", "DISMISSED") and
+         ledger.get("operation") in ("NO_INPUT_CAPTURE_PENDING_VISUAL_REVIEW",
+                                     "BACK_RETURNED_CAPTURE_PENDING_VISUAL_REVIEW") and
          type(ledger.get("observations")) is int and 0 < ledger["observations"] <= admission["attempts"],
          "Missing completed API32 education precondition")
-    dismissed = ledger["operation"] == "DISMISSED"
+    dismissed = ledger["operation"] == "BACK_RETURNED_CAPTURE_PENDING_VISUAL_REVIEW"
     need(set(ledger) == {"schema", "api", "operation", "observations", "after"} |
          ({"before", "request", "observerRefresh"} if dismissed else set()), "Unexpected education action ledger")
     after = ledger["after"]
     need(isinstance(after, dict) and set(after) ==
-         {"attempt", "observedElapsedMillis", "popupAbsent", "absence", "systemWindow"} and
+         {"attempt", "observedElapsedMillis", "popupAbsence", "positiveSelectorPresence", "systemWindow"} and
          type(after["attempt"]) is int and after["attempt"] == admission["attempts"] and
          type(after["observedElapsedMillis"]) is int and
          admission["startedElapsedMillis"] <= after["observedElapsedMillis"] <= admission["completedElapsedMillis"] and
-         after["popupAbsent"] is True and isinstance(system, dict) and after["systemWindow"] == system,
-         "Education acknowledgement lacks later complete popup-absent real-card admission")
-    absence = after["absence"]
-    need(isinstance(absence, dict) and set(absence) == {"complete", "textIds", "arrowIds", "exactTexts"} and
-         absence["complete"] is True and
-         all(type(absence[key]) is int and absence[key] == 0 for key in ("textIds", "arrowIds", "exactTexts")),
-         "Refused or ambiguous known-popup markers are not observed absence")
+         after["popupAbsence"] == "NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED" and
+         after["positiveSelectorPresence"] in ("NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED", "REFUSED") and
+         isinstance(system, dict) and
+         json.dumps(after["systemWindow"], sort_keys=True) == json.dumps(system, sort_keys=True),
+         "Education input is not disappearance evidence; the original whole snapshot still needs review")
     if not dismissed:
         return
     before, request = ledger["before"], ledger["request"]
     need(isinstance(before, dict) and set(before) == {"attempt", "observedElapsedMillis", "owner", "popup"} and
          type(before["attempt"]) is int and 0 < before["attempt"] < after["attempt"] and
          type(before["observedElapsedMillis"]) is int and
-         before["owner"] == {key: val for key, val in system.items() if key != "taskCard"},
+         json.dumps(before["owner"], sort_keys=True) ==
+         json.dumps({key: val for key, val in system.items() if key != "taskCard"}, sort_keys=True),
          "Education BACK lacks the same actual owned task/root before and after")
     popup = before["popup"]
     need(isinstance(popup, dict) and set(popup) ==
          {"parentBounds", "textBounds", "arrowBounds", "exactText", "exactIds", "expectedClasses", "unique",
-          "rootContained", "complete", "parentProjection", "dragLayerResourceMatch", "markerCounts"} and
+          "rootContained", "complete", "selectionScope", "parentProjection", "dragLayerResourceMatch", "markerCounts"} and
+         popup["selectionScope"] == "POSITIVE_ROOT_SCOPED_MARKERS" and
          all(popup[key] is True for key in ("exactText", "exactIds", "expectedClasses", "unique", "rootContained", "complete")),
          "Education action was not positively admitted by the exact complete structured selector")
     need((popup["parentProjection"] == "DIRECT_LINEAR_LAYOUT" and popup["dragLayerResourceMatch"] is False) or
@@ -180,7 +182,7 @@ def validate_recents_education(value, api, admission, system):
     counts = popup["markerCounts"]
     need(isinstance(counts, dict) and set(counts) == {"textIds", "arrowIds", "exactTexts"} and
          all(type(counts[key]) is int and counts[key] == 1 for key in counts),
-         "Education input requires globally unique associated markers")
+         "Education input requires unique positive root-scoped associated markers")
     bounds = system.get("bounds")
     need(isinstance(bounds, list) and len(bounds) == 4 and all(type(x) is int for x in bounds),
          "Missing education root geometry")
@@ -324,7 +326,8 @@ def validate_report(raw, token, source, tree, api, files):
             need(isinstance(system, dict) and set(system) ==
                  {"activity", "taskId", "secureFlag", "stopped", "windowFocused", "package", "windowId", "bounds",
                   "ownedTaskCount", "baseActivityMatches", "topActivityMatches", "taskCard"} and
-                 system == item.get("systemWindowAfter") and type(system.get("activity")) is int and
+                 json.dumps(system, sort_keys=True) == json.dumps(item.get("systemWindowAfter"), sort_keys=True) and
+                 type(system.get("activity")) is int and
                  system["activity"] == created[0] and type(system.get("taskId")) is int and
                  system["taskId"] == value["taskId"] and system["secureFlag"] is True and
                  system["stopped"] is True and system["windowFocused"] is False and
@@ -338,11 +341,19 @@ def validate_report(raw, token, source, tree, api, files):
                  bounds[2] > bounds[0] and bounds[3] > bounds[1], "Missing actual system window bounds")
             card = system["taskCard"]
             need(isinstance(card, dict) and set(card) ==
-                 {"kind", "exactPublicLabelMatch", "uniqueStructuredCard", "cardBounds", "labelBounds", "snapshotBounds"}
-                 and card["kind"] == ("SYSTEM_UI_TASK_TITLE" if api == 24 else "QUICKSTEP_TASK_DESCRIPTION") and
+                 {"kind", "exactPublicLabelMatch", "uniqueStructuredCard", "cardBounds", "labelBounds", "snapshotBounds"} |
+                 ({"observationScope", "paneBounds"} if api == 32 else set()) and card["kind"] == ("SYSTEM_UI_TASK_TITLE" if api == 24 else "QUICKSTEP_TASK_DESCRIPTION") and
                  card["exactPublicLabelMatch"] is True and card["uniqueStructuredCard"] is True,
                  "Missing unique structured intended-task correlation")
-            for key, outer in (("cardBounds", bounds), ("labelBounds", card["cardBounds"]),
+            if api == 32:
+                pane = card["paneBounds"]
+                need(card["observationScope"] == "OWNED_OVERVIEW_PANEL_COMPLETE_SUBTREE" and
+                     isinstance(pane, list) and len(pane) == 4 and all(type(x) is int for x in pane) and
+                     bounds[0] <= pane[0] < pane[2] <= bounds[2] and bounds[1] <= pane[1] < pane[3] <= bounds[3],
+                     "Missing complete uniquely selected owned Recents pane")
+            else:
+                pane = bounds
+            for key, outer in (("cardBounds", pane), ("labelBounds", card["cardBounds"]),
                                ("snapshotBounds", card["cardBounds"])):
                 rectangle = card[key]
                 need(isinstance(rectangle, list) and len(rectangle) == 4 and
@@ -388,7 +399,7 @@ class LegacyCampaign:
     CASE = "479"
     BUILD_TASKS = ()
     SCOPE = "API24/32 secure-window and system Recents; synthetic MainActivity content only"
-    REVIEW = "REQUIRED: independently inspect original Recents task card and synthetic-only control images"
+    REVIEW = "REQUIRED: identify the entire unobscured bound Recents snapshot and inspect all original control images"
     NOT_QUALIFIED = ["natural revealed credential UI", "physical/OEM devices", "RPC", "Wi-Fi", "API37 permissions"]
 
     def __init__(self, api):
