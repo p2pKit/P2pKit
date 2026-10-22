@@ -57,6 +57,11 @@ FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
 TERMINATION_GRACE_SECONDS = 15
 TERMINATION_KILL_SECONDS = 5
+# Darwin's observed fresh census costs exhaust the original 15+5s reserve.
+# Use measured operational headroom (45+45s), not a future native latency bound;
+# unchanged ownership checks still require three timely quiet censuses per phase.
+DARWIN_TERMINATION_GRACE_SECONDS = 45
+DARWIN_TERMINATION_KILL_SECONDS = 45
 INTEL_BOOTSTATUS_SECONDS = 600
 INTEL_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_V1"
 INTEL_RETIREMENT_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_RETIREMENT_V1"
@@ -360,8 +365,8 @@ def _intel_phase(originals, label, root, selected):
     require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["timedOut"] is False and
             row["outputLimitExceeded"] is False and row["ownedGroupDrained"] is True, "INTEL_PHASE_FAILED")
     start, end = _intel_time(row["startedUtc"]), _intel_time(row["finishedUtc"])
-    require(0 <= (end - start).total_seconds() <= _intel_work_seconds(label) + TERMINATION_GRACE_SECONDS +
-            TERMINATION_KILL_SECONDS, "INTEL_PHASE_DEADLINE")
+    require(0 <= (end - start).total_seconds() <= _intel_work_seconds(label) + DARWIN_TERMINATION_GRACE_SECONDS +
+            DARWIN_TERMINATION_KILL_SECONDS, "INTEL_PHASE_DEADLINE")
     for stream in ("stdout", "stderr"):
         raw = originals[label + "/" + stream + ".bin"]
         require(type(row[stream + "Bytes"]) is int and row[stream + "Bytes"] == len(raw) and
@@ -695,6 +700,9 @@ class ProcessOwner:
                 self.retirement_error, self.retirement_phase = self.launch_error, "LAUNCH"
             return self.drained  # No child was attempted before the scope returned.
         children, readers = [], []
+        grace, kill_wait = ((DARWIN_TERMINATION_GRACE_SECONDS, DARWIN_TERMINATION_KILL_SECONDS)
+                            if isinstance(self.scope, audit_processes.DarwinScope)
+                            else (TERMINATION_GRACE_SECONDS, TERMINATION_KILL_SECONDS))
         end, cancellation = None, None
         def remember(error, phase):
             nonlocal cancellation
@@ -705,7 +713,7 @@ class ProcessOwner:
         if self.launch_error is not None and audit_processes.retirement_details(self.launch_error):
             remember(self.launch_error, "LAUNCH")
         try:
-            end = time.monotonic() + TERMINATION_GRACE_SECONDS + TERMINATION_KILL_SECONDS
+            end = time.monotonic() + grace + kill_wait
         except BaseException as error:
             remember(error, "CLOCK")
         phase = "LEADERS"
@@ -728,7 +736,7 @@ class ProcessOwner:
             phase = "DRAIN"
             live, returned = None, False
             try:
-                live = self.scope.drain(TERMINATION_GRACE_SECONDS, TERMINATION_KILL_SECONDS, deadline=end)
+                live = self.scope.drain(grace, kill_wait, deadline=end)
                 returned = True
             finally:
                 # Snapshot the existing result/state before close clears native

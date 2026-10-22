@@ -116,6 +116,18 @@ class ComponentTests(unittest.TestCase):
             evidence_spec.loader.exec_module(evidence)
         self.assertTrue(set(expected) <= evidence.TASK_NAMES)
 
+    def test_whole_ownership_deadline_suite_is_mandatory_source_task(self):
+        name = 'audit-process-drain-deadline-test.py'
+        commands = C.commands('source')
+        self.assertEqual([argv for task, argv in commands if task == name],
+                         [[C.sys.executable, '-B', 'scripts/tests/' + name, '-v']])
+        self.assertTrue((ROOT / 'scripts/tests' / name).is_file())
+        evidence_spec = importlib.util.spec_from_file_location('drain_ci_evidence', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        self.assertIn(name, evidence.TASK_NAMES)
+
     def test_issue_acceptance_offline_controls_are_mandatory_source_tasks(self):
         names = ('apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
                  'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',

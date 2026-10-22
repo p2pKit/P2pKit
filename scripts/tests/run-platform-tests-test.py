@@ -449,7 +449,7 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
         self.assertEqual(120, GATE.simulator.SECONDS)
         self.assertEqual((15, 5), (GATE.TERMINATION_GRACE_SECONDS, GATE.TERMINATION_KILL_SECONDS))
         for label in IntelEvidenceFixture.prepare + IntelEvidenceFixture.retire:
-            ceiling = 620 if label == "intel-bootstatus" else 140
+            ceiling = 690 if label == "intel-bootstatus" else 210
             durations = (300, ceiling, ceiling + 1) if label == "intel-bootstatus" else (ceiling, ceiling + 1)
             for duration in durations:
                 fixture = IntelEvidenceFixture()
@@ -582,7 +582,7 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
             self.assess(fixture)
         fixture = IntelEvidenceFixture()
         row = fixture.rows["intel-boot"]
-        row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) + timedelta(seconds=141)).isoformat()
+        row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) + timedelta(seconds=211)).isoformat()
         with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
             self.assess(fixture)
 
@@ -1848,6 +1848,111 @@ class ProcessOwnerModels(unittest.TestCase):
             scope.close.assert_called_once_with()
             child.poll.assert_called_once_with()
 
+    def darwin_owner(self, census_seconds):
+        owner, _, child = self.owner()
+        scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
+        scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+        scope.active_drain, scope.drain_reconciliations = None, []
+        scope.known, scope.handles = {}, {}
+        clock = [100.]
+        def discover():
+            clock[0] += census_seconds
+            return []
+        scope.discover = mock.Mock(side_effect=discover)
+        scope.close = mock.Mock()
+        scope.signal_all = mock.Mock(side_effect=AssertionError("NO_SIGNAL_FOR_QUIET_CENSUS"))
+        owner.scope = scope
+        timer = mock.Mock(monotonic=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+        return owner, scope, timer
+
+    def test_measured_slow_censuses_require_three_fresh_in_one_original_phase(self):
+        # 7s is a supplied model near the observed two-census mean, not a claim
+        # about unretained individual native timings or a future-host bound.
+        for old_policy in (True, False):
+            owner, scope, timer = self.darwin_owner(7.)
+            with self.subTest(old_policy=old_policy), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(self.native, "time", timer))
+                stack.enter_context(mock.patch.object(GATE, "time", timer))
+                if old_policy:
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_GRACE_SECONDS", 15, create=True))
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_KILL_SECONDS", 5, create=True))
+                self.assertIs(GATE.terminate_process(owner), not old_policy)
+            record = scope.drain_reconciliations[0]
+            self.assertEqual((15, 5) if old_policy else (45, 45),
+                             (record["graceSeconds"], record["killWaitSeconds"]))
+            self.assertEqual(120 if old_policy else 190, record["absoluteDeadlineMonotonic"])
+            rows = owner.drain_state["darwinDrain"]["phases"]
+            self.assertEqual([2, 0] if old_policy else [3], [row["quietEnd"] for row in rows])
+            self.assertEqual(3, scope.discover.call_count)
+            scope.signal_all.assert_not_called(); scope.close.assert_called_once_with()
+            if old_policy:
+                self.assertEqual("DRAIN_NOT_QUIET", owner.retirement_diagnostic()["reason"])
+            else:
+                self.assertEqual("retired", record["outcome"])
+
+    def test_darwin_two_plus_two_and_late_third_do_not_establish_retirement(self):
+        owner, scope, timer = self.darwin_owner(15.)
+        with mock.patch.object(self.native, "time", timer), mock.patch.object(GATE, "time", timer):
+            self.assertFalse(GATE.terminate_process(owner))
+        rows = owner.drain_state["darwinDrain"]["phases"]
+        self.assertEqual([2, 2], [row["quietEnd"] for row in rows])
+        self.assertEqual([2, 2], [row["inTime"] for row in rows])
+        self.assertEqual([1, 1], [row["late"] for row in rows])
+        self.assertEqual(6, scope.discover.call_count)
+        self.assertEqual("DRAIN_NOT_QUIET", owner.retirement_diagnostic()["reason"])
+        scope.signal_all.assert_not_called(); scope.close.assert_called_once_with()
+
+    def test_actual_backend_selects_original_reserve_including_every_final_close(self):
+        classes = (self.native.DarwinScope, self.native.LocalDarwinScope,
+                   GATE.ci_evidence._HostedLocalDarwinScope, self.native.LocalLinuxScope, self.native.WindowsScope)
+        for cls in classes:
+            darwin = issubclass(cls, self.native.DarwinScope)
+            grace, kill = (45, 45) if darwin else (15, 5)
+            end = 100 + grace + kill
+            for observed in (end - .001, end, end + 1):
+                owner, _, child = self.owner()
+                scope = cls.__new__(cls)  # No native constructor or fabricated host admission.
+                scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+                scope.drain, scope.close = mock.Mock(return_value=[]), mock.Mock()
+                owner.scope = scope
+                with self.subTest(backend=cls.__name__, observed=observed), \
+                        mock.patch.object(time, "monotonic", side_effect=[100, observed]):
+                    self.assertIs(GATE.terminate_process(owner), observed < end)
+                scope.drain.assert_called_once_with(grace, kill, deadline=end)
+                scope.close.assert_called_once_with(); child.poll.assert_called_once_with()
+
+    def test_darwin_reserve_cannot_convert_unknown_cancellation_or_close_failure_to_success(self):
+        for failed in ("live", "denied", "pending", "leader", "cancel", "scope", "stdout", "stderr"):
+            child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
+            child.poll.return_value = 0
+            owner, _, _ = self.owner(child)
+            scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
+            scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+            scope.drain, scope.close = mock.Mock(return_value=[]), mock.Mock()
+            owner.scope = scope
+            if failed == "live":
+                scope.drain.return_value = [{"pid": 74001}]
+            elif failed == "denied":
+                scope.discovery_errors.add("unresolved")
+            elif failed == "pending":
+                scope.pending_discoveries[74001] = {}
+            elif failed == "leader":
+                child.poll.return_value = None
+            elif failed == "cancel":
+                scope.drain.side_effect = KeyboardInterrupt()
+            else:
+                (scope if failed == "scope" else getattr(child, failed)).close.side_effect = OSError("close failed")
+            with self.subTest(failed=failed), mock.patch.object(time, "monotonic", return_value=100):
+                if failed == "cancel":
+                    with self.assertRaises(KeyboardInterrupt):
+                        GATE.terminate_process(owner)
+                else:
+                    self.assertFalse(GATE.terminate_process(owner))
+                self.assertFalse(GATE.terminate_process(owner), "Never renew an unsuccessful retirement")
+            scope.drain.assert_called_once_with(45, 45, deadline=190)
+            for resource in (scope, child.stdout, child.stderr):
+                resource.close.assert_called_once_with()
+
     def test_close_failure_alone_cannot_pass_or_skip_the_other_reader(self):
         for failed in ("scope", "stdout", "stderr"):
             child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
@@ -2154,7 +2259,8 @@ class ProcessOwnerModels(unittest.TestCase):
                 scope.drain.assert_called_once(); scope.close.assert_called_once()
 
     def test_actual_darwin_drain_metrics_are_projected_before_close_without_new_observations(self):
-        for census_seconds in (0., 21.):
+        # Over the entire new 90s reserve: still zero timely observations.
+        for census_seconds in (0., 91.):
             owner, _, child = self.owner()
             scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
             scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}

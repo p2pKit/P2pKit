@@ -143,7 +143,7 @@ TASK_NAMES = frozenset({
     "inspect-rpc-windows-package-test.py", "verify-rpc-windows-app-image-test.py",
     "verify-rpc-windows-msi-payload-test.py", "rpc-windows-package-inspection",
     "check-rpc-windows-image-runtime-test.py", "rpc-windows-runtime-readback",
-    "run-platform-tests-test.py", "verify-rpc-windows-jdk21-test.py", "check-rpc-windows-packaging-test.py", "integrity-policy",
+    "run-platform-tests-test.py", "audit-process-drain-deadline-test.py", "verify-rpc-windows-jdk21-test.py", "check-rpc-windows-packaging-test.py", "integrity-policy",
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
     "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "shared-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",

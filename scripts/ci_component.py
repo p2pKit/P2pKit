@@ -108,7 +108,7 @@ def commands(component):
                    'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
                    'application-release-version-test.py', 'sample-artifact-identity-test.py',
                    'package-sample-apps-test.py', 'publish-sample-release-test.py',
-                   'release-application-set-test.py', 'run-platform-tests-test.py',
+                   'release-application-set-test.py', 'run-platform-tests-test.py', 'audit-process-drain-deadline-test.py',
                    'verify-rpc-windows-jdk21-test.py', 'check-rpc-windows-packaging-test.py',
                    'verify-rpc-windows-app-image-test.py', 'verify-rpc-windows-msi-payload-test.py',
                    'inspect-rpc-windows-package-test.py', 'check-rpc-windows-image-runtime-test.py'),
