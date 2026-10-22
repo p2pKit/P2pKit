@@ -99,6 +99,22 @@ class ComponentTests(unittest.TestCase):
             evidence_spec.loader.exec_module(evidence)
         self.assertTrue(set(actual) <= evidence.TASK_NAMES)
 
+    def test_publication_deadlines_latest_contract_and_owned_jdk_controls_are_source_routed(self):
+        expected = {
+            'central-http-test.py': [C.sys.executable, '-B', 'scripts/tests/central-http-test.py', '-v'],
+            'kotlin-toolchain-controls': ['bash', 'scripts/tests/check-kotlin-toolchain-policy-test.sh'],
+            'published-consumer-controls': [C.sys.executable, '-B', 'scripts/tests/audit-consumer-test.py',
+                                            '-v', '-k', 'latest_published'],
+        }
+        commands = C.commands('source')
+        for name, argv in expected.items():
+            self.assertEqual([command for task, command in commands if task == name], [argv])
+        evidence_spec = importlib.util.spec_from_file_location('publication_evidence', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        self.assertTrue(set(expected) <= evidence.TASK_NAMES)
+
     def test_issue_acceptance_offline_controls_are_mandatory_source_tasks(self):
         names = ('apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
                  'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',
@@ -751,7 +767,8 @@ class AndroidAbiNamespaceTests(unittest.TestCase):
 
     def fixture(self, root):
         paths = ['build.gradle.kts', 'scripts/run-release-gate.sh',
-                 'scripts/tests/check-kotlin-toolchain-policy-test.sh', 'scripts/check-modular-ci-policy.rb']
+                 'scripts/tests/check-kotlin-toolchain-policy-test.sh', 'scripts/check-modular-ci-policy.rb',
+                 'scripts/ci_component.py']
         paths += [str(p.relative_to(ROOT)) for p in (ROOT / '.github/workflows').glob('*.yml')]
         for module in self.BASELINES:
             paths += [f'library/{module}/build.gradle.kts', f'library/{module}/api/android-bcv/{module}.api']

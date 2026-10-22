@@ -113,6 +113,32 @@ done
 # The modular command roster and its negative tests enforce actual Android ABI
 # tasks. The retired recipient/custody workflow structure is not an ABI rule.
 ruby "$ROOT/scripts/check-modular-ci-policy.rb" || fail "Modular CI policy failed"
+# Inspect the maintained command supplier too: a workflow route alone cannot
+# prove that its compatibility component still executes the graph/comparisons.
+python3 -I -B -S - "$ROOT" <<'PY_MODULAR_ABI' || fail "Modular ABI command policy failed"
+import importlib.util
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('abi_component_policy', root / 'scripts/ci_component.py')
+component = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(component)
+commands = component.commands('compatibility')
+assert [argv for task, argv in commands if task == 'abi-graph'] == [
+    ['bash', 'scripts/check-android-abi-guard.sh']], 'exactly one unflagged graph probe required'
+checks = [argv for task, argv in commands if task == 'api-abi']
+assert len(checks) == 1, 'exactly one comparison invocation required'
+modules = ['p2p-core', 'p2p-transport-lan', 'p2p-network-provisioning-android',
+           'p2p-network-provisioning-desktop', 'p2p-rpc']
+expected = [':' + name + ':checkKotlinAbi' for name in modules]
+expected += [':' + name + ':checkAndroidAbi' for name in modules if name != 'p2p-network-provisioning-desktop']
+wrapper = str(root / 'gradlew.bat') if component.os.name == 'nt' else './gradlew'
+flags = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
+         '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
+assert checks[0] == [wrapper, *flags, *expected], 'complete actual strict ABI comparison invocation required'
+
+PY_MODULAR_ABI
+
 
 # An explicit comparison does not prove module check owns it. The full-mode
 # graph probe is a separate, load-bearing command in both complete gates. CI's

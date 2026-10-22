@@ -94,9 +94,11 @@ def commands(component):
                 *[str(p.relative_to(ROOT)) for p in sorted((ROOT / '.github/workflows').glob('*.yml'))
                   if not p.name.startswith('audit-')]]),
             ('workflow-controls', ['ruby', 'scripts/tests/check-modular-ci-policy-test.rb']),
+            ('kotlin-toolchain-controls', bash + ['scripts/tests/check-kotlin-toolchain-policy-test.sh']),
+            ('published-consumer-controls', py + ['scripts/tests/audit-consumer-test.py', '-v', '-k', 'latest_published']),
             ('platform-contract', ['ruby', 'scripts/tests/check-platform-test-policy-test.rb']),
             ('version-encoding', bash + ['scripts/tests/check-application-release-version.sh']),
-            *tests('ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
+            *tests('central-http-test.py', 'ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
                    'apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
                    'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',
                    'run-jmdns-interpreter-diagnostic-test.py', 'run-android-permission-validation-test.py',

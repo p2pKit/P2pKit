@@ -1,31 +1,34 @@
 #!/usr/bin/env ruby
+# Source/negative controls for the maintained reusable component worker, not the
+# retired platform-checks/artifact-checks cache-witness experiment. setup-java
+# retains versioned JAVA_HOME_21_* while the second setup selects launcher 17;
+# Gradle's checked-in daemon criteria selects 21 independently of JAVA_HOME.
 require "yaml"
 
 ROOT = File.expand_path("../..", __dir__)
-FULL = "needs.repository-checks.outputs.full == 'true'"
-JAVA_ACTION = "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961"
-DAEMON = "Configure Java 21 daemon toolchain"
-CAPTURE = "Retain the daemon toolchain selection"
-LAUNCHER = "Configure Java 17"
-BEFORE_SETUP = "Bind the pre-setup cache environment"
-AFTER_SETUP = "Retain the exact setup cache-home witness"
-CAPTURE_COMMAND = %q(printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV")
 POLICY_CALL = 'ruby "$ROOT/scripts/tests/check-ci-owned-jdk-policy-test.rb"'
-HOSTS = {"platform-checks" => "macos-14", "artifact-checks" => "macos-14"}.freeze
-PINNED_XCODE = {"DEVELOPER_DIR" => "/Applications/Xcode_16.2.app/Contents/Developer"}.freeze
-COMMANDS = {
-    "platform-checks" => {
-        "Run complete module and platform checks" => "python3 scripts/run-platform-tests.py full",
-    },
-    "artifact-checks" => {
-        "Verify local release artifacts and consumers" => <<~'BASH'.strip,
-            scripts/check-publish-artifacts.sh
-            scripts/check-published-consumers.sh
-            ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
-            scripts/check-xcframework-minimum-os.sh
-        BASH
-    },
-}.freeze
+JAVA_ACTION = "actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6"
+GRADLE_ACTION = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6"
+DAEMON = "Configure Java 21 daemon/runtime"
+LAUNCHER = "Configure Java 17 library toolchain"
+CACHE = "Configure optional verified dependency cache"
+HOME = "Select this job's optional Gradle cache directory"
+SETUP = "Install required platform tools"
+EXECUTE = "Execute actual component and encrypt private evidence"
+CHECKOUT = "Check out exact event source without credentials"
+HOME_COMMAND = 'echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-home" >> "$GITHUB_ENV"'
+EXCLUDES = "caches/build-cache-1\ncaches/*/kotlin-dsl\ncaches/*/scripts\ncaches/*/groovy-dsl\n"
+
+EXECUTION = <<~'BASH'
+    if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic ]]; then
+      if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]
+      else [[ "$MINUTES" == 120 ]]; fi
+      python3 -B scripts/run-ci-terminal-component.py --component "$COMPONENT"
+    else
+      python3 -B scripts/ci_evidence.py --component "$COMPONENT" --timeout-seconds "$((MINUTES * 60))" --output-dir "$RUNNER_TEMP/ci-evidence-$COMPONENT" --report-glob '**/build/test-results/**/*.xml' --report-glob 'build/reports/**/*' -- python3 -B scripts/ci_component.py "$COMPONENT"
+    fi
+BASH
+
 
 def one_step(job, name)
     matches = job.fetch("steps").select { |step| step["name"] == name }
@@ -34,185 +37,125 @@ def one_step(job, name)
 end
 
 def check_policy(inputs)
-    raise "Kotlin toolchain policy must execute the owned-JDK controls" unless
+    raise "Kotlin toolchain policy must execute owned-JDK controls" unless
         inputs.fetch(:caller).lines.map(&:strip).count(POLICY_CALL) == 1
-    jobs = inputs.fetch(:workflow).fetch("jobs")
-    COMMANDS.each do |name, commands|
-        job = jobs.fetch(name)
-        raise "owned-JDK preparation must retain the same-source 60-minute worker" unless
-            job["needs"] == "repository-checks" && job["timeout-minutes"] == 60 && job["runs-on"] == HOSTS.fetch(name)
-        raise "worker execution cannot be overridden" if
-            %w[if defaults continue-on-error].any? { |key| job.key?(key) }
-        raise "worker environment must contain only the exact Xcode selection" unless job["env"] == PINNED_XCODE
-        steps = job.fetch("steps")
-        raise "steps cannot override the pinned job Xcode selection" if
-            steps.any? { |step| step.fetch("env", {}).key?("DEVELOPER_DIR") }
-        daemon, capture, launcher = [DAEMON, CAPTURE, LAUNCHER].map { |label| one_step(job, label) }
-        [[daemon, DAEMON, "21"], [launcher, LAUNCHER, "17"]].each do |step, label, version|
-            raise "exact full-scope pinned JDK#{version} setup required" unless step == {
-                "name" => label, "if" => FULL, "uses" => JAVA_ACTION,
-                "with" => {"distribution" => "temurin", "java-version" => version},
-            }
-        end
-        raise "must retain JDK21 before JAVA_HOME changes back to JDK17" unless capture == {
-            "name" => CAPTURE, "if" => FULL, "run" => CAPTURE_COMMAND,
+    raise "Gradle daemon criteria must select JDK21" unless
+        inputs.fetch(:criteria).lines.map(&:strip).grep(/^toolchainVersion=/) == ["toolchainVersion=21"]
+    workflow = inputs.fetch(:worker)
+    raise "worker permissions changed" unless workflow["permissions"] == {"contents" => "read", "actions" => "read"}
+    job = workflow.fetch("jobs").fetch("run")
+    raise "component must use the caller-selected host and finite job budget" unless
+        job["runs-on"] == '${{ inputs.runner }}' && job["timeout-minutes"] == '${{ inputs.job_minutes }}'
+    raise "worker cannot bypass execution" if %w[if continue-on-error container services].any? { |key| job.key?(key) }
+    raise "worker shell changed" unless job["defaults"] == {"run" => {"shell" => "bash"}}
+    raise "worker cannot override selected JDK/cache homes" unless job["env"] == {
+        "PYTHONDONTWRITEBYTECODE" => "1",
+        "CI_EVIDENCE_RECIPIENT_SHA256" => '${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}',
+        "CI_EVIDENCE_RECIPIENT_FINGERPRINT" => '${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}',
+    }
+    steps = job.fetch("steps")
+    expected_names = [CHECKOUT, HOME, DAEMON, LAUNCHER, CACHE, SETUP, EXECUTE,
+        "Retain genuine component evidence, including failures", "Retain exact inspected Android package",
+        "Retain exact inspected desktop package"]
+    raise "preparation/execution order changed or extra steps added" unless steps.map { |s| s["name"] } == expected_names
+    raise "source checkout must not retain credentials or select another ref" unless one_step(job, CHECKOUT) == {
+        "name" => CHECKOUT, "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "with" => {"persist-credentials" => false, "fetch-depth" => 0},
+    }
+    raise "cache home must be job-owned before setup" unless one_step(job, HOME) == {"name" => HOME, "run" => HOME_COMMAND}
+    [[DAEMON, "${{ inputs.component == 'desktop-windows' && '21.0.12+101.0' || '21' }}"], [LAUNCHER, "17"]].each do |label, version|
+        raise "pinned unconditional JDK setup/order changed" unless one_step(job, label) == {
+            "name" => label, "uses" => JAVA_ACTION, "with" => {"distribution" => "temurin", "java-version" => version},
         }
-        java_steps = steps.select { |step| step.fetch("uses", "").start_with?("actions/setup-java@") }
-        raise "no additional Java setup may replace the selected launcher" unless java_steps == [daemon, launcher]
-        first = steps.index(daemon)
-        gradle = steps.index(one_step(job, "Validate wrapper and configure Gradle"))
-        raise "setup21, capture and setup17 must remain consecutive after source admission" unless
-            steps[first, 3] == [daemon, capture, launcher] &&
-            steps.index(one_step(job, "Validate same-source scope")) < first &&
-            first + 2 < gradle
-        before, after = [BEFORE_SETUP, AFTER_SETUP].map { |label| one_step(job, label) }
-        raise "setup witness must observe the exact pinned action without overriding its home" unless
-            steps[gradle - 1, 3] == [before, steps[gradle], after] &&
-            steps.index(before) > steps.index(launcher) &&
-            before == {"name" => BEFORE_SETUP, "if" => FULL,
-                "run" => "exec python3 -I -B -S scripts/rpc_apple_ci_setup.py before"} &&
-            steps[gradle] == {"name" => "Validate wrapper and configure Gradle", "id" => "ci-gradle-setup",
-                "if" => FULL, "uses" => "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb",
-                "with" => {"gradle-home-cache-excludes" => "caches/build-cache-1"}} &&
-            after == {"name" => AFTER_SETUP, "if" => FULL,
-                "env" => {"P2PKIT_CI_SETUP_OUTCOME" => "${{ steps.ci-gradle-setup.outcome }}",
-                          "P2PKIT_CI_SETUP_CONCLUSION" => "${{ steps.ci-gradle-setup.conclusion }}"},
-                "run" => "exec python3 -I -B -S scripts/rpc_apple_ci_setup.py after"}
-        commands.each do |label, command|
-            step = one_step(job, label)
-            raise "complete command or scope changed during toolchain preparation" unless
-                step.fetch("run").strip == command && step["if"] == FULL &&
-                (step.keys - %w[name id if run]).empty? && gradle < steps.index(step)
-        end
     end
+    raise "cache trust/exclusions changed" unless one_step(job, CACHE) == {
+        "name" => CACHE, "if" => "${{ inputs.component != 'source' && inputs.component != 'security' }}",
+        "uses" => GRADLE_ACTION, "with" => {
+            "cache-read-only" => "${{ github.ref != 'refs/heads/main' }}", "gradle-home-cache-excludes" => EXCLUDES,
+        },
+    }
+    raise "platform setup must execute before Gradle without ignored failures" unless one_step(job, SETUP) == {
+        "name" => SETUP, "env" => {"COMPONENT" => '${{ inputs.component }}'},
+        "run" => 'bash scripts/setup-ci-component.sh "$COMPONENT"',
+    }
+    execute = one_step(job, EXECUTE)
+    raise "component invocation must not override selected JDK/cache context or hide failure" unless
+        execute.keys.sort == %w[env id name run] && execute["id"] == "execution" && execute["env"] == {
+            "COMPONENT" => '${{ inputs.component }}', "MINUTES" => '${{ inputs.minutes }}',
+        } && execute["run"] == EXECUTION
+    route = inputs.fetch(:workflow).fetch("jobs").fetch("component")
+    raise "components must execute same-source reusable worker" unless route["uses"] == "./.github/workflows/ci-component.yml"
+    raise "matrix must preserve host/budget/component selection" unless route["with"] == {
+        "component" => '${{ matrix.component }}', "runner" => '${{ matrix.os }}',
+        "minutes" => '${{ matrix.minutes }}', "job_minutes" => '${{ matrix.job_minutes }}',
+    } && route.fetch("strategy")["fail-fast"] == false && route["needs"] == "plan"
 end
 
 inputs = {
     workflow: YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/ci.yml")), aliases: true),
+    worker: YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/ci-component.yml")), aliases: true),
     caller: File.read(File.join(ROOT, "scripts/tests/check-kotlin-toolchain-policy-test.sh")),
+    criteria: File.read(File.join(ROOT, "gradle/gradle-daemon-jvm.properties")),
 }
 check_policy(inputs)
-mutations = {"missing policy wiring" => ->(v) { v[:caller].sub!(POLICY_CALL, "true") }}
-COMMANDS.each do |name, commands|
-    mutations["#{name} missing host"] = ->(v) { v[:workflow]["jobs"][name].delete("runs-on") }
-    [nil, "macos-latest", "macos-15-intel", "macos-14-large", "macos-15", "macos-26", "ubuntu-latest",
-     ["self-hosted", "macOS", "ARM64"]].each do |host|
-        mutations["#{name} changed host #{host.inspect}"] = ->(v) { v[:workflow]["jobs"][name]["runs-on"] = host }
+mutations = {
+    "missing policy wiring" => ->(v) { v[:caller].sub!(POLICY_CALL, "true") },
+    "wrong daemon criteria" => ->(v) { v[:criteria].sub!("toolchainVersion=21", "toolchainVersion=17") },
+    "write token" => ->(v) { v[:worker]["permissions"]["contents"] = "write" },
+    "remote worker" => ->(v) { v[:workflow]["jobs"]["component"]["uses"] = "owner/repo/.github/workflows/ci-component.yml@main" },
+    "fail fast skips peers" => ->(v) { v[:workflow]["jobs"]["component"]["strategy"]["fail-fast"] = true },
+}
+%w[component runner minutes job_minutes].each do |key|
+    mutations["changed caller #{key}"] = ->(v) { v[:workflow]["jobs"]["component"]["with"][key] = "other" }
+end
+{"runs-on" => "macos-latest", "timeout-minutes" => 360, "if" => false,
+ "continue-on-error" => true, "defaults" => {"run" => {"shell" => "sh"}},
+ "env" => {"JAVA_HOME" => "/other"}}.each do |key, value|
+    mutations["changed worker #{key}"] = ->(v) { v[:worker]["jobs"]["run"][key] = value }
+end
+[CHECKOUT, HOME, DAEMON, LAUNCHER, CACHE, SETUP, EXECUTE].each do |name|
+    mutations["missing #{name}"] = ->(v) { v[:worker]["jobs"]["run"]["steps"].delete(one_step(v[:worker]["jobs"]["run"], name)) }
+    mutations["duplicate #{name}"] = ->(v) { v[:worker]["jobs"]["run"]["steps"] << one_step(v[:worker]["jobs"]["run"], name).dup }
+    mutations["reordered #{name}"] = ->(v) do
+        steps = v[:worker]["jobs"]["run"]["steps"]
+        steps << steps.delete(one_step(v[:worker]["jobs"]["run"], name))
     end
-    mutations["#{name} missing Xcode selection"] = ->(v) { v[:workflow]["jobs"][name].delete("env") }
-    [nil, {}, {"DEVELOPER_DIR" => "/Applications/Xcode.app/Contents/Developer"},
-     {"DEVELOPER_DIR" => "/Applications/Xcode_16.4.app/Contents/Developer"},
-     {"DEVELOPER_DIR" => "/Applications/Xcode_26.3.app/Contents/Developer"},
-     PINNED_XCODE.merge("P2PKIT_CONSUMER_PROFILE" => "lan-jvm-android"),
-     PINNED_XCODE.merge("GRADLE_USER_HOME" => "/other")].each do |value|
-        mutations["#{name} changed job environment #{value.inspect}"] = ->(v) { v[:workflow]["jobs"][name]["env"] = value }
-    end
-    mutations["#{name} step overrides Xcode"] = ->(v) do
-        v[:workflow]["jobs"][name]["steps"].last["env"] = {"DEVELOPER_DIR" => "/other"}
-    end
-    [BEFORE_SETUP, AFTER_SETUP].each do |label|
-        mutations["#{name} missing #{label}"] = ->(v) do
-            job = v[:workflow]["jobs"][name]
-            job["steps"].delete(one_step(job, label))
-        end
-        mutations["#{name} unguarded #{label}"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], label).delete("if")
-        end
-        mutations["#{name} reordered #{label}"] = ->(v) do
-            steps = v[:workflow]["jobs"][name]["steps"]
-            index = steps.index { |step| step["name"] == label }
-            steps << steps.delete_at(index)
-        end
-        mutations["#{name} ignored #{label} failure"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], label)["continue-on-error"] = true
-        end
-    end
-    %w[OUTCOME CONCLUSION].each do |kind|
-        mutations["#{name} invented setup #{kind}"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], AFTER_SETUP)["env"]["P2PKIT_CI_SETUP_#{kind}"] = "success"
-        end
-    end
-    {"env" => {"GRADLE_USER_HOME" => "/other"}, "continue-on-error" => true,
-     "id" => "another-setup"}.each do |key, value|
-        mutations["#{name} altered setup #{key}"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], "Validate wrapper and configure Gradle")[key] = value
-        end
-    end
-    [DAEMON, CAPTURE, LAUNCHER].each do |label|
-        mutations["#{name} missing #{label}"] = ->(v) do
-            job = v[:workflow]["jobs"][name]
-            job["steps"].delete(one_step(job, label))
-        end
-        {"missing condition" => nil, "disabled condition" => false}.each do |description, value|
-            mutations["#{name} #{label} #{description}"] = ->(v) do
-                one_step(v[:workflow]["jobs"][name], label)["if"] = value
-            end
-        end
-        {"continue-on-error" => true, "env" => {"JAVA_HOME" => "/other"}}.each do |key, value|
-            mutations["#{name} #{label} #{key}"] = ->(v) do
-                one_step(v[:workflow]["jobs"][name], label)[key] = value
-            end
-        end
-    end
-    [DAEMON, LAUNCHER].each do |label|
-        mutations["#{name} wrong #{label} version"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], label)["with"]["java-version"] = "22"
-        end
-        mutations["#{name} unpinned #{label}"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], label)["uses"] = "actions/setup-java@v5"
-        end
-    end
-    ["JAVA_HOME_21_X64", "GITHUB_OUTPUT"].each do |replacement|
-        mutations["#{name} wrong capture #{replacement}"] = ->(v) do
-            capture = one_step(v[:workflow]["jobs"][name], CAPTURE)
-            capture["run"] = CAPTURE_COMMAND.sub(replacement == "GITHUB_OUTPUT" ? "GITHUB_ENV" : "JAVA_HOME", replacement)
-        end
-    end
-    mutations["#{name} swapped Java setups"] = ->(v) do
-        steps = v[:workflow]["jobs"][name]["steps"]
-        left, right = [DAEMON, LAUNCHER].map { |label| steps.index { |step| step["name"] == label } }
-        steps[left], steps[right] = steps[right], steps[left]
-    end
-    [DAEMON, LAUNCHER].each do |label|
-        mutations["#{name} capture swapped with #{label}"] = ->(v) do
-            steps = v[:workflow]["jobs"][name]["steps"]
-            left, right = [CAPTURE, label].map { |item| steps.index { |step| step["name"] == item } }
-            steps[left], steps[right] = steps[right], steps[left]
-        end
-    end
-    ["Validate same-source scope", "Validate wrapper and configure Gradle"].each do |label|
-        mutations["#{name} wrong setup boundary #{label}"] = ->(v) do
-            steps = v[:workflow]["jobs"][name]["steps"]
-            index = steps.index { |step| step["name"] == label }
-            steps << steps.delete_at(index)
-        end
-    end
-    [nil, 61].each do |timeout|
-        mutations["#{name} changed job timeout #{timeout}"] = ->(v) do
-            v[:workflow]["jobs"][name]["timeout-minutes"] = timeout
-        end
-    end
-    commands.each_key do |label|
-        mutations["#{name} changed complete command"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], label)["run"] += "\ntrue"
-        end
-        mutations["#{name} conditional complete command"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], label)["if"] = false
-        end
-        mutations["#{name} added product timeout"] = ->(v) do
-            one_step(v[:workflow]["jobs"][name], label)["timeout-minutes"] = 120
-        end
+    {"if" => false, "continue-on-error" => true, "env" => {"JAVA_HOME" => "/other"}}.each do |key, value|
+        mutations["#{name} #{key}"] = ->(v) { one_step(v[:worker]["jobs"]["run"], name)[key] = value }
     end
 end
-mutations.each do |name, mutate|
-    altered = Marshal.load(Marshal.dump(inputs))
-    mutate.call(altered)
+[DAEMON, LAUNCHER].each do |name|
+    %w[distribution java-version].each do |key|
+        mutations["#{name} wrong #{key}"] = ->(v) { one_step(v[:worker]["jobs"]["run"], name)["with"][key] = "other" }
+    end
+    mutations["#{name} unpinned"] = ->(v) { one_step(v[:worker]["jobs"]["run"], name)["uses"] = "actions/setup-java@main" }
+end
+{"persist-credentials" => true, "ref" => "other"}.each do |key, value|
+    mutations["checkout #{key}"] = ->(v) { one_step(v[:worker]["jobs"]["run"], CHECKOUT)["with"][key] = value }
+end
+mutations["shared home"] = ->(v) { one_step(v[:worker]["jobs"]["run"], HOME)["run"] = HOME_COMMAND.sub("$RUNNER_TEMP", "$HOME") }
+mutations["cache write on PR"] = ->(v) { one_step(v[:worker]["jobs"]["run"], CACHE)["with"]["cache-read-only"] = false }
+EXCLUDES.lines.map(&:strip).each do |exclusion|
+    mutations["missing cache exclusion #{exclusion}"] = ->(v) { one_step(v[:worker]["jobs"]["run"], CACHE)["with"]["gradle-home-cache-excludes"].sub!(exclusion + "\n", "") }
+end
+{
+    "ignored component failure" => EXECUTION + "\nanything || true\n",
+    "disabled shell errexit" => "set +e\n" + EXECUTION,
+    "echo instead of invocation" => EXECUTION.gsub("python3 -B", "echo python3 -B"),
+    "early success" => "exit 0\n" + EXECUTION,
+    "changed terminal budget" => EXECUTION.sub('== 120', '== 360'),
+}.each do |label, command|
+    mutations[label] = ->(v) { one_step(v[:worker]["jobs"]["run"], EXECUTE)["run"] = command }
+end
+mutations.each do |label, mutate|
+    changed = Marshal.load(Marshal.dump(inputs))
+    mutate.call(changed)
     rejected = false
     begin
-        check_policy(altered)
+        check_policy(changed)
     rescue KeyError, RuntimeError, ArgumentError
         rejected = true
     end
-    raise "unsafe owned-JDK policy accepted: #{name}" unless rejected
+    raise "negative control accepted: #{label}" unless rejected
 end
-puts "RESULT: PASS — CI daemon21/launcher17 and exact setup-home witness (#{mutations.size + 1} policy checks)"
+puts "RESULT: PASS — modular owned-JDK/cache/source policy and #{mutations.size} negative controls (no native execution claim)"
