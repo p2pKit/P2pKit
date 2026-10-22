@@ -37,6 +37,7 @@ import java.util.Iterator;
 import java.util.IdentityHashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
@@ -121,7 +122,9 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
     private final ConcurrentMap<String, ServiceInfo> _services;
 
     /**
-     * This hashtable holds the service types that have been registered or that have been received in an incoming datagram.<br/>
+     * Locally registered/actively requested service types only. Remote types
+     * are a bounded, TTL-aware view of PTR records in the cache, never promoted
+     * into this lifetime-long local registration map.<br/>
      * Keys are instances of String which hold an all lower-case version of the fully qualified service type.<br/>
      * Values hold the fully qualified service type.
      */
@@ -433,10 +436,20 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
      * @exception IOException
      */
     public JmDNSImpl(InetAddress address, String name, long threadSleepDurationMs) throws IOException {
+        this(address, name, threadSleepDurationMs, new DNSCache(100), true);
+    }
+
+    /** Socket-free record-path fixture seam; production constructors always start networking. */
+    JmDNSImpl(InetAddress address, String name, DNSCache cache) throws IOException {
+        this(address, name, 0L, cache, false);
+    }
+
+    private JmDNSImpl(InetAddress address, String name, long threadSleepDurationMs,
+            DNSCache cache, boolean startNetwork) throws IOException {
         super();
         logger.debug("JmDNS instance created");
 
-        _cache = new DNSCache(100);
+        _cache = cache;
 
         _listeners = Collections.synchronizedList(new ArrayList<>());
         _serviceListeners = new ConcurrentHashMap<>();
@@ -451,6 +464,10 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
         _name = (name != null ? name : _localHost.getName());
         _threadSleepDurationMs = threadSleepDurationMs;
         _executor = Executors.newSingleThreadExecutor(new NamedThreadFactory("JmDNS"));
+
+        if (!startNetwork) {
+            return;
+        }
 
         // _cancelerTimer = new Timer("JmDNS.cancelerTimer");
 
@@ -1255,11 +1272,15 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
         if (!addTypeListenerStatus(status)) {
             return;
         }
-        for (final String type : _serviceTypes.keySet()) {
+        for (final ServiceTypeEntry entry : getServiceTypes().values()) {
             dispatchCallback(new Runnable() {
                 @Override
                 public void run() {
-                    status.serviceTypeAdded(new ServiceEventImpl(JmDNSImpl.this, type, "", null));
+                    status.serviceTypeAdded(new ServiceEventImpl(JmDNSImpl.this, entry.getType(), "", null));
+                    for (String subtype : entry.values()) {
+                        status.subTypeForServiceTypeAdded(new ServiceEventImpl(JmDNSImpl.this,
+                                "_" + subtype + "._sub." + entry.getType(), "", null));
+                    }
                 }
             });
         }
@@ -1892,6 +1913,10 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
     void handleRecord(DNSRecord record, long now) {
         DNSRecord newRecord = record;
 
+        Map<String, ServiceTypeEntry> previousTypes = record.getRecordType() == DNSRecordType.TYPE_PTR
+                && !_typeListeners.isEmpty() ? getServiceTypes(now) : null;
+        List<DNSEntry> evicted = new ArrayList<>();
+
         Operation cacheOperation = Operation.Noop;
         final boolean expired = newRecord.isExpired(now);
         logger.debug("{} handle response: {}", this.getName(), newRecord);
@@ -1900,88 +1925,103 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
             return;
         }
         try {
-            // update the cache
-            if (!newRecord.isServicesDiscoveryMetaQuery() && !newRecord.isDomainDiscoveryQuery()) {
-                final boolean unique = newRecord.isUnique();
-                final DNSRecord cachedRecord = (DNSRecord) _cache.getDNSEntry(newRecord);
-                // RFC 6762, section 10.2 Announcements to Flush Outdated Cache Entries
-                // https://tools.ietf.org/html/rfc6762#section-10.2
-                // if (cache-flush a.k.a unique), remove all existing records matching these criterias :--
-                //     1. same name
-                //     2. same record type
-                //     3. same record class
-                //     4. record is older than 1 second.
-                if (unique) {
-                    for (DNSEntry entry : _cache.getDNSEntryList(newRecord.getKey())) {
-                        if (    newRecord.getRecordType().equals(entry.getRecordType()) &&
-                                newRecord.getRecordClass().equals(entry.getRecordClass()) &&
-                                isOlderThanOneSecond( (DNSRecord)entry, now )
-                        ) {
-                            // this set ttl to 1 second,
-                            ((DNSRecord) entry).setWillExpireSoon(now);
+            synchronized (_cache) {
+                // update the cache
+                // Meta PTRs obey the same shared-record, TTL and resource rules as
+                // ordinary PTRs. They no longer create immortal type registrations.
+                if (!newRecord.isDomainDiscoveryQuery()) {
+                    if (!expired && !_cache.canRetain(newRecord)) {
+                        return; // Do not flush a usable old value for an unretainable replacement.
+                    }
+                    final boolean unique = newRecord.isUnique();
+                    final DNSRecord cachedRecord = (DNSRecord) _cache.getDNSEntry(newRecord);
+                    // RFC 6762, section 10.2 Announcements to Flush Outdated Cache Entries
+                    // https://tools.ietf.org/html/rfc6762#section-10.2
+                    // if (cache-flush a.k.a unique), remove all existing records matching these criterias :--
+                    //     1. same name
+                    //     2. same record type
+                    //     3. same record class
+                    //     4. record is older than 1 second.
+                    if (unique) {
+                        for (DNSEntry entry : _cache.getDNSEntryList(newRecord.getKey())) {
+                            if (    newRecord.getRecordType().equals(entry.getRecordType()) &&
+                                    newRecord.getRecordClass().equals(entry.getRecordClass()) &&
+                                    isOlderThanOneSecond( (DNSRecord)entry, now )
+                            ) {
+                                // this set ttl to 1 second,
+                                ((DNSRecord) entry).setWillExpireSoon(now);
+                            }
                         }
                     }
-                }
-                if (cachedRecord != null) {
-                    if (expired) {
-                        // if the record has a 0 ttl that means we have a cancel record we need to delay the removal by 1s
-                        if (newRecord.getTTL() == 0) {
-                            cacheOperation = Operation.Noop;
-                            cachedRecord.setWillExpireSoon(now);
-                            // the actual record will be disposed of by the record reaper.
-                        } else {
-                            cacheOperation = Operation.Remove;
-                            _cache.removeDNSEntry(cachedRecord);
-                        }
-                    } else {
-                        // If the record content has changed we need to inform our listeners.
-                        if (    !newRecord.sameValue(cachedRecord) ||
-                                (
-                                        !newRecord.sameSubtype(cachedRecord) &&
-                                        (!newRecord.getSubtype().isEmpty())
-                                )
-                        ) {
-                            if (newRecord.isSingleValued()) {
-                                cacheOperation = Operation.Update;
-                                _cache.replaceDNSEntry(newRecord, cachedRecord);
+                    if (cachedRecord != null) {
+                        if (expired) {
+                            // if the record has a 0 ttl that means we have a cancel record we need to delay the removal by 1s
+                            if (newRecord.getTTL() == 0) {
+                                cacheOperation = Operation.Noop;
+                                cachedRecord.setWillExpireSoon(now);
+                                // the actual record will be disposed of by the record reaper.
                             } else {
-                                // Address record can have more than one value on multi-homed machines
-                                cacheOperation = Operation.Add;
-                                _cache.addDNSEntry(newRecord);
+                                cacheOperation = Operation.Remove;
+                                _cache.removeDNSEntry(cachedRecord);
                             }
                         } else {
-                            cachedRecord.resetTTL(newRecord);
-                            newRecord = cachedRecord;
+                            // If the record content has changed we need to inform our listeners.
+                            if (    !newRecord.sameValue(cachedRecord) ||
+                                    (
+                                            !newRecord.sameSubtype(cachedRecord) &&
+                                            (!newRecord.getSubtype().isEmpty())
+                                    )
+                            ) {
+                                if (newRecord.isSingleValued()) {
+                                    if (_cache.replaceDNSEntry(newRecord, cachedRecord, now, evicted)) {
+                                        cacheOperation = Operation.Update;
+                                    }
+                                } else {
+                                    // Address record can have more than one value on multi-homed machines
+                                    if (_cache.addDNSEntry(newRecord, now, evicted)) {
+                                        cacheOperation = Operation.Add;
+                                    }
+                                }
+                            } else {
+                                cachedRecord.resetTTL(newRecord);
+                                newRecord = cachedRecord;
+                            }
                         }
-                    }
-                } else {
-                    if (!expired) {
-                        cacheOperation = Operation.Add;
-                        _cache.addDNSEntry(newRecord);
+                    } else {
+                        if (!expired) {
+                            if (_cache.addDNSEntry(newRecord, now, evicted)) {
+                                cacheOperation = Operation.Add;
+                            }
+                        }
                     }
                 }
             }
         } finally {
             endProducerMutation();
+            if (_cache.takePressureNotice()) {
+                // At most once per handle; no remote data, and no logging
+                // backend executes under the cache monitor or producer slice.
+                logger.warn("mDNS cache capacity reached; retaining bounded records with oldest-entry eviction");
+            }
         }
 
         logger.trace("{} cache operation {} for record {}", _name, cacheOperation, newRecord);
 
-        // Register new service types
-        if (newRecord.getRecordType() == DNSRecordType.TYPE_PTR) {
-            // handle DNSConstants.DNS_META_QUERY records
-            boolean typeAdded = false;
-            if (newRecord.isServicesDiscoveryMetaQuery()) {
-                // The service names are in the alias.
-                if (!expired) {
-                    typeAdded = this.registerServiceType(((DNSRecord.Pointer) newRecord).getAlias());
-                }
-                return;
+        // Eviction is observable just like expiration; otherwise service
+        // collectors/listener deduplication could keep every forgotten peer.
+        // Never own the cache monitor or a producer slice across application code.
+        for (DNSEntry entry : evicted) {
+            DNSRecord removed = (DNSRecord) entry;
+            removed.setTTL(0);
+            if (!removed.isServicesDiscoveryMetaQuery()) {
+                this.updateRecord(now, removed, Operation.Remove);
             }
-            typeAdded |= this.registerServiceType(newRecord.getName());
-            if (typeAdded && (cacheOperation == Operation.Noop)) {
-                cacheOperation = Operation.RegisterServiceType;
-            }
+        }
+        if (previousTypes != null) {
+            notifyNewRemoteTypes(previousTypes, getServiceTypes(now));
+        }
+        if (newRecord.isServicesDiscoveryMetaQuery()) {
+            return; // Type discovery, not a service-instance callback.
         }
 
         // notify the listeners
@@ -2507,32 +2547,41 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
      * @see RecordReaper
      */
     public void cleanCache() {
+        cleanCache(System.currentTimeMillis());
+    }
+
+    /** Explicit observation time keeps TTL/reaper regression checks deterministic. */
+    void cleanCache(long now) {
         this.getCache().logCachedContent();
 
-        final long now = System.currentTimeMillis();
         final Set<String> staleServiceTypesForRefresh = new HashSet<>();
         for (final DNSEntry entry : this.getCache().allValues()) {
             try {
                 final DNSRecord record = (DNSRecord) entry;
-                if (record.isExpired(now)) {
-                    this.updateRecord(now, record, Operation.Remove);
-                    logger.trace("Removing DNSEntry from cache: {}", entry);
-                    if (beginProducerMutation()) {
-                        try {
-                            _cache.removeDNSEntry(record);
-                        } finally {
-                            endProducerMutation();
+                boolean removed = false;
+                boolean refresh = false;
+                if (!beginProducerMutation()) {
+                    return;
+                }
+                try {
+                    synchronized (_cache) {
+                        // A snapshot can race a TTL refresh or eviction. Decide
+                        // and mutate against the same retained identity atomically.
+                        if (_cache.containsRecord(record)) {
+                            if (record.isExpired(now)) {
+                                removed = _cache.removeDNSEntry(record);
+                            } else if (record.isStaleAndShouldBeRefreshed(now)) {
+                                record.incrementRefreshPercentage();
+                                refresh = true;
+                            }
                         }
                     }
-                } else if (record.isStaleAndShouldBeRefreshed(now)) {
-                    if (!beginProducerMutation()) {
-                        return;
-                    }
-                    try {
-                        record.incrementRefreshPercentage();
-                    } finally {
-                        endProducerMutation();
-                    }
+                } finally {
+                    endProducerMutation();
+                }
+                if (removed && !record.isServicesDiscoveryMetaQuery()) {
+                    this.updateRecord(now, record, Operation.Remove);
+                } else if (refresh) {
                     String type = record.getServiceInfo().getType().toLowerCase();
                     // only query every service type once per refresh
                     if (staleServiceTypesForRefresh.add(type)) {
@@ -2934,6 +2983,8 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
             }
         }
         if (failures.isEmpty()) {
+            _cache.clear();
+            _serviceTypes.clear();
             _services.clear();
             _serviceCollectors.clear();
             _serviceListeners.clear();
@@ -3051,7 +3102,7 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
         }
         sb.append("\n");
         sb.append("\t---- Types ----");
-        for (final ServiceTypeEntry subtypes : _serviceTypes.values()) {
+        for (final ServiceTypeEntry subtypes : getServiceTypes().values()) {
             sb.append("\n\t\tType: ");
             sb.append(subtypes.getType());
             sb.append(": ");
@@ -3382,7 +3433,85 @@ public class JmDNSImpl extends JmDNS implements DNSStatefulObject, DNSTaskStarte
     }
 
     public Map<String, ServiceTypeEntry> getServiceTypes() {
-        return _serviceTypes;
+        return getServiceTypes(System.currentTimeMillis());
+    }
+
+    /**
+     * Remote base types and subtypes each have at most DNSCache.MAX_RECORDS
+     * entries, backed by the same record/byte budget, not another growing map.
+     * Multiple PTR owners of a type keep it visible until the last expires or
+     * is evicted. Local registrations survive remote TTL-zero/pressure.
+     */
+    Map<String, ServiceTypeEntry> getServiceTypes(long now) {
+        Map<String, ServiceTypeEntry> result = new HashMap<>();
+        for (Map.Entry<String, ServiceTypeEntry> local : _serviceTypes.entrySet()) {
+            synchronized (local.getValue()) {
+                result.put(local.getKey(), local.getValue().clone());
+            }
+        }
+        for (DNSEntry entry : _cache.allValues()) {
+            if (!(entry instanceof DNSRecord.Pointer) || entry.isExpired(now) || entry.isDomainDiscoveryQuery()) {
+                continue;
+            }
+            String type = entry.isServicesDiscoveryMetaQuery()
+                    ? ((DNSRecord.Pointer) entry).getAlias() : entry.getName();
+            Map<Fields, String> parts = ServiceTypeDecoder.decodeQualifiedNameMapForType(type);
+            String application = parts.get(Fields.Application);
+            String domain = parts.get(Fields.Domain);
+            String protocol = parts.get(Fields.Protocol);
+            if (application.equalsIgnoreCase("dns-sd") || domain.toLowerCase(Locale.ROOT).endsWith("in-addr.arpa")
+                    || domain.toLowerCase(Locale.ROOT).endsWith("ip6.arpa")) {
+                continue;
+            }
+            String name = (!application.isEmpty() ? "_" + application + "." : "")
+                    + (!protocol.isEmpty() ? "_" + protocol + "." : "") + domain + ".";
+            String key = name.toLowerCase(Locale.ROOT);
+            ServiceTypeEntry subtypes = result.get(key);
+            if (subtypes == null) {
+                subtypes = new ServiceTypeEntry(name);
+                result.put(key, subtypes);
+            }
+            String subtype = parts.get(Fields.Subtype);
+            if (!subtype.isEmpty()) {
+                subtypes.add(subtype);
+            }
+        }
+        return Collections.unmodifiableMap(result);
+    }
+
+    private void notifyNewRemoteTypes(Map<String, ServiceTypeEntry> previous, Map<String, ServiceTypeEntry> current) {
+        for (Map.Entry<String, ServiceTypeEntry> entry : current.entrySet()) {
+            final ServiceTypeEntry type = entry.getValue();
+            ServiceTypeEntry old = previous.get(entry.getKey());
+            if (old == null) {
+                submitTypeEvent(type.getType(), false);
+            }
+            for (String subtype : type.values()) {
+                if (old == null || !old.contains(subtype)) {
+                    submitTypeEvent("_" + subtype + "._sub." + type.getType(), true);
+                }
+            }
+        }
+    }
+
+    private void submitTypeEvent(String type, final boolean subtype) {
+        final ServiceEvent event = new ServiceEventImpl(this, type, "", null);
+        for (final ServiceTypeListenerStatus status : _typeListeners.toArray(new ServiceTypeListenerStatus[0])) {
+            try {
+                submitCallback(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (subtype) {
+                            status.subTypeForServiceTypeAdded(event);
+                        } else {
+                            status.serviceTypeAdded(event);
+                        }
+                    }
+                });
+            } catch (RejectedExecutionException failure) {
+                logger.warn("Failed to submit service type callback", failure);
+            }
+        }
     }
 
     public MulticastSocket getSocket() {

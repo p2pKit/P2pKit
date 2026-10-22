@@ -608,6 +608,7 @@ tasks.cyclonedxBom {
                 "patches/414-service-port.patch",
                 "patches/417-response-continuation.patch",
                 "patches/418-teardown-budget.patch",
+                "patches/503-cache-bounds.patch",
             )
         ) {
             "Unexpected embedded JmDNS followup patch order or membership"
