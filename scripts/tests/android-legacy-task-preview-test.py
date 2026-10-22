@@ -299,7 +299,9 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertLess(helper.index("checkLegacyCapture(accepted,"), helper.index("afterAcknowledged()"))
         self.assertLess(helper.index("val accepted = perform()"), helper.index("checkLegacyCapture(accepted,"))
         self.assertEqual(refresh.count("uiAutomation.serviceInfo = settings"), 1)
-        self.assertNotIn("settings.flags =", refresh)
+        assignment = r"\bsettings\.flags\s*=(?!=)"
+        self.assertRegex("settings.flags = expected", assignment)
+        self.assertNotRegex(refresh, assignment)
         self.assertNotIn("Thread.sleep", refresh)
         self.assertNotIn("performGlobalAction", refresh)
         self.assertGreaterEqual(refresh.count("bounded()"), 5)
