@@ -411,7 +411,11 @@ internal class AndroidLanDiscoveryTransport(
     private val coordinator = JmdnsLifecycleCoordinator<AndroidLanBindTarget, JmDNS>(
         ops = buildOps(),
         rebindScope = rebindScope,
-        ioContext = Dispatchers.IO
+        ioContext = Dispatchers.IO,
+        onHandleRetiring = {
+            admittedServices.drain()
+            peerEventRelay.clear()
+        }
     )
 
     /** Service-instance ownership admitted only after full record validation. */

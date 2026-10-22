@@ -293,7 +293,11 @@ internal class JvmLanDiscoveryTransport(
     private val coordinator = JmdnsLifecycleCoordinator<JvmLanBindTarget, JmDNS>(
         ops = buildLifecycleOps(),
         rebindScope = lifecycleScope,
-        ioContext = Dispatchers.IO
+        ioContext = Dispatchers.IO,
+        onHandleRetiring = {
+            serviceAdmissions.drain()
+            peerEventRelay.clear()
+        }
     )
 
     /**
