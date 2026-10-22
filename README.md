@@ -338,8 +338,12 @@ build or simulator test is not a real-device or installed-application result.
 The `iosArm64` device target still needs external hardware for runtime testing.
 Focused API35 credential-lifecycle and API37 permission/recreation/TCP cases
 have separately recorded hosted acceptance; they are not a general device suite
-or installed tests of the published packages. API24–32 task-preview privacy
-remains unresolved; see the [release limitations](docs/releases/0.8.0-rc6.md#remaining-limitations).
+or installed tests of the published packages. The published `0.8.0-rc6` retains
+its [API24–32 preview limitation](docs/releases/0.8.0-rc6.md#remaining-limitations).
+The unpublished rc7 candidate adds lifetime `FLAG_SECURE` on those APIs, including
+its foreground-capture tradeoff. The source-bound synthetic API24 witness is
+accepted; API32 review remains pending. See the
+[current policy and evidence limits](docs/security/model.md#android-sample-credential-previews).
 Android host JVM tests (including Robolectric shadows) are not ART or physical-device evidence.
 
 The [canonical six-area status table](docs/validation/README.md#current-status)
