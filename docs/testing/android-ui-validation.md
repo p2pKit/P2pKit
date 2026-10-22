@@ -97,8 +97,14 @@ On API33+, `MainActivity` disables recents screenshots before its first content
 using `setRecentsScreenshotEnabled(false)`: Android can represent a stopped task
 with its theme rather than retain an explicitly revealed credential. This is
 not `FLAG_SECURE`; normal foreground screenshots and explicit-reveal pixel
-positive controls remain available and required. API24–32 keep the existing
-credential clearing behavior but do not gain this task-preview protection.
+positive controls remain available and required on API33+. On API24–32 the sample
+instead sets `FLAG_SECURE` before its first content and retains it for the whole
+window lifetime, including stop/reentry and recreation. This deliberate legacy
+privacy tradeoff also blocks foreground screenshots, screen recordings and
+non-secure displays; it is not a task-preview-only switch. Credential clearing
+and permission/no-replay behavior remain unchanged. Local flag/unit checks do not
+qualify OS snapshots: API24/32 source-bound lifecycle, positive-control and actual
+Recents captures require separate runtime review; no all-OEM claim follows.
 
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window
