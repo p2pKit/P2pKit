@@ -1407,7 +1407,8 @@ class DriverFixtureEnvironmentModels(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             originals = {}
-            for name in ("run-platform-tests.py", "audit_processes.py", "hosted_full_simulator.py"):
+            for name in ("run-platform-tests.py", "audit_processes.py", "hosted_full_simulator.py",
+                         "ci_evidence.py", "hosted_evidence.py", "hosted_evidence_primitives.py"):
                 raw = (ROOT / "scripts" / name).read_bytes()
                 (scripts / name).write_bytes(raw)
                 originals["scripts/" + name] = raw
@@ -1537,6 +1538,25 @@ class DriverLifecycleTest(unittest.TestCase):
         self.assertEqual("FAIL", self.summaries()[0]["result"])
         self.assertEqual(["--stop"], self.calls()[-1])
 
+    def test_failed_inner_retirement_is_retained_in_summary_without_changing_task_or_stop_results(self):
+        retire, owners = GATE.terminate_process, []
+        def uncertain(owner):
+            result = retire(owner)  # Retire real fixture resources before supplying an observation failure.
+            owners.append(owner)
+            if len(owners) == 1:
+                owner.retirement_error = GATE.audit_processes.OwnershipError(
+                    "Unclassified Darwin lifetimes remain; cleanup is not proven")
+                owner.retirement_phase, owner.drained = "DRAIN", False
+                return False
+            return result
+        with mock.patch.object(GATE, "terminate_process", side_effect=uncertain):
+            self.assertNotEqual(0, self.invoke("pass"))
+        summary = self.summaries()[0]
+        self.assertEqual((0, 0, "FAIL"), (summary["gradleExitCode"], summary["stopExitCode"], summary["result"]))
+        self.assertEqual(owners[0].retirement_diagnostic(), summary["gradleRetirementFailure"])
+        self.assertEqual("DRAIN_UNCLASSIFIED", summary["gradleRetirementFailure"]["reason"])
+        self.assertEqual(["--stop"], self.calls()[-1])
+
     def test_stop_timeout_is_failure_and_terminates_its_owned_process(self):
         process = mock.Mock()
         process.wait.side_effect = subprocess.TimeoutExpired("gradlew --stop", 90)
@@ -1652,6 +1672,9 @@ class ProcessOwnerModels(unittest.TestCase):
         self.native = GATE.audit_processes
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
+        # Synthetic owners use supplied backends unless a case explicitly tests
+        # hosted admission; do not inherit the CI runner's real Darwin context.
+        self.stack.enter_context(mock.patch.dict(os.environ, standalone_fixture_environment("model"), clear=True))
         for name in ("kill", "killpg", "getpgid", "pidfd_open"):
             self.stack.enter_context(mock.patch.object(os, name, create=True,
                 side_effect=AssertionError("NO_NUMERIC_PROCESS_OPERATION")))
@@ -1982,6 +2005,73 @@ class ProcessOwnerModels(unittest.TestCase):
                 factory.assert_called_once_with("job", TOKEN, "/state", "/home")
         with mock.patch.object(sys, "platform", "unsupported"), self.assertRaises(self.native.OwnershipError):
             self.native.make_local_scope("job", TOKEN, "/state", "/home")
+
+    def test_actual_owner_selects_hosted_local_scope_without_rebinding_canonical_context(self):
+        base = self.native.ownership_environment({"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "GITHUB_REPOSITORY": "p2pKit/P2pKit", "GITHUB_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "a" * 40,
+            "GITHUB_WORKFLOW_REF": "p2pKit/P2pKit/.github/workflows/ci.yml@refs/pull/504/merge"},
+            "b" * 32, "c" * 32, "/canonical/state", "/canonical/home")
+        owner, scope, child = self.owner()
+        owner.attempted, owner.scope, owner.child = False, None, None
+        scope.spawn.return_value = child
+        with mock.patch.dict(os.environ, base, clear=True), \
+                mock.patch.object(GATE.uuid, "uuid4", return_value=mock.Mock(hex=TOKEN)), \
+                mock.patch.object(GATE.ci_evidence.platform, "system", return_value="Darwin"), \
+                mock.patch.object(GATE.ci_evidence, "_HostedLocalDarwinScope", return_value=scope) as factory, \
+                mock.patch.object(self.native, "make_local_scope", side_effect=AssertionError("STRICT_SCOPE_SELECTED")):
+            owner.start(["not-executed"], cwd=ROOT)
+            factory.assert_called_once_with("b" * 32, TOKEN, "/canonical/state", "/canonical/home")
+            self.assertEqual({**base, self.native.LOCAL_CHAIN_ENV: TOKEN}, scope.spawn.call_args.args[2])
+            self.assertEqual(base, dict(os.environ))
+            self.assertTrue(GATE.terminate_process(owner))
+            self.assertIsNone(owner.retirement_diagnostic())
+
+    def test_retirement_diagnostic_preserves_first_phase_and_never_serializes_private_error(self):
+        owner, scope, child = self.owner()
+        failure = self.native.OwnershipError("Unclassified Darwin lifetimes remain; cleanup is not proven")
+        scope.drain.side_effect = failure
+        scope.close.side_effect = OSError("PRIVATE_LATER_CLOSE")
+        with contextlib.redirect_stderr(io.StringIO()) as output:
+            self.assertFalse(GATE.terminate_process(owner))
+        diagnostic = owner.retirement_diagnostic()
+        self.assertEqual("DRAIN", diagnostic["phase"])
+        self.assertEqual("DRAIN_UNCLASSIFIED", diagnostic["reason"])
+        self.assertEqual("OWNERSHIP_ERROR", diagnostic["nativeError"]["exceptionType"])
+        self.assertIn("PLATFORM_RETIREMENT_FAILURE", output.getvalue())
+        self.assertNotIn("PRIVATE_LATER_CLOSE", output.getvalue())
+        self.assertNotIn(str(failure), output.getvalue())
+        scope.close.side_effect = None
+        self.assertFalse(GATE.terminate_process(owner))
+        self.assertEqual(diagnostic, owner.retirement_diagnostic())
+        scope.drain.assert_called_once()
+        scope.close.assert_called_once()
+
+    def test_retirement_diagnostic_labels_clock_close_and_pending_launch_without_native_queries(self):
+        for failed, phase in (("clock", "CLOCK"), ("scope", "SCOPE_CLOSE"), ("pipe", "PIPE_CLOSE"),
+                              ("launch", "LAUNCH")):
+            child = mock.Mock(stdout=mock.Mock(closed=False), stderr=None, returncode=0)
+            child.poll.return_value = 0
+            owner, scope, _ = self.owner(child)
+            failure = OSError(errno.EPERM, "PRIVATE_TOKEN=https://private.invalid/signed?secret=yes")
+            if failed == "scope":
+                scope.close.side_effect = failure
+            elif failed == "pipe":
+                child.stdout.close.side_effect = failure
+            elif failed == "launch":
+                failure._p2pkit_retirement = {"resources": [], "omitted": 1}
+                owner.scope = owner.child = None
+                owner.launch_error = failure
+            with self.subTest(failed=failed), mock.patch.object(time, "monotonic",
+                    side_effect=failure if failed == "clock" else [100, 100]), \
+                    contextlib.redirect_stderr(io.StringIO()) as output:
+                self.assertFalse(GATE.terminate_process(owner))
+                diagnostic = owner.retirement_diagnostic()
+                self.assertEqual(phase, diagnostic["phase"])
+                self.assertEqual("OS", diagnostic["nativeError"]["kind"])
+                self.assertEqual(errno.EPERM, diagnostic["nativeError"]["errno"])
+                self.assertNotIn("PRIVATE_TOKEN", output.getvalue())
+                self.assertNotIn("private.invalid", output.getvalue())
+                self.assertIs(owner.retirement_error, failure)
 
     def test_fixture_attempts_remaining_retirements_after_cleanup_failure(self):
         for failed in ("owner", "rescue", "close"):

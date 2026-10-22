@@ -23,6 +23,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_processes
+import ci_evidence
 import hosted_full_simulator as simulator
 
 
@@ -563,6 +564,7 @@ class ProcessOwner:
         self.scope, self.child = None, None
         self.attempted, self.retired, self.drained = False, False, False
         self.launch_error, self.retirement_error = None, None
+        self.retirement_phase = None
 
     def start(self, argv, *, cwd, stdout=None, stderr=None):
         if self.attempted or self.retired:
@@ -581,9 +583,9 @@ class ProcessOwner:
                         signal.signal(sig, defer)
                 invocation = uuid.uuid4().hex
                 environment = audit_processes.local_ownership_environment(dict(os.environ), invocation)
-                self.scope = audit_processes.make_local_scope(environment.get(audit_processes.JOB_ENV, invocation),
+                self.scope = ci_evidence.local_command_scope(environment.get(audit_processes.JOB_ENV, invocation),
                     invocation, environment.get(audit_processes.STATE_ENV, str(cwd)),
-                    environment.get("GRADLE_USER_HOME", str(Path.home() / ".gradle")))
+                    environment.get("GRADLE_USER_HOME", str(Path.home() / ".gradle")), environment)
                 if stdout == subprocess.PIPE and stderr == subprocess.PIPE:
                     outputs = {}  # Original bounded capture owns these two readers.
                 else:
@@ -633,21 +635,24 @@ class ProcessOwner:
         self.retired = True  # Withdraw close duties before any fallible native call.
         if self.scope is None:
             self.drained = self.launch_error is None or not audit_processes.retirement_details(self.launch_error)
+            if not self.drained:
+                self.retirement_error, self.retirement_phase = self.launch_error, "LAUNCH"
             return self.drained  # No child was attempted before the scope returned.
         children, readers = [], []
         end, cancellation = None, None
-        def remember(error):
+        def remember(error, phase):
             nonlocal cancellation
             if self.retirement_error is None:
-                self.retirement_error = error
+                self.retirement_error, self.retirement_phase = error, phase
             if not isinstance(error, Exception) and cancellation is None:
                 cancellation = error
         if self.launch_error is not None and audit_processes.retirement_details(self.launch_error):
-            remember(self.launch_error)
+            remember(self.launch_error, "LAUNCH")
         try:
             end = time.monotonic() + TERMINATION_GRACE_SECONDS + TERMINATION_KILL_SECONDS
         except BaseException as error:
-            remember(error)
+            remember(error, "CLOCK")
+        phase = "LEADERS"
         try:
             children = list(self.scope.leaders)
             if self.child is not None and not any(child is self.child for child in children):
@@ -661,36 +666,47 @@ class ProcessOwner:
                                 not any(stream is old for old in readers):
                             readers.append(stream)
                     except BaseException as error:
-                        remember(error)
+                        remember(error, "READERS")
             if end is None:
                 raise audit_processes.OwnershipError("Platform retirement clock unavailable")
+            phase = "DRAIN"
             live = self.scope.drain(TERMINATION_GRACE_SECONDS, TERMINATION_KILL_SECONDS, deadline=end)
             if live or self.scope.discovery_errors or getattr(self.scope, "pending_discoveries", None):
                 raise audit_processes.OwnershipError("Platform descendants were not proven retired")
+            phase = "LEADER_EXIT"
             for child in children:
                 if child.poll() is None:
                     raise audit_processes.OwnershipError("Platform leader exit was not observed")
         except BaseException as error:
-            remember(error)
+            remember(error, phase)
         # A failed drain or one failed close must not skip independent handles or
         # readers. These are only returned pipe readers, never borrowed sinks.
-        for resource in [self.scope, *readers]:
+        for resource, phase in [(self.scope, "SCOPE_CLOSE"), *[(reader, "PIPE_CLOSE") for reader in readers]]:
             try:
                 resource.close()
             except BaseException as error:
-                remember(error)
+                remember(error, phase)
         if end is not None:
             try:
                 if time.monotonic() >= end:
-                    remember(audit_processes.OwnershipError("Platform retirement exceeded its original deadline"))
+                    remember(audit_processes.OwnershipError("Platform retirement exceeded its original deadline"), "DEADLINE")
             except BaseException as error:
-                remember(error)
+                remember(error, "CLOCK")
         self.drained = self.retirement_error is None
         if cancellation is not None:
             if cancellation is self.retirement_error:
                 raise cancellation
             raise cancellation from self.retirement_error
         return self.drained
+
+    def retirement_diagnostic(self):
+        """First failure only: finite labels, no new census or private exception text."""
+        if self.retirement_error is None:
+            return None
+        phases = {"LAUNCH", "CLOCK", "LEADERS", "READERS", "DRAIN", "LEADER_EXIT", "SCOPE_CLOSE", "PIPE_CLOSE", "DEADLINE"}
+        return {"phase": self.retirement_phase if self.retirement_phase in phases else "UNKNOWN",
+                "reason": ci_evidence.cleanup_error_reason(self.retirement_error),
+                "nativeError": ci_evidence.native_error_diagnostic(self.retirement_error)}
 
 
 def terminate_process(process):
@@ -702,6 +718,9 @@ def terminate_process(process):
         return False
     if process.retire():
         return True
+    diagnostic = process.retirement_diagnostic()
+    if diagnostic is not None:
+        print("PLATFORM_RETIREMENT_FAILURE " + json.dumps(diagnostic, sort_keys=True), file=sys.stderr)
     print("FATAL: Owned descendants/handles were not retired within TERM/KILL deadlines", file=sys.stderr)
     return False
 
@@ -1055,6 +1074,8 @@ def run(profile):
     summary = {**source, "gradleExitCode": code if profile != "ios-x64" or gradle_attempted else None, "stopExitCode": stop_code,
                "finishedUtc": datetime.now(timezone.utc).isoformat(), "sourceAfter": source_after,
                "result": "FAIL" if errors else "PASS", "errors": errors, "targets": targets}
+    if process is not None and process.retirement_diagnostic() is not None:
+        summary["gradleRetirementFailure"] = process.retirement_diagnostic()
     if profile == "ios-x64":
         summary["intelSimulatorRetirement"] = intel_retired
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

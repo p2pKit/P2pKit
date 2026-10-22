@@ -299,6 +299,20 @@ def _command_scope(job, invocation, private, home, environment):
             audit_processes.make_scope(job, invocation, private, home))
 
 
+class _HostedLocalDarwinScope(audit_processes.LocalDarwinScope, _HostedDarwinScope):
+    """Independent local marker, with the enclosing command's exact hosted boundary.
+
+    The local marker must not rewrite the canonical evidence-bound audit domain.
+    All native lifetime/pipe/signal operations and hosted exclusion conditions are
+    inherited unchanged; this is not an additional ownership or host exemption.
+    """
+
+
+def local_command_scope(job, invocation, private, home, environment):
+    return (_HostedLocalDarwinScope(job, invocation, private, home) if _hosted_darwin_context(environment) else
+            audit_processes.make_local_scope(job, invocation, private, home))
+
+
 def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,
                 log_limit=MAX_LOG_BYTES, cleanup_seconds=15.0, create_gradle_home=True):
     """Actual command + native ownership, with the explicit hosted Darwin domain.
