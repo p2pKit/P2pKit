@@ -52,6 +52,22 @@ public fun durableFileDestination(
     minimumFreeSpaceBytes = minimumFreeSpaceBytes
 )
 
+/**
+ * Stage in an exclusively application-owned, existing non-symlink directory.
+ * Its filesystem device must match the target's; atomic rename never falls back
+ * to a copy. Commit fsyncs both affected directories. The application must keep
+ * exclusive ownership until commit/abort finishes, including across processes.
+ */
+public fun durableFileDestination(
+    target: File,
+    stagingDirectory: File,
+    minimumFreeSpaceBytes: Long
+): FileTransferDestination = AndroidDurableFileDestination(
+    target,
+    minimumFreeSpaceBytes = minimumFreeSpaceBytes,
+    stagingDirectory = stagingDirectory
+)
+
 internal class AndroidDurableFileDestination(
     target: File,
     private val closeSink: (RawSink) -> Unit = { it.close() },
@@ -63,11 +79,19 @@ internal class AndroidDurableFileDestination(
     private val rename: (String, String) -> Unit = Os::rename,
     private val openDirectory: (String) -> FileDescriptor = { Os.open(it, OsConstants.O_RDONLY, 0) },
     private val fsyncDirectory: (FileDescriptor) -> Unit = Os::fsync,
-    private val closeDirectory: (FileDescriptor) -> Unit = Os::close
+    private val closeDirectory: (FileDescriptor) -> Unit = Os::close,
+    stagingDirectory: File? = null,
+    private val sameFileSystem: (File, File) -> Boolean = { first, second ->
+        Os.stat(first.absolutePath).st_dev == Os.stat(second.absolutePath).st_dev
+    }
 ) : FileTransferDestination, StorageCapacityCheckingFileTransferDestination {
     private val target = target.absoluteFile
     private val parent = checkNotNull(this.target.parentFile) { "Target must have a parent directory" }
         .also { require(it.isDirectory) { "Target parent is not a directory: ${it.absolutePath}" } }
+    private val stagingParent = stagingDirectory?.absoluteFile?.also {
+        require(it.isDirectory && it.canonicalFile == it) { "Staging must be a non-symlink directory" }
+        require(sameFileSystem(parent, it)) { "Staging and target must use the same filesystem" }
+    } ?: parent
 
     init {
         require(minimumFreeSpaceBytes >= 0) { "minimumFreeSpaceBytes must be non-negative" }
@@ -95,7 +119,7 @@ internal class AndroidDurableFileDestination(
     override fun openSink(): RawSink = synchronized(this) {
         check(state == DestinationState.NEW) { "Destination was already opened or terminal" }
         try {
-            val staging = File.createTempFile(tempPrefix(target.name), ".part", parent)
+            val staging = File.createTempFile(tempPrefix(target.name), ".part", stagingParent)
             temp = staging
             chmod(staging.absolutePath, 0x180) // 0600: owner read/write, no group/other access.
             val opened = openStream(staging)
@@ -185,7 +209,12 @@ internal class AndroidDurableFileDestination(
     }
 
     private fun syncParentDirectory() {
-        val descriptor = openDirectory(parent.absolutePath)
+        syncDirectory(parent)
+        if (stagingParent.canonicalFile != parent.canonicalFile) syncDirectory(stagingParent)
+    }
+
+    private fun syncDirectory(directory: File) {
+        val descriptor = openDirectory(directory.absolutePath)
         var primary: Throwable? = null
         try {
             fsyncDirectory(descriptor)

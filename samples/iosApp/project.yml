@@ -29,6 +29,7 @@ targets:
       - SampleConsole.swift
       - SampleP2pError.swift
       - SampleBackupPolicy.swift
+      - SampleTransferStaging.swift
       - TestDiagnosticDetailPolicy.swift
       - TestDiagnostics.swift
     info:

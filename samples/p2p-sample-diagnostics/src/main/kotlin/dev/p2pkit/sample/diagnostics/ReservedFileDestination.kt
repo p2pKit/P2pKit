@@ -12,20 +12,13 @@ import kotlinx.io.RawSink
 private val cleanupMonitor = Any()
 private val cleanedDirectories: MutableSet<String> = mutableSetOf()
 
-/** Remove crash-left SDK part files before this process starts a transfer in [directory]. */
+/** Reconcile proven abandoned sample-owned staging; never sweep received filenames. */
 public fun cleanupStaleTransferPartsOnce(directory: File) {
     val canonicalPath = directory.canonicalPath
     synchronized(cleanupMonitor) {
         if (!cleanedDirectories.add(canonicalPath)) return
         try {
-            directory.listFiles()
-                .orEmpty()
-                .filter { it.isFile && it.name.startsWith(".p2pkit-") && it.name.endsWith(".part") }
-                .forEach { part ->
-                    if (!part.delete()) {
-                        throw IOException("Could not remove stale transfer part ${part.absolutePath}")
-                    }
-                }
+            TransferStagingOwnership.reconcile(directory)
         } catch (failure: Throwable) {
             cleanedDirectories.remove(canonicalPath)
             throw failure
@@ -41,7 +34,32 @@ public fun cleanupStaleTransferPartsOnce(directory: File) {
  * authority to delete the target and cleans only delegate-owned staging state.
  */
 public fun reservedFileDestination(target: File): FileTransferDestination =
-    RetainedReservedFileDestination(target, durableFileDestination(target))
+    reservedFileDestination(target) { destination, staging ->
+        durableFileDestination(destination, staging, 64L * 1024 * 1024)
+    }
+
+/**
+ * Select the platform's durable destination without moving staging ownership to
+ * that factory. Android supplies its own core facade rather than invoking the
+ * JVM-only default above. The factory receives the already exclusively leased
+ * staging directory and must use it until its writer closes on commit/abort.
+ */
+public fun reservedFileDestination(
+    target: File,
+    createDestination: (target: File, stagingDirectory: File) -> FileTransferDestination
+): FileTransferDestination {
+    val lease = TransferStagingOwnership.claim(checkNotNull(target.absoluteFile.parentFile))
+    try {
+        return RetainedReservedFileDestination(
+            target,
+            createDestination(target, lease.directory),
+            lease
+        )
+    } catch (failure: Throwable) {
+        try { lease.retire() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+        throw failure
+    }
+}
 
 internal fun reservedFileDestination(
     target: File,
@@ -50,7 +68,8 @@ internal fun reservedFileDestination(
 
 private class RetainedReservedFileDestination(
     private val target: File,
-    private val delegate: FileTransferDestination
+    private val delegate: FileTransferDestination,
+    private val stagingLease: TransferStagingOwnership.Lease? = null
 ) : FileTransferDestination {
     private val terminalLock = Mutex()
     @Volatile
@@ -72,6 +91,7 @@ private class RetainedReservedFileDestination(
             // may contain received data and must never be deleted by abort.
             state = State.COMMITTING
             delegate.commit()
+            stagingLease?.retire()
             state = State.COMMITTED
         }
     }
@@ -91,6 +111,7 @@ private class RetainedReservedFileDestination(
             var failure: Throwable? = null
             try {
                 delegate.abort(cause)
+                stagingLease?.retire()
             } catch (error: Throwable) {
                 failure = error
             }

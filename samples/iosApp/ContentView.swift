@@ -2534,7 +2534,7 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
     }
 }
 
-/// Sibling temporary file + fsync + atomic replacement. The empty target file
+/// Exclusively leased same-filesystem staging + fsync + atomic replacement. The empty target file
 /// created by `claimUniqueDestination` is a namespace reservation and is
 /// replaced only after verification succeeds.
 final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
@@ -2542,6 +2542,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         case active
         case committing
         case published
+        case durable
         case committed
         case abortingReservation
         case abortingAfterCommit
@@ -2550,6 +2551,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
 
     private let target: URL
     private let temporary: URL
+    private let stagingLease: SampleTransferStaging.Lease
     private let sink: FileHandleRawSink
     private let removeItem: (URL) throws -> Void
     private let synchronizeDirectory: (URL) throws -> Void
@@ -2572,18 +2574,36 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         self.removeItem = removeItem
         self.synchronizeDirectory = synchronizeDirectory
         let directory = target.deletingLastPathComponent()
+        let lease = try SampleTransferStaging.claim(in: directory)
+        self.stagingLease = lease
+        var targetInfo = stat()
+        var stagingInfo = stat()
+        guard Darwin.stat(directory.path, &targetInfo) == 0,
+              Darwin.stat(lease.directory.path, &stagingInfo) == 0,
+              targetInfo.st_dev == stagingInfo.st_dev else {
+            try? lease.retire()
+            throw destinationError("staging and target must be on the same filesystem")
+        }
         var claimed: URL?
         for attempt in 0...100 {
             let boundedName = String(target.lastPathComponent.prefix(48))
-            let candidate = directory.appendingPathComponent(
+            let candidate = lease.directory.appendingPathComponent(
                 ".\(boundedName).\(UUID().uuidString)-\(attempt).p2pkit-part"
             )
-            if FileManager.default.createFile(atPath: candidate.path, contents: nil) {
+            let descriptor = Darwin.open(candidate.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR)
+            if descriptor >= 0 {
+                guard Darwin.close(descriptor) == 0 else {
+                    let failure = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    try? FileManager.default.removeItem(at: candidate)
+                    try? lease.retire()
+                    throw failure
+                }
                 claimed = candidate
                 break
             }
         }
         guard let temporary = claimed else {
+            try? lease.retire()
             throw NSError(
                 domain: "dev.p2pkit.sample.file",
                 code: 2,
@@ -2595,6 +2615,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
             self.sink = FileHandleRawSink(handle: try FileHandle(forWritingTo: temporary))
         } catch {
             try? FileManager.default.removeItem(at: temporary)
+            try? lease.retire()
             throw error
         }
     }
@@ -2614,20 +2635,27 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
             completionHandler(nil)
             return
         }
-        guard phase == .active || phase == .committing || phase == .published else {
+        guard phase == .active || phase == .committing || phase == .published || phase == .durable else {
             stateLock.unlock()
             completionHandler(destinationError("destination is not commit-ready"))
             return
         }
 
         do {
-            if phase != .published {
+            if phase != .published && phase != .durable {
                 phase = .committing
                 try sink.synchronizeAndClose()
-                _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+                guard Darwin.rename(temporary.path, target.path) == 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
                 phase = .published
             }
-            try synchronizeDirectory(target.deletingLastPathComponent())
+            if phase != .durable {
+                try synchronizeDirectory(target.deletingLastPathComponent())
+                try fsyncDirectory(stagingLease.directory)
+                phase = .durable
+            }
+            try stagingLease.retire()
             phase = .committed
             stateLock.unlock()
             completionHandler(nil)
@@ -2651,7 +2679,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         switch phase {
         case .active, .abortingReservation:
             removeReservation = true
-        case .committing, .published, .abortingAfterCommit:
+        case .committing, .published, .durable, .abortingAfterCommit:
             removeReservation = false
         case .committed, .aborted:
             stateLock.unlock()
@@ -2666,6 +2694,9 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         if removeReservation { cleanupTargets.append(target) }
         for url in cleanupTargets where FileManager.default.fileExists(atPath: url.path) {
             do { try removeItem(url) } catch { cleanupError = error }
+        }
+        if cleanupError == nil {
+            do { try stagingLease.retire() } catch { cleanupError = error }
         }
         // Cleanup failure remains abort-retryable, but commit/open can never
         // resume after abort begins.
@@ -2696,17 +2727,7 @@ private func destinationError(_ message: String) -> NSError {
 }
 
 private func cleanupStaleTransferParts(in directory: URL, fileManager: FileManager) throws {
-    let entries = try fileManager.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: [.isRegularFileKey],
-        options: []
-    )
-    for entry in entries where entry.lastPathComponent.hasSuffix(".p2pkit-part") {
-        let values = try entry.resourceValues(forKeys: [.isRegularFileKey])
-        if values.isRegularFile == true {
-            try fileManager.removeItem(at: entry)
-        }
-    }
+    try SampleTransferStaging.reconcile(in: directory)
 }
 
 private func fsyncDirectory(_ directory: URL) throws {

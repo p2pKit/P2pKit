@@ -54,6 +54,24 @@ public fun durableFileDestination(
     minimumFreeSpaceBytes: Long
 ): FileTransferDestination = JvmDurableFileDestination(target, minimumFreeSpaceBytes = minimumFreeSpaceBytes)
 
+/**
+ * Stage in an exclusively application-owned directory on the target's filesystem.
+ * The directory must already exist and its path must not contain symbolic links.
+ * The application must keep it exclusively owned until commit/abort finishes; a
+ * filename alone never proves that another process's staging can be reclaimed.
+ * Atomic publication has no copy fallback. On POSIX both affected directories
+ * are synced before commit returns; Windows retains the documented directory-sync limitation.
+ */
+public fun durableFileDestination(
+    target: File,
+    stagingDirectory: File,
+    minimumFreeSpaceBytes: Long
+): FileTransferDestination = JvmDurableFileDestination(
+    target,
+    minimumFreeSpaceBytes = minimumFreeSpaceBytes,
+    stagingDirectory = stagingDirectory
+)
+
 internal class JvmDurableFileDestination(
     target: File,
     private val closeSink: (RawSink) -> Unit = { it.close() },
@@ -62,11 +80,18 @@ internal class JvmDurableFileDestination(
     private val syncDirectory: (File) -> Unit = ::forceDirectory,
     private val usableSpace: (File) -> Long = { it.usableSpace },
     private val minimumFreeSpaceBytes: Long = DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES,
-    private val openStream: (File) -> FileOutputStream = { FileOutputStream(it, false) }
+    private val openStream: (File) -> FileOutputStream = { FileOutputStream(it, false) },
+    stagingDirectory: File? = null
 ) : FileTransferDestination, StorageCapacityCheckingFileTransferDestination {
     private val target = target.absoluteFile
     private val parent = checkNotNull(this.target.parentFile) { "Target must have a parent directory" }
         .also { require(it.isDirectory) { "Target parent is not a directory: ${it.absolutePath}" } }
+    private val stagingParent = stagingDirectory?.absoluteFile?.also {
+        require(it.isDirectory && it.canonicalFile == it) { "Staging must be a non-symlink directory" }
+        require(Files.getFileStore(it.toPath()) == Files.getFileStore(parent.toPath())) {
+            "Staging and target must use the same filesystem"
+        }
+    } ?: parent
 
     init {
         require(minimumFreeSpaceBytes >= 0) { "minimumFreeSpaceBytes must be non-negative" }
@@ -94,7 +119,7 @@ internal class JvmDurableFileDestination(
     override fun openSink(): RawSink = synchronized(this) {
         check(state == DestinationState.NEW) { "Destination was already opened or terminal" }
         try {
-            val staging = createStagingFile(parent, target.name)
+            val staging = createStagingFile(stagingParent, target.name)
             temp = staging
             val opened = openStream(staging)
             stream = opened
@@ -190,6 +215,7 @@ internal class JvmDurableFileDestination(
     private fun syncParentDirectory() {
         if (isWindows(operatingSystemName)) return
         syncDirectory(parent)
+        if (stagingParent.canonicalFile != parent.canonicalFile) syncDirectory(stagingParent)
     }
 }
 

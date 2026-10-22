@@ -13,6 +13,14 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
+tasks.test {
+    // The ownership regression launches a second real JVM, not another object
+    // sharing this test worker's process-local ownership registry.
+    doFirst {
+        systemProperty("p2pkit.staging.test.classpath", sourceSets.test.get().runtimeClasspath.asPath)
+    }
+}
+
 tasks.register<JavaExec>("generateDiagnosticEvidenceSamples") {
     description = "Generate synthetic pass/fail evidence packages for every sample platform."
     group = "verification"
