@@ -38,7 +38,7 @@ kit-wide disk reservation**; budget across peers in the application.
 On JVM/Android, `durableFileDestination(target, minimumFreeSpaceBytes)` is an
 additional public storage-policy knob: the margin must be non-negative and
 defaults to 64 MiB beyond the declared file size. See the
-[JVM](../../library/p2p-core/src/jvmMain/kotlin/dev/p2pkit/core/transfer/FileTransferDestinationJvm.kt#L40-L55)
+[JVM](../../library/p2p-core/src/jvmMain/kotlin/dev/p2pkit/core/transfer/FileTransferDestinationJvm.kt#L42-L57)
 and [Android](../../library/p2p-core/src/androidMain/kotlin/dev/p2pkit/core/transfer/FileTransferDestinationAndroid.kt#L35-L53)
 factories; application-provided destinations own their storage policy.
 
