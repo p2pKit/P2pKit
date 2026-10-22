@@ -77,7 +77,7 @@ jobs:
       # namespace bootstrap. Ubuntu 22's system Python does not provide them.
       # Select a native interpreter; never substitute weaker network isolation.
       - name: Select the native namespace-capable harness interpreter
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
           architecture: 'x64'
