@@ -26,7 +26,7 @@ final class SampleTransferStagingTests: XCTestCase {
         ))
         var information = stat()
         XCTAssertEqual(SampleTransferPOSIX.fileStatus(target.path, &information), 0)
-        XCTAssertEqual(information.st_mode & S_IFMT, S_IFREG)
+        XCTAssertEqual(information.st_mode & mode_t(S_IFMT), mode_t(S_IFREG))
         let missing = inbox.appendingPathComponent("not-created")
         let missingResult = SampleTransferPOSIX.fileStatus(missing.path, &information)
         let missingError = errno
