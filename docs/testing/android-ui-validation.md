@@ -106,6 +106,24 @@ and permission/no-replay behavior remain unchanged. Local flag/unit checks do no
 qualify OS snapshots: API24/32 source-bound lifecycle, positive-control and actual
 Recents captures require separate runtime review; no all-OEM claim follows.
 
+The independently selectable `android-legacy-task-preview` diagnostic in
+`.github/workflows/ci.yml` runs `.github/workflows/android-legacy-task-preview.yml`
+on fresh API24 and API32 x86_64 emulators. It builds the exact source APKs and uses
+the same bounded, job-owned controller and encrypted 14-day evidence retention
+as the modern lane. `scripts/run-android-legacy-task-preview.py --api 24` (or
+`--api 32`) is its focused command, run under `ci_evidence.py`, not against a
+personal device. The original system-image package properties are retained.
+
+This witness mounts synthetic content in the real MainActivity, observes its
+secure window, Home/Recents, same-task reentry and recreation, and only then
+temporarily unprotects that synthetic content as a positive screenshot control.
+It reapplies production privacy and destroys both owned Activities. Its
+`HARNESS_PASS_PENDING_REVIEW` outcome is not issue closure: independent review
+must decode the original PNGs, identify the actual task card and check that it
+does not expose the synthetic representation. Container/CRC checks and
+device-side pixel samples are not a substitute for that review or physical/OEM
+qualification. The diagnostic cannot satisfy any of the 14 release components.
+
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window
 PixelCopy and finite window identities/frame statistics. These are diagnostic,

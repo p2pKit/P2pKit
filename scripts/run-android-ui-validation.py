@@ -51,7 +51,7 @@ def decode_json(raw):
     return json.loads(raw, object_pairs_hook=unique)
 
 
-def instrumentation_result(raw, case, token):
+def instrumentation_result(raw, case, token, *, definitions=CASES):
     """Exit zero/crashes/partial or duplicate bundles never earn a harness pass."""
     fields, pending, frames, codes = {}, {}, [], []
     for line in raw.decode("utf-8", errors="strict").splitlines():
@@ -69,8 +69,8 @@ def instrumentation_result(raw, case, token):
         elif line.startswith("INSTRUMENTATION_"):
             raise ValueError("Unexpected instrumentation error")
     required = {"p2pkitToken": token, "p2pkitCompleted": "1", "p2pkitOutcome": PASS,
-                "p2pkitEvidence": f"no_backup/ui-{case}-{token}", "class": CASES[case][0],
-                "test": CASES[case][1], "numtests": "1", "current": "1"}
+                "p2pkitEvidence": f"no_backup/ui-{case}-{token}", "class": definitions[case][0],
+                "test": definitions[case][1], "numtests": "1", "current": "1"}
     if case == "317":
         required["p2pkitCleanup"] = "RETIRED_OWNED_OBSERVERS"
     need(codes == ["-1"] and not pending and len(frames) == 1 and frames[0][0] == "0",
@@ -329,7 +329,7 @@ def main(argv=None, *, campaign=None):
 
     need(not git("status", "--porcelain", "--untracked-files=normal"), "Clean committed source required")
     source, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
-    write_json(report / "source.json", {"commit": source, "tree": tree, "case": "372" if campaign is not None else args.case,
+    write_json(report / "source.json", {"commit": source, "tree": tree, "case": getattr(campaign, "CASE", "372") if campaign is not None else args.case,
                "scope": scope})
     emulator_options = campaign.prepare_emulator(run=run, sdk=sdk, report=report) if campaign is not None else ()
     run([ROOT / "gradlew", ":p2p-sample-android:clean", ":p2p-sample-android:assembleDebug",

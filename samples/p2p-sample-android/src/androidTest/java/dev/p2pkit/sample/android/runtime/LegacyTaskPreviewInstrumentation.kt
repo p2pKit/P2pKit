@@ -91,6 +91,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 result.putString("p2pkitRetention", "FAIL")
             }
             result.putString("p2pkitToken", token)
+            result.putString("p2pkitEvidence", "no_backup/ui-479-$token")
             result.putString("p2pkitOutcome", if (failure == null) outcome else "FAIL")
             result.putString("p2pkitCompleted", "1")
             result.putString("class", javaClass.name)
@@ -162,7 +163,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         main {
             val manager = application.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             @Suppress("DEPRECATION") // RecentTaskInfo.id is the public API24-compatible field.
-            val task = manager.appTasks.single { it.taskInfo.id == firstTask }
+            val task = manager.appTasks.single { it.taskInfo?.id == firstTask }
             task.moveToFront()
         }
         await { main { first.hasWindowFocus() && created.size == 1 } }

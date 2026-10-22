@@ -130,7 +130,7 @@ TASK_NAMES = frozenset({
     "wrapper", "layout", "links", "release-metadata", "ios-launcher-controls", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
-    "apple-issue-validation-test.py", "run-android-ui-validation-test.py",
+    "apple-issue-validation-test.py", "run-android-ui-validation-test.py", "android-legacy-task-preview-test.py",
     "tcp-nodelay-latency-test.py", "protocol-ping-latency-test.py", "run-rpc-qualification-test.py",
     "run-jmdns-interpreter-diagnostic-test.py", "jmdns-interpreter-diagnostic",
     "run-android-permission-validation-test.py",
