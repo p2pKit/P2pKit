@@ -166,6 +166,7 @@ for required_value in KOTLIN_VERSION AGP_VERSION COROUTINES_VERSION IOS_MIN_VERS
 done
 
 LAN_METADATA_KOTLIN_VERSION="$KOTLIN_VERSION"
+LAN_METADATA_COROUTINES_VERSION="$COROUTINES_VERSION"
 if [[ "${1:-}" == "--latest-published" ]]; then
     [[ $# -eq 1 ]] || { echo "FAIL: --latest-published accepts no additional arguments" >&2; exit 2; }
     [[ -n "$LATEST_PUBLISHED" && "$LATEST_PUBLISHED" != *-SNAPSHOT ]] || {
@@ -180,6 +181,7 @@ if [[ "${1:-}" == "--latest-published" ]]; then
     # Select the published contract, not the age of the command-line option.
     # Historical 0.7 bytes retain upstream JmDNS and no RPC. Published rc2 uses
     # the same relocated-LAN/complete-RPC fixture as its qualified release gate.
+    # Later reviewed release tags retain that contract with Kotlin 2.4.20.
     # Future versions require an explicit reviewed contract, not a legacy fallback.
     case "$VERSION" in
         0.7.0-rc2|0.7.0-rc3) CURRENT_SOURCE_CONSUMER=0 ;;
@@ -188,6 +190,14 @@ if [[ "${1:-}" == "--latest-published" ]]; then
             # This release's producer metadata is immutable. Compile its
             # isolated consumers with the current catalog toolchain instead.
             LAN_METADATA_KOTLIN_VERSION="2.4.10"
+            LAN_METADATA_COROUTINES_VERSION="1.11.0"
+            ;;
+        0.8.0-rc3|0.8.0-rc4|0.8.0-rc5|0.8.0-rc6)
+            CURRENT_SOURCE_CONSUMER=1
+            # Verified against each immutable v0.8.0-rc{3,4,5,6} producer catalog.
+            # Never infer a future publication's metadata from today's compiler.
+            LAN_METADATA_KOTLIN_VERSION="2.4.20"
+            LAN_METADATA_COROUTINES_VERSION="1.11.0"
             ;;
         *)
             echo "FAIL: unsupported latest-published consumer contract: $VERSION" >&2
@@ -365,7 +375,7 @@ if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
     # A successful project-local build cannot prove that the embedded component
     # ships. Inspect both published metadata formats before isolated resolution;
     # an unknown/file/private edge is a failure, not a dependency to auto-admit.
-    python3 - "$BASE" "$GROUP" "$VERSION" "$LAN_METADATA_KOTLIN_VERSION" "$COROUTINES_VERSION" <<'PY_LAN_METADATA'
+    python3 - "$BASE" "$GROUP" "$VERSION" "$LAN_METADATA_KOTLIN_VERSION" "$LAN_METADATA_COROUTINES_VERSION" <<'PY_LAN_METADATA'
 import json
 from pathlib import Path
 import sys

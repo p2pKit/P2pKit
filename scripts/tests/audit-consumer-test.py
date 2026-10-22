@@ -1471,10 +1471,11 @@ class ConsumerGateTest(unittest.TestCase):
             if version == "0.8.0-rc2":
                 # Immutable published producer metadata, not the new consumer compiler.
                 boundary = boundary.replace(KOTLIN_VERSION, "2.4.10")
+            elif version in ("0.8.0-rc3", "0.8.0-rc4", "0.8.0-rc5", "0.8.0-rc6"):
+                boundary = boundary.replace(KOTLIN_VERSION, "2.4.20")
             path.write_text(boundary)
 
-    def test_latest_published_rc2_uses_complete_rpc_and_relocated_lan_contract(self):
-        version = "0.8.0-rc2"
+    def assert_complete_latest_published_contract(self, version):
         self.select_latest_published_fixture(version)
         result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
                                 "P2PKIT_CONSUMER_WORK_DIR": str(self.work)},
@@ -1497,6 +1498,47 @@ class ConsumerGateTest(unittest.TestCase):
                       (self.work / "consumer/kmpConsumer/build.gradle.kts").read_text())
         self.assertEqual(len(self.calls("xcrun")), 1)
         self.assertFalse(self.calls("executor"))
+
+    def test_latest_published_rc2_uses_complete_rpc_and_relocated_lan_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc2")
+
+    def test_latest_published_rc3_complete_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc3")
+
+    def test_latest_published_rc4_complete_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc4")
+
+    def test_latest_published_rc5_complete_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc5")
+
+    def test_latest_published_rc6_complete_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc6")
+
+    def test_repository_actual_latest_published_has_reviewed_complete_contract(self):
+        # Deliberately select the maintained property, not a hard-coded old RC.
+        latest = next(line.split("=", 1)[1].strip() for line in
+                      (ROOT / "gradle.properties").read_text().splitlines()
+                      if line.startswith("LATEST_PUBLISHED_VERSION="))
+        self.assert_complete_latest_published_contract(latest)
+        self.assertIn(f'kotlin("jvm") version "{KOTLIN_VERSION}" apply false',
+                      (self.work / "consumer/build.gradle.kts").read_text())
+
+    def test_latest_published_rc6_keeps_producer_coroutines_with_updated_catalog(self):
+        catalog = self.root / "gradle/libs.versions.toml"
+        catalog.write_text(catalog.read_text().replace(COROUTINES_VERSION, "99.0.0"))
+        self.assert_complete_latest_published_contract("0.8.0-rc6")
+
+    def test_latest_published_rc6_rejects_relabelled_producer_metadata(self):
+        self.select_latest_published_fixture("0.8.0-rc6")
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "FAKE_LAN_POM_MUTATION": json.dumps({
+                                    "artifact": "p2p-transport-lan-jvm",
+                                    "values": {"groupId": "org.jetbrains.kotlin", "artifactId": "kotlin-stdlib",
+                                               "version": KOTLIN_VERSION, "scope": "compile"},
+                                })}, arguments=("--latest-published",))
+        self.assert_rejected(result, "embedded LAN publication metadata")
+        self.assertFalse(self.calls("gradle"))
+        self.assertFalse(self.calls("xcrun"))
 
     def test_latest_published_rc2_keeps_producer_metadata_with_updated_consumer_compiler(self):
         catalog = self.root / "gradle/libs.versions.toml"
@@ -1563,7 +1605,7 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertFalse(self.calls("xcrun"))
 
     def test_latest_published_unknown_contract_fails_before_remote_or_gradle_boundary(self):
-        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc20", "0.8.0-rc2-extra", "0.8.0", VERSION):
+        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc7", "0.8.0-rc20", "0.8.0-rc2-extra", "0.8.0", VERSION):
             with self.subTest(version=version):
                 self.select_latest_published_fixture(version)
                 result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},
