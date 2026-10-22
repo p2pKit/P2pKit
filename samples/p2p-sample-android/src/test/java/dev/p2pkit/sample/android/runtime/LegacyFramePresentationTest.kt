@@ -83,4 +83,44 @@ class LegacyFramePresentationTest {
         })
         assertEquals(1, reads)
     }
+
+    @Test
+    fun eventIdleUsesOneExactRemainingBudgetAndCanAlreadyBeIdle() {
+        val calls = mutableListOf<Pair<Long, Long>>()
+        assertEquals(2L, awaitLegacyAccessibilityIdle(5, { 2 }) { start, remaining -> calls += start to remaining })
+        assertEquals(listOf(2L to 3L), calls)
+    }
+
+    @Test
+    fun expiredEventIdleNeverInvokesPlatformOrFrameWork() {
+        var calls = 0
+        assertEquals(LegacyCaptureFailureCode.PRESENTATION_ADMISSION_TIMEOUT,
+            assertFailsWith<LegacyCaptureFailure> {
+                awaitLegacyAccessibilityIdle(5, { 5 }) { _, _ -> calls++ }
+            }.code)
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun eventIdleOriginalExceptionIsPreservedAndNeverRetried() {
+        var calls = 0
+        val original = IllegalStateException("synthetic event-stream failure")
+        assertSame(original, assertFailsWith<IllegalStateException> {
+            awaitLegacyAccessibilityIdle(5, { 0 }) { _, _ -> calls++; throw original }
+        })
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun lateEventIdleCannotReachFrameClearing() {
+        var clock = 0L
+        var clears = 0
+        assertEquals(LegacyCaptureFailureCode.PRESENTATION_ADMISSION_TIMEOUT,
+            assertFailsWith<LegacyCaptureFailure> {
+                awaitLegacyAccessibilityIdle(5, { clock }) { _, _ -> clock = 6 }
+                awaitLegacyPresentation(5, { clock }, { clears++; true }, {}, { Any() }, {})
+            }.code)
+        assertEquals(0, clears)
+    }
+
 }

@@ -51,7 +51,9 @@ def fixture(api=24, unavailable=False):
             presentation = dict(startedElapsedMillis=95 + index * 10, deadlineElapsedMillis=5095 + index * 10,
                 completedElapsedMillis=99 + index * 10, budgetMillis=5000, operation="READY", lastRootGuard="READY", root=root,
                 baselineDraws=1, clearReturned=True, invalidatedNano=1000, polls=2, frameCount=2, observedDraws=2,
-                queriedNano=1300, frameIndex=1, postedNano=990, readyNano=1100, presentedNano=1200)
+                queriedNano=1300, frameIndex=1, postedNano=990, readyNano=1100, presentedNano=1200,
+                eventIdle=dict(quietMillis=500, startedElapsedMillis=95 + index * 10, maximumWaitMillis=5000,
+                    completedElapsedMillis=96 + index * 10, returned=True))
             item.update(sampleMatches=[visible] * 4, stateBefore=state, stateAfter=copy.deepcopy(state),
                         presentation=presentation, activeRootAfter=copy.deepcopy(root))
         else:
@@ -72,14 +74,15 @@ def fixture(api=24, unavailable=False):
             files[name + ".png"] = synthetic_png(visible)
         captures.append(item)
     report = dict(case="479", token=TOKEN, sourceCommit=SOURCE, declaredSourceTree=TREE,
-        api=api, targetSdk=37, captureObservationSchema=4, outcome=legacy.owner.PASS,
+        api=api, targetSdk=37, captureObservationSchema=5, outcome=legacy.owner.PASS,
         syntheticOnly=True, recentsReviewRequired=True, cleanup="OWNED_ACTIVITIES_DESTROYED", taskId=7,
         recentsObserver=dict(provider="com.android.systemui" if api == 24 else "com.google.android.apps.nexuslauncher",
             publicAppLabel="P2pKit Sample", requiredFlagsPresent=True, serviceFlags=82,
             closeActionId=0 if api == 24 else 1001, maxNodes=256, maxDepth=24),
         interactiveWindowObserver=dict(original=18, requested=82, readback=82, restored=18, operation="RESTORED"),
         recentsAdmission=dict(startedElapsedMillis=105, deadlineElapsedMillis=5105, completedElapsedMillis=108,
-            budgetMillis=5000, attempts=2, operation="READY", lastRootGuard="READY"),
+            budgetMillis=5000, attempts=2, operation="READY", lastRootGuard="READY", lastCompletedGuard="READY",
+            lastCompletedAttempt=2, guardCounts={"ROOT_MISSING": 1, "READY": 1}),
         navigationRequests=[dict(action=action, platformAction=platform, requestedElapsedMillis=start,
             returnedElapsedMillis=start + 1, returned=True, accepted=True, operation="GLOBAL_ACTION_RETURNED")
             for action, platform, start in (("HOME", 2, 101), ("RECENTS", 3, 103))],
@@ -113,6 +116,43 @@ class LegacyTaskTests(unittest.TestCase):
                 report, files = fixture(api, unavailable)
                 self.assertTrue(self.validate(report, files, api)["recentsReviewRequired"])
             self.assertEqual(legacy.LegacyCampaign(api).API, api)
+
+    def test_event_idle_is_required_inside_original_bound_not_pixel_or_animation_proof(self):
+        for key, invalid in (("quietMillis", 501), ("returned", False), ("returned", 1),
+                ("maximumWaitMillis", 5001), ("maximumWaitMillis", 0), ("startedElapsedMillis", 94),
+                ("completedElapsedMillis", 5100)):
+            report, files = fixture()
+            report["captures"][0]["presentation"]["eventIdle"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        del report["captures"][0]["presentation"]["eventIdle"]
+        with self.assertRaises(ValueError): self.validate(report, files)
+        # Already-idle event streams may return immediately; that never replaces original pixels.
+        report, files = fixture()
+        idle = report["captures"][0]["presentation"]["eventIdle"]
+        idle["completedElapsedMillis"] = idle["startedElapsedMillis"]
+        self.assertTrue(self.validate(report, files)["recentsReviewRequired"])
+
+    def test_completed_guard_history_cannot_claim_a_partial_current_query_is_ready(self):
+        for key, invalid in (("lastCompletedGuard", "TREE_INCOMPLETE"), ("lastCompletedAttempt", 1),
+                ("guardCounts", {"READY": 2}), ("guardCounts", {"READY": 1}),
+                ("guardCounts", {"READY": 1, "UNKNOWN": 1})):
+            report, files = fixture()
+            report["recentsAdmission"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_event_idle_and_finite_diagnostics_do_not_retry_or_weaken_after_capture(self):
+        source = (ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        self.assertEqual(source.count("uiAutomation.waitForIdle("), 1)
+        self.assertIn("uiAutomation.waitForIdle(500, maximumWait)", source)
+        self.assertLess(source.index("awaitLegacyAccessibilityIdle(until"), source.index("uiAutomation.clearWindowContentFrameStats("))
+        self.assertLess(source.index('diagnostic?.put("windowId"'), source.index('return pending("ROOT_NOT_VISIBLE")'))
+        self.assertNotIn('.remove("lastRootGuard")', source)
+        self.assertIn('report.put("recentsQueryLastCompleted", JSONObject(query.toString()))', source)
+        self.assertIn("if (primaryFailure == null) throw error", source)
+        self.assertIn("sameAppCapture(appBefore, checkNotNull(appAfter))", source)
+        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+        self.assertNotIn("clearCache(", source)
 
     def test_observer_flags_must_preserve_exact_original_and_restore_even_after_failure(self):
         for key, invalid in (("original", True), ("requested", 64), ("readback", 18),
@@ -384,9 +424,12 @@ class LegacyTaskTests(unittest.TestCase):
         observation = source.split("    private fun recentsState(", 1)[1].split("    private fun admittedRecentsState(", 1)[0]
         self.assertIn("val until = minOf(deadline, started + 5_000)", poll)
         self.assertIn("return state // No second root acquisition", poll)
-        self.assertEqual(poll.count("recentsState(until)"), 1)
+        self.assertEqual(poll.count("recentsState(until, query)"), 1)
         self.assertNotIn("catch", poll)
-        self.assertNotIn("catch", observation)
+        self.assertEqual(observation.count("catch (error: Throwable)"), 2)
+        self.assertIn("primaryFailure = error\n            throw error", observation)
+        self.assertIn("if (primaryFailure == null) throw error", observation)
+        self.assertLess(observation.index("checkLegacyCapture(exactTask"), observation.index("var primaryFailure"))
         self.assertIn("val systemBefore = if (view == null) admittedRecentsState(attempt) else null", source)
         self.assertIn("systemBefore.toString() == systemAfter?.toString()", source)
         self.assertIn("first in stopped && !first.hasWindowFocus() && secure(first)", observation)

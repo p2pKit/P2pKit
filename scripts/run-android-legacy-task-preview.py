@@ -86,9 +86,9 @@ def validate_presentation(item, state):
     need(isinstance(receipt, dict) and set(receipt) ==
          {"startedElapsedMillis", "deadlineElapsedMillis", "completedElapsedMillis", "budgetMillis", "operation",
           "root", "baselineDraws", "clearReturned", "invalidatedNano", "polls", "frameCount", "observedDraws",
-          "queriedNano", "frameIndex", "postedNano", "readyNano", "presentedNano", "lastRootGuard"},
+          "queriedNano", "frameIndex", "postedNano", "readyNano", "presentedNano", "lastRootGuard", "eventIdle"},
          "Missing exact bounded presentation observation")
-    for key in set(receipt) - {"operation", "root", "clearReturned", "lastRootGuard"}:
+    for key in set(receipt) - {"operation", "root", "clearReturned", "lastRootGuard", "eventIdle"}:
         need(type(receipt[key]) is int, "Invalid presentation scalar")
     need(receipt["operation"] == receipt["lastRootGuard"] == "READY" and receipt["clearReturned"] is True and
          receipt["budgetMillis"] == 5000 and
@@ -98,6 +98,15 @@ def validate_presentation(item, state):
          0 <= receipt["frameIndex"] < receipt["frameCount"] <= 1024 and receipt["polls"] > 0 and
          0 < receipt["baselineDraws"] < receipt["observedDraws"] == state["viewDraws"],
          "Presentation was missing, stale, undefined, late or only a CPU draw")
+    idle = receipt["eventIdle"]
+    need(isinstance(idle, dict) and set(idle) ==
+         {"quietMillis", "startedElapsedMillis", "maximumWaitMillis", "completedElapsedMillis", "returned"} and
+         all(type(idle[key]) is int for key in set(idle) - {"returned"}) and
+         idle["quietMillis"] == 500 and idle["returned"] is True and idle["maximumWaitMillis"] > 0 and
+         receipt["startedElapsedMillis"] <= idle["startedElapsedMillis"] <= idle["completedElapsedMillis"] <=
+         receipt["completedElapsedMillis"] <= receipt["deadlineElapsedMillis"] and
+         idle["maximumWaitMillis"] == receipt["deadlineElapsedMillis"] - idle["startedElapsedMillis"],
+         "Missing or late accessibility-event-idle precondition in original presentation budget")
     root = receipt["root"]
     need(isinstance(root, dict) and set(root) == {"windowId", "package", "bounds", "viewBounds", "interactiveWindow"} and
          root == item.get("activeRootAfter") and type(root["windowId"]) is int and root["windowId"] >= 0 and
@@ -129,7 +138,7 @@ def validate_report(raw, token, source, tree, api, files):
     need(api in IMAGES and value.get("api") == api and value.get("case") == "479" and
          value.get("token") == token and value.get("sourceCommit") == source and
          value.get("declaredSourceTree") == tree and value.get("targetSdk") == 37 and
-         value.get("captureObservationSchema") == 4 and value.get("outcome") == owner.PASS and
+         value.get("captureObservationSchema") == 5 and value.get("outcome") == owner.PASS and
          value.get("syntheticOnly") is True and value.get("recentsReviewRequired") is True and
          value.get("cleanup") == "OWNED_ACTIVITIES_DESTROYED" and
          not any(key in value for key in ("failure", "cleanupFailureType", "observerCleanupFailureType")),
@@ -190,10 +199,18 @@ def validate_report(raw, token, source, tree, api, files):
     admission = value.get("recentsAdmission")
     need(isinstance(admission, dict) and set(admission) ==
          {"startedElapsedMillis", "deadlineElapsedMillis", "completedElapsedMillis", "budgetMillis",
-          "attempts", "operation", "lastRootGuard"} and
-         admission["operation"] == admission["lastRootGuard"] == "READY" and
+          "attempts", "operation", "lastRootGuard", "lastCompletedGuard", "lastCompletedAttempt", "guardCounts"} and
+         admission["operation"] == admission["lastRootGuard"] == admission["lastCompletedGuard"] == "READY" and
+         type(admission["lastCompletedAttempt"]) is int and admission["lastCompletedAttempt"] == admission["attempts"] and
          type(admission["attempts"]) is int and admission["attempts"] > 0 and admission["budgetMillis"] == 5000,
          "Missing complete bounded Recents admission")
+    guard_counts = admission["guardCounts"]
+    need(isinstance(guard_counts, dict) and set(guard_counts) <=
+         {"ROOT_MISSING", "ROOT_REFRESH_FAILED", "ROOT_NOT_VISIBLE", "ROOT_PACKAGE_INVALID", "ROOT_GEOMETRY_INVALID",
+          "TREE_INCOMPLETE", "CARD_NOT_IDENTIFIED", "READY"} and
+         all(type(count) is int and count > 0 for count in guard_counts.values()) and
+         guard_counts.get("READY") == 1 and sum(guard_counts.values()) == admission["attempts"],
+         "Completed Recents guard history is missing, stale or inconsistent")
     start, finish, deadline = (admission[key] for key in
         ("startedElapsedMillis", "completedElapsedMillis", "deadlineElapsedMillis"))
     need(all(type(x) is int for x in (start, finish, deadline)) and

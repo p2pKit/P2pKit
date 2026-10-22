@@ -132,7 +132,10 @@ interactive-window inventory. The instrumentation preserves its original service
 flags, requests only the additional interactive-window observation flag, verifies
 readback, and independently restores the exact original flags during cleanup.
 Window and root bounds each contain the real view and samples; they need not
-be equal across system insets. It clears frame statistics once, invalidates once and observes
+be equal across system insets. Within the same five-second admission, a single
+public accessibility-event-idle wait requests 500ms of event quietness; it is not
+animation/compositor completion or proof of the previous failure's cause. Late
+returns fail. It then clears frame statistics once, invalidates once and observes
 a new draw plus a defined post-invalidation presented-frame timestamp within
 the same five-second admission bound. Missing statistics fail without a CPU-only
 fallback. This timing observation is not unique buffer identity or pixel proof;

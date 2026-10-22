@@ -39,3 +39,17 @@ internal fun <T : Any> awaitLegacyPresentation(
         pause()
     }
 }
+
+/** Accessibility-event quietness only, not compositor/animation completion or pixel identity. */
+internal fun awaitLegacyAccessibilityIdle(
+    until: Long,
+    now: () -> Long,
+    wait: (started: Long, maximumWait: Long) -> Unit,
+): Long {
+    val started = now()
+    val remaining = until - started
+    checkLegacyCapture(remaining > 0, LegacyCaptureFailureCode.PRESENTATION_ADMISSION_TIMEOUT)
+    wait(started, remaining)
+    // API24 may finish an idle-interval wait before rechecking its global timeout. Never accept a late return.
+    return now().also { checkLegacyCapture(it <= until, LegacyCaptureFailureCode.PRESENTATION_ADMISSION_TIMEOUT) }
+}

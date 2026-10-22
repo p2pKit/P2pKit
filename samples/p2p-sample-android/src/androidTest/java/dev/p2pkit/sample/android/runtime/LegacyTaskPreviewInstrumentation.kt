@@ -152,7 +152,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             .put("sourceBinding", "host must bind clean checkout/tree, installed APK hashes and original run")
             .put("api", Build.VERSION.SDK_INT).put("fingerprint", Build.FINGERPRINT).put("pid", Process.myPid())
             .put("targetSdk", application.applicationInfo.targetSdkVersion)
-            .put("syntheticOnly", true).put("captureObservationSchema", 4).put("bodyObservationBudgetMillis", 90_000)
+            .put("syntheticOnly", true).put("captureObservationSchema", 5).put("bodyObservationBudgetMillis", 90_000)
             .put("perMainCallAndAwaitMillis", 5_000)
         deadline = SystemClock.elapsedRealtime() + 90_000
         stage = "observer-flags-admission"
@@ -293,7 +293,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
 
     /** The ID comes from the actual owned View, not a guessed first window or a fabricated node. */
     private fun appCaptureSample(
-        activity: MainActivity, view: PatternView, visible: Boolean, guard: (String) -> Unit,
+        activity: MainActivity, view: PatternView, visible: Boolean, diagnostic: JSONObject? = null,
+        guard: (String) -> Unit,
     ): AppCaptureSample? {
         fun pending(reason: String): AppCaptureSample? { guard(reason); return null }
         val state = captureState(activity, view)
@@ -306,9 +307,19 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             } finally { @Suppress("DEPRECATION") node.recycle() }
         }
         checkLegacyCapture(owned.third, LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
-        val root = uiAutomation.rootInActiveWindow ?: return pending("ROOT_MISSING")
+        val root = uiAutomation.rootInActiveWindow
+        diagnostic?.put("rootAvailable", root != null)
+        if (root == null) return pending("ROOT_MISSING")
         try {
-            if (!root.refresh()) return pending("ROOT_REFRESH_FAILED")
+            val refreshed = root.refresh()
+            diagnostic?.put("refreshed", refreshed)
+            if (!refreshed) return pending("ROOT_REFRESH_FAILED")
+            // Same refreshed root, no extra query or arbitrary system text; do not erase a failed after sample.
+            diagnostic?.put("windowId", root.windowId)?.put("idMatchesActualView", root.windowId == owned.first)
+                ?.put("packageMatchesTarget", root.packageName?.toString() == targetContext.packageName)
+                ?.put("visible", root.isVisibleToUser)?.put("bounds", Rect().also(root::getBoundsInScreen).let {
+                    JSONArray(listOf(it.left, it.top, it.right, it.bottom))
+                })
             if (!root.isVisibleToUser) return pending("ROOT_NOT_VISIBLE")
             if (root.windowId < 0 || root.windowId != owned.first) return pending("ROOT_WINDOW_MISMATCH")
             if (root.packageName?.toString() != targetContext.packageName) return pending("ROOT_PACKAGE_MISMATCH")
@@ -320,6 +331,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             }
             val window = interactiveWindow(root.windowId, viewBounds, state.points)
                 ?: return pending("INTERACTIVE_WINDOW_NOT_READY")
+            diagnostic?.put("interactiveWindow", JSONObject().put("windowId", window.id).put("type", window.type)
+                .put("active", window.active).put("focused", window.focused).put("bounds", JSONArray(window.bounds)))
             guard("READY")
             return AppCaptureSample(state, JSONObject().put("windowId", root.windowId)
                 .put("package", targetContext.packageName)
@@ -362,6 +375,18 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         attempt.put("presentation", receipt)
         fun bounded() = checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
             LegacyCaptureFailureCode.PRESENTATION_ADMISSION_TIMEOUT)
+        bounded()
+        checkLegacyCaptureState(captureState(activity, view), secure = !visible)
+        receipt.put("operation", "ACCESSIBILITY_EVENT_IDLE")
+        val idle = JSONObject().put("quietMillis", 500)
+        receipt.put("eventIdle", idle)
+        val idleCompleted = awaitLegacyAccessibilityIdle(until, SystemClock::elapsedRealtime) { started, maximumWait ->
+            idle.put("startedElapsedMillis", started).put("maximumWaitMillis", maximumWait)
+            uiAutomation.waitForIdle(500, maximumWait)
+            idle.put("returned", true)
+        }
+        idle.put("completedElapsedMillis", idleCompleted)
+        receipt.put("operation", "ACTIVE_OWNED_ROOT")
         var baseline: AppCaptureSample
         while (true) {
             bounded()
@@ -442,8 +467,10 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         val bitmap = uiAutomation.takeScreenshot()
         try {
             attempt.put("screenshotReturned", true).put("screenshotAvailable", bitmap != null)
+            val afterRoot = JSONObject()
+            if (view != null) attempt.put("afterRootObservation", afterRoot)
             val appAfter = view?.let { requireLegacyCaptureValue(
-                appCaptureSample(checkNotNull(activity), it, checkNotNull(visible)) { guard ->
+                appCaptureSample(checkNotNull(activity), it, checkNotNull(visible), afterRoot) { guard ->
                     attempt.put("activeRootAfterGuard", guard)
                 },
                 LegacyCaptureFailureCode.CAPTURE_STATE_INVALID) }
@@ -529,8 +556,11 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         } finally { bitmap?.recycle() }
     }
 
-    private fun recentsState(until: Long, guard: (LegacyRecentsGuard) -> Unit): JSONObject? {
+    private fun recentsState(
+        until: Long, query: JSONObject? = null, guard: (LegacyRecentsGuard) -> Unit,
+    ): JSONObject? {
         fun pending(value: LegacyRecentsGuard): JSONObject? { guard(value); return null }
+        query?.put("phase", "OWNED_TASK")
         val first = created.first()
         val owner = main {
             checkLegacyCapture(!first.isDestroyed && first in stopped && !first.hasWindowFocus() && secure(first),
@@ -550,7 +580,11 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 .put("secureFlag", true).put("stopped", true).put("windowFocused", false)
                 .put("ownedTaskCount", tasks.size).put("baseActivityMatches", true).put("topActivityMatches", true)
         }
+        query?.put("phase", "ACTIVE_ROOT")
         val root = uiAutomation.rootInActiveWindow ?: return pending(LegacyRecentsGuard.ROOT_MISSING)
+        val nodes = mutableListOf<LegacyRecentsNode>()
+        var treeComplete = false
+        var primaryFailure: Throwable? = null
         try {
             if (!root.refresh()) return pending(LegacyRecentsGuard.ROOT_REFRESH_FAILED)
             if (!root.isVisibleToUser) return pending(LegacyRecentsGuard.ROOT_NOT_VISIBLE)
@@ -559,7 +593,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             if (bounds.width() <= 0 || bounds.height() <= 0 || root.windowId < 0) {
                 return pending(LegacyRecentsGuard.ROOT_GEOMETRY_INVALID)
             }
-            val nodes = mutableListOf<LegacyRecentsNode>()
+            query?.put("phase", "TREE_VISIT")?.put("visitedNodeCount", 0)
             var complete = true
             fun visit(node: AccessibilityNodeInfo, parent: Int?, depth: Int) {
                 checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
@@ -582,6 +616,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                     node.text?.toString() == publicAppLabel, node.contentDescription?.toString() == publicAppLabel,
                     node.collectionItemInfo != null,
                     recentsCloseAction != 0 && node.actionList.any { it.id == recentsCloseAction })
+                query?.put("visitedNodeCount", nodes.size)
                 checkLegacyCapture(node.childCount <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
                 for (childIndex in 0 until node.childCount) {
                     checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
@@ -596,6 +631,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             visit(root, null, 0)
             checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
                 LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+            treeComplete = complete
+            query?.put("treeComplete", complete)?.put("phase", "CARD_SELECTION")
             if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)
             val card = findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)
                 ?: return pending(LegacyRecentsGuard.CARD_NOT_IDENTIFIED)
@@ -608,7 +645,33 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             return owner.put("package", recentsProvider).put("windowId", root.windowId)
                 .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
                 .put("taskCard", anchor)
-        } finally { @Suppress("DEPRECATION") root.recycle() }
+        } catch (error: Throwable) {
+            primaryFailure = error
+            throw error
+        } finally {
+            try {
+                if (query != null) retainRecentsQuery(query, nodes, treeComplete)
+            } catch (error: Throwable) {
+                // Diagnostic failure cannot replace the original query/ownership/budget failure.
+                if (primaryFailure == null) throw error
+            } finally { @Suppress("DEPRECATION") root.recycle() }
+        }
+    }
+
+    private fun retainRecentsQuery(query: JSONObject, nodes: List<LegacyRecentsNode>, complete: Boolean) {
+        val summary = summarizeLegacyRecentsNodes(nodes)
+        query.put("treeComplete", complete).put("predicateCounts", JSONObject(summary.counts))
+            .put("candidateCount", summary.candidateCount).put("candidatesTruncated", summary.candidateCount > 16)
+        query.put("candidates", JSONArray(summary.candidates.map { index ->
+            val node = nodes[index]
+            JSONObject().put("index", index).put("parent", node.parent ?: JSONObject.NULL)
+                .put("resource", node.resource.name).put("visible", node.visible).put("owned", node.owned)
+                .put("bounds", JSONArray(node.bounds)).put("labelMatches", node.labelMatches)
+                .put("descriptionMatches", node.descriptionMatches).put("closeAction", node.closeAction)
+                .put("taskCollectionItem", node.taskCollectionItem)
+                .put("snapshotChildCount", nodes.count { it.parent == index &&
+                    it.resource == LegacyRecentsResource.SNAPSHOT })
+        }))
     }
 
     private fun admittedRecentsState(attempt: JSONObject): JSONObject {
@@ -618,10 +681,24 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             .put("budgetMillis", 5_000).put("attempts", 0).put("operation", "PENDING")
         report.put("recentsAdmission", admission)
         attempt.put("operation", "RECENTS_ROOT_ADMISSION")
-        var count = 0
+        val progress = LegacyRecentsProgress()
         val state = awaitLegacyRecentsState(until, SystemClock::elapsedRealtime, { Thread.sleep(20) }) {
-            admission.put("attempts", ++count).put("operation", "OBSERVING").remove("lastRootGuard")
-            recentsState(until) { admission.put("lastRootGuard", it.name) }
+            progress.begin()
+            admission.put("attempts", progress.attempt).put("operation", "OBSERVING")
+            val query = JSONObject().put("attempt", progress.attempt)
+                .put("startedElapsedMillis", SystemClock.elapsedRealtime())
+            report.put("recentsQueryCurrent", query)
+            var returnedGuard: LegacyRecentsGuard? = null
+            val value = recentsState(until, query) { returnedGuard = it }
+            val guard = checkNotNull(returnedGuard)
+            progress.completed(guard)
+            query.put("phase", "RETURNED").put("guard", guard.name)
+                .put("completedElapsedMillis", SystemClock.elapsedRealtime())
+            admission.put("lastRootGuard", guard.name).put("lastCompletedGuard", guard.name)
+                .put("lastCompletedAttempt", progress.lastCompletedAttempt)
+                .put("guardCounts", JSONObject(progress.guardCounts.mapKeys { it.key.name }))
+            report.put("recentsQueryLastCompleted", JSONObject(query.toString()))
+            value
         }
         admission.put("completedElapsedMillis", SystemClock.elapsedRealtime()).put("operation", "READY")
         return state // No second root acquisition before the one original screenshot.
