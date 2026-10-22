@@ -75,6 +75,45 @@ class OwnedStagingDirectoryJvmTest {
         assertTrue(stage.listFiles()!!.isEmpty())
     }
 
+    @Test
+    fun symbolicLinkIsRejectedEvenWhenCanonicalizationPreservesItsSpelling() = withDirectories { parent, stage ->
+        val link = File(parent, "stage-link")
+        Files.createSymbolicLink(link.toPath(), stage.toPath())
+        assertTrue(Files.isSymbolicLink(link.toPath()))
+        val directory = CanonicalIdentityFile(link)
+        assertEquals(directory, directory.canonicalFile)
+        assertFailsWith<IllegalArgumentException> { durableFileDestination(File(parent, "target"), directory, 0) }
+        assertTrue(stage.listFiles()!!.isEmpty())
+    }
+
+    @Test
+    fun symbolicLinkAncestorIsRejectedBeforeOpeningPayload() = withDirectories { parent, stage ->
+        val nested = File(stage, "nested").also { check(it.mkdir()) }
+        val link = File(parent, "stage-link")
+        Files.createSymbolicLink(link.toPath(), stage.toPath())
+        val directory = CanonicalIdentityFile(File(link, nested.name))
+        assertTrue(directory.isDirectory)
+        assertFailsWith<IllegalArgumentException> { durableFileDestination(File(parent, "target"), directory, 0) }
+        assertTrue(nested.listFiles()!!.isEmpty())
+    }
+
+    @Test
+    fun symbolicLinkBeforeParentTraversalIsNotNormalizedAway() = withDirectories { parent, stage ->
+        val link = File(parent, "stage-link")
+        Files.createSymbolicLink(link.toPath(), stage.toPath())
+        val directory = CanonicalIdentityFile(File(link, "../${stage.name}"))
+        assertTrue(directory.isDirectory)
+        assertFailsWith<IllegalArgumentException> { durableFileDestination(File(parent, "target"), directory, 0) }
+        assertTrue(stage.listFiles()!!.isEmpty())
+    }
+
+    // Model a platform whose File canonicalization keeps a real symbolic link's
+    // spelling. NIO still reads the actual filesystem; no attribute result is faked.
+    private class CanonicalIdentityFile(file: File) : File(file.absolutePath) {
+        override fun getAbsoluteFile(): File = this
+        override fun getCanonicalFile(): File = this
+    }
+
     private inline fun withDirectories(block: (File, File) -> Unit) {
         val parent = Files.createTempDirectory("p2pkit-owned-stage-").toFile().canonicalFile
         val stage = File(parent, "owned").also { check(it.mkdir()) }

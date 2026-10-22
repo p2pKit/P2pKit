@@ -6,8 +6,10 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
 import kotlinx.io.RawSink
@@ -88,6 +90,7 @@ internal class JvmDurableFileDestination(
         .also { require(it.isDirectory) { "Target parent is not a directory: ${it.absolutePath}" } }
     private val stagingParent = stagingDirectory?.absoluteFile?.also {
         require(it.isDirectory && it.canonicalFile == it) { "Staging must be a non-symlink directory" }
+        requireUnlinkedDirectoryPath(it)
         require(Files.getFileStore(it.toPath()) == Files.getFileStore(parent.toPath())) {
             "Staging and target must use the same filesystem"
         }
@@ -216,6 +219,20 @@ internal class JvmDurableFileDestination(
         if (isWindows(operatingSystemName)) return
         syncDirectory(parent)
         if (stagingParent.canonicalFile != parent.canonicalFile) syncDirectory(stagingParent)
+    }
+}
+
+private fun requireUnlinkedDirectoryPath(directory: File) {
+    // File canonicalization is not a link test on every platform (notably Windows).
+    // Inspect every component without following the final entry. Do not normalize:
+    // a link followed by `..` still traverses that link while opening a file.
+    var component = directory.toPath()
+    while (true) {
+        val attributes = Files.readAttributes(component, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        require(attributes.isDirectory && !attributes.isSymbolicLink && !attributes.isOther) {
+            "Staging must be a non-symlink directory"
+        }
+        component = component.parent ?: break
     }
 }
 
