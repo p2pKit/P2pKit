@@ -90,12 +90,16 @@ internal class LegacyEducationDismissal {
     var requested = false
         private set
 
-    fun request(until: Long, now: () -> Long, perform: () -> Boolean) {
+    fun request(
+        until: Long, now: () -> Long, afterAcknowledged: () -> Unit = {}, perform: () -> Boolean,
+    ) {
         check(!requested)
         checkLegacyCapture(now() < until, LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
         requested = true
         val accepted = perform()
         checkLegacyCapture(now() < until, LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
         checkLegacyCapture(accepted, LegacyCaptureFailureCode.NAVIGATION_ACTION_REJECTED)
+        afterAcknowledged()
+        checkLegacyCapture(now() < until, LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
     }
 }

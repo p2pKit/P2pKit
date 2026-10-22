@@ -735,12 +735,24 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             }
             query?.put("phase", "TREE_VISIT")?.put("visitedNodeCount", 0)
             var complete = true
-            fun visit(node: AccessibilityNodeInfo, parent: Int?, depth: Int) {
+            fun incomplete(reason: String, parent: Int, childIndex: Int, depth: Int, childCount: Int?) {
+                if (educationObserver != null && query != null && !query.has("incomplete")) {
+                    val detail = JSONObject().put("reason", reason).put("parentIndex", parent)
+                        .put("childIndex", childIndex).put("depth", depth).put("visitedNodes", nodes.size)
+                    if (childCount != null) detail.put("declaredChildCount", childCount)
+                    query.put("incomplete", detail)
+                }
+            }
+            fun visit(node: AccessibilityNodeInfo, parent: Int?, depth: Int, childIndex: Int) {
                 checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
                     LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
                 checkLegacyCapture(nodes.size < 256 && depth <= 24,
                     LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
-                if (parent != null && !node.refresh()) { complete = false; return }
+                if (parent != null && !node.refresh()) {
+                    incomplete("NODE_REFRESH_FALSE", parent, childIndex, depth, null)
+                    complete = false
+                    return
+                }
                 val rectangle = Rect().also(node::getBoundsInScreen)
                 val index = nodes.size
                 val kind = when (node.viewIdResourceName) {
@@ -773,18 +785,23 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                         node.text?.toString() == LEGACY_RECENTS_EDUCATION_TEXT)
                 }
                 query?.put("visitedNodeCount", nodes.size)
-                checkLegacyCapture(node.childCount <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
-                for (childIndex in 0 until node.childCount) {
+                val childCount = node.childCount
+                checkLegacyCapture(childCount <= 256, LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
+                for (position in 0 until childCount) {
                     checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
                         LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
-                    val child = node.getChild(childIndex)
-                    if (child == null) { complete = false; return }
-                    try { visit(child, index, depth + 1) }
+                    val child = node.getChild(position)
+                    if (child == null) {
+                        incomplete("CHILD_UNAVAILABLE", index, position, depth + 1, childCount)
+                        complete = false
+                        return
+                    }
+                    try { visit(child, index, depth + 1, position) }
                     finally { @Suppress("DEPRECATION") child.recycle() }
                     if (!complete) return
                 }
             }
-            visit(root, null, 0)
+            visit(root, null, 0, -1)
             checkLegacyCapture(SystemClock.elapsedRealtime() <= until,
                 LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
             treeComplete = complete
@@ -927,7 +944,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                         .put("owner", observed.owner).put("popup", observed.popup))
                     val request = JSONObject().put("action", "BACK").put("platformAction", 1)
                     ledger.put("request", request).put("operation", "REQUESTING")
-                    dismissal.request(until, SystemClock::elapsedRealtime) {
+                    dismissal.request(until, SystemClock::elapsedRealtime,
+                        afterAcknowledged = { refreshEducationObserver(until, ledger) }) {
                         request.put("requestedElapsedMillis", SystemClock.elapsedRealtime())
                         // Only this positively identified API32 education popup may request BACK once.
                         try {
@@ -955,6 +973,35 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         }
         admission.put("completedElapsedMillis", SystemClock.elapsedRealtime()).put("operation", "READY")
         return state // No second root acquisition before the one original screenshot.
+    }
+
+    /** One same-info request invalidates the observer's local cache; it is not remote or fresh-tree proof. */
+    private fun refreshEducationObserver(until: Long, ledger: JSONObject) {
+        fun bounded() = checkLegacyCapture(SystemClock.elapsedRealtime() < until,
+            LegacyCaptureFailureCode.RECENTS_ADMISSION_TIMEOUT)
+        bounded()
+        val receipt = JSONObject().put("operation", "READ_SAME_SERVICE_INFO")
+            .put("startedElapsedMillis", SystemClock.elapsedRealtime())
+        ledger.put("observerRefresh", receipt)
+        val settings = requireLegacyCaptureValue(uiAutomation.serviceInfo,
+            LegacyCaptureFailureCode.OBSERVER_FLAGS_INVALID)
+        bounded()
+        val expected = checkNotNull(observerFlags).requested
+        checkLegacyCapture(settings.flags == expected && expected ==
+            report.getJSONObject("recentsObserver").getInt("serviceFlags"),
+            LegacyCaptureFailureCode.OBSERVER_FLAGS_INVALID)
+        receipt.put("flagsBefore", settings.flags).put("operation", "APPLY_SAME_SERVICE_INFO")
+        bounded()
+        uiAutomation.serviceInfo = settings // Same object, no property mutation or broader observer privileges.
+        receipt.put("setterReturned", true).put("returnedElapsedMillis", SystemClock.elapsedRealtime())
+        bounded()
+        val readback = requireLegacyCaptureValue(uiAutomation.serviceInfo,
+            LegacyCaptureFailureCode.OBSERVER_FLAGS_INVALID)
+        bounded()
+        receipt.put("flagsAfter", readback.flags)
+        checkLegacyCapture(readback.flags == expected, LegacyCaptureFailureCode.OBSERVER_FLAGS_INVALID)
+        receipt.put("completedElapsedMillis", SystemClock.elapsedRealtime())
+            .put("operation", "SAME_SERVICE_INFO_CALL_RETURNED")
     }
 
     private fun captureState(activity: MainActivity, view: PatternView): LegacyCaptureState = main {

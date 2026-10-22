@@ -138,6 +138,8 @@ class LegacyTaskTests(unittest.TestCase):
                 markerCounts=dict(textIds=1, arrowIds=1, exactTexts=1)))
         ledger["request"] = dict(action="BACK", platformAction=1, requestedElapsedMillis=106,
             returnedElapsedMillis=107, returned=True, accepted=True)
+        ledger["observerRefresh"] = dict(operation="SAME_SERVICE_INFO_CALL_RETURNED", startedElapsedMillis=107,
+            returnedElapsedMillis=107, completedElapsedMillis=108, flagsBefore=82, flagsAfter=82, setterReturned=True)
         return report, files
 
     def test_exact_optional_education_action_requires_popup_absence_and_original_card(self):
@@ -256,7 +258,7 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertNotIn("performGlobalAction", failure)
         self.assertIn("if (observed.popup != null && !dismissal.requested)", admission)
         self.assertIn("Build.VERSION.SDK_INT == 32", admission)
-        self.assertIn("dismissal.request(until, SystemClock::elapsedRealtime)", admission)
+        self.assertIn("dismissal.request(until, SystemClock::elapsedRealtime,", admission)
         self.assertIn('if (value != null)', admission)
         self.assertIn('check(observed.presence == LegacyEducationPresence.ABSENT && observed.popup == null)', admission)
         self.assertIn('if (selection.presence != LegacyEducationPresence.ABSENT)', read_only)
@@ -268,6 +270,45 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)", read_only)
         self.assertIn("findLegacyRecentsCard(Build.VERSION.SDK_INT, nodes)", read_only)
         self.assertNotIn("contains(LEGACY_RECENTS_EDUCATION_TEXT)", source)
+
+    def test_observer_refresh_must_be_timely_unchanged_and_only_after_acknowledged_back(self):
+        for key, invalid in (("operation", "CACHE_FIXED"), ("setterReturned", False), ("setterReturned", 1),
+                             ("flagsBefore", 18), ("flagsAfter", True), ("flagsAfter", 83),
+                             ("startedElapsedMillis", 106), ("returnedElapsedMillis", 106),
+                             ("completedElapsedMillis", 5099), ("completedElapsedMillis", 108.0),
+                             ("secondRefresh", True)):
+            report, files = self.education_fixture()
+            report["recentsEducation"]["observerRefresh"][key] = invalid
+            with self.subTest(key=key, invalid=invalid), self.assertRaises(ValueError):
+                self.validate(report, files, 32)
+        report, files = self.education_fixture()
+        del report["recentsEducation"]["observerRefresh"]
+        with self.assertRaises(ValueError): self.validate(report, files, 32)
+        report, files = fixture(32)
+        report["recentsEducation"]["observerRefresh"] = self.education_fixture()[0]["recentsEducation"]["observerRefresh"]
+        with self.assertRaises(ValueError): self.validate(report, files, 32)
+
+    def test_observer_refresh_and_incomplete_reasons_are_initial_api32_only_without_extra_queries(self):
+        base = ROOT / "samples/p2p-sample-android/src"
+        source = (base / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        helper = (base / "runtimeValidation/kotlin/dev/p2pkit/sample/android/runtime/LegacyRecentsEducation.kt").read_text()
+        observation = source.split("    private fun recentsState(", 1)[1].split("    private fun admittedRecentsState(", 1)[0]
+        refresh = source.split("    private fun refreshEducationObserver(", 1)[1].split("    private fun captureState(", 1)[0]
+        self.assertEqual(source.count("refreshEducationObserver(until, ledger)"), 1)
+        self.assertIn("afterAcknowledged = { refreshEducationObserver(until, ledger) }", source)
+        self.assertLess(helper.index("checkLegacyCapture(accepted,"), helper.index("afterAcknowledged()"))
+        self.assertLess(helper.index("val accepted = perform()"), helper.index("checkLegacyCapture(accepted,"))
+        self.assertEqual(refresh.count("uiAutomation.serviceInfo = settings"), 1)
+        self.assertNotIn("settings.flags =", refresh)
+        self.assertNotIn("Thread.sleep", refresh)
+        self.assertNotIn("performGlobalAction", refresh)
+        self.assertGreaterEqual(refresh.count("bounded()"), 5)
+        self.assertIn('educationObserver != null && query != null && !query.has("incomplete")', observation)
+        self.assertIn('incomplete("NODE_REFRESH_FALSE", parent, childIndex, depth, null)', observation)
+        self.assertIn('incomplete("CHILD_UNAVAILABLE", index, position, depth + 1, childCount)', observation)
+        self.assertEqual(observation.count("node.getChild("), 1)
+        self.assertEqual(observation.count("node.refresh()"), 1)
+        self.assertIn('if (!complete) return pending(LegacyRecentsGuard.TREE_INCOMPLETE)', observation)
 
     def test_failure_scene_field_or_original_image_cannot_be_laundered_into_pass(self):
         for api in (24, 32):

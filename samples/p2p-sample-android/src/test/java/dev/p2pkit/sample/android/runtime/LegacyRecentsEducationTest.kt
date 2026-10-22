@@ -149,6 +149,55 @@ class LegacyRecentsEducationTest {
     }
 
     @Test
+    fun observerRefreshRunsOnlyAfterTimelyTrueAcknowledgement() {
+        for (mode in listOf("accepted", "rejected", "thrown", "late", "expired")) {
+            val state = LegacyEducationDismissal()
+            val calls = mutableListOf<String>()
+            var clock = if (mode == "expired") 5L else 0L
+            val original = IllegalStateException("synthetic action failure")
+            fun request() = state.request(5, { clock }, afterAcknowledged = { calls += "refresh" }) {
+                calls += "action"
+                if (mode == "thrown") throw original
+                if (mode == "late") clock = 5
+                mode != "rejected"
+            }
+            if (mode == "accepted") {
+                request()
+                assertEquals(listOf("action", "refresh"), calls)
+            } else {
+                val failure = assertFailsWith<IllegalStateException> { request() }
+                if (mode == "thrown") assertSame(original, failure)
+                assertEquals(if (mode == "expired") emptyList() else listOf("action"), calls)
+            }
+        }
+    }
+
+    @Test
+    fun observerRefreshFailureOrExpiryCannotRetryOrExtendTheOriginalDeadline() {
+        for (mode in listOf("thrown", "late")) {
+            val state = LegacyEducationDismissal()
+            var clock = 0L
+            val calls = mutableListOf<String>()
+            val original = IllegalStateException("synthetic observer failure")
+            val failure = assertFailsWith<IllegalStateException> {
+                state.request(5, { clock }, afterAcknowledged = {
+                    assertEquals(4L, clock)
+                    calls += "refresh"
+                    if (mode == "thrown") throw original
+                    clock = 5
+                }) { calls += "action"; clock = 4; true }
+            }
+            if (mode == "thrown") assertSame(original, failure)
+            assertFailsWith<IllegalStateException> {
+                state.request(5, { 0 }, afterAcknowledged = { calls += "retry-refresh" }) {
+                    calls += "retry-action"; true
+                }
+            }
+            assertEquals(listOf("action", "refresh"), calls)
+        }
+    }
+
+    @Test
     fun rejectedThrownOrLateRequestIsNeverRetried() {
         for (mode in listOf("rejected", "thrown", "late")) {
             val state = LegacyEducationDismissal()

@@ -146,7 +146,7 @@ def validate_recents_education(value, api, admission, system):
          "Missing completed API32 education precondition")
     dismissed = ledger["operation"] == "DISMISSED"
     need(set(ledger) == {"schema", "api", "operation", "observations", "after"} |
-         ({"before", "request"} if dismissed else set()), "Unexpected education action ledger")
+         ({"before", "request", "observerRefresh"} if dismissed else set()), "Unexpected education action ledger")
     after = ledger["after"]
     need(isinstance(after, dict) and set(after) ==
          {"attempt", "observedElapsedMillis", "popupAbsent", "absence", "systemWindow"} and
@@ -200,6 +200,17 @@ def validate_recents_education(value, api, admission, system):
          request["returnedElapsedMillis"] <= after["observedElapsedMillis"] <= admission["deadlineElapsedMillis"] and
          admission["guardCounts"].get("CARD_NOT_IDENTIFIED", 0) > 0,
          "Wrong, repeated, failed or late education BACK request")
+    refresh = ledger["observerRefresh"]
+    need(isinstance(refresh, dict) and set(refresh) == {"operation", "startedElapsedMillis", "returnedElapsedMillis",
+         "completedElapsedMillis", "flagsBefore", "flagsAfter", "setterReturned"} and
+         refresh["operation"] == "SAME_SERVICE_INFO_CALL_RETURNED" and refresh["setterReturned"] is True and
+         all(type(refresh[key]) is int for key in ("startedElapsedMillis", "returnedElapsedMillis",
+             "completedElapsedMillis", "flagsBefore", "flagsAfter")) and
+         refresh["flagsBefore"] == refresh["flagsAfter"] == value["interactiveWindowObserver"]["requested"] ==
+         value["recentsObserver"]["serviceFlags"] and
+         request["returnedElapsedMillis"] <= refresh["startedElapsedMillis"] <= refresh["returnedElapsedMillis"] <=
+         refresh["completedElapsedMillis"] <= after["observedElapsedMillis"] <= admission["deadlineElapsedMillis"],
+         "Missing timely unchanged observer refresh after the accepted education BACK")
 
 
 def validate_report(raw, token, source, tree, api, files):
