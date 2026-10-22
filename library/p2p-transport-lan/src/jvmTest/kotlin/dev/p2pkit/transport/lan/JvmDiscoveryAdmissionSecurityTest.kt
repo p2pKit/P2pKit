@@ -57,7 +57,14 @@ import kotlin.test.assertTrue
 class JvmDiscoveryAdmissionSecurityTest {
     @Test
     fun v2ClaimsCanStillOccupyEveryDiscoverySlotUntilOneIsWithdrawn() = runTest {
-        val backend = JvmDeterministicDiscoveryTestBackend()
+        // This is a callback/admission test, not a host-interface scan. Keep
+        // every resolution deterministic; the TCP/Noise cases below retain
+        // the backend's ordinary host snapshot provider.
+        var localSnapshotReads = 0
+        val backend = JvmDeterministicDiscoveryTestBackend {
+            localSnapshotReads += 1
+            emptyList()
+        }
         val local = syntheticClaim(MAX_TRACKED_LAN_PEERS + 1)
         val registration = LanServiceRegistration(
             appId = appId,
@@ -85,6 +92,8 @@ class JvmDiscoveryAdmissionSecurityTest {
             occupants.forEach { backend.advertise(advertisement(it)) }
             runCurrent()
             assertEquals(occupants.map { it.peerId }.toSet(), visible.keys)
+            var expectedSnapshotReads = MAX_TRACKED_LAN_PEERS
+            assertEquals(expectedSnapshotReads, localSnapshotReads)
 
             // A refreshed, canonical v2 claim is still refused. These are
             // distinct, internally consistent id/fingerprint pairs; no
@@ -95,6 +104,9 @@ class JvmDiscoveryAdmissionSecurityTest {
                 runCurrent()
                 assertEquals(MAX_TRACKED_LAN_PEERS, visible.size)
                 assertFalse(later.peerId in visible, "known #120 residual, not proof of fairness")
+                // One repeated claim, then all 257 currently advertised claims.
+                expectedSnapshotReads += MAX_TRACKED_LAN_PEERS + 2
+                assertEquals(expectedSnapshotReads, localSnapshotReads)
             }
 
             backend.withdraw(occupants.first().peerId.value)
@@ -108,6 +120,7 @@ class JvmDiscoveryAdmissionSecurityTest {
                     assertNotNull(visible[later.peerId]).authenticationHint
                 ).fingerprint
             )
+            assertEquals(expectedSnapshotReads + 1, localSnapshotReads)
         } finally {
             discovery.stopDiscovery()
             runCurrent()
