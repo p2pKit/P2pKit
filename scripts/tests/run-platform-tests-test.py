@@ -2153,6 +2153,38 @@ class ProcessOwnerModels(unittest.TestCase):
                 self.assertFalse(GATE.terminate_process(owner))
                 scope.drain.assert_called_once(); scope.close.assert_called_once()
 
+    def test_actual_darwin_drain_metrics_are_projected_before_close_without_new_observations(self):
+        for census_seconds in (0., 21.):
+            owner, _, child = self.owner()
+            scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
+            scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+            scope.active_drain, scope.drain_reconciliations = None, []
+            scope.known, scope.handles = {}, {}
+            clock = [100.]
+            def discover():
+                clock[0] += census_seconds
+                return []
+            scope.discover = mock.Mock(side_effect=discover)
+            scope.close = mock.Mock(side_effect=lambda: scope.drain_diagnostics.clear())
+            scope.description = mock.Mock(side_effect=AssertionError("NO_RAW_OWNER_DESCRIPTION"))
+            scope.signal_all = mock.Mock(side_effect=AssertionError("NO_NEW_SIGNALS"))
+            owner.scope = scope
+            timer = mock.Mock(monotonic=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+            with mock.patch.object(self.native, "time", timer), mock.patch.object(GATE, "time", timer):
+                self.assertEqual(census_seconds == 0., GATE.terminate_process(owner))
+            projected = owner.drain_state["darwinDrain"]
+            row = projected["phases"][0]
+            self.assertEqual("OBSERVATION_ONLY_NOT_RETIREMENT", projected["scope"])
+            self.assertEqual(3 if census_seconds == 0. else 0, row["inTime"])
+            self.assertEqual(3 if census_seconds == 0. else 1, scope.discover.call_count)
+            self.assertEqual([], scope.drain_diagnostics)  # Snapshot survives independent close.
+            scope.close.assert_called_once(); scope.description.assert_not_called(); scope.signal_all.assert_not_called()
+            if census_seconds:
+                diagnostic = owner.retirement_diagnostic()
+                self.assertEqual("DRAIN_NOT_QUIET", diagnostic["reason"])
+                self.assertFalse(diagnostic["drainState"]["returned"])
+                self.assertEqual(projected, diagnostic["drainState"]["darwinDrain"])
+
     def test_owner_diagnostics_bound_counts_and_real_source_frame_projection(self):
         class UntrustedLength:
             def __len__(self):

@@ -737,6 +737,9 @@ class ProcessOwner:
                     "discoveryErrors": _recorded_owner_count(self.scope.discovery_errors),
                     "pendingDiscoveries": _recorded_owner_count(getattr(self.scope, "pending_discoveries", None)),
                     "leaders": _recorded_owner_count(children)}
+                darwin = audit_processes.darwin_drain_diagnostic(self.scope)
+                if darwin is not None:
+                    self.drain_state["darwinDrain"] = darwin
             if live or self.scope.discovery_errors or getattr(self.scope, "pending_discoveries", None):
                 raise audit_processes.OwnershipError("Platform descendants were not proven retired")
             phase = "LEADER_EXIT"

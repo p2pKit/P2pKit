@@ -490,6 +490,139 @@ class DrainDeadlineModels(unittest.TestCase):
         self.assertEqual(scope.drain_reconciliations[0], original)
         self.assertEqual(scope.drain_reconciliations[1]["outcome"], "retired")
 
+    def test_darwin_diagnostics_distinguish_zero_timely_from_split_quiet_without_fixing_either(self):
+        for costs, timely, peaks in (([21.], 0, [0, 0]), ([7.4, 7.4, 2.4, 2.4], 4, [2, 2])):
+            self.reset_clock()
+            scope = self.scope("darwin")
+            durations = iter(costs)
+            def discover():
+                self.clock.value += next(durations)
+                return []
+            scope.discover.side_effect = discover
+            with self.subTest(costs=costs), self.assertRaisesRegex(processes.OwnershipError, "three quiet"):
+                scope.drain(15, 5, deadline=120.)
+            projected = processes.darwin_drain_diagnostic(scope)
+            rows = projected["phases"]
+            self.assertEqual(timely, sum(row["inTime"] for row in rows))
+            self.assertEqual(peaks, [row["quietPeak"] for row in rows])
+            self.assertEqual(len(costs), sum(row["completed"] for row in rows))
+            self.assertEqual(len(costs), sum(row["quietStarted"] for row in rows))
+            self.assertEqual(0, sum(row["signalStarted"] for row in rows))
+            self.assertEqual(sum(costs), sum(row["unattributedSeconds"] for row in rows))
+            self.assertTrue(all(row["lastStage"] is None for row in rows))
+            self.assertTrue(all("diagnostics" not in phase for phase in scope.drain_reconciliations[-1]["phases"]))
+            scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_darwin_late_live_and_unknown_census_is_measured_not_accepted(self):
+        scope = self.scope("darwin")
+        def discover():
+            self.clock.value += 21.
+            scope.discovery_errors.add("PRIVATE_ERROR")
+            scope.pending_discoveries[123] = {"private": "PRIVATE_IDENTITY"}
+            return [self.identity]
+        scope.discover.side_effect = discover
+        with self.assertRaisesRegex(processes.OwnershipError, "Unclassified"):
+            scope.drain(15, 5, deadline=120.)
+        row = processes.darwin_drain_diagnostic(scope)["phases"][0]
+        self.assertEqual((1, 1, 0, 1, 0), tuple(row[k] for k in ("started", "completed", "inTime", "late", "quietPeak")))
+        self.assertEqual((1, 1, 1), tuple(row[k] for k in ("lastLive", "lastDiscoveryErrors", "lastPendingDiscoveries")))
+        self.assertFalse(row["lastReturnedWithinPhase"])
+        self.assertNotIn("PRIVATE", repr(row))
+        scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_darwin_nested_signal_census_count_is_not_quiet_credit(self):
+        scope = self.scope("darwin")
+        scope.discover.side_effect = [[self.identity], [self.identity], [], [], []]
+        self.assertEqual(scope.drain(15, 5, deadline=120.), [])
+        row = processes.darwin_drain_diagnostic(scope)["phases"][0]
+        self.assertEqual((5, 5, 5, 4, 1, 3, 3), tuple(row[k] for k in
+            ("started", "completed", "inTime", "quietStarted", "signalStarted", "quietPeak", "quietEnd")))
+        scope.proc.proc_signal_with_audittoken.assert_called_once()
+
+    def test_darwin_actual_discover_stage_hooks_measure_models_without_new_native_calls(self):
+        scope = self.scope("darwin")
+        scope.discover = MethodType(processes.PosixScope.discover, scope)
+        scope.known, scope.handles, scope.baseline = {}, {}, set()
+        scope._remember_identity = Mock()
+        def cost(seconds, result):
+            self.clock.value += seconds
+            return result
+        leader = SimpleNamespace(poll=Mock(side_effect=lambda: cost(.001, 0)))
+        scope.leaders = [leader]
+        scope._pids = Mock(side_effect=lambda: cost(.005, [7]))
+        scope._identity = Mock(side_effect=lambda _pid: cost(.01, dict(self.identity)))
+        scope._inspect_environment = Mock(side_effect=lambda _identity: cost(.02, {}))
+        scope._ownership_proof = Mock(side_effect=lambda *_args: cost(.03, None))
+        with patch.object(processes.os, "getpid", return_value=99), patch.object(processes.os, "getuid", return_value=1000):
+            self.assertEqual(scope.drain(15, 5, deadline=120.), [])
+        row = processes.darwin_drain_diagnostic(scope)["phases"][0]
+        self.assertEqual({"REAP": .003, "ENUMERATE": .015, "IDENTITIES": .03, "ENVIRONMENT": .06,
+            "OWNERSHIP": .09, "ACQUIRE": 0., "KNOWN_RECHECK": 0.}, row["stageSeconds"])
+        self.assertAlmostEqual(row["censusSeconds"], .198)
+        self.assertEqual(row["lastStage"], "KNOWN_RECHECK")
+        for observer in (leader.poll, scope._pids, scope._identity, scope._inspect_environment, scope._ownership_proof):
+            self.assertEqual(observer.call_count, 3)
+        scope._acquire.assert_not_called()
+        self.assertIsNone(scope._drain_census_measurement)
+
+    def test_darwin_failed_stage_and_clock_failure_keep_original_and_detach(self):
+        for clock_failure in (False, True):
+            self.reset_clock()
+            scope = self.scope("darwin")
+            original = OSError("PRIVATE_CENSUS_FAILURE")
+            def discover():
+                scope._discovery_stage("ENVIRONMENT")
+                self.clock.value += .125
+                if clock_failure:
+                    self.clock.on_now = Mock(side_effect=ValueError("PRIVATE_CLOCK_FAILURE"))
+                raise original
+            scope.discover.side_effect = discover
+            with self.subTest(clock_failure=clock_failure), self.assertRaises(OSError) as caught:
+                scope.drain(15, 5, deadline=120.)
+            self.assertIs(original, caught.exception)
+            row = processes.darwin_drain_diagnostic(scope)["phases"][0]
+            self.assertEqual((1, 0, 1, 0), tuple(row[k] for k in ("started", "completed", "failed", "inTime")))
+            self.assertEqual("ENVIRONMENT", row["lastStage"])
+            self.assertEqual(None if clock_failure else .125, row["stageSeconds"]["ENVIRONMENT"])
+            self.assertIsNone(scope._drain_census_measurement)
+            self.assertNotIn("PRIVATE", repr(row))
+
+    def test_darwin_metric_clock_cancellation_is_not_swallowed_and_detaches(self):
+        scope = self.scope("darwin")
+        cancellation = KeyboardInterrupt()
+        def discover():
+            scope._discovery_stage("IDENTITIES")
+            self.clock.on_now = Mock(side_effect=cancellation)
+            return []
+        scope.discover.side_effect = discover
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            scope.drain(15, 5, deadline=120.)
+        self.assertIs(cancellation, caught.exception)
+        self.assertIsNone(scope._drain_census_measurement)
+        self.assertIsNone(scope.active_drain)
+
+    def test_darwin_projection_is_latest_only_closed_finite_and_not_a_receipt_schema_change(self):
+        scope = self.scope("darwin")
+        self.assertEqual(scope.drain(15, 5, deadline=120.), [])
+        old = copy.deepcopy(scope.drain_reconciliations)
+        raw = scope.drain_diagnostics[0]["diagnostics"]
+        raw.update(lastStage="PRIVATE_PATH", lastPurpose=["PRIVATE_ARG"], lastLive=True,
+                   started=1_000_001, censusSeconds=float("nan"), lastReturned="PRIVATE_ERROR")
+        raw["stageSeconds"].update(ENVIRONMENT=float("inf"), PRIVATE_TOKEN=1.)
+        scope.drain_diagnostics[0]["signal"] = []
+        row = processes.darwin_drain_diagnostic(scope)["phases"][0]
+        self.assertTrue(all(row[k] is None for k in ("lastStage", "lastPurpose", "lastLive", "started",
+            "censusSeconds", "lastReturned", "phase", "unattributedSeconds")))
+        self.assertIsNone(row["stageSeconds"]["ENVIRONMENT"])
+        self.assertEqual(set(processes.DARWIN_DRAIN_STAGES), set(row["stageSeconds"]))
+        self.assertNotIn("PRIVATE", repr(row))
+        self.assertEqual(scope.drain_reconciliations, old)
+        self.assertEqual(scope.drain(15, 5, deadline=120.), [])
+        self.assertEqual(len(scope.drain_diagnostics), 1)
+        self.assertEqual(len(scope.drain_reconciliations), 2)
+        self.assertEqual(scope.drain_reconciliations[0], old[0])
+        self.assertEqual(processes.darwin_drain_diagnostic(scope)["phases"][0]["started"], 3)
+
     def test_windows_late_poll_never_signals_that_child_or_polls_the_next(self):
         scope = self.scope("windows")
         def poll():
