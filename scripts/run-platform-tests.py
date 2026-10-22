@@ -553,6 +553,33 @@ def ordinary_simulator_binding(profile, arch, source):
     return {"raw": binding_raw, "path": str(path), "originals": originals, "start": start_raw, "prelaunch": prelaunch_raw}
 
 
+def _owner_error_diagnostic(error):
+    """Finite existing classification plus source-owned frames, including this driver."""
+    result = ci_evidence.native_error_diagnostic(error)
+    owned = {str(Path(module).resolve()): label for module, label in (
+        (__file__, "PLATFORM_DRIVER"), (audit_processes.__file__, "OWNERSHIP"),
+        (ci_evidence.__file__, "EVIDENCE"))}
+    frames, cursor = [], error.__traceback__
+    for _ in range(64):
+        if cursor is None:
+            break
+        label = owned.get(cursor.tb_frame.f_code.co_filename)
+        if label is not None and type(cursor.tb_lineno) is int and 0 < cursor.tb_lineno <= 1_000_000:
+            frames.append({"source": label, "line": cursor.tb_lineno})
+            frames = frames[-3:]
+        cursor = cursor.tb_next
+    if frames:
+        result["sourceFrames"] = frames
+    return result
+
+
+def _recorded_owner_count(value):
+    # Never enumerate, call a native observer, or serialize a process identity.
+    if type(value) in (list, tuple, dict, set) and len(value) <= audit_processes.MAX_PROCESSES:
+        return len(value)
+    return None
+
+
 class ProcessOwner:
     """Retain before launch: a Popen PID/PGID is not a process lifetime capability.
 
@@ -565,6 +592,7 @@ class ProcessOwner:
         self.attempted, self.retired, self.drained = False, False, False
         self.launch_error, self.retirement_error = None, None
         self.retirement_phase = None
+        self.drain_state = None
 
     def start(self, argv, *, cwd, stdout=None, stderr=None):
         if self.attempted or self.retired:
@@ -603,7 +631,35 @@ class ProcessOwner:
                 handlers[sig](sig, None)
         except BaseException as error:
             self.launch_error = error
+            # The Intel caller deliberately suppresses arbitrary exception text.
+            # Retain the first cause before finally drains/closes the owner.
+            try:
+                print("PLATFORM_LAUNCH_FAILURE " + json.dumps(self.launch_diagnostic(), sort_keys=True), file=sys.stderr)
+            except (OSError, ValueError):
+                pass  # A failed diagnostic sink cannot replace this original failure.
             raise
+
+    def launch_diagnostic(self):
+        if self.launch_error is None:
+            return None
+        reasons = {
+            "Darwin exec gate did not establish readiness": "GATE_NOT_READY",
+            "Darwin exec gate is not the directly spawned lifetime": "GATE_IDENTITY",
+            "Darwin exec gate did not inherit its bound pipe capability": "GATE_PIPE",
+            "Darwin exec gate was not released": "GATE_NOT_RELEASED",
+            "Cannot bind the Darwin spawning controller": "CONTROLLER_IDENTITY",
+            "Darwin launch lacks its bound inherited ownership domain": "LAUNCH_DOMAIN",
+            "Darwin launch lost its inherited pipe capability": "LAUNCH_PIPE",
+        }
+        error = self.launch_error
+        message = error.args[0] if type(error) is audit_processes.OwnershipError and len(error.args) == 1 \
+            and type(error.args[0]) is str else None
+        launches = getattr(self.scope, "launches", None)
+        last = launches[-1] if type(launches) is list and launches and type(launches[-1]) is dict else {}
+        return {"phase": "START", "reason": reasons.get(message, "LAUNCH_ERROR"),
+                "nativeError": _owner_error_diagnostic(error), "scopeReturned": self.scope is not None,
+                "childReturned": self.child is not None, "recordedLaunches": _recorded_owner_count(launches),
+                **{key: last.get(key) if type(last.get(key)) is bool else None for key in ("created", "gateReleased")}}
 
     @property
     def pid(self):
@@ -670,7 +726,17 @@ class ProcessOwner:
             if end is None:
                 raise audit_processes.OwnershipError("Platform retirement clock unavailable")
             phase = "DRAIN"
-            live = self.scope.drain(TERMINATION_GRACE_SECONDS, TERMINATION_KILL_SECONDS, deadline=end)
+            live, returned = None, False
+            try:
+                live = self.scope.drain(TERMINATION_GRACE_SECONDS, TERMINATION_KILL_SECONDS, deadline=end)
+                returned = True
+            finally:
+                # Snapshot the existing result/state before close clears native
+                # registries. Counts diagnose failure; they never grant retirement.
+                self.drain_state = {"returned": returned, "live": _recorded_owner_count(live),
+                    "discoveryErrors": _recorded_owner_count(self.scope.discovery_errors),
+                    "pendingDiscoveries": _recorded_owner_count(getattr(self.scope, "pending_discoveries", None)),
+                    "leaders": _recorded_owner_count(children)}
             if live or self.scope.discovery_errors or getattr(self.scope, "pending_discoveries", None):
                 raise audit_processes.OwnershipError("Platform descendants were not proven retired")
             phase = "LEADER_EXIT"
@@ -706,7 +772,7 @@ class ProcessOwner:
         phases = {"LAUNCH", "CLOCK", "LEADERS", "READERS", "DRAIN", "LEADER_EXIT", "SCOPE_CLOSE", "PIPE_CLOSE", "DEADLINE"}
         return {"phase": self.retirement_phase if self.retirement_phase in phases else "UNKNOWN",
                 "reason": ci_evidence.cleanup_error_reason(self.retirement_error),
-                "nativeError": ci_evidence.native_error_diagnostic(self.retirement_error)}
+                "nativeError": _owner_error_diagnostic(self.retirement_error), "drainState": self.drain_state}
 
 
 def terminate_process(process):
@@ -1076,6 +1142,8 @@ def run(profile):
                "result": "FAIL" if errors else "PASS", "errors": errors, "targets": targets}
     if process is not None and process.retirement_diagnostic() is not None:
         summary["gradleRetirementFailure"] = process.retirement_diagnostic()
+    if process is not None and process.launch_diagnostic() is not None:
+        summary["gradleLaunchFailure"] = process.launch_diagnostic()
     if profile == "ios-x64":
         summary["intelSimulatorRetirement"] = intel_retired
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

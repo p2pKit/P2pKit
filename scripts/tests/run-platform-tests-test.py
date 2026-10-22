@@ -869,6 +869,44 @@ class IntelCommandCaptureModels(unittest.TestCase):
             self.assertEqual(output.getvalue(), "INTEL_PHASE_RESULT simulator-first-launch EXIT null "
                              "TIMEOUT 0 OVERFLOW 0 DRAINED 1\n")
 
+    def test_partial_gate_failure_keeps_null_exit_and_both_finite_causes_without_native_retry(self):
+        with tempfile.TemporaryDirectory(prefix="intel-partial-gate-") as temporary:
+            root, stdout, stderr = Path(temporary).resolve(), io.StringIO(), io.StringIO()
+            child = mock.Mock(stdout=None, stderr=None, returncode=None)
+            child.poll.return_value = None
+            scope = mock.Mock(leaders=[child], discovery_errors=set(), pending_discoveries={},
+                              launches=[{"created": True, "gateReleased": False, "pid": 999,
+                                         "requestedArgv": ["PRIVATE_ARG"]}])
+            failure = GATE.audit_processes.OwnershipError("Darwin exec gate did not establish readiness")
+            scope.spawn.side_effect = failure
+            scope.drain.return_value = [{"pid": 999, "private": "PRIVATE_IDENTITY"}]
+            with mock.patch.object(GATE, "ROOT", root), \
+                    mock.patch.object(GATE.ci_evidence, "local_command_scope", return_value=scope), \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                    self.assertRaises(GATE.audit_processes.OwnershipError) as caught:
+                GATE._intel_capture_phase(root, "intel-bootstatus", ["PRIVATE_ARG"])
+            self.assertIs(failure, caught.exception)
+            row = json.loads((root / "intel-bootstatus/result.json").read_bytes())
+            self.assertIsNone(row["exitCode"])
+            self.assertFalse(row["ownedGroupDrained"])
+            self.assertEqual((0, 0), (row["stdoutBytes"], row["stderrBytes"]))
+            launch = json.loads(next(line.split(" ", 1)[1] for line in stderr.getvalue().splitlines()
+                                     if line.startswith("PLATFORM_LAUNCH_FAILURE ")))
+            drain = json.loads(next(line.split(" ", 1)[1] for line in stderr.getvalue().splitlines()
+                                    if line.startswith("PLATFORM_RETIREMENT_FAILURE ")))
+            self.assertEqual("GATE_NOT_READY", launch["reason"])
+            self.assertIs(launch["created"], True)
+            self.assertIs(launch["gateReleased"], False)
+            self.assertIs(launch["childReturned"], False)
+            self.assertEqual({"returned": True, "live": 1, "leaders": 1, "discoveryErrors": 0,
+                              "pendingDiscoveries": 0}, drain["drainState"])
+            self.assertEqual("PLATFORM_DRIVER", drain["nativeError"]["sourceFrames"][-1]["source"])
+            self.assertNotIn("PRIVATE_ARG", stderr.getvalue())
+            self.assertNotIn("PRIVATE_IDENTITY", stderr.getvalue())
+            self.assertNotIn(str(root), stderr.getvalue())
+            scope.spawn.assert_called_once(); scope.drain.assert_called_once(); scope.close.assert_called_once()
+            scope.discover.assert_not_called(); scope.description.assert_not_called()
+
     def test_bootstatus_capture_uses_only_its_named_work_budget(self):
         # Only test-local constants are scaled; the real capture and drain run.
         with tempfile.TemporaryDirectory(prefix="intel-bootstatus-budget-") as temporary:
@@ -2072,6 +2110,66 @@ class ProcessOwnerModels(unittest.TestCase):
                 self.assertNotIn("PRIVATE_TOKEN", output.getvalue())
                 self.assertNotIn("private.invalid", output.getvalue())
                 self.assertIs(owner.retirement_error, failure)
+
+    def test_first_launch_failure_is_finite_even_if_diagnostic_sink_fails(self):
+        owner, scope, child = self.owner()
+        owner.attempted, owner.scope, owner.child = False, None, None
+        failure = OSError(errno.EIO, "PRIVATE_LAUNCH_BODY", "/PRIVATE/PATH")
+        scope.spawn.side_effect = failure
+        scope.launches = [{"created": True, "gateReleased": False, "pid": 123, "private": "PRIVATE_RECORD"}]
+        with mock.patch.object(GATE.ci_evidence, "local_command_scope", return_value=scope), \
+                mock.patch("builtins.print", side_effect=OSError("sink failed")), \
+                self.assertRaises(OSError) as caught:
+            owner.start(["PRIVATE_ARG"], cwd=ROOT)
+        self.assertIs(failure, caught.exception)
+        diagnostic = owner.launch_diagnostic()
+        self.assertEqual("LAUNCH_ERROR", diagnostic["reason"])
+        self.assertEqual(errno.EIO, diagnostic["nativeError"]["errno"])
+        self.assertEqual((True, False, 1, True, False), tuple(diagnostic[k] for k in
+            ("scopeReturned", "childReturned", "recordedLaunches", "created", "gateReleased")))
+        self.assertNotIn("PRIVATE", json.dumps(diagnostic))
+        self.assertTrue(GATE.terminate_process(owner))
+        scope.spawn.assert_called_once(); scope.drain.assert_called_once()
+
+    def test_postdrain_snapshot_precedes_close_and_contains_only_counts(self):
+        for returns in (True, False):
+            owner, scope, child = self.owner()
+            live = [{"pid": 999, "name": "PRIVATE_PROCESS"}]
+            scope.drain.return_value = live
+            scope.discovery_errors.add("PRIVATE_DISCOVERY")
+            scope.pending_discoveries[999] = {"identity": "PRIVATE_IDENTITY"}
+            if not returns:
+                scope.drain.side_effect = self.native.OwnershipError("PRIVATE_DRAIN_ERROR")
+            def close():
+                live.clear(); scope.discovery_errors.clear(); scope.pending_discoveries.clear(); scope.leaders.clear()
+            scope.close.side_effect = close
+            with self.subTest(returned=returns):
+                self.assertFalse(GATE.terminate_process(owner))
+                diagnostic = owner.retirement_diagnostic()
+                self.assertEqual({"returned": returns, "live": 1 if returns else None, "leaders": 1,
+                                  "discoveryErrors": 1, "pendingDiscoveries": 1}, diagnostic["drainState"])
+                self.assertNotIn("PRIVATE", json.dumps(diagnostic))
+                scope.discover.assert_not_called(); scope.description.assert_not_called()
+                self.assertFalse(GATE.terminate_process(owner))
+                scope.drain.assert_called_once(); scope.close.assert_called_once()
+
+    def test_owner_diagnostics_bound_counts_and_real_source_frame_projection(self):
+        class UntrustedLength:
+            def __len__(self):
+                raise AssertionError("DO_NOT_CALL_FOREIGN_COUNTER")
+        for value in (None, UntrustedLength(), [None] * (self.native.MAX_PROCESSES + 1)):
+            self.assertIsNone(GATE._recorded_owner_count(value))
+        self.assertEqual(2, GATE._recorded_owner_count({"PRIVATE": 1, "SECOND_PRIVATE": 2}))
+        try:
+            self.native.resolve_executable([], str(ROOT), {})  # Real pure source guard, no native child.
+        except self.native.OwnershipError as error:
+            diagnostic = GATE._owner_error_diagnostic(error)
+        else:
+            self.fail("Empty command unexpectedly admitted")
+        self.assertEqual("OWNERSHIP", diagnostic["sourceFrames"][-1]["source"])
+        self.assertTrue(0 < diagnostic["sourceFrames"][-1]["line"] <= 1_000_000)
+        self.assertLessEqual(len(diagnostic["sourceFrames"]), 3)
+        self.assertNotIn(str(ROOT), json.dumps(diagnostic))
 
     def test_fixture_attempts_remaining_retirements_after_cleanup_failure(self):
         for failed in ("owner", "rescue", "close"):
