@@ -36,7 +36,7 @@ def fixture(api=24, unavailable=False):
     for index, name in enumerate(legacy.CAPTURES):
         item = dict(name=name, observation="BITMAP", file=name + ".png", width=16, height=16,
                     sourceBitmapWidth=16, sourceBitmapHeight=16, sourceBitmapConfig="ARGB_8888",
-                    pixelReadback="ARGB_8888_COPY", elapsedMillis=100 + index)
+                    pixelReadback="ARGB_8888_COPY", elapsedMillis=100 + index * 10)
         if name != "actual-recents-original":
             visible = name in legacy.POSITIVE
             identity = 1 if index in (0, 2) else 2
@@ -59,6 +59,9 @@ def fixture(api=24, unavailable=False):
     report = dict(case="479", token=TOKEN, sourceCommit=SOURCE, declaredSourceTree=TREE,
         api=api, targetSdk=37, captureObservationSchema=2, outcome=legacy.owner.PASS,
         syntheticOnly=True, recentsReviewRequired=True, cleanup="OWNED_ACTIVITIES_DESTROYED", taskId=7,
+        navigationRequests=[dict(action=action, platformAction=platform, requestedElapsedMillis=start,
+            returnedElapsedMillis=start + 1, returned=True, accepted=True, operation="GLOBAL_ACTION_RETURNED")
+            for action, platform, start in (("HOME", 2, 101), ("RECENTS", 3, 103))],
         captures=captures, lifecycle=[dict(event=event, activity=activity, taskId=7, secureFlag=True)
             for event, activity in (("created", 1), ("stopped", 1), ("created", 2), ("destroyed", 1), ("destroyed", 2))])
     # Clearly synthetic parser inputs, not captured images or proof of visual privacy.
@@ -136,6 +139,78 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("finally { main { secureLegacyTaskWindow(replacement.window) } }", source)
         self.assertLess(source.index('stage = "actual-recents-original"'), source.index("clearFlags("))
         self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
+
+    def test_navigation_requires_exactly_home_then_recents(self):
+        for change in (lambda r: r.pop(), lambda r: r.append(r[0]), lambda r: r.reverse()):
+            report, files = fixture()
+            change(report["navigationRequests"])
+            with self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        report.pop("navigationRequests")
+        with self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_navigation_rejects_false_throw_wrong_action_and_incomplete_return(self):
+        for index in (0, 1):
+            for key, invalid in (("action", "BACK"), ("platformAction", 1), ("platformAction", True),
+                    ("returned", False), ("returned", 1), ("accepted", False), ("accepted", 1),
+                    ("operation", "GLOBAL_ACTION_THROWN"), ("failureType", "IllegalStateException")):
+                report, files = fixture()
+                report["navigationRequests"][index][key] = invalid
+                with self.subTest(index=index, key=key), self.assertRaises(ValueError):
+                    self.validate(report, files)
+            for key in tuple(fixture()[0]["navigationRequests"][index]):
+                report, files = fixture()
+                report["navigationRequests"][index].pop(key)
+                with self.subTest(index=index, absent=key), self.assertRaises(ValueError):
+                    self.validate(report, files)
+
+    def test_navigation_timestamps_must_follow_initial_and_precede_recents_capture(self):
+        for index, key, invalid in ((0, "requestedElapsedMillis", 99), (0, "returnedElapsedMillis", 100),
+                (0, "returnedElapsedMillis", 104), (1, "requestedElapsedMillis", 101),
+                (1, "returnedElapsedMillis", 111), (0, "requestedElapsedMillis", True),
+                (1, "returnedElapsedMillis", "104")):
+            report, files = fixture()
+            report["navigationRequests"][index][key] = invalid
+            with self.subTest(index=index, key=key), self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_navigation_uses_public_closed_actions_without_raw_keys_or_fallback(self):
+        base = ROOT / "samples/p2p-sample-android/src"
+        source = (base / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        helper = (base / "runtimeValidation/kotlin/dev/p2pkit/sample/android/runtime/LegacyNavigation.kt").read_text()
+        self.assertIn("HOME(AccessibilityService.GLOBAL_ACTION_HOME)", helper)
+        self.assertIn("RECENTS(AccessibilityService.GLOBAL_ACTION_RECENTS)", helper)
+        self.assertEqual(helper.count("perform(action.platformAction)"), 1)
+        self.assertLess(helper.index("returned(accepted)"), helper.index("checkLegacyCapture(accepted"))
+        self.assertEqual(source.count("uiAutomation.performGlobalAction(it)"), 1)
+        for forbidden in ("KeyEvent", "injectInputEvent", "executeShellCommand", "moveTaskToBack", "ACTION_MAIN"):
+            self.assertNotIn(forbidden, source)
+        navigation = source.split("    private fun navigate(", 1)[1].split("    private fun <T> main(", 1)[0]
+        self.assertLess(navigation.index("navigationRequests.put(request)"), navigation.index("requestLegacyNavigation("))
+        self.assertIn('if (!request.has("returned"))', navigation)
+        self.assertIn('"GLOBAL_ACTION_THROWN"', navigation)
+        self.assertIn("throw error", navigation)
+        self.assertIn('.put("navigationRequests", navigationRequests)', source)
+        expected = ('stage = "home-request"', 'navigate(LegacyNavigationAction.HOME)', 'stage = "home-stopped"',
+                    'await { main { first in stopped && !first.hasWindowFocus() } }', 'stage = "home-secure"',
+                    'check(main { secure(first) })', 'stage = "recents-request"',
+                    'navigate(LegacyNavigationAction.RECENTS)', 'stage = "actual-recents-original"')
+        start = source.index(expected[0])
+        for marker in expected:
+            start = source.index(marker, start) + len(marker)
+        self.assertIn("task.moveToFront()", source)
+        self.assertIn("first.taskId == firstTask", source)
+        self.assertIn("first.recreate()", source)
+        self.assertIn("check(captures.length() == 7 && appObservations.size == 6)", source)
+        self.assertEqual(legacy.DEFINITIONS["479"][2], 150)
+
+    def test_successful_navigation_does_not_substitute_for_actual_outcomes(self):
+        for missing in ("captures", "lifecycle", "cleanup"):
+            report, files = fixture()
+            report.pop(missing)
+            with self.subTest(missing=missing), self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        report["captures"][1]["pixelVariation"] = False
+        with self.assertRaises(ValueError): self.validate(report, files)
 
     def test_missing_duplicate_reordered_captures_refused(self):
         for change in (lambda c: c.pop(), lambda c: c.append(c[0]), lambda c: c.reverse()):

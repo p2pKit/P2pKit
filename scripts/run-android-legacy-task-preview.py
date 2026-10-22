@@ -104,6 +104,25 @@ def validate_report(raw, token, source, tree, api, files):
     captures = value.get("captures")
     need(isinstance(captures, list) and all(isinstance(item, dict) for item in captures) and
          [item.get("name") for item in captures] == list(CAPTURES), "Missing, duplicate or reordered observations")
+    navigation = value.get("navigationRequests")
+    need(isinstance(navigation, list) and len(navigation) == 2, "Missing or duplicate navigation requests")
+    previous = captures[0].get("elapsedMillis")
+    need(type(previous) is int and previous >= 0, "Missing initial capture timestamp")
+    for request, (action, platform) in zip(navigation, (("HOME", 2), ("RECENTS", 3))):
+        need(isinstance(request, dict) and set(request) ==
+             {"action", "platformAction", "requestedElapsedMillis", "returnedElapsedMillis",
+              "returned", "accepted", "operation"} and
+             request["action"] == action and type(request["platformAction"]) is int and
+             request["platformAction"] == platform and request["returned"] is True and
+             request["accepted"] is True and request["operation"] == "GLOBAL_ACTION_RETURNED",
+             "Navigation request failed, threw or used an unexpected action")
+        start, finish = request["requestedElapsedMillis"], request["returnedElapsedMillis"]
+        need(type(start) is int and type(finish) is int and previous <= start <= finish,
+             "Missing or reordered navigation timestamps")
+        previous = finish
+    need(type(captures[1].get("elapsedMillis")) is int and previous <= captures[1]["elapsedMillis"],
+         "Recents capture did not follow the actual navigation requests")
+    # Accepted system requests are not proof: all actual lifecycle/window/image checks below still apply.
     expected_files = {"result.json"}
     for index, item in enumerate(captures):
         name, kind = item["name"], item.get("observation")

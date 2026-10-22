@@ -17,7 +17,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
-import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.lifecycle.ViewModelProvider
@@ -40,6 +39,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
     private val report = JSONObject()
     private val captures = JSONArray()
     private val captureAttempts = JSONArray()
+    private val navigationRequests = JSONArray()
     private val appObservations = mutableMapOf<String, LegacyCaptureObservation>()
     private val events = CopyOnWriteArrayList<JSONObject>()
     private val created = CopyOnWriteArrayList<MainActivity>()
@@ -88,7 +88,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             }
             val outcome = if (failure == null) "HARNESS_PASS_PENDING_REVIEW" else "FAIL"
             report.put("outcome", outcome).put("captures", captures).put("captureAttempts", captureAttempts)
-                .put("lifecycle", JSONArray(events))
+                .put("lifecycle", JSONArray(events)).put("navigationRequests", navigationRequests)
                 .put("recentsReviewRequired", true)
                 .put("scope", "API24/32 synthetic content in real MainActivity; not natural credential/RPC flow")
             try {
@@ -151,12 +151,15 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         stage = "initial-secure-foreground"
         capture(stage, first, pattern, false)
 
+        stage = "home-request"
+        navigate(LegacyNavigationAction.HOME)
         stage = "home-stopped"
-        key(KeyEvent.KEYCODE_HOME)
         await { main { first in stopped && !first.hasWindowFocus() } }
+        stage = "home-secure"
         check(main { secure(first) })
+        stage = "recents-request"
+        navigate(LegacyNavigationAction.RECENTS)
         stage = "actual-recents-original"
-        key(KeyEvent.KEYCODE_APP_SWITCH)
         // Capture the actual system window, not a fabricated task bitmap. Its task-card identity and
         // absence of the synthetic phrase/pattern must also be independently reviewed in the original PNG.
         await { uiAutomation.rootInActiveWindow?.let { root ->
@@ -356,9 +359,25 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
     private fun secure(activity: Activity): Boolean =
         activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
 
-    private fun key(code: Int) {
-        check(uiAutomation.injectInputEvent(KeyEvent(KeyEvent.ACTION_DOWN, code), true))
-        check(uiAutomation.injectInputEvent(KeyEvent(KeyEvent.ACTION_UP, code), true))
+    private fun navigate(action: LegacyNavigationAction) {
+        val request = JSONObject().put("action", action.name).put("platformAction", action.platformAction)
+            .put("requestedElapsedMillis", SystemClock.elapsedRealtime()).put("operation", "GLOBAL_ACTION_REQUEST")
+        navigationRequests.put(request)
+        try {
+            requestLegacyNavigation(action, perform = { uiAutomation.performGlobalAction(it) }) { accepted ->
+                request.put("returned", true).put("accepted", accepted)
+                    .put("returnedElapsedMillis", SystemClock.elapsedRealtime())
+                    .put("operation", "GLOBAL_ACTION_RETURNED")
+            }
+        } catch (error: Throwable) {
+            // A thrown request is not an invented false return; preserve the original exception.
+            if (!request.has("returned")) {
+                request.put("operation", "GLOBAL_ACTION_THROWN").put("failureType", error.javaClass.name)
+                    .put("failedElapsedMillis", SystemClock.elapsedRealtime())
+            }
+            throw error
+        }
+        // A true return acknowledges the request only. Actual lifecycle/window/image oracles follow.
     }
 
     private fun <T> main(block: () -> T): T {
