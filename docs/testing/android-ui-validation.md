@@ -127,7 +127,12 @@ positive images must contain the known synthetic pattern, with unchanged
 window/view/geometry and before/after state binding around every app capture.
 A returned protected bitmap must exclude the sampled pattern. Before each app
 capture, the witness binds the actual View's accessibility window to the fresh
-active app root, clears its frame statistics once, invalidates once and observes
+active app root and the unique active/focused application entry in the public
+interactive-window inventory. The instrumentation preserves its original service
+flags, requests only the additional interactive-window observation flag, verifies
+readback, and independently restores the exact original flags during cleanup.
+Window and root bounds each contain the real view and samples; they need not
+be equal across system insets. It clears frame statistics once, invalidates once and observes
 a new draw plus a defined post-invalidation presented-frame timestamp within
 the same five-second admission bound. Missing statistics fail without a CPU-only
 fallback. This timing observation is not unique buffer identity or pixel proof;

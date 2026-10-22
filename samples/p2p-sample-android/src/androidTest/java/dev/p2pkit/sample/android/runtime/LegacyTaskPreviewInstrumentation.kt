@@ -6,6 +6,7 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.Application
 import android.app.Instrumentation
+import android.app.KeyguardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -18,11 +19,13 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.p2pkit.core.BuildInfo
@@ -57,6 +60,8 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
     private var recentsProvider = ""
     private var recentsCloseAction = 0
     private var publicAppLabel = ""
+    private var observerFlags: LegacyInteractiveWindowFlags? = null
+    private val observerReceipt = JSONObject()
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -91,6 +96,15 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 report.put("cleanup", "OWNED_ACTIVITIES_DESTROYED")
             } catch (error: Throwable) {
                 report.put("cleanupFailureType", error.javaClass.name)
+                if (failure == null) failure = error
+            }
+            try {
+                observerFlags?.let {
+                    observerReceipt.put("operation", "RESTORE_FLAGS")
+                    observerReceipt.put("restored", it.restore()).put("operation", "RESTORED")
+                }
+            } catch (error: Throwable) {
+                report.put("observerCleanupFailureType", error.javaClass.name)
                 if (failure == null) failure = error
             }
             val outcome = if (failure == null) "HARNESS_PASS_PENDING_REVIEW" else "FAIL"
@@ -138,23 +152,53 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             .put("sourceBinding", "host must bind clean checkout/tree, installed APK hashes and original run")
             .put("api", Build.VERSION.SDK_INT).put("fingerprint", Build.FINGERPRINT).put("pid", Process.myPid())
             .put("targetSdk", application.applicationInfo.targetSdkVersion)
-            .put("syntheticOnly", true).put("captureObservationSchema", 3).put("bodyObservationBudgetMillis", 90_000)
+            .put("syntheticOnly", true).put("captureObservationSchema", 4).put("bodyObservationBudgetMillis", 90_000)
             .put("perMainCallAndAwaitMillis", 5_000)
         deadline = SystemClock.elapsedRealtime() + 90_000
-        stage = "real-activity-launch"
+        stage = "observer-flags-admission"
+        report.put("interactiveWindowObserver", observerReceipt)
+        observerFlags = LegacyInteractiveWindowFlags(
+            read = { uiAutomation.serviceInfo.flags },
+            write = { flags -> uiAutomation.serviceInfo = uiAutomation.serviceInfo.also { it.flags = flags } },
+            requiredFlag = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS,
+        )
+        checkNotNull(observerFlags).let {
+            observerReceipt.put("original", it.original).put("requested", it.requested).put("operation", "SET_FLAGS")
+            observerReceipt.put("readback", it.enable()).put("operation", "ADMITTED")
+        }
+        stage = "real-activity-launch-request"
         main {
             application.registerActivityLifecycleCallbacks(lifecycle)
             application.startActivity(
                 Intent(application, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }
-        await { main { created.size == 1 && created.single().hasWindowFocus() } }
+        stage = "real-activity-launch-focus"
+        await { main {
+            // Diagnostic-only: these booleans do not change the original short-circuit focus predicate.
+            val snapshot = JSONObject().put("createdCount", created.size)
+                .put("focusedCount", created.count { it.hasWindowFocus() })
+                .put("destroyedCount", created.count { it.isDestroyed })
+                .put("elapsedMillis", SystemClock.elapsedRealtime())
+                .put("bodyRemainingMillis", deadline - SystemClock.elapsedRealtime())
+                .put("isInteractive", (application.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                    .isInteractive)
+                .put("keyguardLocked", (application.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager)
+                    .isKeyguardLocked)
+            report.put("launchFocusObservation", snapshot)
+            created.size == 1 && created.single().hasWindowFocus()
+        } }
         val first = created.single()
+        stage = "real-activity-launch-secure"
         check(main { secure(first) })
+        stage = "real-activity-launch-admission"
         model = main { ViewModelProvider(first)[P2pKitViewModel::class.java].also {
-            check(it.currentRunAdmission().canRunKmpSmoke)
+            val admitted = it.currentRunAdmission().canRunKmpSmoke
+            report.put("launchModelAdmitted", admitted)
+            check(admitted)
         } }
         val firstTask = main { first.taskId }
+        stage = "real-activity-launch-mount"
         val pattern = mount(first)
         stage = "initial-secure-foreground"
         capture(stage, first, pattern, false)
@@ -274,13 +318,35 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 !bounds.contains(viewBounds) || state.points.any { (x, y) -> !viewBounds.contains(x, y) }) {
                 return pending("ROOT_GEOMETRY_MISMATCH")
             }
+            val window = interactiveWindow(root.windowId, viewBounds, state.points)
+                ?: return pending("INTERACTIVE_WINDOW_NOT_READY")
             guard("READY")
             return AppCaptureSample(state, JSONObject().put("windowId", root.windowId)
                 .put("package", targetContext.packageName)
                 .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
                 .put("viewBounds", JSONArray(listOf(viewBounds.left, viewBounds.top,
-                    viewBounds.right, viewBounds.bottom))))
+                    viewBounds.right, viewBounds.bottom)))
+                .put("interactiveWindow", JSONObject().put("windowId", window.id).put("type", window.type)
+                    .put("active", window.active).put("focused", window.focused).put("uniqueMatch", true)
+                    .put("bounds", JSONArray(window.bounds))))
         } finally { @Suppress("DEPRECATION") root.recycle() }
+    }
+
+    private fun interactiveWindow(id: Int, view: Rect, points: List<Pair<Int, Int>>): LegacyInteractiveWindow? {
+        val windows = uiAutomation.windows
+        try {
+            checkLegacyCapture(windows.size <= 256, LegacyCaptureFailureCode.INTERACTIVE_WINDOW_LIMIT_EXCEEDED)
+            val observations = windows.map { window ->
+                val bounds = Rect().also(window::getBoundsInScreen)
+                LegacyInteractiveWindow(window.id, window.type, window.isActive, window.isFocused,
+                    listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))
+            }
+            return findLegacyInteractiveWindow(observations, id, AccessibilityWindowInfo.TYPE_APPLICATION,
+                listOf(view.left, view.top, view.right, view.bottom), points)
+        } finally {
+            @Suppress("DEPRECATION") // API24-compatible owned AccessibilityWindowInfo instances.
+            windows.forEach { it.recycle() }
+        }
     }
 
     private fun sameAppCapture(first: AppCaptureSample, second: AppCaptureSample): Boolean =

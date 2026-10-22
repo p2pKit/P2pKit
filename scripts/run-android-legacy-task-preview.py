@@ -99,7 +99,7 @@ def validate_presentation(item, state):
          0 < receipt["baselineDraws"] < receipt["observedDraws"] == state["viewDraws"],
          "Presentation was missing, stale, undefined, late or only a CPU draw")
     root = receipt["root"]
-    need(isinstance(root, dict) and set(root) == {"windowId", "package", "bounds", "viewBounds"} and
+    need(isinstance(root, dict) and set(root) == {"windowId", "package", "bounds", "viewBounds", "interactiveWindow"} and
          root == item.get("activeRootAfter") and type(root["windowId"]) is int and root["windowId"] >= 0 and
          root["package"] == PACKAGE, "Wrong or changed active owned presentation window")
     bounds, view = root["bounds"], root["viewBounds"]
@@ -110,17 +110,37 @@ def validate_presentation(item, state):
          all(view[0] <= x < view[2] and view[1] <= y < view[3] for x, y in state["samplePoints"]),
          "Presentation window does not contain the actual synthetic view and sample points")
 
+    window = root["interactiveWindow"]
+    need(isinstance(window, dict) and set(window) ==
+         {"windowId", "type", "active", "focused", "uniqueMatch", "bounds"} and
+         type(window["windowId"]) is int and window["windowId"] == root["windowId"] and
+         type(window["type"]) is int and window["type"] == 1 and window["active"] is True and
+         window["focused"] is True and window["uniqueMatch"] is True,
+         "Missing unique active/focused application inventory entry for the actual View window")
+    rect = window["bounds"]
+    need(isinstance(rect, list) and len(rect) == 4 and all(type(x) is int for x in rect) and
+         rect[0] <= view[0] < view[2] <= rect[2] and rect[1] <= view[1] < view[3] <= rect[3] and
+         all(rect[0] <= x < rect[2] and rect[1] <= y < rect[3] for x, y in state["samplePoints"]),
+         "Interactive window does not contain actual View/samples")
+
 
 def validate_report(raw, token, source, tree, api, files):
     value = owner.decode_json(raw)
     need(api in IMAGES and value.get("api") == api and value.get("case") == "479" and
          value.get("token") == token and value.get("sourceCommit") == source and
          value.get("declaredSourceTree") == tree and value.get("targetSdk") == 37 and
-         value.get("captureObservationSchema") == 3 and value.get("outcome") == owner.PASS and
+         value.get("captureObservationSchema") == 4 and value.get("outcome") == owner.PASS and
          value.get("syntheticOnly") is True and value.get("recentsReviewRequired") is True and
          value.get("cleanup") == "OWNED_ACTIVITIES_DESTROYED" and
-         not any(key in value for key in ("failure", "cleanupFailureType")),
+         not any(key in value for key in ("failure", "cleanupFailureType", "observerCleanupFailureType")),
          "Legacy witness identity, lifecycle or cleanup failed")
+    flags = value.get("interactiveWindowObserver")
+    need(isinstance(flags, dict) and set(flags) == {"original", "requested", "readback", "restored", "operation"} and
+         all(type(flags[key]) is int and 0 <= flags[key] < 2**31
+             for key in ("original", "requested", "readback", "restored")) and
+         flags["requested"] == flags["readback"] == (flags["original"] | 64) and
+         flags["restored"] == flags["original"] and flags["operation"] == "RESTORED",
+         "Interactive-window observer flags were not exactly admitted and restored")
     events = value.get("lifecycle")
     need(isinstance(events, list) and events and type(value.get("taskId")) is int,
          "Missing actual task/lifecycle observations")
@@ -159,7 +179,8 @@ def validate_report(raw, token, source, tree, api, files):
          {"provider", "publicAppLabel", "requiredFlagsPresent", "serviceFlags", "closeActionId", "maxNodes", "maxDepth"} and
          observer["provider"] == provider and observer["publicAppLabel"] == "P2pKit Sample" and
          observer["requiredFlagsPresent"] is True and type(observer["serviceFlags"]) is int and
-         observer["serviceFlags"] & 18 == 18 and type(observer["closeActionId"]) is int and
+         observer["serviceFlags"] == flags["requested"] and observer["serviceFlags"] & 18 == 18 and
+         type(observer["closeActionId"]) is int and
          (observer["closeActionId"] == 0 if api == 24 else observer["closeActionId"] > 0) and
          observer["maxNodes"] == 256 and observer["maxDepth"] == 24, "Unbound Recents semantic observer")
     lookup = value.get("recentsProviderLookup")

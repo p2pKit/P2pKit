@@ -45,7 +45,9 @@ def fixture(api=24, unavailable=False):
                          viewWidth=16, viewHeight=16, viewDraws=2,
                          samplePoints=[[2, 4], [6, 4], [10, 4], [14, 4]],
                          owned=True, viewAttached=True, windowFocused=True, secureFlag=not visible)
-            root = dict(windowId=identity + 30, package=legacy.PACKAGE, bounds=[0, 0, 16, 17], viewBounds=[0, 0, 16, 16])
+            root = dict(windowId=identity + 30, package=legacy.PACKAGE, bounds=[0, 0, 16, 17], viewBounds=[0, 0, 16, 16],
+                interactiveWindow=dict(windowId=identity + 30, type=1, active=True, focused=True,
+                    uniqueMatch=True, bounds=[0, 0, 16, 16]))
             presentation = dict(startedElapsedMillis=95 + index * 10, deadlineElapsedMillis=5095 + index * 10,
                 completedElapsedMillis=99 + index * 10, budgetMillis=5000, operation="READY", lastRootGuard="READY", root=root,
                 baselineDraws=1, clearReturned=True, invalidatedNano=1000, polls=2, frameCount=2, observedDraws=2,
@@ -70,11 +72,12 @@ def fixture(api=24, unavailable=False):
             files[name + ".png"] = synthetic_png(visible)
         captures.append(item)
     report = dict(case="479", token=TOKEN, sourceCommit=SOURCE, declaredSourceTree=TREE,
-        api=api, targetSdk=37, captureObservationSchema=3, outcome=legacy.owner.PASS,
+        api=api, targetSdk=37, captureObservationSchema=4, outcome=legacy.owner.PASS,
         syntheticOnly=True, recentsReviewRequired=True, cleanup="OWNED_ACTIVITIES_DESTROYED", taskId=7,
         recentsObserver=dict(provider="com.android.systemui" if api == 24 else "com.google.android.apps.nexuslauncher",
-            publicAppLabel="P2pKit Sample", requiredFlagsPresent=True, serviceFlags=18,
+            publicAppLabel="P2pKit Sample", requiredFlagsPresent=True, serviceFlags=82,
             closeActionId=0 if api == 24 else 1001, maxNodes=256, maxDepth=24),
+        interactiveWindowObserver=dict(original=18, requested=82, readback=82, restored=18, operation="RESTORED"),
         recentsAdmission=dict(startedElapsedMillis=105, deadlineElapsedMillis=5105, completedElapsedMillis=108,
             budgetMillis=5000, attempts=2, operation="READY", lastRootGuard="READY"),
         navigationRequests=[dict(action=action, platformAction=platform, requestedElapsedMillis=start,
@@ -110,6 +113,50 @@ class LegacyTaskTests(unittest.TestCase):
                 report, files = fixture(api, unavailable)
                 self.assertTrue(self.validate(report, files, api)["recentsReviewRequired"])
             self.assertEqual(legacy.LegacyCampaign(api).API, api)
+
+    def test_observer_flags_must_preserve_exact_original_and_restore_even_after_failure(self):
+        for key, invalid in (("original", True), ("requested", 64), ("readback", 18),
+                ("restored", 82), ("restored", None), ("operation", "ADMITTED")):
+            report, files = fixture()
+            report["interactiveWindowObserver"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        report["observerCleanupFailureType"] = "synthetic"
+        with self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        del report["interactiveWindowObserver"]
+        with self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_window_inventory_is_exact_unique_active_application_not_first_window(self):
+        for key, invalid in (("windowId", 99), ("type", 2), ("active", False), ("focused", False),
+                ("uniqueMatch", False), ("bounds", [0, 0, 15, 16]), ("type", True)):
+            report, files = fixture()
+            for root in (report["captures"][0]["presentation"]["root"], report["captures"][0]["activeRootAfter"]):
+                root["interactiveWindow"][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+        report, files = fixture()
+        report["captures"][0]["activeRootAfter"]["interactiveWindow"]["bounds"] = [0, 0, 16, 17]
+        with self.assertRaises(ValueError): self.validate(report, files)
+        # The valid fixture deliberately has root.bottom=17 but window.bottom=view.bottom=16.
+        report, files = fixture()
+        self.assertTrue(self.validate(report, files)["recentsReviewRequired"])
+
+    def test_native_flags_cleanup_inventory_and_launch_diagnostics_keep_original_oracles(self):
+        base = ROOT / "samples/p2p-sample-android/src"
+        source = (base / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        self.assertIn("requiredFlag = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS", source)
+        self.assertLess(source.index("observerFlags = LegacyInteractiveWindowFlags("), source.index("it.enable()"))
+        self.assertIn('observerReceipt.put("restored", it.restore())', source)
+        self.assertLess(source.index('report.put("cleanupFailureType"'), source.index("it.restore()"))
+        self.assertIn("windows.forEach { it.recycle() }", source)
+        self.assertLess(source.index("windows.size <= 256"), source.index("val observations = windows.map"))
+        self.assertIn("created.size == 1 && created.single().hasWindowFocus()", source)
+        for suffix in ("request", "focus", "secure", "admission", "mount"):
+            self.assertIn('stage = "real-activity-launch-' + suffix + '"', source)
+        self.assertIn('.put("isInteractive",', source)
+        self.assertIn('.put("keyguardLocked",', source)
+        for forbidden in ("wakeUp(", "requestDismissKeyguard", "acquireWakeLock", "GLOBAL_ACTION_LOCK_SCREEN"):
+            self.assertNotIn(forbidden, source)
 
     def test_presentation_requires_original_complete_non_stale_receipt(self):
         for key, invalid in (("clearReturned", False), ("clearReturned", 1), ("operation", "CPU_DRAW"),

@@ -2,6 +2,8 @@ package dev.p2pkit.sample.android.runtime
 
 /** Fixed diagnostics only: no outcome relaxation or Android capture-policy inference. */
 internal enum class LegacyCaptureFailureCode {
+    OBSERVER_FLAGS_INVALID,
+    INTERACTIVE_WINDOW_LIMIT_EXCEEDED,
     PRESENTATION_ADMISSION_TIMEOUT,
     PRESENTATION_STATS_UNAVAILABLE,
     PRESENTATION_FRAME_LIMIT_EXCEEDED,
