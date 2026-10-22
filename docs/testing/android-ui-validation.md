@@ -193,6 +193,26 @@ protected / positive pixels, deadlines, source bindings and cleanup remain
 mandatory. This explicit observer-contract correction changes neither production
 privacy policy nor the scope of API24's previously accepted runtime evidence.
 
+### Accepted legacy witness scope
+
+Independent original-report and full-image review accepted seven ordered
+observations on each of these source-bound emulator executions:
+
+| API / image | Tested source | Original run |
+| --- | --- | --- |
+| API24 default x86_64 | `13d62b699f6966c888775dfef3289aeb52a26550` | [39800406410/1](https://github.com/p2pKit/P2pKit/actions/runs/39800406410/attempts/1) |
+| API32 Google APIs x86_64 | `aafce4f62c05a74ec6222cb47db3fd11d725cda7` | [39847724503/1](https://github.com/p2pKit/P2pKit/actions/runs/39847724503/attempts/1) |
+
+Both include the actual intended Recents snapshot, two original synthetic
+positive-control images, retained lifecycle/ownership and observed cleanup.
+The API32 snapshot was fully visible and unobscured; the scoped card evidence
+and original image agreed. Neither an empty lookup nor an unavailable protected
+screenshot was promoted to pixel evidence. API24 is retained by reviewed source
+impact, not described as a fresh later-source APK execution. Earlier failed
+attempts remain failures. This is synthetic MainActivity policy evidence, not
+natural-credential/RPC, installed-release, physical-device or all-OEM testing,
+and it does not replace the mandatory exact-source release components.
+
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window
 PixelCopy and finite window identities/frame statistics. These are diagnostic,

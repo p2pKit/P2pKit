@@ -136,10 +136,15 @@ The synthetic API24 witness at source
 ([run 39800406410/1](https://github.com/p2pKit/P2pKit/actions/runs/39800406410/attempts/1))
 has accepted original positive/Recents images, lifecycle and cleanup evidence.
 This is not a later-source re-execution or natural-credential/device-wide proof.
-API32 original review remains pending under
-[issue #479](https://github.com/p2pKit/P2pKit/issues/479); neither source policy,
-protected screenshot unavailability nor an API35 result substitutes for it.
-Physical/OEM qualification remains separate. The
+The API32 witness at `aafce4f62c05a74ec6222cb47db3fd11d725cda7`
+([run 39847724503/1](https://github.com/p2pKit/P2pKit/actions/runs/39847724503/attempts/1))
+also has accepted original lifecycle, cleanup and full unobscured task-snapshot
+review, with the same-window positive/protected/positive capture controls.
+Its observer verifies the complete owned Recents pane, not unrelated Launcher
+widgets; automated popup absence is not asserted. These scoped synthetic results
+support the selected legacy policy in [issue #479](https://github.com/p2pKit/P2pKit/issues/479),
+not natural-credential or physical/OEM qualification. Protected screenshot
+unavailability alone still is not privacy proof. The
 [rendered/lifecycle validation guide](../testing/android-ui-validation.md#foreground-pixels-and-stopped-task-previews)
 keeps actual global pixels authoritative over cleared state or an empty owned
 window buffer. This sample-specific policy neither changes transport security

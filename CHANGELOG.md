@@ -29,9 +29,9 @@ remain `0.8.0-rc6`; this source does not retroactively change their evidence.
 - Protect the Android sample's API24–32 window with `FLAG_SECURE` for its full
   lifetime (#479). This intentionally also disables foreground screenshots,
   recording and non-secure displays on those APIs; API33+ keeps its existing
-  task-preview-only policy. The synthetic API24 witness at `13d62b6` has accepted
-  original Recents/lifecycle/capture evidence; API32 original review remains
-  pending. This is not natural-credential, physical-device or all-OEM acceptance.
+  task-preview-only policy. Synthetic API24 (`13d62b6`) and API32 (`aafce4f6`)
+  witnesses have accepted original Recents/lifecycle/capture evidence. This is
+  not natural-credential, physical-device or all-OEM acceptance.
 
 ### Tests, tooling and release reliability
 

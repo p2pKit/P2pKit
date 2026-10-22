@@ -341,8 +341,9 @@ have separately recorded hosted acceptance; they are not a general device suite
 or installed tests of the published packages. The published `0.8.0-rc6` retains
 its [API24–32 preview limitation](docs/releases/0.8.0-rc6.md#remaining-limitations).
 The unpublished rc7 candidate adds lifetime `FLAG_SECURE` on those APIs, including
-its foreground-capture tradeoff. The source-bound synthetic API24 witness is
-accepted; API32 review remains pending. See the
+its foreground-capture tradeoff. The source-bound synthetic API24 and API32
+witnesses have accepted original task-preview/lifecycle evidence; this does not
+establish natural-credential, physical-device or all-OEM coverage. See the
 [current policy and evidence limits](docs/security/model.md#android-sample-credential-previews).
 Android host JVM tests (including Robolectric shadows) are not ART or physical-device evidence.
 
