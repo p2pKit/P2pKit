@@ -80,6 +80,13 @@ class SecureSessionLifecycleTest {
             aliceConfigure = { beforeSessionCommitForTest = gate },
             bobConfigure = { beforeSessionCommitForTest = gate }
         ) { kits ->
+            val aliceKeepsOutgoing = kits.alice.localPeerId.value < kits.bob.localPeerId.value
+            val incomingOwner = if (aliceKeepsOutgoing) kits.bob else kits.alice
+            val incomingPeer = if (aliceKeepsOutgoing) kits.alice.localPeerId else kits.bob.localPeerId
+            // No replay: subscribe before either dial to the larger peer's winning incoming publication.
+            val preferredIncoming = async(start = CoroutineStart.UNDISPATCHED) {
+                incomingOwner.incomingSessions.first { it.peer.id == incomingPeer }
+            }
             val aliceCall = async { kits.alice.connect(peerForSecureKit(kits.bob)) }
             val bobCall = async { kits.bob.connect(peerForSecureKit(kits.alice)) }
             try {
@@ -92,16 +99,18 @@ class SecureSessionLifecycleTest {
                 releaseCommit.complete(Unit)
                 withTimeout(5_000) { aliceCall.await(); bobCall.await() }
 
-                val aliceKeepsOutgoing = kits.alice.localPeerId.value < kits.bob.localPeerId.value
                 val winner = if (aliceKeepsOutgoing) aliceOut else bobOut
                 val loser = if (aliceKeepsOutgoing) bobOut else aliceOut
-                withTimeout(5_000) {
+                val publishedIncoming = withTimeout(5_000) {
                     loser.a.state.first { it == ConnectionState.Closed }
                     loser.b.state.first { it == ConnectionState.Closed }
                     kits.awaitKeyCounts(total = 4, cleared = 2)
+                    // Losing-wire cleanup does not join the independent preferred incoming commit.
+                    preferredIncoming.await()
                 }
                 val aliceSession = kits.alice.sessions.value.single()
                 val bobSession = kits.bob.sessions.value.single()
+                assertSame(publishedIncoming, if (aliceKeepsOutgoing) bobSession else aliceSession)
                 kits.assertAuthenticated(aliceSession, bobSession)
                 assertEquals(ConnectionState.Connected, winner.a.state.value)
                 assertEquals(ConnectionState.Connected, winner.b.state.value)
@@ -121,6 +130,7 @@ class SecureSessionLifecycleTest {
                 assertTrue(kits.bob.sessions.value.isEmpty())
             } finally {
                 releaseCommit.complete(Unit)
+                preferredIncoming.cancel()
             }
         }
     }
