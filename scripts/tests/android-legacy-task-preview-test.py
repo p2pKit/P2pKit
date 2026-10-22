@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Offline identity/completion controls; never Android execution evidence."""
+"""Offline identity/completion and install-shell controls; never Android execution evidence."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
+import signal
 import struct
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 import zlib
 
@@ -170,6 +176,85 @@ class LegacyTaskTests(unittest.TestCase):
         self.assertIn("--report-glob 'build/reports/android-legacy-task-preview-api*/**/*'", workflow)
         self.assertIn("uses: ./.github/workflows/android-legacy-task-preview.yml", main)
         self.assertEqual(main.count("inputs.component != 'android-legacy-task-preview'"), 4)
+
+
+class LegacySdkInstallTests(unittest.TestCase):
+    def install_body(self):
+        workflow = (ROOT / ".github/workflows/android-legacy-task-preview.yml").read_text()
+        parts = workflow.split("      - name: Install producer NDK and explicit legacy witness image\n")
+        self.assertEqual(len(parts), 2)
+        step = parts[1].split("      - name:", 1)[0]
+        self.assertIn("timeout-minutes: 12", [line.strip() for line in step.splitlines()])
+        self.assertIn("WITNESS_IMAGE: ${{ matrix.image }}", step)
+        _, body = step.split("        run: |\n")
+        return textwrap.dedent(body)
+
+    def run_install(self, *, api=32, sdk_status=0, prompts=3):
+        # Exercise the checked-in Bash body, not a reimplementation. Only the
+        # SDK command is synthetic; the feeder runs the real yes and records
+        # its exit so a genuine SIGPIPE cannot be mistaken for SDK failure.
+        bash, yes = shutil.which("bash"), shutil.which("yes")
+        self.assertIsNotNone(bash)
+        self.assertIsNotNone(yes)
+        body = self.install_body()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = root / "android sdk"
+            manager = sdk / "cmdline-tools/latest/bin/sdkmanager"
+            manager.parent.mkdir(parents=True)
+            manager.write_text(f"#!{sys.executable}\n" + textwrap.dedent("""\
+                import json, os, sys
+                answers = [sys.stdin.readline() for _ in range(int(os.environ["SDK_PROMPTS"]))]
+                with open(os.environ["SDK_CALLS"], "a") as output:
+                    output.write(json.dumps({"argv": sys.argv[1:], "answers": answers}) + "\\n")
+                sys.exit(int(os.environ["SDK_STATUS"]) if all(a == "y\\n" for a in answers) else 66)
+                """))
+            manager.chmod(0o700)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            feeder = bin_dir / "yes"
+            feeder.write_text(f"#!{bash}\n" + textwrap.dedent("""\
+                "$REAL_YES" "$@"
+                status=$?
+                printf '%s\\n' "$status" > "$FEEDER_STATUS"
+                exit "$status"
+                """))
+            feeder.chmod(0o700)
+            calls, feeder_status = root / "sdk-calls.jsonl", root / "feeder-status"
+            env = dict(PATH=str(bin_dir), ANDROID_HOME=str(sdk), ANDROID_SDK_ROOT=str(sdk),
+                       WITNESS_IMAGE=legacy.IMAGES[api], REAL_YES=yes, FEEDER_STATUS=str(feeder_status),
+                       SDK_CALLS=str(calls), SDK_STATUS=str(sdk_status), SDK_PROMPTS=str(prompts))
+            process = subprocess.Popen([bash, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", body],
+                                       env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, start_new_session=True)
+            try:
+                stdout, stderr = process.communicate(b"", timeout=5)
+            except BaseException:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.communicate(timeout=5)
+                raise
+            self.assertEqual(process.returncode, sdk_status, (stdout, stderr))
+            self.assertEqual(int(feeder_status.read_text()), 128 + signal.SIGPIPE)
+            self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()], [dict(
+                argv=["platforms;android-36", "platforms;android-37.0", "ndk;29.0.14206865",
+                      "platform-tools", "emulator", legacy.IMAGES[api]],
+                answers=["y\n"] * prompts)])
+
+    def test_license_prompts_accept_only_the_exact_requested_installation(self):
+        for api in (24, 32):
+            with self.subTest(api=api):
+                self.run_install(api=api)
+
+    def test_sdk_failure_is_not_hidden_by_feeder_sigpipe(self):
+        for status in (1, 37, 124):
+            with self.subTest(status=status):
+                self.run_install(sdk_status=status)
+
+    def test_success_without_prompts_survives_real_yes_sigpipe(self):
+        self.run_install(prompts=0)
 
 
 if __name__ == "__main__":

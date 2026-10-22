@@ -59,9 +59,15 @@ jobs:
         env:
           WITNESS_IMAGE: ${{ matrix.image }}
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+          # Accept only this installation's prompts, not all SDK licenses.
+          # yes may receive SIGPIPE when the SDK command exits; preserve the SDK status.
+          set +e
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             'platforms;android-36' 'platforms;android-37.0' 'ndk;29.0.14206865' \
             'platform-tools' 'emulator' "$WITNESS_IMAGE"
+          sdkmanager_status=${PIPESTATUS[1]}
+          set -e
+          exit "$sdkmanager_status"
       - name: Admit KVM for this hosted job user
         id: kvm
         run: |
