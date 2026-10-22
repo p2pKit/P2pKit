@@ -32,6 +32,15 @@ POLICY = GATE.read_json(ROOT / "gradle/platform-test-policy.json")
 TOKEN = "a" * 32
 
 
+def model_process_launch(supplier):
+    """Supply a child to the retained owner, without executing native admission."""
+    def start(owner, argv, *, cwd, stdout=None, stderr=None):
+        owner.attempted = True
+        outputs = {} if stdout is None and stderr is None else {"stdout": stdout, "stderr": stderr}
+        owner.child = supplier(argv, cwd=cwd, **outputs)
+    return mock.patch.object(GATE.ProcessOwner, "start", new=start)
+
+
 def example_report(profile="full", arch="arm64"):
     required = GATE.required_tasks(POLICY, profile, arch)
     tasks = {name for entry in POLICY["model"].values() for name in entry["tests"]}
@@ -440,7 +449,7 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
         self.assertEqual(120, GATE.simulator.SECONDS)
         self.assertEqual((15, 5), (GATE.TERMINATION_GRACE_SECONDS, GATE.TERMINATION_KILL_SECONDS))
         for label in IntelEvidenceFixture.prepare + IntelEvidenceFixture.retire:
-            ceiling = 620 if label == "intel-bootstatus" else 140
+            ceiling = 840 if label == "intel-bootstatus" else 360
             durations = (300, ceiling, ceiling + 1) if label == "intel-bootstatus" else (ceiling, ceiling + 1)
             for duration in durations:
                 fixture = IntelEvidenceFixture()
@@ -573,7 +582,7 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
             self.assess(fixture)
         fixture = IntelEvidenceFixture()
         row = fixture.rows["intel-boot"]
-        row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) + timedelta(seconds=141)).isoformat()
+        row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) + timedelta(seconds=361)).isoformat()
         with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
             self.assess(fixture)
 
@@ -659,7 +668,8 @@ class IntelOwnerLifecycleModels(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(GATE.platform, "system", return_value="Darwin"))
         self.stack.enter_context(mock.patch.object(GATE.platform, "machine", return_value="x86_64"))
         self.stack.enter_context(mock.patch.object(GATE, "_intel_capture_phase", side_effect=self.phase))
-        self.stack.enter_context(mock.patch.object(GATE.subprocess, "Popen", side_effect=self.product))
+        self.stack.enter_context(model_process_launch(self.product))
+        self.stack.enter_context(mock.patch.object(GATE.subprocess, "Popen", side_effect=AssertionError("NO_PROCESS")))
         self.stack.enter_context(mock.patch.object(GATE.subprocess, "check_output", side_effect=AssertionError("NO_PROCESS")))
         self.stack.enter_context(mock.patch.object(GATE.os, "killpg", side_effect=AssertionError("NO_NATIVE_SIGNAL")))
         self.stack.enter_context(mock.patch.object(GATE, "terminate_process", return_value=True))
@@ -673,9 +683,9 @@ class IntelOwnerLifecycleModels(unittest.TestCase):
         path = directory / label
         path.mkdir(mode=0o700)
         fault = self.faults.get(label)
-        if label == "intel-boot" and fault != "spawn":
+        if label == "intel-boot" and fault not in ("spawn", "ownership"):
             self.state = "Booted"
-        if label == "intel-shutdown" and fault not in ("spawn", "exit"):
+        if label == "intel-shutdown" and fault not in ("spawn", "exit", "ownership"):
             self.state = "Shutdown"
         stdout = self.fixture.stdout[label]
         if label in ("simulator-devices", "intel-prelaunch", "intel-retire-before", "intel-retire-after"):
@@ -684,21 +694,23 @@ class IntelOwnerLifecycleModels(unittest.TestCase):
             stdout = b"Xcode 26.3\nBuild version WRONG\n"
         row = copy.deepcopy(self.fixture.rows[label])
         row.update(startedUtc=datetime.now(timezone.utc).isoformat(), finishedUtc=datetime.now(timezone.utc).isoformat(),
-                   exitCode=None if fault == "spawn" else 1 if fault == "exit" else 0, timedOut=fault == "timeout")
+                   exitCode=None if fault in ("spawn", "ownership") else 1 if fault == "exit" else 0,
+                   timedOut=fault == "timeout")
         for stream, raw in (("stdout", stdout), ("stderr", b"")):
             row[stream + "Bytes"], row[stream + "Sha256"] = len(raw), intel_hash(raw)
             GATE._intel_write(path / (stream + ".bin"), raw)
         GATE._intel_write(path / "result.json", intel_encoded(row))
         if fault == "spawn":
             raise OSError("supplied failed spawn")
+        if fault == "ownership":
+            raise GATE.audit_processes.OwnershipError("supplied native ownership refusal")
         if fault == "interrupt":
             raise KeyboardInterrupt()
         return row
 
-    def product(self, command, *, cwd, start_new_session):
+    def product(self, command, *, cwd):
         self.calls.append("gradle")
         self.assertEqual(self.root, cwd)
-        self.assertIs(start_new_session, True)
         raw = (self.directory / "binding.json").read_bytes()
         binding = json.loads(raw)
         fixture = IntelEvidenceFixture(str(self.root), binding["token"])
@@ -722,6 +734,17 @@ class IntelOwnerLifecycleModels(unittest.TestCase):
             code = GATE.run("ios-x64")
         summary = json.loads((self.directory.parent / "summary.json").read_bytes())
         return code, summary
+
+    def test_native_ownership_refusal_still_attempts_remaining_intel_retirement(self):
+        for failed in GATE.INTEL_RETIRE:
+            self.faults = {failed: "ownership"}
+            with self.subTest(phase=failed):
+                code, summary = self.invoke()
+                self.assertNotEqual(0, code)
+                self.assertEqual("FAIL", summary["result"])
+                self.assertTrue(summary["errors"])
+                self.assertEqual(list(GATE.INTEL_RETIRE), [name for name in self.calls if name in GATE.INTEL_RETIRE])
+                self.assertEqual(1, self.calls.count("stop"))
 
     def test_once_preparation_real_property_join_and_owned_retirement_order(self):
         environment = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "example/project", "GITHUB_RUN_ID": "123",
@@ -833,16 +856,56 @@ class IntelCommandCaptureModels(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="intel-finite-phase-") as temporary:
             root, output = Path(temporary).resolve(), io.StringIO()
             with mock.patch.object(GATE, "ROOT", root), contextlib.redirect_stdout(output), \
-                    mock.patch.object(GATE.subprocess, "Popen", side_effect=OSError("private-launch-error")), \
+                    mock.patch.object(GATE.ProcessOwner, "start", side_effect=OSError("private-launch-error")), \
                     mock.patch.object(GATE, "terminate_process", return_value=True) as drain, \
                     self.assertRaisesRegex(OSError, "private-launch-error"):
                 GATE._intel_capture_phase(root, "simulator-first-launch", ["private-not-executed"])
-            drain.assert_called_once_with(None)
+            drain.assert_called_once()
+            self.assertIs(type(drain.call_args.args[0]), GATE.ProcessOwner)
+            self.assertIsNone(drain.call_args.args[0].child)
             row = json.loads((root / "simulator-first-launch/result.json").read_bytes())
             self.assertIsNone(row["exitCode"])
             self.assertIs(row["ownedGroupDrained"], True)
             self.assertEqual(output.getvalue(), "INTEL_PHASE_RESULT simulator-first-launch EXIT null "
                              "TIMEOUT 0 OVERFLOW 0 DRAINED 1\n")
+
+    def test_partial_gate_failure_keeps_null_exit_and_both_finite_causes_without_native_retry(self):
+        with tempfile.TemporaryDirectory(prefix="intel-partial-gate-") as temporary:
+            root, stdout, stderr = Path(temporary).resolve(), io.StringIO(), io.StringIO()
+            child = mock.Mock(stdout=None, stderr=None, returncode=None)
+            child.poll.return_value = None
+            scope = mock.Mock(leaders=[child], discovery_errors=set(), pending_discoveries={},
+                              launches=[{"created": True, "gateReleased": False, "pid": 999,
+                                         "requestedArgv": ["PRIVATE_ARG"]}])
+            failure = GATE.audit_processes.OwnershipError("Darwin exec gate did not establish readiness")
+            scope.spawn.side_effect = failure
+            scope.drain.return_value = [{"pid": 999, "private": "PRIVATE_IDENTITY"}]
+            with mock.patch.object(GATE, "ROOT", root), \
+                    mock.patch.object(GATE.ci_evidence, "local_command_scope", return_value=scope), \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                    self.assertRaises(GATE.audit_processes.OwnershipError) as caught:
+                GATE._intel_capture_phase(root, "intel-bootstatus", ["PRIVATE_ARG"])
+            self.assertIs(failure, caught.exception)
+            row = json.loads((root / "intel-bootstatus/result.json").read_bytes())
+            self.assertIsNone(row["exitCode"])
+            self.assertFalse(row["ownedGroupDrained"])
+            self.assertEqual((0, 0), (row["stdoutBytes"], row["stderrBytes"]))
+            launch = json.loads(next(line.split(" ", 1)[1] for line in stderr.getvalue().splitlines()
+                                     if line.startswith("PLATFORM_LAUNCH_FAILURE ")))
+            drain = json.loads(next(line.split(" ", 1)[1] for line in stderr.getvalue().splitlines()
+                                    if line.startswith("PLATFORM_RETIREMENT_FAILURE ")))
+            self.assertEqual("GATE_NOT_READY", launch["reason"])
+            self.assertIs(launch["created"], True)
+            self.assertIs(launch["gateReleased"], False)
+            self.assertIs(launch["childReturned"], False)
+            self.assertEqual({"returned": True, "live": 1, "leaders": 1, "discoveryErrors": 0,
+                              "pendingDiscoveries": 0}, drain["drainState"])
+            self.assertEqual("PLATFORM_DRIVER", drain["nativeError"]["sourceFrames"][-1]["source"])
+            self.assertNotIn("PRIVATE_ARG", stderr.getvalue())
+            self.assertNotIn("PRIVATE_IDENTITY", stderr.getvalue())
+            self.assertNotIn(str(root), stderr.getvalue())
+            scope.spawn.assert_called_once(); scope.drain.assert_called_once(); scope.close.assert_called_once()
+            scope.discover.assert_not_called(); scope.description.assert_not_called()
 
     def test_bootstatus_capture_uses_only_its_named_work_budget(self):
         # Only test-local constants are scaled; the real capture and drain run.
@@ -895,7 +958,7 @@ class IntelCommandCaptureModels(unittest.TestCase):
                     self.assertLessEqual((root / label / "stdout.bin").stat().st_size, 512)
                     self.assertEqual(0o400, (root / label / "result.json").stat().st_mode & 0o777)
                     self.assertEqual(row, json.loads((root / label / "result.json").read_bytes()))
-                with mock.patch.object(GATE.subprocess, "Popen", side_effect=OSError("supplied failed spawn")), \
+                with mock.patch.object(GATE.ProcessOwner, "start", side_effect=OSError("supplied failed spawn")), \
                         self.assertRaises(OSError):
                     GATE._intel_capture_phase(root, "spawn", ["not-executed"])
                 failed = json.loads((root / "spawn/result.json").read_bytes())
@@ -906,16 +969,17 @@ class IntelCommandCaptureModels(unittest.TestCase):
                 def interrupt(_signum, _frame):
                     raise KeyboardInterrupt()
                 def interrupted_launch(*_args, **_kwargs):
-                    # Deliver while Popen has not returned its process object.
+                    # Deliver before the model supplier returns its child.
                     signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
                     return owned
                 previous = signal.signal(signal.SIGTERM, interrupt)
                 try:
-                    with mock.patch.object(GATE.subprocess, "Popen", side_effect=interrupted_launch), \
+                    with model_process_launch(interrupted_launch), \
                             mock.patch.object(GATE, "terminate_process", return_value=True) as drain, \
                             self.assertRaises(KeyboardInterrupt):
                         GATE._intel_capture_phase(root, "interrupted", ["not-executed"])
-                    drain.assert_called_once_with(owned)
+                    drain.assert_called_once()
+                    self.assertIs(drain.call_args.args[0].child, owned)
                     interrupted = json.loads((root / "interrupted/result.json").read_bytes())
                     self.assertEqual(-15, interrupted["exitCode"])
                     self.assertIs(interrupted["ownedGroupDrained"], True)
@@ -946,7 +1010,8 @@ class OrdinarySimulatorModels(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(GATE.platform, "system", return_value="Darwin"))
         self.stack.enter_context(mock.patch.object(GATE.platform, "machine", return_value="arm64"))
         self.stack.enter_context(mock.patch.object(GATE.os, "getppid", return_value=65001))
-        self.stack.enter_context(mock.patch.object(GATE.subprocess, "Popen", side_effect=self.product))
+        self.stack.enter_context(model_process_launch(self.product))
+        self.stack.enter_context(mock.patch.object(GATE.subprocess, "Popen", side_effect=AssertionError("NO_REAL_PROCESS")))
         self.stack.enter_context(mock.patch.object(GATE.subprocess, "check_output", side_effect=AssertionError("NO_REAL_PROCESS")))
         self.stack.enter_context(mock.patch.object(GATE.audit_processes.ctypes, "CDLL", side_effect=AssertionError("NO_NATIVE_API")))
         self.stack.enter_context(mock.patch.object(GATE.os, "killpg", side_effect=AssertionError("NO_NATIVE_SIGNAL")))
@@ -1020,9 +1085,8 @@ class OrdinarySimulatorModels(unittest.TestCase):
         self.prelaunch = sim.prelaunch_record(run_raw, self.binding, row, stdout, b"")
         self.save(self.session / "evidence/simulator/prelaunch.json", self.prelaunch)
 
-    def product(self, command, *, cwd, start_new_session):
+    def product(self, command, *, cwd):
         self.assertEqual(cwd, self.root)
-        self.assertIs(start_new_session, True)
         self.calls.append(command)
         token = next(arg.split("=", 1)[1] for arg in command if arg.startswith("-Pp2pkit.testCoverageToken="))
         report = example_report()
@@ -1366,6 +1430,7 @@ class DriverFixtureEnvironmentModels(unittest.TestCase):
                  GATE.audit_processes.STATE_ENV: "/synthetic/ordinary-state",
                  GATE.audit_processes.JOB_ENV: "a" * 32, GATE.audit_processes.CHAIN_ENV: "b" * 32,
                  GATE.audit_processes.DOMAINS_ENV: "synthetic-domain",
+                 GATE.audit_processes.LOCAL_CHAIN_ENV: "d" * 32,
                  GATE.simulator.PATH_ENV: "/synthetic/simulator-binding", GATE.simulator.HASH_ENV: "c" * 64,
                  "GRADLE_USER_HOME": "/synthetic/ordinary-home", "P2PKIT_FAKE_PLATFORM_MODE": "foreign"}
         with mock.patch.dict(os.environ, {**essentials, **other}, clear=True):
@@ -1380,7 +1445,8 @@ class DriverFixtureEnvironmentModels(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             originals = {}
-            for name in ("run-platform-tests.py", "audit_processes.py", "hosted_full_simulator.py"):
+            for name in ("run-platform-tests.py", "audit_processes.py", "hosted_full_simulator.py",
+                         "ci_evidence.py", "hosted_evidence.py", "hosted_evidence_primitives.py"):
                 raw = (ROOT / "scripts" / name).read_bytes()
                 (scripts / name).write_bytes(raw)
                 originals["scripts/" + name] = raw
@@ -1501,20 +1567,45 @@ class DriverLifecycleTest(unittest.TestCase):
         self.assertNotEqual(0, summary["stopExitCode"])
 
     def test_undrained_owned_group_fails_gate_but_still_attempts_gradle_stop(self):
-        with mock.patch.object(GATE, "terminate_process", return_value=False):
+        retire = GATE.terminate_process
+        def uncertain(owner):
+            retire(owner)  # Do not leak the fixture's real retained native handles.
+            return False
+        with mock.patch.object(GATE, "terminate_process", side_effect=uncertain):
             self.assertNotEqual(0, self.invoke("pass"))
         self.assertEqual("FAIL", self.summaries()[0]["result"])
         self.assertEqual(["--stop"], self.calls()[-1])
 
+    def test_failed_inner_retirement_is_retained_in_summary_without_changing_task_or_stop_results(self):
+        retire, owners = GATE.terminate_process, []
+        def uncertain(owner):
+            result = retire(owner)  # Retire real fixture resources before supplying an observation failure.
+            owners.append(owner)
+            if len(owners) == 1:
+                owner.retirement_error = GATE.audit_processes.OwnershipError(
+                    "Unclassified Darwin lifetimes remain; cleanup is not proven")
+                owner.retirement_phase, owner.drained = "DRAIN", False
+                return False
+            return result
+        with mock.patch.object(GATE, "terminate_process", side_effect=uncertain):
+            self.assertNotEqual(0, self.invoke("pass"))
+        summary = self.summaries()[0]
+        self.assertEqual((0, 0, "FAIL"), (summary["gradleExitCode"], summary["stopExitCode"], summary["result"]))
+        self.assertEqual(owners[0].retirement_diagnostic(), summary["gradleRetirementFailure"])
+        self.assertEqual("DRAIN_UNCLASSIFIED", summary["gradleRetirementFailure"]["reason"])
+        self.assertEqual(["--stop"], self.calls()[-1])
+
     def test_stop_timeout_is_failure_and_terminates_its_owned_process(self):
-        process = mock.Mock(pid=123)
-        process.poll.return_value = None
-        process.wait.side_effect = [subprocess.TimeoutExpired("gradlew --stop", 90), 0]
-        with mock.patch.object(GATE.subprocess, "Popen", return_value=process), \
-                mock.patch.object(GATE.os, "killpg", side_effect=[None, ProcessLookupError]) as kill, \
+        process = mock.Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("gradlew --stop", 90)
+        with model_process_launch(mock.Mock(return_value=process)), \
+                mock.patch.object(GATE, "terminate_process", return_value=True) as retire, \
+                mock.patch.object(GATE.os, "killpg", side_effect=AssertionError("NO_NUMERIC_SIGNAL")), \
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(124, GATE.stop_gradle())
-        self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0)], kill.call_args_list)
+        process.wait.assert_called_once_with(timeout=90)
+        retire.assert_called_once()
+        self.assertIs(retire.call_args.args[0].child, process)
 
     def test_cancellation_signals_owned_gradle_group_stops_and_reports_failure(self):
         # A separate Python driver plus a real fake-wrapper/worker process tests
@@ -1526,237 +1617,779 @@ class DriverLifecycleTest(unittest.TestCase):
             f"g.ROOT=pathlib.Path({str(self.root)!r}); g.POLICY=g.ROOT/'gradle/platform-test-policy.json'; "
             "g.platform.system=lambda:'Darwin'; g.platform.machine=lambda:'arm64'; sys.exit(g.run('full'))"
         )
-        process = subprocess.Popen([sys.executable, "-c", bootstrap], cwd=self.root,
-                                   env=standalone_fixture_environment("wait"),
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-        worker = None
-        try:
+        with owned_process_fixture(standalone_fixture_environment("wait")) as fixture, tempfile.TemporaryFile() as log:
+            launch, rescue = fixture
+            process = launch([sys.executable, "-I", "-B", "-c", bootstrap], cwd=self.root,
+                             stdout=log, stderr=subprocess.STDOUT)
             deadline = time.monotonic() + 10
             while not (self.root / "worker.pid").exists() and process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.05)
             self.assertTrue((self.root / "worker.pid").exists(), "Fake build never reached worker start")
-            worker = int((self.root / "worker.pid").read_text())
-            process.send_signal(signal.SIGTERM)
-            output = process.communicate(timeout=20)[0].decode()
-            self.assertEqual(130, process.returncode, output)
+            worker_pid = int((self.root / "worker.pid").read_text())
+            worker = next((identity for identity in rescue.discover() if identity["pid"] == worker_pid), None)
+            self.assertIsNotNone(worker, "Rescue must bind the actual worker before cancellation")
+            leader = next((identity for identity in process.scope.discover() if identity["pid"] == process.pid), None)
+            self.assertIsNotNone(leader)
+            key = process.scope._key(leader)
+            # Deliver cancellation only through the originally retained native
+            # capability. Cleanup never uses the ready file's numeric PID.
+            process.scope._send(leader, process.scope.handles[key], signal.SIGTERM,
+                                deadline=time.monotonic() + 10)
+            process.wait(timeout=20)
+            log.seek(0)
+            output = log.read(64 * 1024 + 1)
+            self.assertLessEqual(len(output), 64 * 1024)
+            self.assertEqual(130, process.returncode, output.decode(errors="replace"))
             self.assertEqual(["--stop"], self.calls()[-1])
             self.assertEqual("FAIL", self.summaries()[0]["result"])
-            with self.assertRaises(ProcessLookupError):
-                os.kill(worker, 0)
-        finally:
-            if process.poll() is None:
-                process.send_signal(signal.SIGTERM)
-                try:
-                    process.communicate(timeout=20)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.communicate()
-            if worker is not None:
-                try:
-                    os.kill(worker, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            current = rescue._identity(worker_pid)
+            self.assertTrue(current is None or rescue._key(current) != rescue._key(worker),
+                            "Fake Gradle did not reap its original worker")
+
+
+def fixture_retirement_budget():
+    # The finite self-created worker controls retain their original short TERM
+    # and KILL budgets on either native backend; never change production policy.
+    return mock.patch.multiple(GATE, TERMINATION_GRACE_SECONDS=0.2, TERMINATION_KILL_SECONDS=5,
+                               DARWIN_TERMINATION_GRACE_SECONDS=0.2, DARWIN_TERMINATION_KILL_SECONDS=5)
+
+
+def retire_fixture_owners(owners, rescue):
+    """Attempt every original owner, then an independent retained rescue scope."""
+    first = None
+    for owner in owners:
+        try:
+            if not GATE.terminate_process(owner):
+                raise AssertionError("Fixture owner did not prove retirement")
+        except BaseException as error:
+            if first is None:
+                first = error
+    try:
+        # Shorter test-local grace, never a longer production deadline. The
+        # rescue owns the fixture's inherited prefix, not a numeric PID/PGID.
+        end = time.monotonic() + 5.2
+        live = rescue.drain(0.2, 5, deadline=end)
+        if live or rescue.discovery_errors or getattr(rescue, "pending_discoveries", None):
+            raise AssertionError("Fixture rescue did not prove retirement")
+    except BaseException as error:
+        if first is None:
+            first = error
+    finally:
+        try:
+            rescue.close()
+        except BaseException as error:
+            if first is None:
+                first = error
+    if first is not None:
+        raise first
 
 
 @contextlib.contextmanager
-def darwin_group_diagnostic(leader_exits_first):
-    """Adjacent raw worker observations for #157; never a new cleanup authority."""
-    if sys.platform != "darwin":
-        yield None
-        return
+def owned_process_fixture(environment=None):
+    """Finite self-created POSIX children; no foreign-group signal authority.
 
-    def emit(record):
+    An independent native rescue scope is retained before any child starts, so
+    even a failed tested retirement cannot force the fixture to signal a PID.
+    """
+    native = GATE.audit_processes
+    token = GATE.uuid.uuid4().hex
+    environment = native.local_ownership_environment(dict(os.environ) if environment is None else environment, token)
+    rescue = native.make_local_scope(environment.get(native.JOB_ENV, token), token,
+                                    environment.get(native.STATE_ENV, str(ROOT)),
+                                    environment.get("GRADLE_USER_HOME", str(Path.home() / ".gradle")))
+    owners = []
+    def launch(argv, *, cwd=ROOT, stdout=None, stderr=None):
+        owner = GATE.ProcessOwner()
+        owners.append(owner)  # Retain the owner before a partial/failed spawn.
+        owner.start(argv, cwd=cwd, stdout=stdout, stderr=stderr)
+        return owner
+    with mock.patch.dict(os.environ, environment, clear=True):
         try:
-            print("P2PKIT_DARWIN_GROUP " + json.dumps({"leaderExitsFirst": leader_exits_first, **record}),
-                  file=sys.stderr, flush=True)
-        except Exception:
-            pass  # Diagnostic output cannot replace a syscall result or prevent fixture cleanup.
-
-    try:
-        spec = importlib.util.spec_from_file_location("group_diagnostic_processes", ROOT / "scripts/audit_processes.py")
-        processes = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(processes)
-        domains = processes.ownership_domains(os.environ.get(processes.CHAIN_ENV, ""),
-                                              os.environ.get(processes.DOMAINS_ENV, ""))
-        if not domains:
-            raise processes.OwnershipError("Diagnostic has no current audit ownership domain")
-        domain = domains[-1]
-        if (os.environ.get(processes.JOB_ENV), os.environ.get(processes.STATE_ENV),
-                os.environ.get("GRADLE_USER_HOME")) != (domain["job"], domain["state"], domain["home"]):
-            raise processes.OwnershipError("Diagnostic ownership domain is not current")
-        observer = processes.DarwinScope(domain["job"], domain["id"], domain["state"], domain["home"])
-    except Exception as error:
-        emit({"event": "unavailable", "errorType": type(error).__name__})
-        yield None
-        return
-
-    group = worker = initial_key = None
-
-    def snapshot():
-        try:
-            at = time.monotonic_ns()
-            current = observer._identity(worker, required=True)
-            state = ("ABSENT" if current is None else "UNBOUND" if initial_key is None else
-                     "SAME_LIFETIME" if observer._key(current) == initial_key else "REPLACED")
-            return {"monotonicNs": at, "state": state, "identity": current}
-        except Exception as error:
-            # Raw required reads retain zombie/replacement state and do not reconcile/retry.
-            return {"state": "UNKNOWN", "errorType": type(error).__name__, "error": str(error)}
-
-    def bind_worker(group_pid, worker_pid):
-        nonlocal group, worker, initial_key
-        group, worker = group_pid, worker_pid
-        try:
-            observed = snapshot()
-            current = observed.get("identity")
-            if current is not None:
-                initial_key = observer._key(current)
-                observed["state"] = "INITIAL"
-            matches = (current is not None and current["live"] and current["group"] == group and
-                       current["uid"] == os.geteuid() and current["realUid"] == os.getuid())
-            emit({"event": "worker-ready", "group": group, "worker": worker, "initialKey": initial_key,
-                  "readyMatchesFixture": matches, "snapshotsAreNonAtomic": True, "observation": observed})
-        except Exception as error:
-            emit({"event": "bind-failed", "errorType": type(error).__name__})
-
-    bind_worker.phase = "drain"
-    killpg, kill = os.killpg, os.kill
-
-    def traced_call(name, original, pid, signum):
-        if group is None or not ((name == "killpg" and pid == group) or
-                                 (name == "kill" and pid == worker and signum == 0)):
-            return original(pid, signum)
-        before = snapshot()
-        failure = None
-        result = None
-        started = None
-        try:
-            started = time.monotonic_ns()
-        except Exception:
-            pass  # An unavailable diagnostic clock must not prevent the original syscall.
-        try:
-            result = original(pid, signum)
-            return result
-        except BaseException as error:
-            failure = error
-            raise
+            yield launch, rescue
         finally:
-            try:
-                finished = time.monotonic_ns()
-                # Only existing TERM/KILL, failed group calls and the worker's zero probe.
-                # Successful drain polls emit nothing; no extra probes, sleeps or retries.
-                if failure is not None or signum != 0 or name == "kill":
-                    emit({"event": "call", "phase": bind_worker.phase,
-                          "operation": name, "pid": pid, "signal": int(signum),
-                          "syscallStartedMonotonicNs": started, "syscallFinishedMonotonicNs": finished,
-                          "returned": failure is None, "result": result,
-                          "errorType": None if failure is None else type(failure).__name__,
-                          "errno": 0 if failure is None else getattr(failure, "errno", None),
-                          "before": before, "after": snapshot()})
-            except Exception as error:
-                emit({"event": "capture-failed", "errorType": type(error).__name__})
+            with fixture_retirement_budget():
+                retire_fixture_owners(owners, rescue)
 
-    try:
-        with mock.patch.object(os, "killpg", lambda pid, sig: traced_call("killpg", killpg, pid, sig)), \
-                mock.patch.object(os, "kill", lambda pid, sig: traced_call("kill", kill, pid, sig)):
-            yield bind_worker
-    finally:
+
+class ProcessOwnerModels(unittest.TestCase):
+    """No real child/census/signal; native currency and lifetime transitions modeled."""
+    def setUp(self):
+        self.native = GATE.audit_processes
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        # Synthetic owners use supplied backends unless a case explicitly tests
+        # hosted admission; do not inherit the CI runner's real Darwin context.
+        self.stack.enter_context(mock.patch.dict(os.environ, standalone_fixture_environment("model"), clear=True))
+        for name in ("kill", "killpg", "getpgid", "pidfd_open"):
+            self.stack.enter_context(mock.patch.object(os, name, create=True,
+                side_effect=AssertionError("NO_NUMERIC_PROCESS_OPERATION")))
+        self.pidfd_send = self.stack.enter_context(mock.patch.object(signal, "pidfd_send_signal", create=True,
+            side_effect=AssertionError("NO_NATIVE_SIGNAL")))
+        self.stack.enter_context(mock.patch.object(subprocess, "Popen", side_effect=AssertionError("NO_REAL_PROCESS")))
+        self.stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+
+    def owner(self, child=None):
+        if child is None:
+            child = mock.Mock(stdout=None, stderr=None, returncode=0)
+            child.poll.return_value = 0
+        scope = mock.Mock(leaders=[child], discovery_errors=set(), pending_discoveries={})
+        scope.drain.return_value = []
+        owner = GATE.ProcessOwner()
+        owner.scope, owner.child, owner.attempted = scope, child, True
+        return owner, scope, child
+
+    def linux_scope(self):
+        # Native constructors are deliberately NOT called. All census/handle
+        # observations are supplied, including the conditional kernel ID reuse.
+        scope = self.native.LocalLinuxScope.__new__(self.native.LocalLinuxScope)
+        scope.job, scope.invocation, scope.state, scope.home = "b" * 32, TOKEN, "/state", "/home"
+        scope.leaders, scope.launches, scope.discovery_reconciliations = [], [], []
+        scope.known, scope.handles, scope.pending_discoveries = {}, {}, {}
+        scope.baseline, scope.discovery_errors = set(), set()
+        scope._closed, scope._retirement_error = False, None
+        scope._pids = mock.Mock(return_value=[])
+        scope._environment = mock.Mock(return_value={})
+        scope._acquire = mock.Mock(side_effect=AssertionError("NO_FOREIGN_HANDLE_ACQUISITION"))
+        scope._release = mock.Mock()
+        return scope
+
+    def test_original_reaped_popen_model_cannot_adopt_a_recycled_group(self):
+        for cached_status in (None, 0):
+            stale = mock.Mock(pid=74001, returncode=cached_status)
+            stale.poll.return_value = cached_status
+            with self.subTest(cached_status=cached_status):
+                self.assertFalse(GATE.terminate_process(stale))
+                stale.poll.assert_not_called()
+        self.assertTrue(GATE.terminate_process(None))
+
+    def test_reaped_owner_excludes_same_pid_and_group_with_different_lifetime(self):
+        scope = self.linux_scope()
+        original = {"pid": 74001, "startTicks": 11, "uid": os.getuid(), "group": 74001, "live": False}
+        replacement = {**original, "startTicks": 12, "live": True}
+        handle = object()
+        scope.known[(74001, 11)], scope.handles[(74001, 11)] = original, handle
+        scope._pids.return_value = [74001]
+        scope._identity = mock.Mock(return_value=replacement)
+        owner, _, child = self.owner()
+        child.pid = 74001
+        owner.scope, scope.leaders = scope, [child]
+        with mock.patch.object(time, "monotonic", return_value=100), mock.patch.object(time, "sleep") as sleep:
+            self.assertTrue(GATE.terminate_process(owner))
+        self.assertEqual(2, sleep.call_count, "Three quiet native observations remain mandatory")
+        scope._acquire.assert_not_called()
+        scope._release.assert_called_once_with(handle)
+        self.pidfd_send.assert_not_called()
+        child.close.assert_called_once_with()
+        self.assertTrue(GATE.terminate_process(owner))
+        scope._release.assert_called_once_with(handle)
+
+    def test_replacement_between_census_and_signal_uses_only_retained_pidfd(self):
+        scope = self.linux_scope()
+        original = {"pid": 74001, "startTicks": 11, "live": True}
+        handle = object()
+        scope.known[(74001, 11)], scope.handles[(74001, 11)] = original, handle
+        scope.discover = mock.Mock(return_value=[original])
+        # Original lifetime ended after the census; the old descriptor's ESRCH
+        # cannot authorize an open/signal of the unrelated replacement PID.
+        self.pidfd_send.side_effect = ProcessLookupError(errno.ESRCH, "original lifetime ended")
+        scope.signal_all(signal.SIGTERM)
+        self.pidfd_send.assert_called_once_with(handle, signal.SIGTERM)
+        scope._acquire.assert_not_called()
+
+    def test_unknown_live_or_unobserved_exit_remains_failed_without_retry(self):
+        for outcome in ("live", "denied", "pending", "leader"):
+            owner, scope, child = self.owner()
+            if outcome == "live":
+                scope.drain.return_value = [{"pid": 74001}]
+            elif outcome == "denied":
+                scope.discovery_errors.add("denied lifetime")
+            elif outcome == "pending":
+                scope.pending_discoveries[74001] = {"outcome": "unresolved"}
+            else:
+                child.poll.return_value = None
+            with self.subTest(outcome=outcome):
+                self.assertFalse(GATE.terminate_process(owner))
+                scope.drain.return_value = []
+                scope.discovery_errors.clear()
+                scope.pending_discoveries.clear()
+                child.poll.return_value = 0
+                self.assertFalse(GATE.terminate_process(owner), "UNKNOWN must not become a later green retry")
+                scope.drain.assert_called_once()
+                scope.close.assert_called_once_with()
+
+    def test_denied_signal_census_and_timeout_failures_still_close_all_resources(self):
+        class FalseyError(self.native.OwnershipError):
+            def __bool__(self):
+                return False
+        failures = (PermissionError(errno.EPERM, "signal denied"), OSError(errno.EIO, "census failed"),
+                    self.native.DrainDeadlineExceeded("original deadline"), FalseyError("original unknown"),
+                    KeyboardInterrupt())
+        for failure in failures:
+            child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
+            child.poll.return_value = 0
+            owner, scope, _ = self.owner(child)
+            scope.drain.side_effect = failure
+            scope.close.side_effect = OSError("later native close")
+            child.stdout.close.side_effect = OSError("later reader close")
+            with self.subTest(error=type(failure).__name__):
+                if isinstance(failure, Exception):
+                    self.assertFalse(GATE.terminate_process(owner))
+                else:
+                    with self.assertRaises(KeyboardInterrupt) as caught:
+                        GATE.terminate_process(owner)
+                    self.assertIs(caught.exception, failure)
+                self.assertIs(owner.retirement_error, failure)
+                scope.close.assert_called_once_with()
+                child.stdout.close.assert_called_once_with()
+                child.stderr.close.assert_called_once_with()
+                self.assertFalse(GATE.terminate_process(owner))
+                child.stderr.close.assert_called_once_with()
+
+    def test_success_requires_original_15_plus_5_end_including_finalization(self):
+        self.assertEqual((15, 5), (GATE.TERMINATION_GRACE_SECONDS, GATE.TERMINATION_KILL_SECONDS))
+        for observed in (120 - 0.001, 120, 121):
+            owner, scope, child = self.owner()
+            with self.subTest(observed=observed), mock.patch.object(time, "monotonic", side_effect=[100, observed]):
+                self.assertIs(GATE.terminate_process(owner), observed < 120)
+            scope.drain.assert_called_once_with(15, 5, deadline=120)
+            scope.close.assert_called_once_with()
+            child.poll.assert_called_once_with()
+
+    def darwin_owner(self, census_seconds):
+        owner, _, child = self.owner()
+        scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
+        scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+        scope.active_drain, scope.drain_reconciliations = None, []
+        scope.known, scope.handles = {}, {}
+        clock = [100.]
+        costs = iter(census_seconds) if isinstance(census_seconds, tuple) else None
+        def discover():
+            clock[0] += next(costs) if costs is not None else census_seconds
+            return []
+        scope.discover = mock.Mock(side_effect=discover)
+        scope.close = mock.Mock()
+        scope.signal_all = mock.Mock(side_effect=AssertionError("NO_SIGNAL_FOR_QUIET_CENSUS"))
+        owner.scope = scope
+        timer = mock.Mock(monotonic=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+        return owner, scope, timer
+
+    def test_measured_slow_censuses_require_three_fresh_in_one_original_phase(self):
+        # 7s is a supplied model near the observed two-census mean, not a claim
+        # about unretained individual native timings or a future-host bound.
+        for old_policy in (True, False):
+            owner, scope, timer = self.darwin_owner(7.)
+            with self.subTest(old_policy=old_policy), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(self.native, "time", timer))
+                stack.enter_context(mock.patch.object(GATE, "time", timer))
+                if old_policy:
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_GRACE_SECONDS", 15, create=True))
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_KILL_SECONDS", 5, create=True))
+                self.assertIs(GATE.terminate_process(owner), not old_policy)
+            record = scope.drain_reconciliations[0]
+            self.assertEqual((15, 5) if old_policy else (120, 120),
+                             (record["graceSeconds"], record["killWaitSeconds"]))
+            self.assertEqual(120 if old_policy else 340, record["absoluteDeadlineMonotonic"])
+            rows = owner.drain_state["darwinDrain"]["phases"]
+            self.assertEqual([2, 0] if old_policy else [3], [row["quietEnd"] for row in rows])
+            self.assertEqual(3, scope.discover.call_count)
+            scope.signal_all.assert_not_called(); scope.close.assert_called_once_with()
+            if old_policy:
+                self.assertEqual("DRAIN_NOT_QUIET", owner.retirement_diagnostic()["reason"])
+            else:
+                self.assertEqual("retired", record["outcome"])
+
+    def test_hosted_wall_cost_requires_three_timely_censuses_in_one_phase(self):
+        # Run 39753819318/1 recorded a 75.527819s TERM phase with only two timely
+        # quiet censuses, then a 19.247416s KILL phase with only one. These supplied
+        # per-call costs reproduce those aggregate wall spans, NOT unretained
+        # individual native timings, CPU costs, or a future-host latency bound.
+        costs = (20., 20., 35.327819, 9., 10.147416)
+        for old_policy in (True, False):
+            owner, scope, timer = self.darwin_owner(costs)
+            with self.subTest(old_policy=old_policy), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(self.native, "time", timer))
+                stack.enter_context(mock.patch.object(GATE, "time", timer))
+                if old_policy:
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_GRACE_SECONDS", 45))
+                    stack.enter_context(mock.patch.object(GATE, "DARWIN_TERMINATION_KILL_SECONDS", 45))
+                self.assertIs(GATE.terminate_process(owner), not old_policy)
+            record = scope.drain_reconciliations[0]
+            rows = owner.drain_state["darwinDrain"]["phases"]
+            self.assertEqual((45, 45) if old_policy else (120, 120),
+                             (record["graceSeconds"], record["killWaitSeconds"]))
+            self.assertEqual(190 if old_policy else 340, record["absoluteDeadlineMonotonic"])
+            self.assertEqual([2, 1] if old_policy else [3], [row["quietEnd"] for row in rows])
+            self.assertEqual([1, 1] if old_policy else [0], [row["late"] for row in rows])
+            self.assertEqual(5 if old_policy else 3, scope.discover.call_count)
+            self.assertAlmostEqual(75.527819, rows[0]["phaseSeconds"], places=6)
+            if old_policy:
+                self.assertAlmostEqual(19.247416, rows[1]["phaseSeconds"], places=6)
+                self.assertEqual("DRAIN_NOT_QUIET", owner.retirement_diagnostic()["reason"])
+            else:
+                self.assertEqual("retired", record["outcome"])
+            scope.signal_all.assert_not_called(); scope.close.assert_called_once_with()
+
+    def test_darwin_two_plus_two_and_late_third_do_not_establish_retirement(self):
+        owner, scope, timer = self.darwin_owner(40.)
+        with mock.patch.object(self.native, "time", timer), mock.patch.object(GATE, "time", timer):
+            self.assertFalse(GATE.terminate_process(owner))
+        rows = owner.drain_state["darwinDrain"]["phases"]
+        self.assertEqual([2, 2], [row["quietEnd"] for row in rows])
+        self.assertEqual([2, 2], [row["inTime"] for row in rows])
+        self.assertEqual([1, 1], [row["late"] for row in rows])
+        self.assertEqual(6, scope.discover.call_count)
+        self.assertEqual("DRAIN_NOT_QUIET", owner.retirement_diagnostic()["reason"])
+        scope.signal_all.assert_not_called(); scope.close.assert_called_once_with()
+
+    def test_actual_backend_selects_original_reserve_including_every_final_close(self):
+        classes = (self.native.DarwinScope, self.native.LocalDarwinScope,
+                   GATE.ci_evidence._HostedLocalDarwinScope, self.native.LocalLinuxScope, self.native.WindowsScope)
+        for cls in classes:
+            darwin = issubclass(cls, self.native.DarwinScope)
+            grace, kill = (120, 120) if darwin else (15, 5)
+            end = 100 + grace + kill
+            for observed in (end - .001, end, end + 1):
+                owner, _, child = self.owner()
+                scope = cls.__new__(cls)  # No native constructor or fabricated host admission.
+                scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+                scope.drain, scope.close = mock.Mock(return_value=[]), mock.Mock()
+                owner.scope = scope
+                with self.subTest(backend=cls.__name__, observed=observed), \
+                        mock.patch.object(time, "monotonic", side_effect=[100, observed]):
+                    self.assertIs(GATE.terminate_process(owner), observed < end)
+                scope.drain.assert_called_once_with(grace, kill, deadline=end)
+                scope.close.assert_called_once_with(); child.poll.assert_called_once_with()
+
+    def test_live_fixture_budget_stays_short_on_both_actual_backend_types(self):
+        constants = ("TERMINATION_GRACE_SECONDS", "TERMINATION_KILL_SECONDS",
+                     "DARWIN_TERMINATION_GRACE_SECONDS", "DARWIN_TERMINATION_KILL_SECONDS")
+        before = tuple(getattr(GATE, key) for key in constants)
+        for cls in (self.native.LocalDarwinScope, self.native.LocalLinuxScope):
+            owner, _, child = self.owner()
+            scope = cls.__new__(cls)
+            scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+            scope.drain, scope.close = mock.Mock(return_value=[]), mock.Mock()
+            owner.scope = scope
+            with self.subTest(backend=cls.__name__), fixture_retirement_budget(), \
+                    mock.patch.object(time, "monotonic", return_value=100):
+                self.assertEqual((0.2, 5, 0.2, 5), tuple(getattr(GATE, key) for key in constants))
+                self.assertTrue(GATE.terminate_process(owner))
+            scope.drain.assert_called_once_with(0.2, 5, deadline=105.2)
+            scope.close.assert_called_once_with()
+            self.assertEqual(before, tuple(getattr(GATE, key) for key in constants))
+
+    def test_darwin_reserve_cannot_convert_unknown_cancellation_or_close_failure_to_success(self):
+        for failed in ("live", "denied", "pending", "leader", "cancel", "scope", "stdout", "stderr"):
+            child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
+            child.poll.return_value = 0
+            owner, _, _ = self.owner(child)
+            scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
+            scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+            scope.drain, scope.close = mock.Mock(return_value=[]), mock.Mock()
+            owner.scope = scope
+            if failed == "live":
+                scope.drain.return_value = [{"pid": 74001}]
+            elif failed == "denied":
+                scope.discovery_errors.add("unresolved")
+            elif failed == "pending":
+                scope.pending_discoveries[74001] = {}
+            elif failed == "leader":
+                child.poll.return_value = None
+            elif failed == "cancel":
+                scope.drain.side_effect = KeyboardInterrupt()
+            else:
+                (scope if failed == "scope" else getattr(child, failed)).close.side_effect = OSError("close failed")
+            with self.subTest(failed=failed), mock.patch.object(time, "monotonic", return_value=100):
+                if failed == "cancel":
+                    with self.assertRaises(KeyboardInterrupt):
+                        GATE.terminate_process(owner)
+                else:
+                    self.assertFalse(GATE.terminate_process(owner))
+                self.assertFalse(GATE.terminate_process(owner), "Never renew an unsuccessful retirement")
+            scope.drain.assert_called_once_with(120, 120, deadline=340)
+            for resource in (scope, child.stdout, child.stderr):
+                resource.close.assert_called_once_with()
+
+    def test_close_failure_alone_cannot_pass_or_skip_the_other_reader(self):
+        for failed in ("scope", "stdout", "stderr"):
+            child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
+            child.poll.return_value = 0
+            owner, scope, _ = self.owner(child)
+            resource = scope if failed == "scope" else getattr(child, failed)
+            failure = OSError("uncertain close")
+            resource.close.side_effect = failure
+            with self.subTest(resource=failed):
+                self.assertFalse(GATE.terminate_process(owner))
+                self.assertIs(owner.retirement_error, failure)
+                for resource in (scope, child.stdout, child.stderr):
+                    resource.close.assert_called_once_with()
+
+    def test_clock_failure_keeps_first_error_and_still_attempts_all_closes(self):
+        for early in (True, False):
+            child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
+            child.poll.return_value = 0
+            owner, scope, _ = self.owner(child)
+            failure = OSError("original retirement failure")
+            clock_error = OSError("retirement clock unavailable")
+            scope.drain.side_effect = failure
+            with self.subTest(early=early), mock.patch.object(time, "monotonic",
+                    side_effect=clock_error if early else [100, clock_error]):
+                self.assertFalse(GATE.terminate_process(owner))
+            self.assertIs(owner.retirement_error, clock_error if early else failure)
+            if early:
+                scope.drain.assert_not_called()  # Never fall back to an unbounded drain.
+            else:
+                scope.drain.assert_called_once_with(15, 5, deadline=120)
+            for resource in (scope, child.stdout, child.stderr):
+                resource.close.assert_called_once_with()
+
+    def test_later_cancellation_propagates_without_losing_first_error_or_other_closes(self):
+        child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
+        child.poll.return_value = 0
+        owner, scope, _ = self.owner(child)
+        failure, cancelled = OSError("first native failure"), KeyboardInterrupt()
+        scope.drain.side_effect = failure
+        child.stdout.close.side_effect = cancelled
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            GATE.terminate_process(owner)
+        self.assertIs(caught.exception, cancelled)
+        self.assertIs(owner.retirement_error, failure)
+        self.assertIs(cancelled.__cause__, failure)
+        for resource in (scope, child.stdout, child.stderr):
+            resource.close.assert_called_once_with()
+        self.assertFalse(GATE.terminate_process(owner))
+
+    def test_partial_spawn_retains_scope_leader_and_readers_before_return(self):
+        child = mock.Mock(stdout=mock.Mock(closed=False), stderr=mock.Mock(closed=False), returncode=0)
+        child.poll.return_value = 0
+        _, scope, _ = self.owner(child)
+        scope.leaders = []
+        failure = self.native.OwnershipError("discovery after successful spawn failed")
+        def partial(*_args, **_kwargs):
+            scope.leaders.append(child)
+            raise failure
+        scope.spawn.side_effect = partial
+        owner = GATE.ProcessOwner()
+        with mock.patch.object(self.native, "make_local_scope", return_value=scope), self.assertRaises(type(failure)):
+            owner.start(["not-executed"], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertIs(owner.scope, scope)
+        self.assertIsNone(owner.child)
+        self.assertIs(owner.launch_error, failure)
+        self.assertTrue(GATE.terminate_process(owner))
+        scope.close.assert_called_once_with()
+        child.stdout.close.assert_called_once_with()
+        child.stderr.close.assert_called_once_with()
+        with self.assertRaises(self.native.OwnershipError):
+            owner.start(["not-executed"], cwd=ROOT)
+
+    def test_closed_preexec_readers_are_not_closed_again_and_unknown_carrier_persists(self):
+        for attached in (False, True):
+            child = mock.Mock(stdout=mock.Mock(closed=True), stderr=mock.Mock(closed=True), returncode=0)
+            child.poll.return_value = 0
+            owner, scope, _ = self.owner(child)
+            failure = self.native.OwnershipError("failed pre-exec admission")
+            failure._p2pkit_retirement = {"status": "UNKNOWN", "resources": [
+                {"phase": "posix-darwin-spawn", "resource": "stream:0", "status": "UNKNOWN", "error": "close"}],
+                "omitted": 0}
+            owner.launch_error = failure
+            if not attached:
+                owner.scope = owner.child = None
+            with self.subTest(scope_returned=attached):
+                self.assertFalse(GATE.terminate_process(owner))
+                child.stdout.close.assert_not_called()
+                child.stderr.close.assert_not_called()
+                if attached:
+                    self.assertIs(owner.retirement_error, failure)
+                    scope.close.assert_called_once_with()
+
+    def test_start_defers_handled_cancellation_until_native_child_is_retained(self):
+        _, scope, child = self.owner()
+        observed = []
+        owner = GATE.ProcessOwner()
+        def cancelled(_sig, _frame):
+            observed.append((owner.scope, owner.child))
+            raise KeyboardInterrupt()
+        def launch(*_args, **_kwargs):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            self.assertEqual([], observed)
+            return child
+        scope.spawn.side_effect = launch
+        previous = signal.signal(signal.SIGTERM, cancelled)
         try:
-            observer.close()
-        except Exception as error:
-            emit({"event": "close-failed", "errorType": type(error).__name__})
+            with mock.patch.object(self.native, "make_local_scope", return_value=scope), self.assertRaises(KeyboardInterrupt):
+                owner.start(["not-executed"], cwd=ROOT)
+            self.assertEqual([(scope, child)], observed)
+            self.assertIs(signal.getsignal(signal.SIGTERM), cancelled)
+            self.assertTrue(GATE.terminate_process(owner))
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+
+    def test_launch_preserves_exact_canonical_context_and_borrows_output_sinks(self):
+        base = self.native.ownership_environment({"PATH": "/synthetic/bin", "UNRELATED": "unchanged"},
+                                                "b" * 32, "c" * 32, "/canonical/state", "/canonical/home")
+        for capture in ("inherited", "pipes", "merged-file"):
+            owner, scope, child = self.owner()
+            owner.attempted, owner.scope, owner.child = False, None, None
+            scope.spawn.return_value = child
+            sink = io.BytesIO()
+            outputs = {} if capture == "inherited" else {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE} \
+                if capture == "pipes" else {"stdout": sink, "stderr": subprocess.STDOUT}
+            with self.subTest(capture=capture), mock.patch.dict(os.environ, base, clear=True), \
+                    mock.patch.object(GATE.uuid, "uuid4", return_value=mock.Mock(hex=TOKEN)), \
+                    mock.patch.object(self.native, "make_local_scope", return_value=scope) as factory:
+                owner.start(["not-executed"], cwd=ROOT, **outputs)
+                factory.assert_called_once_with("b" * 32, TOKEN, "/canonical/state", "/canonical/home")
+                command, cwd, environment = scope.spawn.call_args.args
+                self.assertEqual((["not-executed"], str(ROOT)), (command, cwd))
+                self.assertEqual({**base, self.native.LOCAL_CHAIN_ENV: TOKEN}, environment)
+                self.assertEqual(base, dict(os.environ), "Do not alter the parent's canonical context")
+                self.assertEqual({"stdout": 1, "stderr": 2} if capture == "inherited" else {} if capture == "pipes"
+                                 else {"stdout": sink, "stderr": sink}, scope.spawn.call_args.kwargs)
+                self.assertTrue(GATE.terminate_process(owner))
+                self.assertFalse(sink.closed, "Borrowed output sinks do not become owned readers")
+            sink.close()
+
+    def test_local_marker_is_independent_bounded_and_nested_without_environment_rewrites(self):
+        base = {self.native.JOB_ENV: "b" * 32, self.native.CHAIN_ENV: "c" * 32,
+                self.native.DOMAINS_ENV: "byte-identical", self.native.STATE_ENV: "/state", "GRADLE_USER_HOME": "/home"}
+        first = self.native.local_ownership_environment(base, TOKEN)
+        nested = self.native.local_ownership_environment(first, "d" * 32)
+        self.assertEqual({**base, self.native.LOCAL_CHAIN_ENV: TOKEN + ":" + "d" * 32}, nested)
+        scope = self.linux_scope()
+        self.assertTrue(scope._ours({self.native.LOCAL_CHAIN_ENV.encode(): nested[self.native.LOCAL_CHAIN_ENV].encode()}))
+        self.assertFalse(scope._ours({self.native.CHAIN_ENV.encode(): TOKEN.encode()}))
+        full = ":".join("%032x" % number for number in range(32))
+        self.assertEqual(32, len(self.native.local_ownership_chain(full)))
+        invalid = (None, 1, TOKEN + ":", ":" + TOKEN, TOKEN + ":" + TOKEN, "A" * 32,
+                   TOKEN + ":" + full, TOKEN + ":not-hex")
+        for chain in invalid:
+            with self.subTest(chain=chain), self.assertRaises(self.native.OwnershipError):
+                self.native.local_ownership_environment({self.native.LOCAL_CHAIN_ENV: chain}, "d" * 32)
+        for token in (TOKEN, "c" * 32, "z" * 32, "a" * 31, True):
+            with self.subTest(token=token), self.assertRaises(self.native.OwnershipError):
+                self.native.local_ownership_environment(first, token)
+        with self.assertRaises(self.native.OwnershipError):
+            self.native.local_ownership_environment({self.native.LOCAL_CHAIN_ENV: full}, TOKEN)
+        for chain in (TOKEN.encode() + b":bad", TOKEN.encode() + b":\xff"):
+            with self.assertRaises(self.native.OwnershipError):
+                scope._ours({self.native.LOCAL_CHAIN_ENV.encode(): chain})
+        parsed = self.native.parse_environment(self.native.LOCAL_CHAIN_ENV.encode() + b"=" + TOKEN.encode() + b"\0")
+        self.assertTrue(scope._ours(parsed))
+        with self.assertRaises(self.native.OwnershipError):
+            self.native.parse_environment((self.native.LOCAL_CHAIN_ENV.encode() + b"=" + TOKEN.encode() + b"\0") * 2)
+
+    def test_darwin_local_nesting_retains_only_verified_inherited_pipe_capabilities(self):
+        scope = self.native.LocalDarwinScope.__new__(self.native.LocalDarwinScope)
+        scope.invocation = TOKEN
+        marker = (17, 18, 19)
+        rows = [{"id": token, "fd": fd, "digest": scope._pipe_digest(marker)}
+                for token, fd in (("c" * 32, 10), ("d" * 32, 11))]
+        env = {self.native.CHAIN_ENV: "c" * 32, self.native.LOCAL_CHAIN_ENV: "d" * 32 + ":" + TOKEN,
+               self.native.PIPE_ENV: json.dumps(rows)}
+        scope._pipe_identity = mock.Mock(return_value=marker)
+        self.assertEqual(rows, scope._inherited_pipes(env))
+        scope._pipe_identity.return_value = (20, 21, 22)  # Recycled descriptor, not the held original pipe.
+        self.assertEqual([], scope._inherited_pipes(env))
+        with self.assertRaises(self.native.OwnershipError):
+            scope._inherited_pipes({**env, self.native.LOCAL_CHAIN_ENV: TOKEN})
+        with self.assertRaises(self.native.OwnershipError):
+            scope._inherited_pipes({**env, self.native.PIPE_ENV: json.dumps(rows * 17)})
+        self.assertIs(self.native.LocalDarwinScope._send, self.native.DarwinScope._send)
+        self.assertIs(self.native.LocalDarwinScope._acquire, self.native.DarwinScope._acquire)
+
+    def test_factory_keeps_native_backends_and_existing_windows_job_contract(self):
+        for platform_name, kind in (("linux", "LocalLinuxScope"), ("darwin", "LocalDarwinScope"), ("win32", "WindowsScope")):
+            with self.subTest(platform=platform_name), mock.patch.object(sys, "platform", platform_name), \
+                    mock.patch.object(self.native, kind) as factory:
+                self.assertIs(factory.return_value, self.native.make_local_scope("job", TOKEN, "/state", "/home"))
+                factory.assert_called_once_with("job", TOKEN, "/state", "/home")
+        with mock.patch.object(sys, "platform", "unsupported"), self.assertRaises(self.native.OwnershipError):
+            self.native.make_local_scope("job", TOKEN, "/state", "/home")
+
+    def test_actual_owner_selects_hosted_local_scope_without_rebinding_canonical_context(self):
+        base = self.native.ownership_environment({"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "GITHUB_REPOSITORY": "p2pKit/P2pKit", "GITHUB_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "a" * 40,
+            "GITHUB_WORKFLOW_REF": "p2pKit/P2pKit/.github/workflows/ci.yml@refs/pull/504/merge"},
+            "b" * 32, "c" * 32, "/canonical/state", "/canonical/home")
+        owner, scope, child = self.owner()
+        owner.attempted, owner.scope, owner.child = False, None, None
+        scope.spawn.return_value = child
+        with mock.patch.dict(os.environ, base, clear=True), \
+                mock.patch.object(GATE.uuid, "uuid4", return_value=mock.Mock(hex=TOKEN)), \
+                mock.patch.object(GATE.ci_evidence.platform, "system", return_value="Darwin"), \
+                mock.patch.object(GATE.ci_evidence, "_HostedLocalDarwinScope", return_value=scope) as factory, \
+                mock.patch.object(self.native, "make_local_scope", side_effect=AssertionError("STRICT_SCOPE_SELECTED")):
+            owner.start(["not-executed"], cwd=ROOT)
+            factory.assert_called_once_with("b" * 32, TOKEN, "/canonical/state", "/canonical/home")
+            self.assertEqual({**base, self.native.LOCAL_CHAIN_ENV: TOKEN}, scope.spawn.call_args.args[2])
+            self.assertEqual(base, dict(os.environ))
+            self.assertTrue(GATE.terminate_process(owner))
+            self.assertIsNone(owner.retirement_diagnostic())
+
+    def test_retirement_diagnostic_preserves_first_phase_and_never_serializes_private_error(self):
+        owner, scope, child = self.owner()
+        failure = self.native.OwnershipError("Unclassified Darwin lifetimes remain; cleanup is not proven")
+        scope.drain.side_effect = failure
+        scope.close.side_effect = OSError("PRIVATE_LATER_CLOSE")
+        with contextlib.redirect_stderr(io.StringIO()) as output:
+            self.assertFalse(GATE.terminate_process(owner))
+        diagnostic = owner.retirement_diagnostic()
+        self.assertEqual("DRAIN", diagnostic["phase"])
+        self.assertEqual("DRAIN_UNCLASSIFIED", diagnostic["reason"])
+        self.assertEqual("OWNERSHIP_ERROR", diagnostic["nativeError"]["exceptionType"])
+        self.assertIn("PLATFORM_RETIREMENT_FAILURE", output.getvalue())
+        self.assertNotIn("PRIVATE_LATER_CLOSE", output.getvalue())
+        self.assertNotIn(str(failure), output.getvalue())
+        scope.close.side_effect = None
+        self.assertFalse(GATE.terminate_process(owner))
+        self.assertEqual(diagnostic, owner.retirement_diagnostic())
+        scope.drain.assert_called_once()
+        scope.close.assert_called_once()
+
+    def test_retirement_diagnostic_labels_clock_close_and_pending_launch_without_native_queries(self):
+        for failed, phase in (("clock", "CLOCK"), ("scope", "SCOPE_CLOSE"), ("pipe", "PIPE_CLOSE"),
+                              ("launch", "LAUNCH")):
+            child = mock.Mock(stdout=mock.Mock(closed=False), stderr=None, returncode=0)
+            child.poll.return_value = 0
+            owner, scope, _ = self.owner(child)
+            failure = OSError(errno.EPERM, "PRIVATE_TOKEN=https://private.invalid/signed?secret=yes")
+            if failed == "scope":
+                scope.close.side_effect = failure
+            elif failed == "pipe":
+                child.stdout.close.side_effect = failure
+            elif failed == "launch":
+                failure._p2pkit_retirement = {"resources": [], "omitted": 1}
+                owner.scope = owner.child = None
+                owner.launch_error = failure
+            with self.subTest(failed=failed), mock.patch.object(time, "monotonic",
+                    side_effect=failure if failed == "clock" else [100, 100]), \
+                    contextlib.redirect_stderr(io.StringIO()) as output:
+                self.assertFalse(GATE.terminate_process(owner))
+                diagnostic = owner.retirement_diagnostic()
+                self.assertEqual(phase, diagnostic["phase"])
+                self.assertEqual("OS", diagnostic["nativeError"]["kind"])
+                self.assertEqual(errno.EPERM, diagnostic["nativeError"]["errno"])
+                self.assertNotIn("PRIVATE_TOKEN", output.getvalue())
+                self.assertNotIn("private.invalid", output.getvalue())
+                self.assertIs(owner.retirement_error, failure)
+
+    def test_first_launch_failure_is_finite_even_if_diagnostic_sink_fails(self):
+        owner, scope, child = self.owner()
+        owner.attempted, owner.scope, owner.child = False, None, None
+        failure = OSError(errno.EIO, "PRIVATE_LAUNCH_BODY", "/PRIVATE/PATH")
+        scope.spawn.side_effect = failure
+        scope.launches = [{"created": True, "gateReleased": False, "pid": 123, "private": "PRIVATE_RECORD"}]
+        with mock.patch.object(GATE.ci_evidence, "local_command_scope", return_value=scope), \
+                mock.patch("builtins.print", side_effect=OSError("sink failed")), \
+                self.assertRaises(OSError) as caught:
+            owner.start(["PRIVATE_ARG"], cwd=ROOT)
+        self.assertIs(failure, caught.exception)
+        diagnostic = owner.launch_diagnostic()
+        self.assertEqual("LAUNCH_ERROR", diagnostic["reason"])
+        self.assertEqual(errno.EIO, diagnostic["nativeError"]["errno"])
+        self.assertEqual((True, False, 1, True, False), tuple(diagnostic[k] for k in
+            ("scopeReturned", "childReturned", "recordedLaunches", "created", "gateReleased")))
+        self.assertNotIn("PRIVATE", json.dumps(diagnostic))
+        self.assertTrue(GATE.terminate_process(owner))
+        scope.spawn.assert_called_once(); scope.drain.assert_called_once()
+
+    def test_postdrain_snapshot_precedes_close_and_contains_only_counts(self):
+        for returns in (True, False):
+            owner, scope, child = self.owner()
+            live = [{"pid": 999, "name": "PRIVATE_PROCESS"}]
+            scope.drain.return_value = live
+            scope.discovery_errors.add("PRIVATE_DISCOVERY")
+            scope.pending_discoveries[999] = {"identity": "PRIVATE_IDENTITY"}
+            if not returns:
+                scope.drain.side_effect = self.native.OwnershipError("PRIVATE_DRAIN_ERROR")
+            def close():
+                live.clear(); scope.discovery_errors.clear(); scope.pending_discoveries.clear(); scope.leaders.clear()
+            scope.close.side_effect = close
+            with self.subTest(returned=returns):
+                self.assertFalse(GATE.terminate_process(owner))
+                diagnostic = owner.retirement_diagnostic()
+                self.assertEqual({"returned": returns, "live": 1 if returns else None, "leaders": 1,
+                                  "discoveryErrors": 1, "pendingDiscoveries": 1}, diagnostic["drainState"])
+                self.assertNotIn("PRIVATE", json.dumps(diagnostic))
+                scope.discover.assert_not_called(); scope.description.assert_not_called()
+                self.assertFalse(GATE.terminate_process(owner))
+                scope.drain.assert_called_once(); scope.close.assert_called_once()
+
+    def test_actual_darwin_drain_metrics_are_projected_before_close_without_new_observations(self):
+        # Over the entire 240s reserve: still zero timely observations.
+        for census_seconds in (0., 241.):
+            owner, _, child = self.owner()
+            scope = self.native.DarwinScope.__new__(self.native.DarwinScope)
+            scope.leaders, scope.discovery_errors, scope.pending_discoveries = [child], set(), {}
+            scope.active_drain, scope.drain_reconciliations = None, []
+            scope.known, scope.handles = {}, {}
+            clock = [100.]
+            def discover():
+                clock[0] += census_seconds
+                return []
+            scope.discover = mock.Mock(side_effect=discover)
+            scope.close = mock.Mock(side_effect=lambda: scope.drain_diagnostics.clear())
+            scope.description = mock.Mock(side_effect=AssertionError("NO_RAW_OWNER_DESCRIPTION"))
+            scope.signal_all = mock.Mock(side_effect=AssertionError("NO_NEW_SIGNALS"))
+            owner.scope = scope
+            timer = mock.Mock(monotonic=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+            with mock.patch.object(self.native, "time", timer), mock.patch.object(GATE, "time", timer):
+                self.assertEqual(census_seconds == 0., GATE.terminate_process(owner))
+            projected = owner.drain_state["darwinDrain"]
+            row = projected["phases"][0]
+            self.assertEqual("OBSERVATION_ONLY_NOT_RETIREMENT", projected["scope"])
+            self.assertEqual(3 if census_seconds == 0. else 0, row["inTime"])
+            self.assertEqual(3 if census_seconds == 0. else 1, scope.discover.call_count)
+            self.assertEqual([], scope.drain_diagnostics)  # Snapshot survives independent close.
+            scope.close.assert_called_once(); scope.description.assert_not_called(); scope.signal_all.assert_not_called()
+            if census_seconds:
+                diagnostic = owner.retirement_diagnostic()
+                self.assertEqual("DRAIN_NOT_QUIET", diagnostic["reason"])
+                self.assertFalse(diagnostic["drainState"]["returned"])
+                self.assertEqual(projected, diagnostic["drainState"]["darwinDrain"])
+
+    def test_owner_diagnostics_bound_counts_and_real_source_frame_projection(self):
+        class UntrustedLength:
+            def __len__(self):
+                raise AssertionError("DO_NOT_CALL_FOREIGN_COUNTER")
+        for value in (None, UntrustedLength(), [None] * (self.native.MAX_PROCESSES + 1)):
+            self.assertIsNone(GATE._recorded_owner_count(value))
+        self.assertEqual(2, GATE._recorded_owner_count({"PRIVATE": 1, "SECOND_PRIVATE": 2}))
+        try:
+            self.native.resolve_executable([], str(ROOT), {})  # Real pure source guard, no native child.
+        except self.native.OwnershipError as error:
+            diagnostic = GATE._owner_error_diagnostic(error)
+        else:
+            self.fail("Empty command unexpectedly admitted")
+        self.assertEqual("OWNERSHIP", diagnostic["sourceFrames"][-1]["source"])
+        self.assertTrue(0 < diagnostic["sourceFrames"][-1]["line"] <= 1_000_000)
+        self.assertLessEqual(len(diagnostic["sourceFrames"]), 3)
+        self.assertNotIn(str(ROOT), json.dumps(diagnostic))
+
+    def test_fixture_attempts_remaining_retirements_after_cleanup_failure(self):
+        for failed in ("owner", "rescue", "close"):
+            first = PermissionError(errno.EPERM, "first fixture retirement failure")
+            owners, scope = [object(), object()], mock.Mock(discovery_errors=set(), pending_discoveries={})
+            scope.drain.return_value = []
+            if failed == "rescue":
+                scope.drain.side_effect = first
+            if failed == "close":
+                scope.close.side_effect = first
+            with self.subTest(failed=failed), mock.patch.object(GATE, "terminate_process",
+                    side_effect=[first, True] if failed == "owner" else [True, True]) as retire:
+                with self.assertRaises(PermissionError) as caught:
+                    retire_fixture_owners(owners, scope)
+                self.assertIs(caught.exception, first)
+                self.assertEqual([mock.call(owner) for owner in owners], retire.call_args_list)
+                scope.drain.assert_called_once()
+                scope.close.assert_called_once_with()
 
 
 class OwnedProcessGroupTest(unittest.TestCase):
-    def test_fixture_attempts_remaining_retirements_after_cleanup_failure(self):
-        # Exercise the actual fixture finalizer, without creating any processes.
-        for failing_operation in ("group", "leader"):
-            with self.subTest(failing_operation=failing_operation):
-                failure = (PermissionError(1, "injected group EPERM") if failing_operation == "group"
-                           else subprocess.TimeoutExpired("fixture leader", 10))
-                leader = mock.Mock(pid=123)
-                unrelated = mock.Mock(pid=124)
-                unrelated.poll.return_value = None
-                if failing_operation == "leader":
-                    leader.wait.side_effect = failure
-
-                def signal_group(pid, signum):
-                    if signum == 0:
-                        raise ProcessLookupError(pid)
-                    if failing_operation == "group":
-                        raise failure
-
-                group_kill = mock.Mock(side_effect=signal_group)
-                retirements = mock.Mock()
-                for name, operation in (("group_kill", group_kill), ("leader_wait", leader.wait),
-                                        ("unrelated_terminate", unrelated.terminate),
-                                        ("unrelated_wait", unrelated.wait)):
-                    retirements.attach_mock(operation, name)
-                with mock.patch.object(tempfile, "TemporaryDirectory") as directory, \
-                        mock.patch.object(Path, "exists", return_value=True), \
-                        mock.patch.object(Path, "read_text", return_value="125"), \
-                        mock.patch.object(subprocess, "Popen", side_effect=[leader, unrelated]), \
-                        mock.patch.object(GATE, "terminate_process", return_value=True), \
-                        mock.patch.object(os, "kill", side_effect=ProcessLookupError), \
-                        mock.patch.object(os, "killpg", group_kill):
-                    directory.return_value.__enter__.return_value = "/synthetic-owned-group"
-                    with self.assertRaises(type(failure)) as raised:
-                        self.resistant_worker_control(leader_exits_first=False)
-                self.assertIs(failure, raised.exception, "cleanup must not swallow the original failure")
-                self.assertEqual([
-                    mock.call.group_kill(123, 0),
-                    mock.call.group_kill(123, signal.SIGKILL),
-                    mock.call.leader_wait(timeout=10),
-                    mock.call.unrelated_terminate(),
-                    mock.call.unrelated_wait(timeout=10),
-                ], retirements.mock_calls)
-
-    def test_unterminated_group_fails_after_both_bounded_deadlines(self):
-        for probe_denied in (False, True):
-            with self.subTest(probe_denied=probe_denied):
-                def signal_group(pid, signum):
-                    if signum == 0 and probe_denied:
-                        raise PermissionError(errno.EPERM, "group remains uncertain")
-
-                process = mock.Mock(pid=123)
-                with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
-                        mock.patch.object(GATE, "TERMINATION_KILL_SECONDS", 0), \
-                        mock.patch.object(GATE.os, "killpg", side_effect=signal_group) as kill, \
-                        contextlib.redirect_stderr(io.StringIO()):
-                    self.assertFalse(GATE.terminate_process(process))
-                self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0),
-                                  mock.call(123, signal.SIGKILL), mock.call(123, 0)], kill.call_args_list)
-
-    def test_exit_transition_probe_denial_requires_later_group_absence(self):
-        process = mock.Mock(pid=123)
-        with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
-                mock.patch.object(GATE.time, "monotonic", side_effect=[0, 0, 1, 1.01]), \
-                mock.patch.object(GATE.time, "sleep") as sleep, \
-                mock.patch.object(GATE.os, "killpg", side_effect=[
-                    None, None, None, PermissionError(errno.EPERM, "exiting group"),
-                    ProcessLookupError(errno.ESRCH, "group absent"),
-                ]) as kill:
-            self.assertTrue(GATE.terminate_process(process))
-        self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0),
-                          mock.call(123, signal.SIGKILL), mock.call(123, 0),
-                          mock.call(123, 0)], kill.call_args_list)
-        sleep.assert_called_once_with(0.05)
-
-    def test_signal_denial_and_non_permission_probe_error_remain_fatal(self):
-        for side_effect in ([PermissionError(errno.EPERM, "TERM denied")],
-                            [None, None, PermissionError(errno.EPERM, "KILL denied")],
-                            [None, OSError(errno.EIO, "probe failed")]):
-            with self.subTest(side_effect=side_effect), \
-                    mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
-                    mock.patch.object(GATE.os, "killpg", side_effect=side_effect) as kill, \
-                    mock.patch.object(GATE.time, "sleep") as sleep, \
-                    contextlib.redirect_stderr(io.StringIO()):
-                self.assertFalse(GATE.terminate_process(mock.Mock(pid=123)))
-                self.assertEqual(len(side_effect), kill.call_count)
-                sleep.assert_not_called()
-
-    def resistant_worker_control(self, leader_exits_first, bind_worker=None):
-        with tempfile.TemporaryDirectory(prefix="p2pkit-owned-group-") as temporary:
+    """Live own-process controls; no actual foreign PID churn or native-platform equivalence claim."""
+    def resistant_worker_control(self, leader_exits_first):
+        with tempfile.TemporaryDirectory(prefix="p2pkit-owned-lifetime-") as temporary, owned_process_fixture() as fixture:
+            launch, rescue = fixture
             ready = Path(temporary) / "worker.pid"
             worker_code = (
                 "import os,pathlib,signal,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
@@ -1769,57 +2402,45 @@ class OwnedProcessGroupTest(unittest.TestCase):
                 "\nwhile not ready.exists(): time.sleep(0.01)\n"
                 + ("sys.exit(0)" if leader_exits_first else "time.sleep(90)")
             )
-            leader = subprocess.Popen([sys.executable, "-c", leader_code, str(ready)], start_new_session=True)
-            unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"], start_new_session=True)
-            try:
-                deadline = time.monotonic() + 10
-                while not ready.exists() and time.monotonic() < deadline:
-                    time.sleep(0.02)
-                self.assertTrue(ready.exists(), "TERM-resistant worker never reached ready state")
-                worker = int(ready.read_text())
-                if bind_worker is not None:
-                    bind_worker(leader.pid, worker)
-                if leader_exits_first:
-                    self.assertEqual(0, leader.wait(timeout=10))
-                # Bound a deterministic control's grace period without lengthening
-                # production timeouts or changing assertions. R1 has no constant.
-                with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0.2, create=True):
-                    drained = GATE.terminate_process(leader)
-                if bind_worker is not None:
-                    bind_worker.phase = "worker-zero"
-                with self.assertRaises(ProcessLookupError, msg="Owned resistant worker survived cleanup"):
-                    os.kill(worker, 0)
-                if bind_worker is not None:
-                    bind_worker.phase = "group-zero"
-                with self.assertRaises(ProcessLookupError, msg="Owned process group was not drained"):
-                    os.killpg(leader.pid, 0)
-                self.assertTrue(drained)
-                self.assertIsNone(unrelated.poll(), "Cleanup touched an unrelated process group")
-            finally:
-                if bind_worker is not None:
-                    bind_worker.phase = "finalizer-kill"
-                # A red control must not leave its intentionally resistant child.
-                try:
-                    try:
-                        os.killpg(leader.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                finally:
-                    try:
-                        leader.wait(timeout=10)
-                    finally:
-                        try:
-                            unrelated.terminate()
-                        finally:
-                            unrelated.wait(timeout=10)
+            leader = launch([sys.executable, "-I", "-B", "-c", leader_code, str(ready)])
+            unrelated = launch([sys.executable, "-I", "-B", "-c", "import time; time.sleep(90)"])
+            deadline = time.monotonic() + 10
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), "TERM-resistant worker never reached ready state")
+            worker_pid = int(ready.read_text())
+            if leader_exits_first:
+                self.assertEqual(0, leader.wait(timeout=10))
+            live = rescue.discover()
+            worker = next((identity for identity in live if identity["pid"] == worker_pid), None)
+            self.assertIsNotNone(worker, "Independent rescue did not bind the actual owned worker lifetime")
+            worker_key = rescue._key(worker)
+            self.assertIn(worker_key, rescue.handles)
+            self.assertIn(worker_key, {leader.scope._key(identity) for identity in leader.scope.discover()})
+            # Keep the exact main-owner native signal path but record its input
+            # currency. No extra native signal is issued by this observer.
+            with mock.patch.object(leader.scope, "_send", wraps=leader.scope._send) as send, \
+                    fixture_retirement_budget():
+                drained = GATE.terminate_process(leader)
+            self.assertTrue(drained)
+            worker_signals = [call.args[2] for call in send.call_args_list
+                              if leader.scope._key(call.args[0]) == worker_key]
+            self.assertIn(signal.SIGTERM, worker_signals)
+            self.assertIn(signal.SIGKILL, worker_signals, "TERM-resistant descendants still require KILL")
+            current = rescue._identity(worker_pid)
+            self.assertTrue(current is None or rescue._key(current) != worker_key or not current["live"],
+                            "Original owned worker lifetime remains live")
+            # A replaced numeric identity is not absence. The original retained
+            # capability and scoped census, not kill(pid, 0), establish this check.
+            self.assertNotIn(worker_key, {rescue._key(identity) for identity in rescue.discover()})
+            self.assertIsNotNone(leader.poll())
+            self.assertIsNone(unrelated.poll(), "Cleanup touched the separately owned unrelated control")
 
     def test_term_resistant_worker_is_killed_after_leader_exits_on_term(self):
-        with darwin_group_diagnostic(leader_exits_first=False) as bind_worker:
-            self.resistant_worker_control(leader_exits_first=False, bind_worker=bind_worker)
+        self.resistant_worker_control(leader_exits_first=False)
 
     def test_surviving_group_is_drained_even_when_leader_already_exited(self):
-        with darwin_group_diagnostic(leader_exits_first=True) as bind_worker:
-            self.resistant_worker_control(leader_exits_first=True, bind_worker=bind_worker)
+        self.resistant_worker_control(leader_exits_first=True)
 
 
 if __name__ == "__main__":

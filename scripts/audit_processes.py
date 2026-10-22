@@ -36,6 +36,10 @@ CHAIN_ENV = "P2PKIT_AUDIT_OWNERSHIP_CHAIN"
 DOMAINS_ENV = "P2PKIT_AUDIT_OWNERSHIP_DOMAINS"
 STATE_ENV = "P2PKIT_AUDIT_STATE_DIR"
 PIPE_ENV = "P2PKIT_AUDIT_DARWIN_PIPES"
+# Inner command owners must not rewrite a caller's evidence-bound audit domain.
+# This independent marker has the same controlled-inheritance (not hostile-child
+# containment) scope; native signals still require pidfds/audit tokens/Jobs.
+LOCAL_CHAIN_ENV = "P2PKIT_AUDIT_LOCAL_OWNERSHIP_CHAIN"
 MAX_PROCESS_BYTES = 8 * 1024 * 1024
 MAX_PROCESSES = 65536
 MAX_PROCESS_FDS = 65536
@@ -51,6 +55,7 @@ DARWIN_DIAGNOSTIC_ROLES = frozenset((
     "mDNSResponder", "OTHER", "UNRECORDED",
 ))
 DARWIN_DIAGNOSTIC_PARENTAGE = frozenset(("OWNED", "BASELINE", "UNOBSERVED", "TRACED", "INVALID"))
+DARWIN_DRAIN_STAGES = ("REAP", "ENUMERATE", "IDENTITIES", "ENVIRONMENT", "OWNERSHIP", "ACQUIRE", "KNOWN_RECHECK")
 DARWIN_SESSION_EXCLUSIONS = frozenset(("SAME_VALID_SESSION", "UNADMITTED_CONTROLLER_SESSION",
                                      "UNADMITTED_TARGET_SESSION"))
 
@@ -332,6 +337,29 @@ def ownership_environment(base: dict[str, str], job: str, invocation: str,
     return result
 
 
+def local_ownership_chain(value: str) -> list[str]:
+    if not isinstance(value, str):
+        raise OwnershipError("Invalid local ownership chain type")
+    if not value:
+        return []
+    if not re.fullmatch(r"[0-9a-f]{32}(?::[0-9a-f]{32}){0,31}", value):
+        raise OwnershipError("Malformed or excessive local ownership chain")
+    parts = value.split(":")
+    if len(set(parts)) != len(parts):
+        raise OwnershipError("Duplicate local ownership identity")
+    return parts
+
+
+def local_ownership_environment(base: dict[str, str], invocation: str) -> dict[str, str]:
+    """Append only an inner-command marker; canonical context stays byte-identical."""
+    if not isinstance(invocation, str) or not re.fullmatch(r"[0-9a-f]{32}", invocation):
+        raise OwnershipError("Invalid local ownership identity")
+    parts = local_ownership_chain(base.get(LOCAL_CHAIN_ENV, ""))
+    if len(parts) >= 32 or invocation in parts or invocation in base.get(CHAIN_ENV, "").split(":"):
+        raise OwnershipError("Duplicate or excessive local ownership nesting")
+    return {**base, LOCAL_CHAIN_ENV: ":".join([*parts, invocation])}
+
+
 def parse_procargs2(raw: bytes) -> dict[bytes, bytes]:
     """Parse bounded Darwin KERN_PROCARGS2; never return or retain argv."""
     if not 5 <= len(raw) <= MAX_PROCESS_BYTES:
@@ -356,7 +384,7 @@ def parse_procargs2(raw: bytes) -> dict[bytes, bytes]:
 def parse_environment(raw: bytes) -> dict[bytes, bytes]:
     if len(raw) > MAX_PROCESS_BYTES:
         raise OwnershipError("Process environment exceeds the bounded parser")
-    selected = {key.encode() for key in (JOB_ENV, CHAIN_ENV, DOMAINS_ENV, STATE_ENV, "GRADLE_USER_HOME")}
+    selected = {key.encode() for key in (JOB_ENV, CHAIN_ENV, DOMAINS_ENV, STATE_ENV, "GRADLE_USER_HOME", LOCAL_CHAIN_ENV)}
     result: dict[bytes, bytes] = {}
     for entry in raw.split(b"\0"):
         if not entry:
@@ -551,19 +579,27 @@ class PosixScope:
             record.update(outcome=outcome, lastIdentity=current)
             self.discovery_errors.discard(record["message"])
 
+    def _discovery_stage(self, stage: str | None) -> None:
+        pass  # Passive Darwin drain timing only; no Linux/native observation.
+
     def discover(self) -> list[dict[str, Any]]:
         self._ensure_open()
+        self._discovery_stage("REAP")
         for leader in self.leaders:
             leader.poll()  # Reap our children; a zombie is not a running worker.
         # A missing census entry is not exit evidence for an unresolved lifetime.
         census = []
-        for pid in dict.fromkeys([*self._pids(), *self.pending_discoveries]):
+        self._discovery_stage("ENUMERATE")
+        pids = dict.fromkeys([*self._pids(), *self.pending_discoveries])
+        self._discovery_stage("IDENTITIES")
+        for pid in pids:
             if pid == os.getpid():
                 continue
             identity = self._identity(pid)
             if identity is not None:
                 self._remember_identity(identity)
             census.append((pid, identity))
+        del pids
         # Remember the entire observed census before interpreting parentage; OS
         # enumeration order is neither ancestry nor proof of ownership.
         for pid, identity in census:
@@ -581,6 +617,7 @@ class PosixScope:
                 self.known[key] = identity
                 continue
             try:
+                self._discovery_stage("ENVIRONMENT")
                 environment = self._inspect_environment(identity)
             except (PermissionError, OwnershipError) as error:
                 if retirement_details(error):
@@ -593,6 +630,7 @@ class PosixScope:
                 self._discovery_resolved(pid, "lifetime-ended")
                 continue
             try:
+                self._discovery_stage("OWNERSHIP")
                 proof = self._ownership_proof(identity, environment)
             except DiscoveryUncertain as error:
                 if retirement_details(error):
@@ -611,6 +649,7 @@ class PosixScope:
                 # Both native backends recheck the bound lifetime while acquiring
                 # the handle. A separate eligibility read here could hide denial
                 # as absence before this positively owned process is registered.
+                self._discovery_stage("ACQUIRE")
                 handle = self._acquire(identity)
             except ProcessLookupError as error:
                 if retirement_details(error):
@@ -622,6 +661,7 @@ class PosixScope:
             self._retain_proof(identity, proof)
             self._discovery_resolved(pid, "owned", identity)
         live = []
+        self._discovery_stage("KNOWN_RECHECK")
         for key, previous in list(self.known.items()):
             current = self._identity(previous["pid"])
             if current is not None and current["live"] and self._key(current) == key:
@@ -1047,7 +1087,7 @@ class DarwinScope(PosixScope):
             raise OwnershipError("Invalid Darwin inherited pipe bindings") from error
         if not isinstance(records, list) or len(records) > 32:
             raise OwnershipError("Invalid Darwin inherited pipe binding count")
-        chain = env.get(CHAIN_ENV, "").split(":")
+        chain = env.get(CHAIN_ENV, "").split(":") + local_ownership_chain(env.get(LOCAL_CHAIN_ENV, ""))
         verified, seen, descriptors = [], set(), set()
         for record in records:
             if not isinstance(record, dict) or set(record) != {"id", "fd", "digest"} or \
@@ -1530,6 +1570,73 @@ class DarwinScope(PosixScope):
         if result == errno.ESRCH:
             raise ProcessLookupError(identity["pid"])
 
+    @staticmethod
+    def _diagnostic_now() -> float | None:
+        try:
+            value = time.monotonic()
+            return value if _finite_number(value) else None
+        except Exception:
+            return None  # Metrics cannot replace the original native/clock failure.
+
+    @staticmethod
+    def _diagnostic_elapsed(start: Any, end: Any) -> float | None:
+        if _finite_number(start) and _finite_number(end) and 0 <= end - start <= 86400:
+            return end - start
+        return None
+
+    def _discovery_stage(self, stage: str | None) -> None:
+        measurement = getattr(self, "_drain_census_measurement", None)
+        if measurement is None:
+            return
+        now = self._diagnostic_now()
+        previous = measurement["stage"]
+        elapsed = self._diagnostic_elapsed(measurement["stageStarted"], now)
+        if previous is not None:
+            costs = measurement["metrics"]["stageSeconds"]
+            costs[previous] = None if elapsed is None or costs[previous] is None else costs[previous] + elapsed
+        measurement.update(stage=stage, stageStarted=now)
+
+    def _drain_discover(self, purpose: str) -> list[dict[str, Any]]:
+        # Wrap only the two existing drain census sites. Fixed-size diagnostics
+        # do not classify lifetimes, cache negative proofs, or perform native work.
+        metrics = self.active_drain.get("metrics") if self.active_drain is not None else None
+        if metrics is None:
+            return self.discover()
+        metrics["started"] += 1
+        metrics[purpose.lower() + "Started"] += 1
+        started = self._diagnostic_now()
+        measurement = {"metrics": metrics, "stage": None, "stageStarted": started}
+        self._drain_census_measurement = measurement
+        returned, live = False, None
+        try:
+            live = self.discover()
+            returned = True
+            return live
+        finally:
+            # Even a thrown census retains its last stage and cost. No exception
+            # text, PID, argv, environment, path, or native token is copied.
+            try:
+                stage = measurement["stage"]
+                self._discovery_stage(stage)
+                finished = measurement["stageStarted"]
+                elapsed = self._diagnostic_elapsed(started, finished)
+                metrics["censusSeconds"] = None if elapsed is None or metrics["censusSeconds"] is None else metrics["censusSeconds"] + elapsed
+                metrics["completed" if returned else "failed"] += 1
+                within = finished < self.active_drain["deadline"] if finished is not None else None
+                metrics["lastReturnedWithinPhase"] = within if returned else None
+                if returned and within is False:
+                    metrics["late"] += 1
+                metrics.update(lastPurpose=purpose, lastStage=stage, lastReturned=returned,
+                               lastLive=len(live) if type(live) is list else None,
+                               lastDiscoveryErrors=len(self.discovery_errors), lastPendingDiscoveries=len(self.pending_discoveries))
+            finally:
+                self._drain_census_measurement = None
+
+    def _drain_census_accepted(self) -> None:
+        metrics = self.active_drain.get("metrics")
+        if metrics is not None and metrics["lastReturnedWithinPhase"] is True:
+            metrics["inTime"] += 1  # Only after the existing post-census deadline check.
+
     def _reconcile_drain_signals(self, *, deadline: float | None = None) -> None:
         for key, record in list(self.active_drain["pending"].items()):
             # A filtered/empty census, changed credentials, or a stale token's
@@ -1555,8 +1662,9 @@ class DarwinScope(PosixScope):
             _check_drain_deadline(deadline)
         elif time.monotonic() >= active["deadline"]:
             return
-        live = self.discover()
+        live = self._drain_discover("SIGNAL")
         _check_drain_deadline(deadline)
+        self._drain_census_accepted()
         if deadline is None:
             self._reconcile_drain_signals()
         else:
@@ -1626,6 +1734,7 @@ class DarwinScope(PosixScope):
         if deadline is not None:
             record["absoluteDeadlineMonotonic"] = deadline
         self.drain_reconciliations.append(record)
+        self.drain_diagnostics = []  # Latest drain only; original historical receipt schema stays unchanged.
         self.active_drain = {"record": record, "pending": {}, "deadline": started}
         live, primary = [], None
         try:
@@ -1635,11 +1744,20 @@ class DarwinScope(PosixScope):
                 self.active_drain["deadline"] = phase_end
                 record["phases"].append({"signal": signum, "deadlineMonotonic": phase_end})
                 quiet = 0
+                metrics = {key: 0 for key in ("started", "completed", "inTime", "late", "failed",
+                    "quietStarted", "signalStarted", "quietPeak", "quietEnd")}
+                metrics.update(censusSeconds=0.0, phaseSeconds=None, stageSeconds={stage: 0.0 for stage in DARWIN_DRAIN_STAGES},
+                    lastPurpose=None, lastStage=None, lastReturned=None, lastReturnedWithinPhase=None,
+                    lastLive=None, lastDiscoveryErrors=None, lastPendingDiscoveries=None)
+                self.drain_diagnostics.append({"signal": signum, "diagnostics": metrics})
+                self.active_drain["metrics"] = metrics
+                phase_started = self._diagnostic_now()
                 try:
                     while time.monotonic() < phase_end:
                         _check_drain_deadline(phase_end if deadline is not None else None)
-                        observed = self.discover()
+                        observed = self._drain_discover("QUIET")
                         _check_drain_deadline(phase_end if deadline is not None else None)
+                        self._drain_census_accepted()
                         live = observed
                         if deadline is None:
                             self._reconcile_drain_signals()
@@ -1649,6 +1767,7 @@ class DarwinScope(PosixScope):
                         unknown = self.discovery_errors or self.pending_discoveries
                         if not live and not self.active_drain["pending"] and not unknown:
                             quiet += 1
+                            metrics["quietPeak"] = max(metrics["quietPeak"], quiet)
                             if quiet >= 3:
                                 _check_drain_deadline(phase_end if deadline is not None else None)
                                 record["outcome"] = "retired"
@@ -1668,6 +1787,9 @@ class DarwinScope(PosixScope):
                     if deadline is None:
                         raise
                     record["phases"][-1]["outcome"] = "deadline-exhausted"
+                finally:
+                    metrics["quietEnd"] = quiet
+                    metrics["phaseSeconds"] = self._diagnostic_elapsed(phase_started, self._diagnostic_now())
             if self.active_drain["pending"]:
                 raise DarwinObservationExhausted("Darwin known-token drain remains unresolved within its phase bounds")
             if live:
@@ -1705,6 +1827,40 @@ class DarwinScope(PosixScope):
                     # Earlier terminal/failed records are never rewritten by a
                     # later drain; even a late-return failure retires active state.
                     self.active_drain = None
+
+
+def darwin_drain_diagnostic(scope: Any) -> dict[str, Any] | None:
+    """Closed finite projection of existing measurements; no ownership inference."""
+    if not isinstance(scope, DarwinScope):
+        return None
+    phases = getattr(scope, "drain_diagnostics", None)
+    if type(phases) is not list or len(phases) > 2:
+        return None
+    def count(value):
+        return value if type(value) is int and 0 <= value <= 1_000_000 else None
+    def seconds(value):
+        return round(value, 6) if _finite_number(value) and 0 <= value <= 86400 else None
+    result = []
+    for phase in phases:
+        if type(phase) is not dict or type(phase.get("diagnostics")) is not dict:
+            continue
+        raw = phase["diagnostics"]
+        costs = raw.get("stageSeconds")
+        costs = costs if type(costs) is dict else {}
+        row = {key: count(raw.get(key)) for key in ("started", "completed", "inTime", "late", "failed",
+            "quietStarted", "signalStarted", "quietPeak", "quietEnd", "lastLive", "lastDiscoveryErrors", "lastPendingDiscoveries")}
+        row.update(phase={SIG_TERM: "TERM", SIG_KILL: "KILL"}.get(phase.get("signal")) if type(phase.get("signal")) is int else None,
+            phaseSeconds=seconds(raw.get("phaseSeconds")), censusSeconds=seconds(raw.get("censusSeconds")),
+            stageSeconds={stage: seconds(costs.get(stage)) for stage in DARWIN_DRAIN_STAGES},
+            lastPurpose=raw.get("lastPurpose") if type(raw.get("lastPurpose")) is str and raw["lastPurpose"] in ("QUIET", "SIGNAL") else None,
+            lastStage=raw.get("lastStage") if type(raw.get("lastStage")) is str and raw["lastStage"] in DARWIN_DRAIN_STAGES else None,
+            **{key: raw.get(key) if type(raw.get(key)) is bool else None
+               for key in ("lastReturned", "lastReturnedWithinPhase")})
+        values = list(row["stageSeconds"].values())
+        row["unattributedSeconds"] = (round(max(0., row["censusSeconds"] - sum(values)), 6)
+            if row["censusSeconds"] is not None and all(value is not None for value in values) else None)
+        result.append(row)
+    return {"scope": "OBSERVATION_ONLY_NOT_RETIREMENT", "phases": result}
 
 
 class SecurityAttributes(ctypes.Structure):
@@ -2256,6 +2412,32 @@ class WindowsScope:
 
 def make_scope(job: str, invocation: str, state: str, home: str) -> PosixScope | WindowsScope:
     kind = {"Linux": LinuxScope, "Darwin": DarwinScope, "Windows": WindowsScope}.get(platform.system())
+    if kind is None:
+        raise OwnershipError("Unsupported native process-ownership backend")
+    return kind(job, invocation, state, home)
+
+
+class _LocalOwnership:
+    def _ours(self, environment: dict[bytes, bytes]) -> bool:
+        value = environment.get(LOCAL_CHAIN_ENV.encode())
+        if value is None or self.invocation.encode() not in value.split(b":"):
+            return False
+        try:
+            return self.invocation in local_ownership_chain(value.decode("ascii"))
+        except UnicodeError as error:
+            raise OwnershipError("Invalid local ownership encoding") from error
+
+
+class LocalLinuxScope(_LocalOwnership, LinuxScope):
+    """Same pidfd ownership, with an independent inner-command marker."""
+
+
+class LocalDarwinScope(_LocalOwnership, DarwinScope):
+    """Same gated launch, pipe/parent proofs and real audit-token signaling."""
+
+
+def make_local_scope(job: str, invocation: str, state: str, home: str) -> PosixScope | WindowsScope:
+    kind = {"linux": LocalLinuxScope, "darwin": LocalDarwinScope, "win32": WindowsScope}.get(sys.platform)
     if kind is None:
         raise OwnershipError("Unsupported native process-ownership backend")
     return kind(job, invocation, state, home)

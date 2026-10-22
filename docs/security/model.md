@@ -123,11 +123,28 @@ before its first content to request theme-based task previews instead of real
 screenshots. Normal foreground screenshots remain possible; this is not
 `FLAG_SECURE` or general screenshot prevention.
 
-API24–32 receive no task-preview suppression from this change. Their stopped-task
-credential-preview channel remains unresolved; an API35 validation result cannot
-establish all-version absence of retained credential pixels. Do not describe
-this residual as fixed or risk-accepted by a prerelease; it remains tracked in
-[issue #479](https://github.com/p2pKit/P2pKit/issues/479). The
+The unpublished rc7 candidate sets `FLAG_SECURE` before the first content on
+API24–32 and keeps it for the window's lifetime, including stop/reentry and
+recreation. Unlike the API33+ policy, this deliberately restricts foreground
+screenshots, screen recording and non-secure displays as well as task previews.
+It does not change credential clearing or transport security. Published
+`0.8.0-rc6` binaries remain unchanged and retain their
+[legacy preview limitation](../releases/0.8.0-rc6.md#remaining-limitations).
+
+The synthetic API24 witness at source
+`13d62b699f6966c888775dfef3289aeb52a26550`
+([run 39800406410/1](https://github.com/p2pKit/P2pKit/actions/runs/39800406410/attempts/1))
+has accepted original positive/Recents images, lifecycle and cleanup evidence.
+This is not a later-source re-execution or natural-credential/device-wide proof.
+The API32 witness at `aafce4f62c05a74ec6222cb47db3fd11d725cda7`
+([run 39847724503/1](https://github.com/p2pKit/P2pKit/actions/runs/39847724503/attempts/1))
+also has accepted original lifecycle, cleanup and full unobscured task-snapshot
+review, with the same-window positive/protected/positive capture controls.
+Its observer verifies the complete owned Recents pane, not unrelated Launcher
+widgets; automated popup absence is not asserted. These scoped synthetic results
+support the selected legacy policy in [issue #479](https://github.com/p2pKit/P2pKit/issues/479),
+not natural-credential or physical/OEM qualification. Protected screenshot
+unavailability alone still is not privacy proof. The
 [rendered/lifecycle validation guide](../testing/android-ui-validation.md#foreground-pixels-and-stopped-task-previews)
 keeps actual global pixels authoritative over cleared state or an empty owned
 window buffer. This sample-specific policy neither changes transport security

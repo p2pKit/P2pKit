@@ -164,7 +164,9 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
     private val ioContext: CoroutineContext,
     private val rebindDebounceMillis: Long = REBIND_DEBOUNCE_MILLIS,
     private val rebindRetryBaseDelayMillis: Long = REBIND_RETRY_BASE_DELAY_MILLIS,
-    private val rebindRetryMaxAttempts: Int = REBIND_RETRY_MAX_ATTEMPTS
+    private val rebindRetryMaxAttempts: Int = REBIND_RETRY_MAX_ATTEMPTS,
+    /** Withdraw transport-managed peer state after callback fencing, before whole-handle close. */
+    private val onHandleRetiring: () -> Unit = {}
 ) {
 
     private val lock = Mutex()
@@ -707,6 +709,10 @@ internal class JmdnsLifecycleCoordinator<N : Any, H : Any>(
             return
         }
         listenerToken?.let(ops::deactivateListenerToken)
+        // This handle can no longer remove its peers. Clear even if native close or recreation
+        // fails; retained native ownership is for cleanup retry, never callback publication.
+        // Same-handle add-first listener refresh does not pass through this boundary.
+        onHandleRetiring()
         withContext(ioContext) { ops.closeHandleBlocking(current) }
         handle = null
         advertisedToken = null

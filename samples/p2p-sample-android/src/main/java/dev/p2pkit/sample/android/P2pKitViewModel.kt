@@ -55,8 +55,6 @@ import dev.p2pkit.sample.diagnostics.DiagnosticRecorder
 import dev.p2pkit.sample.diagnostics.DiagnosticSeverity
 import dev.p2pkit.sample.diagnostics.SessionTransferKey
 import dev.p2pkit.sample.diagnostics.SessionTransferList
-import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
-import dev.p2pkit.sample.diagnostics.reservedFileDestination
 import dev.p2pkit.sample.diagnostics.secureV2ConnectionRecord
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
@@ -1267,7 +1265,7 @@ class P2pKitViewModel internal constructor(
                 return@launch
             }
             if (preparedHash != null) {
-                val size = runCatching {
+                val size = TestFileDigests.readSourceSize {
                     ctx.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
                 }.getOrNull()
                 recordDiagnostic(
@@ -1468,11 +1466,11 @@ class P2pKitViewModel internal constructor(
             appendSystemMessage("rejected '${pending.name}': exceeds 50 MiB sample quota")
             return
         }
-        val opened = withContext(Dispatchers.IO) {
-            runCatchingNonCancel {
+        val opened = runCatchingNonCancel {
+            prepareIncomingDestination {
                 val location = incomingFileDirectory(ctx.getExternalFilesDir(null), pending.peerName) { ctx.filesDir }
                 val saveDir = location.file.also { it.mkdirs() }
-                cleanupStaleTransferPartsOnce(saveDir)
+                cleanupAndroidStaleTransferPartsOnce(saveDir)
                 val allocatableBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val storage = ctx.getSystemService(StorageManager::class.java)
                         ?: error("storage service unavailable")
@@ -1486,20 +1484,14 @@ class P2pKitViewModel internal constructor(
                 location.copy(file = uniqueDestination(saveDir, pending.name))
             }
         }
-        val location = opened.getOrElse { e ->
+        val prepared = opened.getOrElse { e ->
             runCatchingNonCancel { pending.offer.reject("receiver storage unavailable") }
             appendSystemMessage("rejected '${pending.name}': ${e.message ?: "storage unavailable"}")
             return
         }
-        val saveFile = location.file
+        val location = prepared.location
+        val destination = prepared.destination
         Log.i(LOG_TAG, "incoming file offer <file> (${pending.sizeBytes}B) → <${location.storageDomain} destination>")
-        val destination = runCatchingNonCancel { reservedFileDestination(saveFile) }
-            .getOrElse { e ->
-                runCatchingNonCancel { pending.offer.reject("destination preparation failed") }
-                runCatchingNonCancel { saveFile.delete() }
-                appendSystemMessage("receive '${pending.name}' failed: ${e.message ?: e::class.simpleName}")
-                return
-            }
         recordTemporaryFileEvent(
             peerId = pending.offer.peer.id.value,
             sessionId = pending.sessionId,

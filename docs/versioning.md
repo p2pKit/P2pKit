@@ -4,19 +4,20 @@ The repository uses SemVer-style versions with release-candidate prereleases.
 
 - `VERSION_NAME` is the source/build version.
 - `LATEST_PUBLISHED_VERSION` is the immutable version consumers should install.
-- Development on `main` uses a `-SNAPSHOT` suffix. Snapshot versions cannot pass
-  the release-tag or Maven Central collision gates.
+- Unreleased development may use a `-SNAPSHOT` suffix. After a release, `main`
+  can retain that version until the next reviewed version change. Snapshot
+  versions cannot pass the release-tag or Maven Central collision gates.
 - A release tag must be exactly `v<VERSION_NAME>` and must point to the exact
   verified commit.
 - Published tags and artifacts are never moved, deleted, overwritten, or
   rebuilt under the same coordinate.
 
-The current development source is `0.8.0-SNAPSHOT`, continuing the existing
-0.8.0 development line after the published `0.8.0-rc2` prerelease. The latest
-published release is [`0.8.0-rc2`](releases/0.8.0-rc2.md); development is not
-a new release candidate or a publication authorization. Release-specific
-validation must use that immutable tag and its published artifacts, not this
-later snapshot. The snapshot does not replace or change the versions of published apps.
+Read the two canonical values in [`gradle.properties`](../gradle.properties)
+and the corresponding [release record](README.md#test-and-release), rather than inferring
+publication from the source version. A later commit can retain the released
+version without belonging to its immutable tag. Release-specific validation must
+use the recorded tag, exact source and artifacts, not a later `main` checkout.
+Changing `VERSION_NAME` alone is neither publication nor publication approval.
 
 The pre-`1.0.0` breaking-change reservation includes public sealed-hierarchy
 evolution. See the [compatibility policy](compatibility.md#public-sealed-hierarchies)

@@ -1595,6 +1595,76 @@ class EvidenceTests(unittest.TestCase):
                         scope._ownership_proof(identity, {})
                 self.assertEqual(scope.outside_domain_observations, 0)
 
+    def test_hosted_local_scope_reuses_exact_context_and_preserves_nonadmitted_factories(self):
+        env = dict(GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", GITHUB_REPOSITORY="p2pKit/P2pKit",
+                   GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
+                   GITHUB_WORKFLOW_REF="p2pKit/P2pKit/.github/workflows/ci.yml@refs/pull/504/merge")
+        args = ("job", "invocation", "private", "home")
+        for host in ("Darwin", "Linux", "Windows"):
+            for change in ({}, {"RUNNER_ENVIRONMENT": "self-hosted"}, {"GITHUB_ACTIONS": "false"},
+                           {"GITHUB_REPOSITORY": "other/repo"}, {"GITHUB_WORKFLOW_SHA": "b" * 40},
+                           {"GITHUB_WORKFLOW_REF": "p2pKit/P2pKit/.github/workflows/other.yml@refs/heads/main"}):
+                actual = {**env, **change}
+                with self.subTest(host=host, change=change), mock.patch.object(E.platform, "system", return_value=host), \
+                        mock.patch.object(E, "_HostedLocalDarwinScope") as hosted, \
+                        mock.patch.object(E.audit_processes, "make_local_scope") as original:
+                    result = E.local_command_scope(*args, actual)
+                    selected, rejected = (hosted, original) if E._hosted_darwin_context(actual) else (original, hosted)
+                    self.assertIs(result, selected.return_value)
+                    selected.assert_called_once_with(*args)
+                    rejected.assert_not_called()
+        # No parallel workflow/job policy: both factories ask the exact same guard.
+        with mock.patch.object(E, "_hosted_darwin_context", return_value=False) as guard, \
+                mock.patch.object(E.audit_processes, "make_local_scope"):
+            E.local_command_scope(*args, env)
+        guard.assert_called_once_with(env)
+
+    def test_hosted_local_scope_keeps_local_markers_and_every_native_lifetime_method(self):
+        kind = E._HostedLocalDarwinScope
+        for method in ("discover", "spawn", "drain", "_send", "_acquire", "close", "_inherited_pipes"):
+            self.assertIs(getattr(kind, method), getattr(E.audit_processes.LocalDarwinScope, method))
+        self.assertIs(kind._ownership_proof, E._HostedDarwinScope._ownership_proof)
+        self.assertIs(kind.__init__, E._HostedDarwinScope.__init__)
+        self.assertIs(kind._ours, E.audit_processes.LocalDarwinScope._ours)
+        with mock.patch.object(E.audit_processes.DarwinScope, "__init__", return_value=None) as native:
+            initialized = kind("job", "invocation", "private", "home")
+        native.assert_called_once_with("job", "invocation", "private", "home")
+        self.assertEqual(0, initialized.outside_domain_observations)
+        scope = object.__new__(kind)
+        scope.invocation = "b" * 32
+        self.assertTrue(scope._ours({E.audit_processes.LOCAL_CHAIN_ENV.encode(): b"a" * 32 + b":" + b"b" * 32}))
+        self.assertFalse(scope._ours({E.audit_processes.CHAIN_ENV.encode(): b"b" * 32}))
+        with self.assertRaises(E.audit_processes.OwnershipError):
+            scope._ours({E.audit_processes.LOCAL_CHAIN_ENV.encode(): b"b" * 32 + b":invalid"})
+
+    def test_hosted_local_scope_reuses_positive_proof_and_fail_closed_models(self):
+        # Execute the existing complete hosted proof/rejection models against the
+        # inner class too; no mocked native census is represented as a Mac run.
+        with mock.patch.object(E, "_HostedDarwinScope", E._HostedLocalDarwinScope):
+            self.test_hosted_darwin_domain_retains_positive_proofs_and_revisits_unobserved_parent()
+            self.test_hosted_darwin_domain_does_not_relax_real_observation_or_known_owner_failures()
+
+    def test_strict_local_parent_unknown_is_not_confused_with_hosted_domain_exclusion(self):
+        # A controlled comparison, NOT identification of an unrecorded native
+        # failure: the old inner policy and maintained hosted policy differ here.
+        for kind in (E.audit_processes.LocalDarwinScope, E._HostedLocalDarwinScope):
+            scope = object.__new__(kind)
+            scope.invocation = "b" * 32
+            scope.known, scope.foreign_sessions, scope.outside_domain_observations, scope.controller_session = {}, {}, 0, 17
+            identity = {"pid": 123, "uniqueId": 456, "startSeconds": 1, "startMicroseconds": 2}
+            unknown = E.audit_processes.DiscoveryUncertain("Darwin non-reaper original-parent lifetime was not observed")
+            with self.subTest(kind=kind.__name__), mock.patch.object(scope, "_has_pipe", return_value=False), \
+                    mock.patch.object(scope, "_parent_proof", side_effect=unknown), \
+                    mock.patch.object(scope, "_audit_session", return_value=17):
+                if kind is E.audit_processes.LocalDarwinScope:
+                    with self.assertRaises(E.audit_processes.DiscoveryUncertain):
+                        scope._ownership_proof(identity, {})
+                else:
+                    self.assertIsNone(scope._ownership_proof(identity, {}))
+                    self.assertEqual(1, scope.outside_domain_observations)
+                self.assertEqual({}, scope.known)
+                self.assertEqual({}, scope.foreign_sessions)
+
     def test_hosted_darwin_boundary_public_projection_has_only_finite_fields(self):
         outcome = {"code": "PASS", "exitCode": 0, "timedOut": False, "cleanupKnown": True,
                    "ownershipBoundary": E.HOSTED_DARWIN_BOUNDARY, "outsideDomainObservations": 52}

@@ -6,7 +6,15 @@ acceptance checklist in [Windows qualification issue #462](https://github.com/p2
 assigned to the repository owner under **Post-0.8.0-rc1 Windows RPC qualification**.
 No test runs against the owner's daily Windows profile are authorized by this document.
 
-## Current integration candidate — 2026-10-19
+## Current implementation versus qualification
+
+Productive Windows loading, the native/managed profile and Host/Client route are
+included in rc4 and later. Follow the latest [immutable release record](../README.md#test-and-release)
+for the released source and application bytes. This does not complete W01–W11 or
+extend earlier manual evidence to a new release. The dated decisions and incoming
+candidate observations below are preserved history, not pending implementation.
+
+## Historical integration candidate — 2026-10-19
 
 The owner authorized integrating the incoming Windows/Android work and pursuing
 **0.8.0-rc4** through the existing merge/publication pipeline after its required

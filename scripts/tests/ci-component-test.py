@@ -49,7 +49,7 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(len(rows), 14)
         self.assertEqual({x['component'] for x in rows}, set(C.COMPONENTS))
     def test_workflow_only_diagnostics_cannot_enter_component_matrix(self):
-        for name in ('apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic'):
+        for name in ('apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic', 'android-legacy-task-preview'):
             self.assertNotIn(name, C.COMPONENTS)
             self.assertNotIn(name, C.DIAGNOSTICS)
             for selection in (name, 'source,' + name, name + ',android'):
@@ -99,6 +99,35 @@ class ComponentTests(unittest.TestCase):
             evidence_spec.loader.exec_module(evidence)
         self.assertTrue(set(actual) <= evidence.TASK_NAMES)
 
+    def test_publication_deadlines_latest_contract_and_owned_jdk_controls_are_source_routed(self):
+        expected = {
+            'check-rpc-hosted-validation-test.py': [C.sys.executable, '-B', 'scripts/tests/check-rpc-hosted-validation-test.py', '-v'],
+            'central-http-test.py': [C.sys.executable, '-B', 'scripts/tests/central-http-test.py', '-v'],
+            'kotlin-toolchain-controls': ['bash', 'scripts/tests/check-kotlin-toolchain-policy-test.sh'],
+            'published-consumer-controls': [C.sys.executable, '-B', 'scripts/tests/audit-consumer-test.py',
+                                            '-v', '-k', 'latest_published'],
+        }
+        commands = C.commands('source')
+        for name, argv in expected.items():
+            self.assertEqual([command for task, command in commands if task == name], [argv])
+        evidence_spec = importlib.util.spec_from_file_location('publication_evidence', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        self.assertTrue(set(expected) <= evidence.TASK_NAMES)
+
+    def test_whole_ownership_deadline_suite_is_mandatory_source_task(self):
+        name = 'audit-process-drain-deadline-test.py'
+        commands = C.commands('source')
+        self.assertEqual([argv for task, argv in commands if task == name],
+                         [[C.sys.executable, '-B', 'scripts/tests/' + name, '-v']])
+        self.assertTrue((ROOT / 'scripts/tests' / name).is_file())
+        evidence_spec = importlib.util.spec_from_file_location('drain_ci_evidence', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        self.assertIn(name, evidence.TASK_NAMES)
+
     def test_issue_acceptance_offline_controls_are_mandatory_source_tasks(self):
         names = ('apple-issue-validation-test.py', 'run-android-ui-validation-test.py',
                  'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',
@@ -132,6 +161,24 @@ class ComponentTests(unittest.TestCase):
 
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])
+
+    def test_windows_installer_executes_all_diagnostics_ownership_tests_once(self):
+        task = ':p2p-sample-diagnostics:test'
+        with tempfile.TemporaryDirectory(prefix='ci-diagnostics-routing-') as temporary:
+            # Diagnostics is an existing sample, independent of optional RPC.
+            with patch.object(C, 'ROOT', Path(temporary)):
+                for rpc_present in (False, True):
+                    if rpc_present:
+                        (Path(temporary) / 'samples/p2p-sample-rpc').mkdir(parents=True)
+                    for component in ('desktop-windows', 'desktop-linux', 'desktop-macos'):
+                        command = dict(C.commands(component))['desktop-tests-and-installer']
+                        self.assertEqual(command.count(task), int(component == 'desktop-windows'))
+                        self.assertNotIn('--tests', command)
+                        self.assertIn(':p2p-sample-desktop:check', command)
+                        self.assertIn(':p2p-sample-desktop-ui:test', command)
+                        if component == 'desktop-windows':
+                            self.assertLess(command.index(task), command.index(':p2p-sample-desktop-ui:packageMsi'))
+
     def test_unknown_duplicate_empty_refused(self):
         for value in ['', 'android,android', 'bogus', 'source,']:
             with self.subTest(value=value), self.assertRaises(ValueError): C.matrix(value)
@@ -751,7 +798,8 @@ class AndroidAbiNamespaceTests(unittest.TestCase):
 
     def fixture(self, root):
         paths = ['build.gradle.kts', 'scripts/run-release-gate.sh',
-                 'scripts/tests/check-kotlin-toolchain-policy-test.sh', 'scripts/check-modular-ci-policy.rb']
+                 'scripts/tests/check-kotlin-toolchain-policy-test.sh', 'scripts/check-modular-ci-policy.rb',
+                 'scripts/ci_component.py']
         paths += [str(p.relative_to(ROOT)) for p in (ROOT / '.github/workflows').glob('*.yml')]
         for module in self.BASELINES:
             paths += [f'library/{module}/build.gradle.kts', f'library/{module}/api/android-bcv/{module}.api']

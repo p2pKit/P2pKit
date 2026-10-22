@@ -21,6 +21,7 @@ fi
 
 RELEASE_ROOT="$WORK_DIR/release-repo"
 mkdir -p "$RELEASE_ROOT/scripts"
+cp "$ROOT/scripts/central-http.sh" "$RELEASE_ROOT/scripts/"
 cp "$ROOT/scripts/check-maven-central-version.sh" "$RELEASE_ROOT/scripts/check-maven-central-version.sh"
 printf '%s\n' \
     "GROUP=$GROUP" \

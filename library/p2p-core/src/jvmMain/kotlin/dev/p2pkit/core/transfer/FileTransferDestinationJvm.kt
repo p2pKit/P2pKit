@@ -6,8 +6,10 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
 import kotlinx.io.RawSink
@@ -54,6 +56,24 @@ public fun durableFileDestination(
     minimumFreeSpaceBytes: Long
 ): FileTransferDestination = JvmDurableFileDestination(target, minimumFreeSpaceBytes = minimumFreeSpaceBytes)
 
+/**
+ * Stage in an exclusively application-owned directory on the target's filesystem.
+ * The directory must already exist and its path must not contain symbolic links.
+ * The application must keep it exclusively owned until commit/abort finishes; a
+ * filename alone never proves that another process's staging can be reclaimed.
+ * Atomic publication has no copy fallback. On POSIX both affected directories
+ * are synced before commit returns; Windows retains the documented directory-sync limitation.
+ */
+public fun durableFileDestination(
+    target: File,
+    stagingDirectory: File,
+    minimumFreeSpaceBytes: Long
+): FileTransferDestination = JvmDurableFileDestination(
+    target,
+    minimumFreeSpaceBytes = minimumFreeSpaceBytes,
+    stagingDirectory = stagingDirectory
+)
+
 internal class JvmDurableFileDestination(
     target: File,
     private val closeSink: (RawSink) -> Unit = { it.close() },
@@ -62,11 +82,19 @@ internal class JvmDurableFileDestination(
     private val syncDirectory: (File) -> Unit = ::forceDirectory,
     private val usableSpace: (File) -> Long = { it.usableSpace },
     private val minimumFreeSpaceBytes: Long = DEFAULT_DURABLE_DESTINATION_MINIMUM_FREE_SPACE_BYTES,
-    private val openStream: (File) -> FileOutputStream = { FileOutputStream(it, false) }
+    private val openStream: (File) -> FileOutputStream = { FileOutputStream(it, false) },
+    stagingDirectory: File? = null
 ) : FileTransferDestination, StorageCapacityCheckingFileTransferDestination {
     private val target = target.absoluteFile
     private val parent = checkNotNull(this.target.parentFile) { "Target must have a parent directory" }
         .also { require(it.isDirectory) { "Target parent is not a directory: ${it.absolutePath}" } }
+    private val stagingParent = stagingDirectory?.absoluteFile?.also {
+        require(it.isDirectory && it.canonicalFile == it) { "Staging must be a non-symlink directory" }
+        requireUnlinkedDirectoryPath(it)
+        require(Files.getFileStore(it.toPath()) == Files.getFileStore(parent.toPath())) {
+            "Staging and target must use the same filesystem"
+        }
+    } ?: parent
 
     init {
         require(minimumFreeSpaceBytes >= 0) { "minimumFreeSpaceBytes must be non-negative" }
@@ -94,7 +122,7 @@ internal class JvmDurableFileDestination(
     override fun openSink(): RawSink = synchronized(this) {
         check(state == DestinationState.NEW) { "Destination was already opened or terminal" }
         try {
-            val staging = createStagingFile(parent, target.name)
+            val staging = createStagingFile(stagingParent, target.name)
             temp = staging
             val opened = openStream(staging)
             stream = opened
@@ -190,6 +218,21 @@ internal class JvmDurableFileDestination(
     private fun syncParentDirectory() {
         if (isWindows(operatingSystemName)) return
         syncDirectory(parent)
+        if (stagingParent.canonicalFile != parent.canonicalFile) syncDirectory(stagingParent)
+    }
+}
+
+private fun requireUnlinkedDirectoryPath(directory: File) {
+    // File canonicalization is not a link test on every platform (notably Windows).
+    // Inspect every component without following the final entry. Do not normalize:
+    // a link followed by `..` still traverses that link while opening a file.
+    var component = directory.toPath()
+    while (true) {
+        val attributes = Files.readAttributes(component, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        require(attributes.isDirectory && !attributes.isSymbolicLink && !attributes.isOther) {
+            "Staging must be a non-symlink directory"
+        }
+        component = component.parent ?: break
     }
 }
 

@@ -2,24 +2,24 @@
 
 ## Verified release scope
 
-The [`0.8.0-rc2` release record](../releases/0.8.0-rc2.md) binds the following
-results to source `bd98deeb6ab44b5f5126d88742aa69b57f290c32`, not to later
-`0.8.0-SNAPSHOT` development:
+Use [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) and its immutable
+[release record](../README.md#test-and-release) for published evidence. The latest
+verified record when this guidance was reconciled is
+[`0.8.0-rc6`](../releases/0.8.0-rc6.md), source
+`3ef2c6155abd66292011c3775b30fb71d280e9c7`. Its exact-source fourteen-component
+qualification, four frozen applications, signed Maven originals and complete
+anonymous download hashes are recorded there—not inferred from later `main`.
+The original publisher's final upload failed; the distinct read-only recovery
+and subsequent application publication succeeded. The missing original final
+publication/SBOM archive was not reconstructed or called retained.
 
-- Exact-source modular qualification, including JVM Linux/Windows/macOS,
-  Android host checks and packaging, native ARM64/Intel iOS simulator execution,
-  API/ABI, strict Dokka, dependency/security checks, SBOM, publication shape,
-  isolated consumers and Swift/XCFramework checks.
-- Actual protected Maven publication with signed-original and remote-byte
-  verification and complete remote-consumer checks.
-- The same-source frozen APK/MSI/ARM64-DMG/DEB development prerelease, with full
-  anonymous-download hashes verified for all seven public assets.
-
-The prior [`0.7.0-rc3` record](../releases/0.7.0-rc3.md) remains historical.
-Neither release's results certify subsequent source changes or complete the
-six campaigns in the [canonical status table](../validation/README.md#current-status).
-Windows sample RPC Host/Client is still unavailable; see its
-[explicit implementation and runtime limitations](../rpc/windows-release-scope.md).
+Earlier [rc2](../releases/0.8.0-rc2.md) and
+[0.7.0-rc3](../releases/0.7.0-rc3.md) evidence stays historical. No release certifies
+subsequent source changes or completes the
+[six external campaigns](../validation/README.md#current-status).
+Windows sample Host/Client and installed loading/provider integration are
+implemented; full W01–W11 qualification remains incomplete. See the
+[precise Windows scope](../rpc/windows-release-scope.md).
 
 ## Informational automated history (not release or campaign evidence)
 
@@ -43,7 +43,7 @@ native ARM64/Intel simulator components retain their own source-bound reports.
 `complete-gate` requires their actual successful aggregation, including on
 ordinary documentation PRs. A focused component pass is not complete qualification.
 
-`0.8.0-rc2` has actual same-source results for these components, as recorded above.
+The recorded rc6 has actual same-source results for these components, as recorded above.
 They must not be reused as a pass for changed source. Deterministic callbacks,
 loopback TCP and hosted multicast still do not establish physical-network coverage.
 
@@ -57,20 +57,21 @@ execution. See [platform execution evidence](local.md#platform-execution-evidenc
 
 | Target / suite | Verified release scope and remaining limitation |
 | --- | --- |
-| JVM | Linux/Windows components and macOS shared gate passed for the recorded rc2 source. |
-| Android | Host JVM tests and APK inspection passed; framework stubs/Robolectric are not ART or physical devices. The authored focused API37 case does not constitute a complete device suite. |
-| `iosSimulatorArm64` | Native simulator profile passed for the recorded rc2 source. |
-| `iosX64` | Separate native Intel simulator profile passed for rc2; ARM64 cross-compilation is not its evidence. |
+| JVM | Linux/Windows components and macOS shared gate passed for the recorded rc6 source. |
+| Android | Host JVM tests and APK inspection passed; framework stubs/Robolectric are not ART or physical devices. Separate source-bound instrumentation results must be consulted for ART/privacy cases; they are not a complete physical-device suite. |
+| `iosSimulatorArm64` | Native simulator profile passed for the recorded rc6 source. |
+| `iosX64` | Separate native Intel simulator profile passed for rc6; ARM64 cross-compilation is not its evidence. |
 | `iosArm64` | Device target still requires external hardware and real device-test execution. |
 | KMP metadata | Compilation/publication checks, not a runtime test target. |
-| Swift sample | Swift warnings-as-errors and XCFramework provenance checks are not a claim of unit/UI or physical-device execution. |
+| Swift sample | Recorded rc6 Swift unit/UI and XCFramework checks passed within their exact simulator scope; physical-device behavior and later changes need separate evidence. |
 
-The published rc2 used the temporary macOS 14 CLI/shared baseline, which retires
-on `2026-11-02`. Current source selects a macOS 15 Intel/Xcode 26.3 replacement;
-its configured routes are not yet a passing hosted qualification. Retain actual
-same-source JmDNS/shared/consumer execution before claiming the replacement
-accepted. Native ARM64/Intel and Desktop/Swift lanes remain unchanged. These
-structural and runtime limits are not changed by publication.
+Historical rc2 used the temporary macOS 14 CLI/shared baseline. The maintained
+macOS 15 Intel/Xcode 26.3 replacement has actual same-source shared/native and
+consumer results in the later release records, including rc6. Do not revive the
+retired macOS 14 setup or confuse historical macOS 26 JVM multicast failures with
+a fresh result from the replacement. New source/toolchain changes still need
+matching hosted qualification. Publication does not remove structural or
+physical-device limits.
 
 ## External campaign status
 

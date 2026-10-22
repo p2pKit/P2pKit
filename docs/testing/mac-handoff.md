@@ -1,6 +1,11 @@
-# Continue the audit on a Mac
+# Historical September audit handoff — not current setup
 
-**Start from `main`; do not restart the audit.** The [checkpoint](../../AUDIT_CHECKPOINT.md)
+> This is the preserved September 2026 consolidation handoff. Commands, versions,
+> issue dispositions and authorization windows below describe that checkpoint,
+> not today's setup or gates. Use [local testing](local.md), [current validation](validation-status.md)
+> and the [release checklist](../releasing/checklist.md) for maintained operations.
+
+**Historical instruction: start from `main`; do not restart the audit.** The [checkpoint](../../AUDIT_CHECKPOINT.md)
 and [issue records](../audit/2026-09-04/issues.json) retain the completed work and
 exact limitations. [Consolidation/branch decisions](../maintenance/repository-consolidation-2026-09.md)
 explain the six unqualified dependency proposals intentionally kept separate.

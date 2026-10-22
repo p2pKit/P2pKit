@@ -13,6 +13,11 @@ internal object TestFileDigests {
         openInput()?.use(::sha256)
     }
 
+    /** The entire optional provider open/length/close callback runs on IO, not the returning caller. */
+    suspend fun readSourceSize(readSize: () -> Long?): Result<Long?> = readSampleFileDiagnostic {
+        readSize()?.takeIf { it >= 0L }
+    }
+
     fun sha256(file: File): String = FileInputStream(file).use(::sha256)
 
     fun sha256(input: InputStream): String {

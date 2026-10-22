@@ -1,6 +1,5 @@
 import SwiftUI
 import P2pKitShared
-import CryptoKit
 import Darwin
 
 /// UI-thread-only selectors shared by consent, cancellation, and watcher updates.
@@ -799,18 +798,6 @@ struct ContentView: View {
         return "\(n) B"
     }
 
-    private func sha256File(at url: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var hasher = CryptoKit.SHA256()
-        while true {
-            let chunk = try handle.read(upToCount: 64 * 1024) ?? Data()
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
     // MARK: - Actions
 
     private func consumeIgnoredStartActionForUITest() -> Bool {
@@ -1580,7 +1567,9 @@ struct ContentView: View {
                 guard cleanupComplete else { return "temporary cleanup incomplete" }
                 guard completed else { return nil }
                 do {
-                    let digest = try sha256File(at: dest)
+                    let digest = try await runLifecycle.prepare(run) {
+                        try SampleFilePreparation.sha256File(at: dest)
+                    }
                     diagnostics.fileHash(
                         peerId: "\(offer.peer.id)",
                         transferId: transfer.id,
@@ -1602,6 +1591,9 @@ struct ContentView: View {
                     diag("file", "durable receive committed sha256=\(digest)")
                     appendMessage("sha256 \(dest.lastPathComponent): \(digest)", kind: .info)
                 } catch {
+                    guard runLifecycle.acceptsWork(run), !Task.isCancelled, !(error is CancellationError) else {
+                        return nil
+                    }
                     diag("file", "sha256 read failed for selected file: \(SampleConsole.failure(error))")
                     appendMessage(
                         "sha256 unavailable for \(dest.lastPathComponent): \(error.localizedDescription)",
@@ -1675,25 +1667,25 @@ struct ContentView: View {
         }
 
         let size = preset.byteCount
-        var data = Data(count: size)
-        for i in 0..<size {
-            data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7)   // deterministic pattern
-        }
         let name = "ios-test-\(preset.rawValue.replacingOccurrences(of: " ", with: "-"))-\(Int(Date().timeIntervalSince1970)).bin"
-        let source = PreparedDataSource(data: data)
-        let digest = source.sha256Hex
-        diagnostics.record(TestDiagnosticRecord(
-            peerId: row.peerId,
-            connectionId: diagnostics.connectionId(for: row.peerId),
-            category: "file",
-            eventName: TestDiagnosticEventName.fileGenerated,
-            direction: .sent,
-            payloadSizeBytes: Int64(size),
-            details: ["name": name, "preset": preset.rawValue]
-        ))
-        diag("file", "sendFile (\(size) B) sha256=\(digest) -> \(SampleConsole.identifier(row.peerId))")
-        appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
         do {
+            let snapshot = try await runLifecycle.prepare(run) {
+                try SampleFilePreparation.preset(byteCount: size)
+            }
+            // prepare fences retirement/cancellation before any diagnostic or SDK action.
+            let source = PreparedDataSource(snapshot: snapshot)
+            let digest = source.sha256Hex
+            diagnostics.record(TestDiagnosticRecord(
+                peerId: row.peerId,
+                connectionId: diagnostics.connectionId(for: row.peerId),
+                category: "file",
+                eventName: TestDiagnosticEventName.fileGenerated,
+                direction: .sent,
+                payloadSizeBytes: Int64(size),
+                details: ["name": name, "preset": preset.rawValue]
+            ))
+            diag("file", "sendFile (\(size) B) sha256=\(digest) -> \(SampleConsole.identifier(row.peerId))")
+            appendMessage("prepared \(name): sha256 \(digest)", kind: .info)
             let transfer = try await row.session.sendFile(
                 name: name,
                 mimeType: "application/octet-stream",
@@ -1738,7 +1730,7 @@ struct ContentView: View {
                 return nil
             }
         } catch {
-            guard runLifecycle.acceptsWork(run) else { return }
+            guard runLifecycle.acceptsWork(run), !Task.isCancelled, !(error is CancellationError) else { return }
             diagnostics.transfer(
                 TestDiagnosticEventName.transferFailed,
                 peerId: row.peerId,
@@ -1772,7 +1764,7 @@ struct ContentView: View {
         direction: TransferRow.Direction,
         detail: String?,
         run: SampleRunLifecycle.Run,
-        onTerminal: @escaping (_ completed: Bool) -> String?
+        onTerminal: @escaping @MainActor (_ completed: Bool) async -> String?
     ) {
         guard runLifecycle.acceptsWork(run) else { return }
         let key = TransferKey(sessionId: sessionId, transferId: transfer.id)
@@ -1832,8 +1824,9 @@ struct ContentView: View {
                                 : (label.hasPrefix("Cancelled") ? .cancellation : .failure),
                             error: label == "Completed" ? nil : label
                         )
-                        let localFailure = onTerminal(label == "Completed")
                         cleanupCompleted = true
+                        let localFailure = await onTerminal(label == "Completed")
+                        guard self.runLifecycle.owns(run), !Task.isCancelled else { break }
                         let finalLabel = localFailure.map { "Failed: \($0)" } ?? label
                         SessionTransferEntries.update(key, in: &transfers) { $0.stateLabel = finalLabel }
                         let arrow = direction == .send ? "→" : "←"
@@ -1852,7 +1845,8 @@ struct ContentView: View {
             // onTerminal is UI/diagnostics only; SDK source/destination cleanup
             // already ran before Stop retires watchers. Never publish into B.
             if !cleanupCompleted && self.runLifecycle.owns(run) {
-                let localFailure = onTerminal(false)
+                let localFailure = await onTerminal(false)
+                guard self.runLifecycle.owns(run), !Task.isCancelled else { return }
                 if let localFailure {
                     let arrow = direction == .send ? "→" : "←"
                     appendMessage(
@@ -2412,11 +2406,11 @@ final class PreparedDataSource: NSObject, PreparedFileSource {
     let sha256: Sha256Digest
     let sha256Hex: String
 
-    init(data: Data) {
-        self.data = data
-        self.sizeBytes = Int64(data.count)
-        let digest = Array(CryptoKit.SHA256.hash(data: data))
-        self.sha256Hex = digest.map { String(format: "%02x", $0) }.joined()
+    init(snapshot: SampleFilePreparation.Snapshot) {
+        self.data = snapshot.data
+        self.sizeBytes = Int64(snapshot.data.count)
+        let digest = snapshot.digest
+        self.sha256Hex = snapshot.sha256Hex
         let bytes = KotlinByteArray(size: Int32(digest.count))
         for (index, byte) in digest.enumerated() {
             bytes.set(index: Int32(index), value: Int8(bitPattern: byte))
@@ -2540,7 +2534,7 @@ final class FileHandleRawSink: NSObject, Kotlinx_io_coreRawSink {
     }
 }
 
-/// Sibling temporary file + fsync + atomic replacement. The empty target file
+/// Exclusively leased same-filesystem staging + fsync + atomic replacement. The empty target file
 /// created by `claimUniqueDestination` is a namespace reservation and is
 /// replaced only after verification succeeds.
 final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
@@ -2548,6 +2542,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         case active
         case committing
         case published
+        case durable
         case committed
         case abortingReservation
         case abortingAfterCommit
@@ -2556,6 +2551,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
 
     private let target: URL
     private let temporary: URL
+    private let stagingLease: SampleTransferStaging.Lease
     private let sink: FileHandleRawSink
     private let removeItem: (URL) throws -> Void
     private let synchronizeDirectory: (URL) throws -> Void
@@ -2578,18 +2574,36 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         self.removeItem = removeItem
         self.synchronizeDirectory = synchronizeDirectory
         let directory = target.deletingLastPathComponent()
+        let lease = try SampleTransferStaging.claim(in: directory)
+        self.stagingLease = lease
+        var targetInfo = stat()
+        var stagingInfo = stat()
+        guard SampleTransferPOSIX.fileStatus(directory.path, &targetInfo) == 0,
+              SampleTransferPOSIX.fileStatus(lease.directory.path, &stagingInfo) == 0,
+              targetInfo.st_dev == stagingInfo.st_dev else {
+            try? lease.retire()
+            throw destinationError("staging and target must be on the same filesystem")
+        }
         var claimed: URL?
         for attempt in 0...100 {
             let boundedName = String(target.lastPathComponent.prefix(48))
-            let candidate = directory.appendingPathComponent(
+            let candidate = lease.directory.appendingPathComponent(
                 ".\(boundedName).\(UUID().uuidString)-\(attempt).p2pkit-part"
             )
-            if FileManager.default.createFile(atPath: candidate.path, contents: nil) {
+            let descriptor = Darwin.open(candidate.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR)
+            if descriptor >= 0 {
+                guard Darwin.close(descriptor) == 0 else {
+                    let failure = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    try? FileManager.default.removeItem(at: candidate)
+                    try? lease.retire()
+                    throw failure
+                }
                 claimed = candidate
                 break
             }
         }
         guard let temporary = claimed else {
+            try? lease.retire()
             throw NSError(
                 domain: "dev.p2pkit.sample.file",
                 code: 2,
@@ -2601,6 +2615,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
             self.sink = FileHandleRawSink(handle: try FileHandle(forWritingTo: temporary))
         } catch {
             try? FileManager.default.removeItem(at: temporary)
+            try? lease.retire()
             throw error
         }
     }
@@ -2620,20 +2635,27 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
             completionHandler(nil)
             return
         }
-        guard phase == .active || phase == .committing || phase == .published else {
+        guard phase == .active || phase == .committing || phase == .published || phase == .durable else {
             stateLock.unlock()
             completionHandler(destinationError("destination is not commit-ready"))
             return
         }
 
         do {
-            if phase != .published {
+            if phase != .published && phase != .durable {
                 phase = .committing
                 try sink.synchronizeAndClose()
-                _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+                guard Darwin.rename(temporary.path, target.path) == 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
                 phase = .published
             }
-            try synchronizeDirectory(target.deletingLastPathComponent())
+            if phase != .durable {
+                try synchronizeDirectory(target.deletingLastPathComponent())
+                try fsyncDirectory(stagingLease.directory)
+                phase = .durable
+            }
+            try stagingLease.retire()
             phase = .committed
             stateLock.unlock()
             completionHandler(nil)
@@ -2657,7 +2679,7 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         switch phase {
         case .active, .abortingReservation:
             removeReservation = true
-        case .committing, .published, .abortingAfterCommit:
+        case .committing, .published, .durable, .abortingAfterCommit:
             removeReservation = false
         case .committed, .aborted:
             stateLock.unlock()
@@ -2672,6 +2694,9 @@ final class AtomicFileTransferDestination: NSObject, FileTransferDestination {
         if removeReservation { cleanupTargets.append(target) }
         for url in cleanupTargets where FileManager.default.fileExists(atPath: url.path) {
             do { try removeItem(url) } catch { cleanupError = error }
+        }
+        if cleanupError == nil {
+            do { try stagingLease.retire() } catch { cleanupError = error }
         }
         // Cleanup failure remains abort-retryable, but commit/open can never
         // resume after abort begins.
@@ -2702,17 +2727,7 @@ private func destinationError(_ message: String) -> NSError {
 }
 
 private func cleanupStaleTransferParts(in directory: URL, fileManager: FileManager) throws {
-    let entries = try fileManager.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: [.isRegularFileKey],
-        options: []
-    )
-    for entry in entries where entry.lastPathComponent.hasSuffix(".p2pkit-part") {
-        let values = try entry.resourceValues(forKeys: [.isRegularFileKey])
-        if values.isRegularFile == true {
-            try fileManager.removeItem(at: entry)
-        }
-    }
+    try SampleTransferStaging.reconcile(in: directory)
 }
 
 private func fsyncDirectory(_ directory: URL) throws {

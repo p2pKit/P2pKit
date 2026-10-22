@@ -18,7 +18,13 @@
  */
 package dev.p2pkit.transport.lan.internal.jmdns.impl;
 
+import java.util.ArrayList;
 import java.util.EventListener;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -173,7 +179,10 @@ public class ListenerStatus<T extends EventListener> {
     public static class ServiceTypeListenerStatus extends ListenerStatus<ServiceTypeListener> {
         private final Logger                       logger = LoggerFactory.getLogger(ServiceTypeListenerStatus.class);
 
-        private final ConcurrentMap<String, String> _addedTypes;
+        // Deduplication must not recreate the old immortal remote-type map as
+        // types expire/are evicted. A forgotten type may be announced again.
+        private final LinkedHashMap<String, Long> _addedTypes;
+        private long _typeBytes;
 
         /**
          * @param listener
@@ -183,7 +192,7 @@ public class ListenerStatus<T extends EventListener> {
          */
         public ServiceTypeListenerStatus(ServiceTypeListener listener, boolean synch) {
             super(listener, synch);
-            _addedTypes = new ConcurrentHashMap<>(32);
+            _addedTypes = new LinkedHashMap<>(32);
         }
 
         /**
@@ -193,7 +202,7 @@ public class ListenerStatus<T extends EventListener> {
          *            The service event providing the fully qualified type of the service.
          */
         void serviceTypeAdded(ServiceEvent event) {
-            if (null == _addedTypes.putIfAbsent(event.getType(), event.getType())) {
+            if (rememberType(event.getType())) {
                 this.getListener().serviceTypeAdded(event);
             } else {
                 logger.trace("Service Type Added called for a service type already added: {}", event);
@@ -211,11 +220,43 @@ public class ListenerStatus<T extends EventListener> {
          *            The service event providing the fully qualified type of the service with subtype.
          */
         void subTypeForServiceTypeAdded(ServiceEvent event) {
-            if (null == _addedTypes.putIfAbsent(event.getType(), event.getType())) {
+            if (rememberType(event.getType())) {
                 this.getListener().subTypeForServiceTypeAdded(event);
             } else {
                 logger.trace("Service Sub Type Added called for a service sub type already added: {}", event);
             }
+        }
+
+        private synchronized boolean rememberType(String type) {
+            String key = type.toLowerCase(Locale.ROOT);
+            if (_addedTypes.containsKey(key)) {
+                return false;
+            }
+            long bytes = 128L + 2L * key.length();
+            if (bytes > DNSCache.MAX_RETAINED_BYTES) {
+                return true; // A local caller's oversized type is not retained.
+            }
+            Iterator<Map.Entry<String, Long>> iterator = _addedTypes.entrySet().iterator();
+            while (_addedTypes.size() >= 2 * DNSCache.MAX_RECORDS
+                    || _typeBytes + bytes > DNSCache.MAX_RETAINED_BYTES) {
+                _typeBytes -= iterator.next().getValue();
+                iterator.remove();
+            }
+            _addedTypes.put(key, bytes);
+            _typeBytes += bytes;
+            return true;
+        }
+
+        synchronized int retainedTypeCount() {
+            return _addedTypes.size();
+        }
+
+        synchronized long retainedTypeBytes() {
+            return _typeBytes;
+        }
+
+        private synchronized List<String> rememberedTypes() {
+            return new ArrayList<>(_addedTypes.keySet());
         }
 
         /*
@@ -227,11 +268,12 @@ public class ListenerStatus<T extends EventListener> {
             final StringBuilder sb = new StringBuilder(2048);
             sb.append("[Status for ");
             sb.append(this.getListener().toString());
-            if (_addedTypes.isEmpty()) {
+            List<String> types = rememberedTypes();
+            if (types.isEmpty()) {
                 sb.append(" no type event ");
             } else {
                 sb.append(" (");
-                for (final String type : _addedTypes.keySet()) {
+                for (final String type : types) {
                     sb.append(type).append(", ");
                 }
                 sb.append(") ");

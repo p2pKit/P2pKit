@@ -116,4 +116,69 @@ final class KeyboardReadinessTests: XCTestCase {
         XCTAssertEqual(states, [.indeterminate, .hittable, .indeterminate, .notHittable])
         XCTAssertEqual(actualHitTests, 2)
     }
+
+    @MainActor
+    func testInputCountersReuseOriginalGuardsWithoutExtraQueries() {
+        var existenceCalls = 0, frameCalls = 0, hitCalls = 0
+        let observation = KeyboardReadiness.observeInput([0, 1, 2, 3, 4], exists: { key in
+            existenceCalls += 1
+            return key != 0
+        }, frame: { key in
+            frameCalls += 1
+            return key == 1 ? CGRect.null : self.visible
+        }, isHittable: { key in
+            hitCalls += 1
+            return key == 3
+        })
+        XCTAssertEqual(observation, KeyboardInputObservation(state: .hittable, keys: 5,
+            examined: 4, existing: 3, invalidGeometry: 1, hitTests: 2, hittable: 1))
+        XCTAssertEqual(existenceCalls, 4)
+        XCTAssertEqual(frameCalls, 3)
+        XCTAssertEqual(hitCalls, 2)
+        XCTAssertEqual(observation.diagnostic,
+            "state=HITTABLE keys=5 examined=4 existing=3 invalidGeometry=1 hitTests=2 hittable=1")
+    }
+
+    @MainActor
+    func testInputUnknownAndNonhittableKeysNeverProduceReadiness() {
+        for frames in [[CGRect.null, visible], [visible, CGRect.null]] {
+            let observation = KeyboardReadiness.observeInput(frames, exists: { _ in true }, frame: { $0 }) { _ in false }
+            XCTAssertEqual(observation, KeyboardInputObservation(state: .indeterminate, keys: 2,
+                examined: 2, existing: 2, invalidGeometry: 1, hitTests: 1, hittable: 0))
+            XCTAssertTrue(observation.diagnostic.hasPrefix("state=INDETERMINATE "))
+        }
+        let observation = KeyboardReadiness.observeInput([visible], exists: { _ in true }, frame: { $0 }) { _ in false }
+        XCTAssertEqual(observation.state, .notHittable)
+        XCTAssertEqual(observation.hitTests, 1)
+        XCTAssertEqual(observation.hittable, 0)
+    }
+
+    @MainActor
+    func testInputRemovedOrEmptyInventoryDoesNotReadFramesOrHitTests() {
+        for keys in [[0, 1], []] {
+            let observation = KeyboardReadiness.observeInput(keys, exists: { _ in false }, frame: { _ in
+                XCTFail("Removed keys must not acquire geometry")
+                return self.visible
+            }, isHittable: { _ in
+                XCTFail("Removed keys must not enter hit testing")
+                return true
+            })
+            XCTAssertEqual(observation, KeyboardInputObservation(state: .notHittable, keys: keys.count,
+                examined: keys.count, existing: 0, invalidGeometry: 0, hitTests: 0, hittable: 0))
+        }
+    }
+
+    @MainActor
+    func testInputObservationDoesNotReusePriorSuccessfulKeyOrCounters() {
+        let first = KeyboardReadiness.observeInput([visible], exists: { _ in true }, frame: { $0 }) { _ in true }
+        let second = KeyboardReadiness.observeInput([CGRect.null], exists: { _ in true }, frame: { $0 }) { _ in
+            XCTFail("A subsequent invalid key must not reuse prior hittability")
+            return true
+        }
+        XCTAssertEqual(first.state, .hittable)
+        XCTAssertEqual(second, KeyboardInputObservation(state: .indeterminate, keys: 1,
+            examined: 1, existing: 1, invalidGeometry: 1, hitTests: 0, hittable: 0))
+        XCTAssertFalse(second.diagnostic.contains("HITTABLE "))
+    }
+
 }

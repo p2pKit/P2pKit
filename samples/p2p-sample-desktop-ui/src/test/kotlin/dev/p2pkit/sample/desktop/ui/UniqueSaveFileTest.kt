@@ -135,18 +135,19 @@ class UniqueSaveFileTest {
         destination.abort(cause = null)
 
         assertFalse(claimed.exists(), "aborting must remove the empty namespace reservation")
-        assertEquals(emptyList(), dir.list()?.toList())
+        assertEquals(listOf(".p2pkit-transfer-staging-v1"), dir.list()?.toList())
+        assertEquals(emptyList(), File(dir, ".p2pkit-transfer-staging-v1").list()?.toList())
     }
 
     @Test
-    fun firstUseCleanupRemovesOnlySdkPartFiles() {
+    fun firstUseCleanupNeverInfersOwnershipFromAReceivedFilename() {
         val dir = newTempDir()
         val stale = File(dir, ".p2pkit-crashed.123.part").also { it.writeText("partial") }
         val unrelated = File(dir, "keep.part").also { it.writeText("user data") }
 
         cleanupStaleTransferPartsOnce(dir)
 
-        assertFalse(stale.exists())
+        assertEquals("partial", stale.readText(), "a matching name is not proof of an abandoned SDK part")
         assertTrue(unrelated.exists())
         assertEquals("user data", unrelated.readText())
     }

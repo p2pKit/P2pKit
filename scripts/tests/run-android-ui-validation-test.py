@@ -58,7 +58,8 @@ def archive(entries):
 
 class GuestFixture:
     """Synthetic command/clock control, never an adb or runtime witness."""
-    def __init__(self):
+    def __init__(self, api=37):
+        self.api = api
         self.now = 0.0
         self.calls = []
         self.responses = {}
@@ -90,7 +91,7 @@ class GuestFixture:
         if key == ("emu", "avd", "name"):
             return 0, b"owned-fixture\nOK\n"
         if key == ("shell", "getprop", "ro.build.version.sdk"):
-            return 0, b"37\n"
+            return 0, f"{self.api}\n".encode()
         if key == ("shell", "getprop"):
             return 0, b"synthetic properties\n"
         if key == ("shell", "df", "-k", "/data", "/data/local/tmp"):
@@ -100,7 +101,7 @@ class GuestFixture:
         raise AssertionError("Unexpected synthetic command")
 
     def admit(self, report):
-        ui.admit_android_guest(self.run, ["owned-adb"], self.emulator, "owned-fixture", 37,
+        ui.admit_android_guest(self.run, ["owned-adb"], self.emulator, "owned-fixture", self.api,
                                report, clock=lambda: self.now, sleep=self.sleep)
 
     def unlocks(self):
@@ -303,6 +304,146 @@ class AndroidBootAdmissionTests(unittest.TestCase):
                 self.assertEqual(run.call_count, 0 if dead else 1)
         with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
             ui.capture_guest_failure(Mock(), [], Mock(), "owned-fixture", Path(directory), phase="arbitrary")
+
+
+class AndroidApi24BootAdmissionTests(unittest.TestCase):
+    # Exact API24 content-query syntax/output from AOSP, not a settings value
+    # or a transcript of device execution. The read projects only the key name.
+    QUERY = ("shell", "content query --user 0 --uri content://settings/global/device_provisioned "
+             "--projection name 2>&1")
+    ROW = b"Row: 0 name=device_provisioned\n"
+
+    def guest(self, response=None):
+        guest = GuestFixture(api=24)
+        guest.responses[("shell", "service", "check", "settings")] = (0, b"Service settings: not found\n")
+        guest.responses[self.QUERY] = (0, self.ROW) if response is None else response
+        return guest
+
+    def assert_bounded(self, guest):
+        self.assertLessEqual(guest.now, 180)
+        for _, timeout, start in guest.calls:
+            self.assertLessEqual(timeout, min(15, 180 - start))
+
+    def test_api24_stock_binders_and_read_only_provider_then_one_unlock(self):
+        # No value assertion: unprovisioned/provisioned/null values give the
+        # same projected name. A missing key gives the successful empty cursor.
+        for output in (self.ROW, b"No result found.\n"):
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as directory:
+                guest = self.guest((0, output))
+                guest.admit(Path(directory))
+                self.assertTrue((Path(directory) / "runtime-properties.txt").is_file())
+                self.assertTrue((Path(directory) / "runtime-data-space.txt").is_file())
+                self.assertEqual(len(guest.unlocks()), 1)
+                commands = [item[0][1:] for item in guest.calls]
+                self.assertEqual([c[-1] for c in commands if c[:3] == ("shell", "service", "check")],
+                                 ["input", "activity", "package"])
+                self.assertEqual(commands.count(self.QUERY), 1)
+                self.assertLess(commands.index(self.QUERY), commands.index(("emu", "avd", "name")))
+                self.assertLess(commands.index(("shell", "getprop", "ro.build.version.sdk")),
+                                commands.index(("shell", "input", "keyevent", "82")))
+                self.assert_bounded(guest)
+
+    def test_api24_missing_core_binder_never_queries_provider_or_unlocks(self):
+        for service in ("input", "activity", "package"):
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as directory:
+                guest = self.guest()
+                guest.responses[("shell", "service", "check", service)] = (0, b"not found\n")
+                with self.assertRaises(ValueError):
+                    guest.admit(Path(directory))
+                self.assertFalse(guest.unlocks())
+                self.assertNotIn(self.QUERY, [item[0][1:] for item in guest.calls])
+                self.assert_bounded(guest)
+
+    def test_api24_missing_failed_ambiguous_or_diagnostic_provider_response_never_unlocks(self):
+        invalid = ((0, b""), (0, b"null\n"), (0, b"0\n"), (0, b"1\n"), (1, self.ROW),
+                   (0, b"Error while accessing provider:settings\n"),
+                   (0, self.ROW + b"Error while accessing provider:settings\n"),
+                   (0, b"No result found.\njava.lang.SecurityException: denied\n"),
+                   (0, self.ROW * 2), (0, b"No result found.\n" * 2),
+                   (0, b"Row: 0 name=foreign\n"), (0, b"Row: 1 name=device_provisioned\n"),
+                   (0, b"Row: 0 name=device_provisioned, value=1\n"),
+                   ValueError("synthetic provider command timeout"))
+        for response in invalid:
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as directory:
+                guest = self.guest(response)
+                with self.assertRaises(ValueError):
+                    guest.admit(Path(directory))
+                self.assertFalse(guest.unlocks())
+                self.assert_bounded(guest)
+
+    def test_api24_provider_may_become_ready_inside_same_boot_budget(self):
+        guest = self.guest()
+        guest.responses[self.QUERY] = lambda: (
+            (0, b"Error while accessing provider:settings\n") if guest.now < 12 else (0, self.ROW))
+        with tempfile.TemporaryDirectory() as directory:
+            guest.admit(Path(directory))
+        self.assertEqual(len(guest.unlocks()), 1)
+        self.assertGreaterEqual(guest.unlocks()[0][2], 12)
+        self.assert_bounded(guest)
+
+    def test_api24_foreign_avd_wrong_api_or_unlock_failure_is_not_retried(self):
+        for command, response, unlocks in (
+            (("emu", "avd", "name"), (0, b"foreign\nOK\n"), 0),
+            (("shell", "getprop", "ro.build.version.sdk"), (0, b"32\n"), 0),
+            (("shell", "getprop", "ro.build.version.sdk"), (0, b"24\n24\n"), 0),
+            (("shell", "input", "keyevent", "82"), ValueError("synthetic input failure"), 1),
+        ):
+            with self.subTest(command=command, response=response), tempfile.TemporaryDirectory() as directory:
+                guest = self.guest()
+                guest.responses[command] = response
+                with self.assertRaises(ValueError):
+                    guest.admit(Path(directory))
+                self.assertEqual(len(guest.unlocks()), unlocks)
+                self.assertEqual(sum(item[0][1:] == command for item in guest.calls), 1)
+                self.assert_bounded(guest)
+
+    def test_api24_provider_command_time_counts_toward_original_deadline(self):
+        guest = self.guest((0, b"Error while accessing provider:settings\n"))
+        original_run = guest.run
+
+        def slow_provider(command, **kwargs):
+            guest.delay = 14 if tuple(command[1:]) == self.QUERY else 0.25
+            return original_run(command, **kwargs)
+
+        guest.run = slow_provider
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+            guest.admit(Path(directory))
+        self.assertFalse(guest.unlocks())
+        self.assertEqual(guest.now, 180)
+        self.assertEqual(guest.calls[-1][0][1:], self.QUERY)
+        self.assertLess(guest.calls[-1][1], 15)
+        self.assert_bounded(guest)
+
+    def test_api24_dead_owner_after_core_checks_never_reads_provider_or_unlocks(self):
+        guest = self.guest()
+
+        def owner_exits():
+            guest.emulator.poll.return_value = 1
+            return 0, b"Service package: found\n"
+
+        guest.responses[("shell", "service", "check", "package")] = owner_exits
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+            guest.admit(Path(directory))
+        self.assertNotIn(self.QUERY, [item[0][1:] for item in guest.calls])
+        self.assertFalse(guest.unlocks())
+
+    def test_api32_api35_and_api37_keep_settings_binder_and_never_fall_back(self):
+        for api in (32, 35, 37):
+            for ready in (True, False):
+                with self.subTest(api=api, ready=ready), tempfile.TemporaryDirectory() as directory:
+                    guest = GuestFixture(api=api)
+                    guest.responses[self.QUERY] = (0, self.ROW)
+                    if ready:
+                        guest.admit(Path(directory))
+                        self.assertEqual(len(guest.unlocks()), 1)
+                    else:
+                        guest.responses[("shell", "service", "check", "settings")] = (0, b"not found\n")
+                        with self.assertRaises(ValueError):
+                            guest.admit(Path(directory))
+                        self.assertFalse(guest.unlocks())
+                    self.assertIn(("shell", "service", "check", "settings"), [c[0][1:] for c in guest.calls])
+                    self.assertNotIn(self.QUERY, [c[0][1:] for c in guest.calls])
+                    self.assert_bounded(guest)
 
 
 class AndroidUiAdmissionTests(unittest.TestCase):

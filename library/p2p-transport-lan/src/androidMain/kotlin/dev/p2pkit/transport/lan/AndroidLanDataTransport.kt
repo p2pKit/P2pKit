@@ -11,16 +11,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.buffer
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -343,101 +342,123 @@ internal class AndroidLanDataTransport(
         return minOf(roundedMillis.toInt(), LanConstants.TCP_CANDIDATE_CONNECT_TIMEOUT_MS)
     }
 
-    // The adjacent buffer fuses with callbackFlow. trySend still rejects the newest
-    // connection immediately when full; SUSPEND does not park this accept loop.
+    // The explicit channel owns undelivered sockets, including prompt receive cancellation.
+    // trySend still rejects the newest connection immediately at the existing depth.
     override fun incomingConnections(): Flow<RawConnection> = if (role == LanRole.DialOnly) {
         flow { awaitCancellation() }
-    } else callbackFlow {
-        if (hasStarted && serverSocket.get() == null && !closed) {
-            start().getOrThrow()
-        }
-        // Park until start() binds a server socket; a later successful retry
-        // after a failed first bind still serves this collector (see
-        // serverSocketFlow KDoc).
-        val sock = serverSocketFlow.filterNotNull().first()
-        val boundNetwork = (sock as? AndroidNetworkServerSocket)?.boundNetwork
-        val accepterJob: Job = launch(io.accept) {
-            try {
-                while (!closed) {
-                    val socket = try {
-                        sock.accept()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Throwable) {
-                        // awaitClose cancels this job before closing the listener to unblock accept().
-                        // That expected socket exception is cancellation, not a live listener failure.
+    } else object : Flow<RawConnection> {
+        override suspend fun collect(collector: FlowCollector<RawConnection>) = coroutineScope {
+            if (hasStarted && serverSocket.get() == null && !closed) {
+                start().getOrThrow()
+            }
+            // Park until start() binds a server socket; a later successful retry
+            // after a failed first bind still serves this collector (see
+            // serverSocketFlow KDoc).
+            val sock = serverSocketFlow.filterNotNull().first()
+            val boundNetwork = (sock as? AndroidNetworkServerSocket)?.boundNetwork
+            val incoming = Channel<PendingInboundConnection>(
+                capacity = LanConstants.MAX_BUFFERED_INBOUND_CONNECTIONS,
+                onUndeliveredElement = PendingInboundConnection::discard
+            )
+            val accepterJob: Job = launch(io.accept) {
+                try {
+                    while (!closed) {
                         currentCoroutineContext().ensureActive()
-                        if (!closed) {
-                            releaseServerSocket(sock, preservePort = true)
-                            // Caller cancellation takes priority over an accept failure.
+                        val socket = try {
+                            sock.accept()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            // Collector cleanup cancels this job before closing the listener to unblock accept().
+                            // That expected socket exception is cancellation, not a live listener failure.
                             currentCoroutineContext().ensureActive()
-                            close(e)
+                            if (!closed) {
+                                releaseServerSocket(sock, preservePort = true)
+                                // Caller cancellation takes priority over an accept failure.
+                                currentCoroutineContext().ensureActive()
+                                incoming.close(e)
+                            }
+                            break
                         }
-                        break
-                    }
-                    // Close the socket when the channel refuses it (buffer full
-                    // under an accept burst / stalled collector): silently
-                    // dropping leaked the fd while the remote believed it had
-                    // connected (AUDIT-2026-06 fix).
-                    Log.d(TAG, "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}")
-                    if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress, boundNetwork)) {
-                        Log.d(
-                            TAG,
-                            "REJECTED ${socket.remoteSocketAddress} on excluded local " +
-                                socket.localAddress.hostAddress
-                        )
-                        runCatching { socket.close() }
-                        continue
-                    }
-                    // Configure while the accepter still owns the fd and before taking a source slot.
-                    try {
-                        socket.tcpNoDelay = true
-                    } catch (error: Throwable) {
-                        val cleanupFailure = closeSocketRetainingFailure(socket)
-                        cleanupFailure?.let(error::addSuppressed)
-                        if (error !is IOException || cleanupFailure != null) {
-                            // An uncertain release stays in the stop/retry ledger; never keep accepting.
-                            // Close the flow as well, including when the accepter exits by cancellation.
-                            close(error)
-                            throw error
+                        // Close the socket when the channel refuses it (buffer full
+                        // under an accept burst / stalled collector): silently
+                        // dropping leaked the fd while the remote believed it had
+                        // connected (AUDIT-2026-06 fix).
+                        Log.d(TAG, "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}")
+                        if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress, boundNetwork)) {
+                            Log.d(
+                                TAG,
+                                "REJECTED ${socket.remoteSocketAddress} on excluded local " +
+                                    socket.localAddress.hostAddress
+                            )
+                            runCatching { socket.close() }
+                            continue
                         }
-                        Log.d(TAG, "REJECTED inbound socket: TCP_NODELAY configuration failed")
-                        continue
-                    }
-                    val source = runCatching { socket.inetAddress.hostAddress }
-                        .getOrNull()
-                        ?.takeIf(String::isNotBlank)
-                        ?: UNKNOWN_INBOUND_SOURCE
-                    val admissionLease = inboundAdmission.tryAcquire(source)
-                    if (admissionLease == null) {
-                        Log.d(
-                            TAG,
-                            "REJECTED ${socket.remoteSocketAddress}: per-source pre-handshake " +
-                                "capacity ($MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE)"
+                        // Configure while the accepter still owns the fd and before taking a source slot.
+                        try {
+                            socket.tcpNoDelay = true
+                        } catch (error: Throwable) {
+                            val cleanupFailure = closeSocketRetainingFailure(socket)
+                            cleanupFailure?.let(error::addSuppressed)
+                            if (error !is IOException || cleanupFailure != null) {
+                                // An uncertain release stays in the stop/retry ledger; never keep accepting.
+                                // Close the flow as well, including when the accepter exits by cancellation.
+                                incoming.close(error)
+                                throw error
+                            }
+                            Log.d(TAG, "REJECTED inbound socket: TCP_NODELAY configuration failed")
+                            continue
+                        }
+                        val source = runCatching { socket.inetAddress.hostAddress }
+                            .getOrNull()
+                            ?.takeIf(String::isNotBlank)
+                            ?: UNKNOWN_INBOUND_SOURCE
+                        val admissionLease = inboundAdmission.tryAcquire(source)
+                        if (admissionLease == null) {
+                            Log.d(
+                                TAG,
+                                "REJECTED ${socket.remoteSocketAddress}: per-source pre-handshake " +
+                                    "capacity ($MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE)"
+                            )
+                            runCatching { socket.close() }
+                            continue
+                        }
+                        // No raw-connection scope exists until a consumer actually receives this socket.
+                        val pending = PendingInboundConnection(
+                            lease = admissionLease,
+                            create = { wrapSocket(socket, boundNetwork) },
+                            closeSocket = { closeSocketRetainingFailure(socket) }
                         )
-                        runCatching { socket.close() }
-                        continue
+                        val offered = incoming.trySend(pending)
+                        if (offered.isFailure) {
+                            Log.d(TAG, "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
+                            pending.discard()
+                        }
                     }
-                    val raw = AdmissionControlledRawConnection(
-                        wrapSocket(socket, boundNetwork),
-                        admissionLease
-                    )
-                    val offered = trySend(raw)
-                    if (offered.isFailure) {
-                        Log.d(TAG, "DROPPED ${socket.remoteSocketAddress} (channel full) — closing")
-                        runCatching { raw.close() }
-                    }
+                    incoming.close()
+                } catch (e: CancellationException) {
+                    // Normal shutdown.
+                } finally {
+                    // stop/close may end accept while a delivered consumer is still suspended.
+                    // Retire queued sockets now rather than waiting for that consumer to resume.
+                    incoming.cancel()
                 }
-                close()
-            } catch (e: CancellationException) {
-                // Normal shutdown.
+            }
+            try {
+                for (pending in incoming) {
+                    val raw = pending.claim() ?: continue
+                    // Direct, non-buffered handoff: no cancellable Flow-builder emission check
+                    // between the channel's prompt-cancellation guarantee and the consumer call.
+                    // Once called, the consumer owns raw (including first()/take() short-circuit).
+                    collector.emit(raw)
+                }
+            } finally {
+                accepterJob.cancel()
+                releaseServerSocket(sock, preservePort = !closed)
+                incoming.cancel()
             }
         }
-        awaitClose {
-            accepterJob.cancel()
-            releaseServerSocket(sock, preservePort = !closed)
-        }
-    }.buffer(LanConstants.MAX_BUFFERED_INBOUND_CONNECTIONS, BufferOverflow.SUSPEND)
+    }
 
     override suspend fun stop(): Unit = startMutex.withLock {
         if (closed) return@withLock

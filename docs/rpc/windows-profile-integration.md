@@ -1,21 +1,28 @@
 # Windows RPC profile integration contract
 
-**Implementation status: NOT_IMPLEMENTED. Runtime qualification: NOT_QUALIFIED.**
+**Current implementation: productive installed loader/provider connected. Full installed
+runtime qualification: NOT_QUALIFIED ([#462](https://github.com/p2pKit/P2pKit/issues/462)).**
 
-The complete Windows backend remains incomplete. The managed filesystem seam,
-validation-only adapter, and partial C/JNI custody implementation now exist, including
-composed record writes/deletes, bootstrap synchronization and conservative interrupted-state
-admission. These implementations do not supply a qualified Windows DLL, secure loader,
-qualified durable NTFS transactions, or installed-runtime evidence. The production Windows profile gate remains closed.
-See the implementation checkpoints below.
+The maintained MSI includes the original-owner loader, JNI/provider integration and
+Desktop Host/Client route, shipped in rc4 and later. `WindowsLoader.openInstalledProvider`
+uses the installed-entry/runtime contract and retains failures; it is not an unconditional
+unimplemented stub. `WindowsProfileInstalledProvider` selects this path. The earlier
+partial `WindowsProfileAvailability` flags and custody ABI13/0x43 remain deliberately
+separate from the complete provider's ABI1/0x7f contract; do not flip flags or invent
+capabilities. No unprotected, plaintext or in-memory identity fallback is permitted.
 
-This document records the missing protected-storage work; it does not enable a
-Windows backend. Integrating the RPC section into the existing Desktop sample
-must not make its Windows Host/Client buttons usable through an unprotected,
-plaintext or in-memory identity fallback. Other supported sample sections may
-remain available. A rendered Windows UI is not evidence of RPC readiness.
+See [Windows release scope](windows-release-scope.md), the
+[October19 incoming handoff](../maintenance/windows-android-rpc-handoff-20261019.md),
+and the [immutable release records](../README.md#test-and-release) for source-bound
+implementation and test evidence. Successful manual use and development fixtures do
+not satisfy all negative, crash/recovery, installed-lifetime or twenty-cycle criteria.
 
-## Current implementation and reusable reference
+The sections below preserve the earlier design and incremental implementation history.
+Their dated “missing”, “dormant” and proposed-boundary descriptions are not a new claim
+that the integrated provider is absent. Unqualified acceptance criteria remain open;
+historical failed runs have not become passes.
+
+## Original POSIX implementation and reusable reference
 
 `DesktopRpcProfile` derives a 256-bit key from the application passphrase using
 PBKDF2-HMAC-SHA256 (600,000 iterations, random 16-byte salt). `LabVault` encrypts
@@ -23,7 +30,7 @@ bounded, namespace-authenticated records with AES-GCM. The profile lock remains
 held while roles can use its identity/trust. Stop preserves saved identity and
 trust; wrong passwords, corrupt records and missing metadata do not reset them.
 
-The filesystem implementation is POSIX-only: exact `0700`/`0600` modes, owner and
+The original Linux/macOS filesystem implementation is POSIX-only: exact `0700`/`0600` modes, owner and
 symlink checks, filesystem identity readback, `FileChannel` locks, synced temporary
 files, exclusive publication and atomic replacement, and directory synchronization.
 Windows cannot be enabled by bypassing unsupported permission or directory-sync
@@ -77,7 +84,7 @@ physical memory erasure or add DPAPI/password recovery implicitly. SYSTEM,
 privileged administrators and compromised same-user application code are outside
 the user-private-file isolation boundary.
 
-## Decisions required before implementation
+## Original design decisions and acceptance requirements
 
 1. Supported Windows versions, native architectures, filesystems and profile root
    location, including whether roaming, synchronized or removable storage is refused.
@@ -661,12 +668,14 @@ padding. The supported mapping plan requires the maintained producer's 4KiB sect
 other alignments and executable discardable sections rather than inventing their mapping/protection semantics.
 The structural-only PE reader remains unchanged in those respects.
 
-Headers preserve every original byte, including the preferred `ImageBase`, followed by zero padding to their
-page boundary. Executable regions preserve **all** original `SizeOfRawData` bytes (also when larger than
-`VirtualSize`), followed by zeros through the page-aligned maximum of those sizes. Only previously validated
-AMD64 `DIR64` writes are adjusted, using unsigned 64-bit addition. Expanding compared ranges does not authorize
-relocations into headers, raw padding, import metadata or the relocation program. No header rewriting,
-hotpatch tolerance, arbitrary masking or missing-header success is admitted.
+The current comparison derives the header's `ImageBase` from the independently supplied **actual loaded
+base**, matching the Windows loader's field, and preserves every other original header byte followed by
+zero padding. It does not compare against an unchanged preferred base after relocation. Executable regions
+preserve **all** original `SizeOfRawData` bytes (also when larger than `VirtualSize`), followed by zeros through
+the page-aligned maximum of those sizes. Only previously validated AMD64 `DIR64` writes are adjusted using
+unsigned 64-bit addition. This exact ImageBase adjustment does not authorize arbitrary header rewrites,
+relocations into padding/import metadata/the relocation program, hotpatch tolerance, masking, or
+missing-header success. See `WindowsProfileMappedCode.kt` for the maintained byte comparison.
 
 Each `Region.executable=false` is a header page requiring actual read-only, non-executable protection;
 code requires execute/read protection. The FFM reader now provides distinct `READ_ONLY` mode (exact

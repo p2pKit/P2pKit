@@ -127,6 +127,17 @@ def test_apk_manifest(names=None):
 
 
 class AndroidArtAdmissionTest(unittest.TestCase):
+    def test_legacy_preview_runner_is_additive_and_cannot_satisfy_permission_campaign(self):
+        self.assertEqual(art.LEGACY_PREVIEW_INSTRUMENTATION,
+                         art.PACKAGE + ".runtime.LegacyTaskPreviewInstrumentation")
+        self.assertIn(art.LEGACY_PREVIEW_INSTRUMENTATION,
+                      art.verify_test_apk_manifest(test_apk_manifest()))
+        self.assertEqual(art.INSTRUMENTATION, art.PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation")
+        raw, token, pin = instrumentation_output()
+        impostor = raw.replace(art.INSTRUMENTATION.encode(), art.LEGACY_PREVIEW_INSTRUMENTATION.encode())
+        with self.assertRaises(ValueError):
+            art.instrumentation_result(impostor, token, pin)
+
     def test_source_manifest_reserves_first_entry_for_agp_default_runner_injection(self):
         # Source tripwire only. Both real APK consumers independently inspect the
         # binary manifest; this must not stand in for an actual packaging result.

@@ -17,35 +17,31 @@ reset_fixture() {
     mkdir -p \
         "$FIXTURE/.github/workflows" \
         "$FIXTURE/scripts/tests" \
-        "$FIXTURE/library/p2p-core/api/android" \
-        "$FIXTURE/library/p2p-transport-lan/api/android" \
-        "$FIXTURE/library/p2p-rpc/api/android" \
-        "$FIXTURE/library/p2p-network-provisioning-android/api/android"
+        "$FIXTURE/library/p2p-core/api/android-bcv" \
+        "$FIXTURE/library/p2p-transport-lan/api/android-bcv" \
+        "$FIXTURE/library/p2p-rpc/api/android-bcv" \
+        "$FIXTURE/library/p2p-network-provisioning-android/api/android-bcv"
     cp "$ROOT/build.gradle.kts" "$FIXTURE/build.gradle.kts"
-    cp "$ROOT/.github/workflows/ci.yml" "$FIXTURE/.github/workflows/ci.yml"
+    cp "$ROOT/.github/workflows/"*.yml "$FIXTURE/.github/workflows/"
     cp "$ROOT/scripts/run-release-gate.sh" "$FIXTURE/scripts/run-release-gate.sh"
-    for policy_input in \
-        check-heavy-job-queue-policy.rb check-hosted-test-workflow-policy.rb check-hosted-test-composition.py \
-        run-hosted-test-custody.py hosted_full_supplements.py hosted_primary_abi.py \
-        run-platform-tests.py run-audit-command.py hosted_dependency_seed_files.py hosted_canonical_python.py \
-        hosted_jvm_library_custody.py; do
+    for policy_input in check-modular-ci-policy.rb ci_component.py; do
         cp "$ROOT/scripts/$policy_input" "$FIXTURE/scripts/$policy_input"
     done
     cp "$ROOT/scripts/tests/check-kotlin-toolchain-policy-test.sh" \
         "$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh"
     cp "$ROOT/library/p2p-core/build.gradle.kts" "$FIXTURE/library/p2p-core/build.gradle.kts"
-    cp "$ROOT/library/p2p-core/api/android/p2p-core.api" \
-        "$FIXTURE/library/p2p-core/api/android/p2p-core.api"
+    cp "$ROOT/library/p2p-core/api/android-bcv/p2p-core.api" \
+        "$FIXTURE/library/p2p-core/api/android-bcv/p2p-core.api"
     cp "$ROOT/library/p2p-transport-lan/build.gradle.kts" \
         "$FIXTURE/library/p2p-transport-lan/build.gradle.kts"
-    cp "$ROOT/library/p2p-transport-lan/api/android/p2p-transport-lan.api" \
-        "$FIXTURE/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
+    cp "$ROOT/library/p2p-transport-lan/api/android-bcv/p2p-transport-lan.api" \
+        "$FIXTURE/library/p2p-transport-lan/api/android-bcv/p2p-transport-lan.api"
     cp "$ROOT/library/p2p-rpc/build.gradle.kts" "$FIXTURE/library/p2p-rpc/build.gradle.kts"
-    cp "$ROOT/library/p2p-rpc/api/android/p2p-rpc.api" "$FIXTURE/library/p2p-rpc/api/android/p2p-rpc.api"
+    cp "$ROOT/library/p2p-rpc/api/android-bcv/p2p-rpc.api" "$FIXTURE/library/p2p-rpc/api/android-bcv/p2p-rpc.api"
     cp "$ROOT/library/p2p-network-provisioning-android/build.gradle.kts" \
         "$FIXTURE/library/p2p-network-provisioning-android/build.gradle.kts"
-    cp "$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api" \
-        "$FIXTURE/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api"
+    cp "$ROOT/library/p2p-network-provisioning-android/api/android-bcv/p2p-network-provisioning-android.api" \
+        "$FIXTURE/library/p2p-network-provisioning-android/api/android-bcv/p2p-network-provisioning-android.api"
     # Keep original source read-only; mutations belong to this private copy.
     chmod -R u+w "$FIXTURE"
 }
@@ -75,9 +71,8 @@ reset_fixture
 "$CHECKER" --root "$FIXTURE" --static-only >/dev/null
 
 reset_fixture
-rm "$FIXTURE/scripts/hosted_canonical_python.py"
-expect_rejected "missing-canonical-helper" \
-    "ordinary composition input is missing/oversized: scripts/hosted_canonical_python.py"
+rm "$FIXTURE/scripts/ci_component.py"
+expect_rejected "missing-component-supplier" "Modular ABI command policy failed"
 
 reset_fixture
 remove_matching_lines "$FIXTURE/build.gradle.kts" '    ":p2p-network-provisioning-android",'
@@ -94,44 +89,37 @@ remove_matching_lines "$FIXTURE/build.gradle.kts" 'dependsOn(checkAndroidAbi)'
 expect_rejected "missing-check-edge" "do not depend on the Android ABI comparison"
 
 reset_fixture
-ci_run='          python3 -I -B -S scripts/run-hosted-test-custody.py run --profile full --consume-dependencies'
+ci_run='    uses: ./.github/workflows/ci-component.yml'
 [[ "$(grep -Fxc "$ci_run" "$FIXTURE/.github/workflows/ci.yml")" == 1 ]] ||
-    fail "fixture must remove the actual ordinary FULL command exactly once"
+    fail "fixture must remove the actual component route exactly once"
 remove_matching_lines "$FIXTURE/.github/workflows/ci.yml" "$ci_run"
-if grep -Fq "$ci_run" "$FIXTURE/.github/workflows/ci.yml"; then
-    fail "fixture did not remove the actual ordinary FULL command"
-fi
-expect_rejected "missing-ci-edge" "CI ordinary FULL caller policy failed"
+expect_rejected "missing-ci-edge" "Modular CI policy failed"
 
 reset_fixture
-sed 's/"checkAndroidAbi"/"checkKotlinAbi"/g' "$FIXTURE/scripts/hosted_primary_abi.py" \
-    >"$FIXTURE/scripts/hosted_primary_abi.py.new"
-mv "$FIXTURE/scripts/hosted_primary_abi.py.new" "$FIXTURE/scripts/hosted_primary_abi.py"
-expect_rejected "missing-three-android-comparisons" \
-    "ordinary executable composition changed: scripts/hosted_primary_abi.py"
+sed 's/:checkAndroidAbi/:checkKotlinAbi/g' "$FIXTURE/scripts/ci_component.py" >"$FIXTURE/scripts/ci_component.py.new"
+mv "$FIXTURE/scripts/ci_component.py.new" "$FIXTURE/scripts/ci_component.py"
+expect_rejected "missing-four-android-comparisons" "Modular ABI command policy failed"
 
-# Mutate the real composed graph command instead of a no-longer-executable
-# YAML/comment string. No supplier module is imported or executed by this test.
+# Mutate the actual modular graph command, not a retired custody supplier.
 for mutation in removed static-only commented duplicated ignored-failure; do
     reset_fixture
-    python3 -I -B -S - "$FIXTURE/scripts/hosted_full_supplements.py" "$mutation" <<'PY'
+    python3 -I -B -S - "$FIXTURE/scripts/ci_component.py" "$mutation" <<'PY'
 from pathlib import Path
 import sys
 path, mutation = Path(sys.argv[1]), sys.argv[2]
-before = '        ("command", ["bash", "scripts/check-android-abi-guard.sh"]),'
+before = "        return [('abi-graph', bash + ['scripts/check-android-abi-guard.sh']),"
 after = {
-    "removed": "",
-    "static-only": '        ("command", ["bash", "scripts/check-android-abi-guard.sh", "--static-only"]),',
-    "commented": "#" + before,
-    "duplicated": before + "\n" + before,
-    "ignored-failure": '        ("command", ["bash", "-c", "scripts/check-android-abi-guard.sh || true"]),',
+    "removed": "        return [",
+    "static-only": "        return [('abi-graph', bash + ['scripts/check-android-abi-guard.sh', '--static-only']),",
+    "commented": "        return [ # ('abi-graph', bash + ['scripts/check-android-abi-guard.sh']),",
+    "duplicated": before + "\n                ('abi-graph', bash + ['scripts/check-android-abi-guard.sh']),",
+    "ignored-failure": "        return [('abi-graph', bash + ['-c', 'scripts/check-android-abi-guard.sh || true']),",
 }[mutation]
 source = path.read_text(encoding="utf-8")
 assert source.count(before) == 1, "fixture must mutate the actual graph command once"
 path.write_text(source.replace(before, after), encoding="utf-8")
 PY
-    expect_rejected "ci-graph-$mutation" \
-        "ordinary executable composition changed: scripts/hosted_full_supplements.py"
+    expect_rejected "ci-graph-$mutation" "Modular ABI command policy failed"
 done
 
 # Keep the actual graph probe reachable exactly once from each complete gate.
@@ -178,7 +166,7 @@ expect_rejected "duplicate-static-policy-call" "toolchain policy must invoke And
 
 reset_fixture
 printf '%s\n' 'public final class dev/p2pkit/transport/lan/AndroidLanDataTransport {' \
-    >>"$FIXTURE/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
+    >>"$FIXTURE/library/p2p-transport-lan/api/android-bcv/p2p-transport-lan.api"
 expect_rejected "internal-symbol-leak" "incorrectly freeze internal symbol"
 
 for signature in \
@@ -189,7 +177,7 @@ for signature in \
     '    public static final field engine Ldev/p2pkit/rpc/internal/RpcHostEngine;' \
     '    public synthetic fun <init> (Ldev/p2pkit/rpc/internal/RpcHostEngine;)V'; do
     reset_fixture
-    printf '%s\n' "$signature" >>"$FIXTURE/library/p2p-rpc/api/android/p2p-rpc.api"
+    printf '%s\n' "$signature" >>"$FIXTURE/library/p2p-rpc/api/android-bcv/p2p-rpc.api"
     expect_rejected "rpc-internal-api-leak" "incorrectly freeze internal symbol"
 done
 
@@ -199,12 +187,12 @@ done
 reset_fixture
 printf '%s\n' \
     '    public synthetic fun <init> (Ldev/p2pkit/rpc/internal/RpcHostEngine;Lkotlin/jvm/internal/DefaultConstructorMarker;)V' \
-    >>"$FIXTURE/library/p2p-rpc/api/android/p2p-rpc.api"
+    >>"$FIXTURE/library/p2p-rpc/api/android-bcv/p2p-rpc.api"
 "$CHECKER" --root "$FIXTURE" --static-only >/dev/null
 
 reset_fixture
 remove_matching_lines \
-    "$FIXTURE/library/p2p-transport-lan/api/android/p2p-transport-lan.api" \
+    "$FIXTURE/library/p2p-transport-lan/api/android-bcv/p2p-transport-lan.api" \
     'dev/p2pkit/transport/lan/AndroidLanDiag'
 expect_rejected "missing-public-symbol" "LAN Android ABI baseline omits"
 

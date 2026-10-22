@@ -4,6 +4,8 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.PayloadBudget
+import dev.p2pkit.core.PayloadLease
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -17,6 +19,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -40,6 +43,53 @@ import kotlinx.coroutines.withTimeout
 /** Exact policy charges and ownership, not measurements of a platform's heap layout. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ApplicationBacklogAccountingTest {
+    @Test
+    fun sharedBudgetIsReusableAfterOneSessionCancelsAMatchedReceive() = runTest {
+        val budget = PayloadBudget(2)
+        withFixture {
+            val survivingSession = this
+            val first = P2pMessage.Binary(byteArrayOf(1))
+            enqueue(first, assertNotNull(budget.tryReserve(1)))
+            assertClaimed(first)
+            assertBacklog(1, 513L)
+
+            withFixture {
+                // Let delivery and routing suspend on their empty channels first. The buffered
+                // CLOSE is processed by the router before the matched delivery can resume.
+                tick()
+                events.trySend(
+                    ProtocolEvent.Message(P2pMessage.Binary(byteArrayOf(2)), assertNotNull(budget.tryReserve(1)))
+                ).getOrThrow()
+                events.trySend(ProtocolEvent.Close).getOrThrow()
+                tick()
+
+                assertEquals(ConnectionState.Closed, session.state.value)
+                assertTrue(claimed.tryReceive().isFailure, "the cancelled receive must not enter the delivery hook")
+                assertNoDeliveredMessage()
+                assertBacklog(0, 0L)
+                assertEquals(1L, budget.retainedBytes.value, "only the other session's live lease must remain")
+                survivingSession.assertBacklog(1, 513L)
+                assertEquals(ConnectionState.Connected, survivingSession.session.state.value)
+
+                survivingSession.releaseOne()
+                survivingSession.assertDelivered(first)
+                survivingSession.assertBacklog(0, 0L)
+                assertEquals(0L, budget.retainedBytes.value)
+                // Stop the surviving fixture's liveness clock before awaiting real-dispatcher
+                // cleanup; automatic virtual-time advance must not manufacture a PONG timeout.
+                survivingSession.session.close()
+                survivingSession.awaitTermination()
+                awaitTermination()
+                assertNotNull(budget.tryReserve(2)).release()
+                logger.assertNoUnexpectedWarnOrError()
+            }
+
+            assertBacklog(0, 0L)
+            assertEquals(0L, budget.retainedBytes.value)
+            logger.assertNoUnexpectedWarnOrError()
+        }
+    }
+
     @Test
     fun textUsesUtf16CodeUnitsAndFixedAllowanceRatherThanUtf8Encoding() = runTest {
         val cases = listOf(
@@ -445,8 +495,8 @@ class ApplicationBacklogAccountingTest {
             session.start()
         }
 
-        suspend fun enqueue(message: P2pMessage) {
-            events.send(ProtocolEvent.Message(message))
+        suspend fun enqueue(message: P2pMessage, lease: PayloadLease? = null) {
+            events.send(ProtocolEvent.Message(message, lease))
             tick()
         }
 

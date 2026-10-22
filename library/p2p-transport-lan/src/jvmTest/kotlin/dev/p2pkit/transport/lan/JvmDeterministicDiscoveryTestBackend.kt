@@ -8,7 +8,9 @@ import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 
 /** Process-local discovery callback delivery; compiled only into JVM tests. */
-internal class JvmDeterministicDiscoveryTestBackend : JvmTestDiscoveryBackend {
+internal class JvmDeterministicDiscoveryTestBackend(
+    private val readLocalInterfaceAddresses: () -> List<LanInterfaceAddress> = ::localJvmLanInterfaceAddresses
+) : JvmTestDiscoveryBackend {
     private data class Subscriber(
         val resolved: (JvmTestDiscoveryAdvertisement) -> Unit,
         val removed: (String) -> Unit
@@ -17,6 +19,8 @@ internal class JvmDeterministicDiscoveryTestBackend : JvmTestDiscoveryBackend {
     private val lock = Any()
     private val advertisements = linkedMapOf<String, JvmTestDiscoveryAdvertisement>()
     private val subscribers = linkedMapOf<PeerId, Subscriber>()
+
+    override fun localInterfaceAddresses(): List<LanInterfaceAddress> = readLocalInterfaceAddresses()
 
     override fun advertise(advertisement: JvmTestDiscoveryAdvertisement) {
         val listeners = synchronized(lock) {

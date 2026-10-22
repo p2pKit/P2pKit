@@ -1584,6 +1584,7 @@ public abstract interface class dev/p2pkit/core/transfer/FileTransferDestination
 public final class dev/p2pkit/core/transfer/FileTransferDestinationJvmKt {
 	public static final fun durableFileDestination (Ljava/io/File;)Ldev/p2pkit/core/transfer/FileTransferDestination;
 	public static final fun durableFileDestination (Ljava/io/File;J)Ldev/p2pkit/core/transfer/FileTransferDestination;
+	public static final fun durableFileDestination (Ljava/io/File;Ljava/io/File;J)Ldev/p2pkit/core/transfer/FileTransferDestination;
 }
 
 public final class dev/p2pkit/core/transfer/FileTransferJvmKt {

@@ -11,7 +11,6 @@ import kotlinx.io.Buffer
 import kotlinx.io.RawSource
 import kotlinx.io.asSource
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * Send a file identified by a content [Uri] (typically from the Storage Access
@@ -74,13 +73,7 @@ public suspend fun P2pSession.sendFile(context: Context, uri: Uri): P2pFileTrans
             throw e
         }
     }
-    val hash = withContext(Dispatchers.IO) {
-        try {
-            hashPreparedSource(source)
-        } finally {
-            source.close()
-        }
-    }
+    val hash = prepareOwnedUriSource(source) { hashPreparedSource(it) }
     require(hash.sizeBytes == resolvedSize) {
         "Document size changed while hashing $uri: expected=$resolvedSize actual=${hash.sizeBytes}"
     }

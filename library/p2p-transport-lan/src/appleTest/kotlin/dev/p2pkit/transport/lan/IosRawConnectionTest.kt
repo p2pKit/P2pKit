@@ -9,6 +9,7 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
@@ -17,6 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineStart
@@ -174,7 +176,12 @@ class IosRawConnectionTest {
     }
 
     @Test
-    fun cancellingReadCollectorCancelsOutstandingNetworkReceive() = runBlocking {
+    fun cancellingReadCollectorCancelsOutstandingNetworkReceive() = runReadCancellationScenario(false)
+
+    @Test
+    fun setupFailureAfterDialStillRetiresTheTransportAndAcquiredConnections() = runReadCancellationScenario(true)
+
+    private fun runReadCancellationScenario(failAfterDial: Boolean) = runBlocking {
         val context = TransportContext(
             appId = AppId("ios-read-cancel"),
             localPeerId = PeerId("ios-read-cancel-local"),
@@ -182,38 +189,55 @@ class IosRawConnectionTest {
             platform = Platform.IOS
         )
         val transport = IosLanDataTransport(context, IosEndpointRegistry())
-        assertTrue(transport.start().isSuccess)
-        val port = requireNotNull(transport.tcpPort.value)
-        val incoming = async(start = CoroutineStart.UNDISPATCHED) {
-            transport.incomingConnections().first()
-        }
-        val peer = InternalPeer(
-            publicPeer = Peer(
-                id = PeerId("ios-read-cancel-remote"),
-                name = "loopback",
-                platform = Platform.IOS,
-                supportedTransports = setOf(TransportKind.LAN)
-            ),
-            transportHints = listOf(
-                TransportHint(TransportKind.LAN, host = "127.0.0.1", port = port)
-            )
-        )
-        val outbound = withTimeout(CONNECTION_TIMEOUT_MILLIS) { transport.connect(peer) }
-        val inbound = withTimeout(CONNECTION_TIMEOUT_MILLIS) { incoming.await() }
-        try {
-            // UNDISPATCHED runs the flow until nw_connection_receive is
-            // installed, providing deterministic synchronization with the
-            // cancellation handler and no timing delay.
-            val reader = launch(start = CoroutineStart.UNDISPATCHED) {
-                inbound.read().collect { }
+        val primary = IllegalStateException("synthetic setup failure after dial")
+        var acquiredOutbound: RawConnection? = null
+        var acquiredInbound: RawConnection? = null
+        val result = runCatching {
+            withTestResourceCleanup { cleanup ->
+                cleanup.own { transport.close() }
+                assertTrue(transport.start().isSuccess)
+                val port = requireNotNull(transport.tcpPort.value)
+                val incoming = async(start = CoroutineStart.UNDISPATCHED) {
+                    transport.incomingConnections().first().also { connection ->
+                        acquiredInbound = connection
+                        cleanup.own { connection.close() }
+                    }
+                }
+                cleanup.own { incoming.cancelAndJoin() }
+                val peer = InternalPeer(
+                    publicPeer = Peer(
+                        id = PeerId("ios-read-cancel-remote"),
+                        name = "loopback",
+                        platform = Platform.IOS,
+                        supportedTransports = setOf(TransportKind.LAN)
+                    ),
+                    transportHints = listOf(
+                        TransportHint(TransportKind.LAN, host = "127.0.0.1", port = port)
+                    )
+                )
+                withTimeout(CONNECTION_TIMEOUT_MILLIS) {
+                    transport.connect(peer).also { outbound ->
+                        acquiredOutbound = outbound
+                        cleanup.own { outbound.close() }
+                    }
+                }
+                if (failAfterDial) throw primary
+                val inbound = withTimeout(CONNECTION_TIMEOUT_MILLIS) { incoming.await() }
+                // UNDISPATCHED runs the flow until nw_connection_receive is
+                // installed, providing deterministic synchronization with the
+                // cancellation handler and no timing delay.
+                val reader = launch(start = CoroutineStart.UNDISPATCHED) {
+                    inbound.read().collect { }
+                }
+                cleanup.own { reader.cancelAndJoin() }
+                reader.cancel()
+                withTimeout(CONNECTION_TIMEOUT_MILLIS) { reader.cancelAndJoin() }
+                assertEquals(ConnectionState.Closed, inbound.state.value)
             }
-            reader.cancel()
-            withTimeout(CONNECTION_TIMEOUT_MILLIS) { reader.cancelAndJoin() }
-            assertEquals(ConnectionState.Closed, inbound.state.value)
-        } finally {
-            outbound.close()
-            transport.close()
         }
+        if (failAfterDial) assertSame(primary, result.exceptionOrNull()) else result.getOrThrow()
+        acquiredOutbound?.let { assertEquals(ConnectionState.Closed, it.state.value) }
+        acquiredInbound?.let { assertEquals(ConnectionState.Closed, it.state.value) }
         assertNull(transport.tcpPort.value)
         assertNull(transport.listener)
         assertTrue(transport.start().isFailure, "terminally closed transport must not restart")

@@ -44,7 +44,7 @@ grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
 # dependency/wrapper caches, never caches/build-cache-1 across trust boundaries.
 ruby "$ROOT/scripts/check-gradle-cache-policy.rb"
 ruby "$ROOT/scripts/tests/check-gradle-cache-policy-test.rb"
-# Fresh owned Apple CI homes need both the JDK21 daemon and JDK17 launcher.
+# Maintained modular workers need the JDK21 daemon and JDK17 launcher.
 ruby "$ROOT/scripts/tests/check-ci-owned-jdk-policy-test.rb"
 python3 -I -B -S "$ROOT/scripts/tests/rpc-apple-ci-setup-test.py"
 
@@ -102,10 +102,10 @@ grep -Fq 'check_rc2_legacy_jvm_symbols' "$PUBLICATION_GATE" ||
     fail "published artifacts do not retain the supplemental RC2 JVM-symbol guard"
 
 [[ -x "$XCFRAMEWORK_GATE" ]] || fail "the XCFramework minimum-OS gate is not executable"
-# Ordinary CI runs the linked minimum-OS/provenance supplement in custody,
-# not a direct YAML command. Check both the caller and its executable supplier.
+# Ordinary CI uses the maintained modular worker and component commands.
+# Retired custody AST fingerprints are not contracts for the replacement.
 ruby "$ROOT/scripts/check-hosted-test-workflow-policy.rb" "$CI_WORKFLOW"
-python3 -I -B -S "$ROOT/scripts/check-hosted-test-composition.py" --root "$ROOT"
+ruby "$ROOT/scripts/tests/check-modular-ci-policy-test.rb"
 grep -Fq 'scripts/check-xcframework-minimum-os.sh' "$RELEASE_GATE" ||
     fail "the release gate does not verify the linked XCFramework deployment floor"
 

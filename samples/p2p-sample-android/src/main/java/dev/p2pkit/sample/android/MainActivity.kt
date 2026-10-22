@@ -130,9 +130,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // A stopped-task preview must not retain an explicitly revealed credential.
-        // Unlike FLAG_SECURE, this leaves normal foreground screenshots available.
+        // API33+ can keep foreground screenshots; older releases need whole-window protection.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             setRecentsScreenshotEnabled(false)
+        } else {
+            secureLegacyTaskWindow(window)
         }
         if (savedInstanceState == null && sampleRpcAvailable) rpcNavigationRequest.offer(intent?.action)
         setContent {

@@ -199,13 +199,35 @@ final class ContentViewPresentationUITests: XCTestCase {
         // a fresh hosted keyboard. Send each original character exactly once;
         // no paste, value injection, deletion, retry, or repaired port token.
         // Each typeText call synchronizes with the app before the next input.
+        var lastObservation: KeyboardInputObservation?
+        var lastElapsed: Double?
+        var evaluations = 0
         let ready = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                self.keyboardReadiness(in: app) == .hittable
+                evaluations += 1
+                let started = ProcessInfo.processInfo.systemUptime
+                // Bind each positive probe to the same accessibility element,
+                // not a position that may now identify a different key. This
+                // is not a snapshot-only hit test or a latency guarantee.
+                lastObservation = KeyboardReadiness.observeInput(
+                    app.keyboards.keys.allElementsBoundByAccessibilityElement,
+                    exists: { $0.exists }, frame: { $0.frame }, isHittable: { $0.isHittable }
+                )
+                lastElapsed = ProcessInfo.processInfo.systemUptime - started
+                return lastObservation?.state == .hittable
             },
             object: nil
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+        let readinessResult = XCTWaiter.wait(for: [ready], timeout: 5)
+        if readinessResult != .completed {
+            // Only cached finite facts after the original wait fails: no new
+            // accessibility query, raw key/frame, input, or replacement wait.
+            let elapsed = lastElapsed.flatMap { $0.isFinite && $0 >= 0 ? String($0) : nil } ?? "UNAVAILABLE"
+            print("KEYBOARD_INPUT_READINESS_FAILURE waiter=\(readinessResult.rawValue) " +
+                "evaluations=\(evaluations) lastElapsedSeconds=\(elapsed) " +
+                (lastObservation?.diagnostic ?? "state=NOT_OBSERVED"))
+        }
+        XCTAssertEqual(readinessResult, .completed)
         for character in text {
             field.typeText(String(character))
         }

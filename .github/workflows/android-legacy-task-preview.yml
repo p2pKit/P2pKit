@@ -1,0 +1,135 @@
+name: Android legacy task-preview privacy
+on:
+  workflow_call:
+    inputs:
+      api:
+        description: Legacy diagnostic API selection, not qualification
+        type: string
+        default: both
+  workflow_dispatch:
+    inputs:
+      api:
+        description: Legacy diagnostic API selection, not qualification
+        type: choice
+        default: both
+        options: [both, '24', '32']
+permissions:
+  contents: read
+concurrency:
+  group: android-legacy-task-preview-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  select-api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          LEGACY_API: ${{ inputs.api }}
+        shell: python3 -I -B -S {0}
+        run: |
+          import json
+          import os
+
+          selection = os.environ["LEGACY_API"]
+          if selection not in ("both", "24", "32"):
+              raise SystemExit("api must be exactly both, 24, or 32")
+          rows = [
+              {"api": 24, "image": "system-images;android-24;default;x86_64"},
+              {"api": 32, "image": "system-images;android-32;google_apis;x86_64"},
+          ]
+          matrix = {"include": [row for row in rows if selection == "both" or str(row["api"]) == selection]}
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
+  legacy-task-preview:
+    needs: select-api
+    name: Legacy task-preview API${{ matrix.api }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select-api.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - name: Check out exact event source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure Java 21 daemon/runtime
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Configure Java 17 library toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Select job-owned optional Gradle cache
+        run: echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-home" >> "$GITHUB_ENV"
+      - name: Configure optional verified dependency cache
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
+        with:
+          cache-read-only: true
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            caches/*/kotlin-dsl
+            caches/*/scripts
+            caches/*/groovy-dsl
+      - name: Install producer NDK and explicit legacy witness image
+        timeout-minutes: 12
+        env:
+          WITNESS_IMAGE: ${{ matrix.image }}
+        run: |
+          # Accept only this installation's prompts, not all SDK licenses.
+          # yes may receive SIGPIPE when the SDK command exits; preserve the SDK status.
+          set +e
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platforms;android-36' 'platforms;android-37.0' 'ndk;29.0.14206865' \
+            'platform-tools' 'emulator' "$WITNESS_IMAGE"
+          sdkmanager_status=${PIPESTATUS[1]}
+          set -e
+          exit "$sdkmanager_status"
+      - name: Admit KVM for this hosted job user
+        id: kvm
+        run: |
+          test -c /dev/kvm
+          getfacl -p /dev/kvm > "$RUNNER_TEMP/android-ui-kvm-original.acl"
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Build exact APKs and run one fresh owned legacy witness
+        id: execution
+        env:
+          WITNESS_API: ${{ matrix.api }}
+        run: |
+          python3 -B scripts/ci_evidence.py --component android-legacy-task-preview --timeout-seconds 3600 \
+            --output-dir "$RUNNER_TEMP/android-legacy-evidence" \
+            --report-glob 'build/reports/android-legacy-task-preview-api*/**/*' -- \
+            python3 -B scripts/run-android-legacy-task-preview.py --api "$WITNESS_API"
+      - name: Restore the original hosted KVM access policy
+        if: ${{ always() && steps.kvm.outcome != 'skipped' }}
+        run: |
+          original="$RUNNER_TEMP/android-ui-kvm-original.acl"
+          if test -f "$original"; then
+            sudo setfacl --restore="$original"
+            getfacl -p /dev/kvm > "$RUNNER_TEMP/android-ui-kvm-final.acl"
+            cmp "$original" "$RUNNER_TEMP/android-ui-kvm-final.acl"
+          fi
+      - name: Retain encrypted original evidence, including failures
+        if: ${{ always() && steps.execution.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: android-legacy-api${{ matrix.api }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-legacy-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

@@ -45,7 +45,8 @@ record_event() {
     usage >&2
     exit 2
 }
-for command in base64 curl jq openssl unzip; do
+source "$ROOT/scripts/central-http.sh"
+for command in base64 curl jq openssl python3 unzip; do
     command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 [[ -n "${MAVEN_CENTRAL_USERNAME:-}" ]] || fail "MAVEN_CENTRAL_USERNAME is required"
@@ -86,10 +87,13 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
 fi
 AUTHORIZATION="Authorization: Bearer $BEARER_TOKEN"
 
+# One transfer, at most five minutes; timeout remains an ambiguous upload.
+central_phase_start 300
+central_phase_active || fail "publisher HTTP window expired before upload; no upload attempted"
 record_event "upload_started" "LOCAL" "$DEPLOYMENT_NAME"
 set +e
 UPLOAD_HTTP_CODE="$(
-    curl --silent --show-error \
+    central_http 300 --silent --show-error \
         --request POST \
         --header "$AUTHORIZATION" \
         --form "bundle=@$BUNDLE;type=application/octet-stream" \
@@ -115,14 +119,16 @@ printf '%s\n' "$DEPLOYMENT_ID" >"$EVIDENCE/deployment-id.txt"
 rm -f "$RESPONSE_FILE"
 record_event "upload_accepted" "PENDING" "$DEPLOYMENT_ID"
 
+# Polls, transfers and sleeps share the original thirty-minute status window.
+central_phase_start 1800
 poll=0
 last_state=""
-while (( poll < MAX_POLLS )); do
+while (( poll < MAX_POLLS )) && central_phase_active; do
     poll=$((poll + 1))
     STATUS_TMP="$EVIDENCE/status.tmp"
     set +e
     STATUS_HTTP_CODE="$(
-        curl --silent --show-error \
+        central_http 60 --silent --show-error \
             --request POST \
             --header "$AUTHORIZATION" \
             --output "$STATUS_TMP" \
@@ -177,9 +183,9 @@ while (( poll < MAX_POLLS )); do
     fi
     rm -f "$STATUS_TMP"
     if (( poll < MAX_POLLS )); then
-        sleep "$POLL_SECONDS"
+        central_phase_sleep "$POLL_SECONDS"
     fi
 done
 
-record_event "publication_timeout" "$last_state" "polls_$MAX_POLLS"
+record_event "publication_timeout" "$last_state" "polls_$poll"
 fail "Central did not reach PUBLISHED within the bounded polling window"

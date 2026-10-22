@@ -51,7 +51,7 @@ def decode_json(raw):
     return json.loads(raw, object_pairs_hook=unique)
 
 
-def instrumentation_result(raw, case, token):
+def instrumentation_result(raw, case, token, *, definitions=CASES):
     """Exit zero/crashes/partial or duplicate bundles never earn a harness pass."""
     fields, pending, frames, codes = {}, {}, [], []
     for line in raw.decode("utf-8", errors="strict").splitlines():
@@ -69,8 +69,8 @@ def instrumentation_result(raw, case, token):
         elif line.startswith("INSTRUMENTATION_"):
             raise ValueError("Unexpected instrumentation error")
     required = {"p2pkitToken": token, "p2pkitCompleted": "1", "p2pkitOutcome": PASS,
-                "p2pkitEvidence": f"no_backup/ui-{case}-{token}", "class": CASES[case][0],
-                "test": CASES[case][1], "numtests": "1", "current": "1"}
+                "p2pkitEvidence": f"no_backup/ui-{case}-{token}", "class": definitions[case][0],
+                "test": definitions[case][1], "numtests": "1", "current": "1"}
     if case == "317":
         required["p2pkitCleanup"] = "RETIRED_OWNED_OBSERVERS"
     need(codes == ["-1"] and not pending and len(frames) == 1 and frames[0][0] == "0",
@@ -170,12 +170,15 @@ BOOT_SERVICES = ("input", "activity", "package", "settings")
 
 
 def admit_android_guest(run, device, emulator, avd, api, report, *, clock=time.monotonic, sleep=time.sleep):
-    """Admit real binder services, not just a possibly stale boot property.
+    """Admit real services/provider, not just a possibly stale boot property.
 
     Keep the original 180-second boot bound, including identity checks and the
     single unlock attempt. Polling here never retries an instrumentation/action.
     """
     end = clock() + 180
+    # Android 7's SettingsProvider is not a named SettingsService Binder.
+    # Only API24 changes probe; API32/35/37 keep all existing service checks.
+    services = tuple(service for service in BOOT_SERVICES if api != 24 or service != "settings")
 
     def bounded(command, *, check=True):
         need(emulator.poll() is None, "Owned emulator exited before admission")
@@ -189,11 +192,20 @@ def admit_android_guest(run, device, emulator, avd, api, report, *, clock=time.m
         code, boot = bounded(["shell", "getprop", "sys.boot_completed"], check=False)
         ready = code == 0 and boot.strip() == b"1"
         if ready:
-            for service in BOOT_SERVICES:
+            for service in services:
                 code, output = bounded(["shell", "service", "check", service], check=False)
                 if code != 0 or output.strip() != f"Service {service}: found".encode():
                     ready = False
                     break
+        if ready and api == 24:
+            # Android 7 Content.QueryCommand prints these only after provider.query.
+            # Project no value: provisioning may be 0/1/null or the key absent.
+            # Its caught exceptions can exit zero; include stderr and require the
+            # entire successful response, not exit status or a matching prefix.
+            code, output = bounded([
+                "shell", "content query --user 0 --uri content://settings/global/device_provisioned "
+                "--projection name 2>&1"], check=False)
+            ready = code == 0 and output.strip() in (b"Row: 0 name=device_provisioned", b"No result found.")
         if ready:
             break
         sleep(min(2, max(0, end - clock())))
@@ -329,7 +341,7 @@ def main(argv=None, *, campaign=None):
 
     need(not git("status", "--porcelain", "--untracked-files=normal"), "Clean committed source required")
     source, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
-    write_json(report / "source.json", {"commit": source, "tree": tree, "case": "372" if campaign is not None else args.case,
+    write_json(report / "source.json", {"commit": source, "tree": tree, "case": getattr(campaign, "CASE", "372") if campaign is not None else args.case,
                "scope": scope})
     emulator_options = campaign.prepare_emulator(run=run, sdk=sdk, report=report) if campaign is not None else ()
     run([ROOT / "gradlew", ":p2p-sample-android:clean", ":p2p-sample-android:assembleDebug",

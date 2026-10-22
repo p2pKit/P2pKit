@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -511,6 +512,140 @@ class SwiftJvmTransferControls(unittest.TestCase):
             self.assertEqual("FAIL", result["result"])
             self.assertEqual([{"kind": "xcodebuild", "pid": 9999}], result["unresolvedChildren"])
             self.assertTrue(result["cleanupErrors"])
+
+
+class SampleTransferPosixBindingControls(unittest.TestCase):
+    """Source/registration controls only; real stat/flock assertions run in XCTest."""
+
+    def sources(self):
+        app = ROOT / "samples/iosApp"
+        return {name: (app / name).read_text() for name in (
+            "SampleTransferPOSIX.h", "SampleTransferStaging.swift", "ContentView.swift",
+            "DiagnosticsTests/SampleTransferStagingTests.swift", "project.yml")}
+
+    def assert_binding(self, sources):
+        header = re.sub(r"//[^\n]*", "", sources["SampleTransferPOSIX.h"])
+        self.assertIn("#include <sys/file.h>", header)
+        self.assertIn("#include <sys/stat.h>", header)
+        functions = re.findall(r"static inline int\s+(\w+)\(([^)]*)\)\s*\{([^{}]*)\}", header)
+        self.assertEqual([
+            ("p2pkit_sample_file_status", "const char *path, struct stat *information",
+             "return stat(path, information);"),
+            ("p2pkit_sample_lock_file", "int descriptor, int operation",
+             "return flock(descriptor, operation);")
+        ], [(name, arguments, body.strip()) for name, arguments, body in functions])
+        self.assertNotRegex(header, r"#\s*define\s+(?:stat|flock)\b")
+        staging = sources["SampleTransferStaging.swift"]
+        self.assertIn("path.withCString { p2pkit_sample_file_status($0, information) }", staging)
+        self.assertIn("p2pkit_sample_lock_file(descriptor, operation)", staging)
+        self.assertIn("guard SampleTransferPOSIX.lockFile(descriptor, LOCK_EX | LOCK_NB) == 0", staging)
+        self.assertIn("if SampleTransferPOSIX.lockFile(descriptor, LOCK_EX | LOCK_NB) != 0 {\n"
+                      "                if errno == EWOULDBLOCK { continue }\n"
+                      "                throw posixError()", staging)
+        view = sources["ContentView.swift"]
+        self.assertIn("guard SampleTransferPOSIX.fileStatus(directory.path, &targetInfo) == 0,\n"
+                      "              SampleTransferPOSIX.fileStatus(lease.directory.path, &stagingInfo) == 0,\n"
+                      "              targetInfo.st_dev == stagingInfo.st_dev else {\n"
+                      "            try? lease.retire()", view)
+        native = sources["DiagnosticsTests/SampleTransferStagingTests.swift"]
+        for operation in ("LOCK_EX | LOCK_NB", "LOCK_UN"):
+            self.assertIn(f"XCTAssertEqual(SampleTransferPOSIX.lockFile(descriptor, {operation}), 0)", native)
+        for source in (staging, view, native):
+            self.assertNotRegex(source, r"Darwin\.(stat|flock)\s*\(")
+        project = sources["project.yml"]
+        binding = '        SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/SampleTransferPOSIX.h"'
+        self.assertEqual(1, project.count("SWIFT_OBJC_BRIDGING_HEADER:"))
+        # Only the app needs the C import. Unit tests call the Swift forwarding
+        # methods through @testable import, not a duplicate test-only C shim.
+        app = project.split("targets:\n  p2pkit-sample:\n", 1)[1].split("\n  p2pkit-sample-uitests:", 1)[0]
+        self.assertIn(binding, app)
+        self.assertIn("      - SampleTransferStaging.swift\n", app)
+
+    def test_sdk_functions_and_original_callers_are_registered(self):
+        self.assert_binding(self.sources())
+
+    def test_missing_or_changed_binding_and_lock_semantics_are_rejected(self):
+        original = self.sources()
+        changes = [
+            ("SampleTransferPOSIX.h", "return flock(descriptor, operation);", "return 0;"),
+            ("SampleTransferPOSIX.h", "return flock(descriptor, operation);", "return fcntl(descriptor, operation);"),
+            ("SampleTransferPOSIX.h", "return stat(path, information);", "return lstat(path, information);"),
+            ("SampleTransferStaging.swift", "p2pkit_sample_lock_file(descriptor, operation)",
+             "p2pkit_sample_lock_file(descriptor, LOCK_UN)"),
+            ("SampleTransferStaging.swift", "if errno == EWOULDBLOCK { continue }", "if true { continue }"),
+            ("ContentView.swift", "targetInfo.st_dev == stagingInfo.st_dev", "true"),
+            ("project.yml", "SWIFT_OBJC_BRIDGING_HEADER:", "MISSING_BRIDGING_HEADER:"),
+            ("project.yml", "$(SRCROOT)/SampleTransferPOSIX.h", "$(SRCROOT)/Other.h"),
+            ("project.yml", "      - SampleTransferStaging.swift\n", ""),
+        ]
+        # Reintroduce each of the six actual colliding sites independently.
+        for name, before, after in (
+            ("ContentView.swift", "SampleTransferPOSIX.fileStatus", "Darwin.stat"),
+            ("SampleTransferStaging.swift", "SampleTransferPOSIX.lockFile", "Darwin.flock"),
+            ("DiagnosticsTests/SampleTransferStagingTests.swift",
+             "SampleTransferPOSIX.lockFile(descriptor,", "Darwin.flock(descriptor,"),
+        ):
+            positions = [m.start() for m in re.finditer(re.escape(before), original[name])]
+            self.assertEqual(2, len(positions))
+            for index in positions:
+                changed = dict(original)
+                changed[name] = original[name][:index] + original[name][index:].replace(before, after, 1)
+                with self.subTest(source=name, site=index), self.assertRaises(AssertionError):
+                    self.assert_binding(changed)
+        for name, before, after in changes:
+            self.assertIn(before, original[name])
+            changed = {**original, name: original[name].replace(before, after)}
+            with self.subTest(source=name, mutation=before), self.assertRaises(AssertionError):
+                self.assert_binding(changed)
+
+
+class RunningOracleControls(unittest.TestCase):
+    """Static shared-predicate/registration checks, not native XCTest execution."""
+
+    def source(self):
+        return (ROOT / "samples/iosApp/UITests/P2pKitSampleUITests.swift").read_text()
+
+    def assert_oracle(self, source):
+        predicate = source.split("private func runningPredicate() -> NSPredicate {", 1)[1].split("\n    }", 1)[0]
+        self.assertEqual('NSPredicate(format: "label == %@", "Status: Running")', predicate.strip())
+        wait = source.split("private func waitForRunning(status: Any, timeout: TimeInterval) -> Bool {", 1)[1]
+        wait = wait.split("\n    }", 1)[0]
+        self.assertIn("predicate: runningPredicate(),\n            object: status", wait)
+        self.assertIn("return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed", wait)
+        self.assertIn("guard waitForRunning(status: status, timeout: 30) else {", source)
+        delayed = source.split("func testRunningOracleWaitsForDelayedStartupPublicationWithoutAnotherTap() {", 1)[1]
+        delayed = delayed.split("\n    }", 1)[0]
+        self.assertIn('DispatchQueue.main.async { status.label = "Status: Running" }', delayed)
+        self.assertIn("XCTAssertTrue(waitForRunning(status: status, timeout: 2))", delayed)
+        semantic = source.split("func testRunningOracleRejectsStartingEvenWhenStopIsAlreadyPresent() {", 1)[1]
+        semantic = semantic.split("\n    }", 1)[0]
+        self.assertIn("XCTAssertTrue(status.stopExists)", semantic)
+        self.assertIn("let predicate = runningPredicate()", semantic)
+        self.assertEqual(2, semantic.count("XCTAssertFalse(predicate.evaluate(with: status)"))
+        self.assertIn('status.label = "Status: Running"\n        XCTAssertTrue(predicate.evaluate(with: status))', semantic)
+        self.assertIn('for label in ["Status: Not started", "Status: Stopped", "Status: Starting", "Status: Failed"]', semantic)
+        self.assertNotIn("waitForRunning(", semantic)
+        self.assertNotIn("XCTWaiter", semantic.replace("XCTWaiter's polling schedule", ""))
+
+    def test_exact_shared_running_predicate_and_original_waits_are_preserved(self):
+        self.assert_oracle(self.source())
+
+    def test_weakened_predicate_unshared_oracle_or_short_scheduled_fixture_is_rejected(self):
+        source = self.source()
+        for before, after in (
+            ('NSPredicate(format: "label == %@", "Status: Running")',
+             'NSPredicate(format: "label != %@", "Status: Not started")'),
+            ('NSPredicate(format: "label == %@", "Status: Running")', 'NSPredicate(value: true)'),
+            ("predicate: runningPredicate(),", "predicate: NSPredicate(value: true),"),
+            ("let predicate = runningPredicate()", "let predicate = NSPredicate(value: true)"),
+            ("guard waitForRunning(status: status, timeout: 30)", "guard waitForRunning(status: status, timeout: 60)"),
+            ("XCTAssertTrue(waitForRunning(status: status, timeout: 2))", "XCTAssertTrue(status.stopExists)"),
+            ("XCTAssertTrue(predicate.evaluate(with: status))", "XCTAssertTrue(waitForRunning(status: status, timeout: 0.01))"),
+            ('"Status: Stopped", "Status: Starting", "Status: Failed"', '"Status: Stopped", "Status: Failed"'),
+        ):
+            self.assertIn(before, source)
+            with self.subTest(mutation=before), self.assertRaises(AssertionError):
+                self.assert_oracle(source.replace(before, after))
 
 
 if __name__ == "__main__":

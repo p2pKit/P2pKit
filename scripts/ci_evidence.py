@@ -122,6 +122,7 @@ DEPENDENCY_UPDATE_EXCEPTIONS = frozenset({
 })
 
 TASK_NAMES = frozenset({
+    "check-rpc-hosted-validation-test.py", "central-http-test.py", "kotlin-toolchain-controls", "published-consumer-controls",
     'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
     'intel-advertising-prepare', 'intel-advertising-restore',
     "release-tag-controls", "release-identity-controls", "maven-environment-controls",
@@ -129,7 +130,7 @@ TASK_NAMES = frozenset({
     "wrapper", "layout", "links", "release-metadata", "ios-launcher-controls", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
-    "apple-issue-validation-test.py", "run-android-ui-validation-test.py",
+    "apple-issue-validation-test.py", "run-android-ui-validation-test.py", "android-legacy-task-preview-test.py",
     "tcp-nodelay-latency-test.py", "protocol-ping-latency-test.py", "run-rpc-qualification-test.py",
     "run-jmdns-interpreter-diagnostic-test.py", "jmdns-interpreter-diagnostic",
     "run-android-permission-validation-test.py",
@@ -142,7 +143,7 @@ TASK_NAMES = frozenset({
     "inspect-rpc-windows-package-test.py", "verify-rpc-windows-app-image-test.py",
     "verify-rpc-windows-msi-payload-test.py", "rpc-windows-package-inspection",
     "check-rpc-windows-image-runtime-test.py", "rpc-windows-runtime-readback",
-    "run-platform-tests-test.py", "verify-rpc-windows-jdk21-test.py", "check-rpc-windows-packaging-test.py", "integrity-policy",
+    "run-platform-tests-test.py", "audit-process-drain-deadline-test.py", "verify-rpc-windows-jdk21-test.py", "check-rpc-windows-packaging-test.py", "integrity-policy",
     "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
     "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "shared-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
@@ -296,6 +297,20 @@ def _hosted_darwin_context(environment):
 def _command_scope(job, invocation, private, home, environment):
     return (_HostedDarwinScope(job, invocation, private, home) if _hosted_darwin_context(environment) else
             audit_processes.make_scope(job, invocation, private, home))
+
+
+class _HostedLocalDarwinScope(audit_processes.LocalDarwinScope, _HostedDarwinScope):
+    """Independent local marker, with the enclosing command's exact hosted boundary.
+
+    The local marker must not rewrite the canonical evidence-bound audit domain.
+    All native lifetime/pipe/signal operations and hosted exclusion conditions are
+    inherited unchanged; this is not an additional ownership or host exemption.
+    """
+
+
+def local_command_scope(job, invocation, private, home, environment):
+    return (_HostedLocalDarwinScope(job, invocation, private, home) if _hosted_darwin_context(environment) else
+            audit_processes.make_local_scope(job, invocation, private, home))
 
 
 def run_command(argv, *, cwd, environment, private, timeout, cancelled=None,

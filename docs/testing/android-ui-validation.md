@@ -8,9 +8,10 @@ an API29/OEM result, or a replacement for release CI.
 
 The workflow `.github/workflows/android-ui-validation.yml` accepts `case=317`,
 `case=324`, or `case=both`; reusable `workflow_call` accepts the same string
-input (default `both`). Before the workflow exists on the default branch, push
-an authorized `work/**` candidate with `[android-ui-validation]` in its tip commit
-message to select the same lane. Ordinary branch pushes do not run an emulator.
+input (default `both`). Dispatch that workflow on the exact committed ref, or
+select its optional diagnostic from modular `ci.yml`. It has no marker-triggered
+push route: `[android-ui-validation]` in a commit message does not start it.
+Ordinary PR/main qualification does not imply this emulator diagnostic ran.
 
 The hosted job uses Linux KVM, a fresh Google APIs API35 x86_64 AVD, targetSdk37,
 Java17/21, the checked-in Gradle wrapper, strict dependency locks/checksums, and
@@ -19,7 +20,7 @@ this lane does not claim the API37 runtime/module/flag profile. Dependencies and
 SDK licenses must already be authorized; the workflow does not accept licenses.
 
 The controller refuses dirty source, builds both APKs, inspects their actual
-binary manifests, checks the exact five explicit instrumentation runners, and
+binary manifests, checks the maintained explicit instrumentation-runner inventory, and
 binds commit/tree, APK hashes, runtime and synthetic evidence token. The API37
 permission instrumentation remains the default runner; this lane explicitly
 selects only the UI runner. Each case uses a fresh install and the invocation's
@@ -96,8 +97,121 @@ On API33+, `MainActivity` disables recents screenshots before its first content
 using `setRecentsScreenshotEnabled(false)`: Android can represent a stopped task
 with its theme rather than retain an explicitly revealed credential. This is
 not `FLAG_SECURE`; normal foreground screenshots and explicit-reveal pixel
-positive controls remain available and required. API24–32 keep the existing
-credential clearing behavior but do not gain this task-preview protection.
+positive controls remain available and required on API33+. On API24–32 the sample
+instead sets `FLAG_SECURE` before its first content and retains it for the whole
+window lifetime, including stop/reentry and recreation. This deliberate legacy
+privacy tradeoff also blocks foreground screenshots, screen recordings and
+non-secure displays; it is not a task-preview-only switch. Credential clearing
+and permission/no-replay behavior remain unchanged. Local flag/unit checks do not
+qualify OS snapshots: API24/32 source-bound lifecycle, positive-control and actual
+Recents captures require separate runtime review; no all-OEM claim follows.
+
+The independently selectable `android-legacy-task-preview` diagnostic in
+`.github/workflows/ci.yml` runs `.github/workflows/android-legacy-task-preview.yml`
+on fresh API24 and API32 x86_64 emulators. It builds the exact source APKs and uses
+the same bounded, job-owned controller and encrypted 14-day evidence retention
+as the modern lane. `scripts/run-android-legacy-task-preview.py --api 24` (or
+`--api 32`) is its focused command, run under `ci_evidence.py`, not against a
+personal device. The original system-image package properties are retained.
+
+This witness mounts synthetic content in the real MainActivity and records seven
+ordered observations: protected foreground, actual Home/Recents, same-task
+reentry, recreation, then same-window unprotected-positive / protected /
+unprotected-positive capture controls. Only the late synthetic controls clear
+`FLAG_SECURE`; production protection is immediately restored and both owned
+Activities are destroyed. A global screenshot may legitimately be unavailable
+while a secure layer is visible. Such a protected observation records
+`UNAVAILABLE`, not invented pixels or a unique security-error diagnosis. It
+cannot replace either positive-control PNG or the real Recents PNG. Both
+positive images must contain the known synthetic pattern, with unchanged
+window/view/geometry and before/after state binding around every app capture.
+A returned protected bitmap must exclude the sampled pattern. Before each app
+capture, the witness binds the actual View's accessibility window to the fresh
+active app root and the unique active/focused application entry in the public
+interactive-window inventory. The instrumentation preserves its original service
+flags, requests only the additional interactive-window observation flag, verifies
+readback, and independently restores the exact original flags during cleanup.
+Window and root bounds each contain the real view and samples; they need not
+be equal across system insets. Within the same five-second admission, a single
+public accessibility-event-idle wait requests 500ms of event quietness; it is not
+animation/compositor completion or proof of the previous failure's cause. Late
+returns fail. It then clears frame statistics once, invalidates once and observes
+a new draw plus a defined post-invalidation presented-frame timestamp within
+the same five-second admission bound. Missing statistics fail without a CPU-only
+fallback. This timing observation is not unique buffer identity or pixel proof;
+each original screenshot and the unchanged positive/protected/positive controls
+remain decisive. The debug target declares visibility of only the API32 Nexus
+Recents provider for its actual action-resource lookup; missing resources still
+fail, and release package visibility is unchanged.
+
+`HARNESS_PASS_PENDING_REVIEW` still is not issue closure: independent review
+must decode the originals, identify the intended task card on a genuine
+nonblank Recents surface, and check the **entire snapshot rectangle** bound by
+the before/after task-card observations. That region must be fully visible and
+unobscured, with no synthetic phrase or pattern. An overlay, clipping, uncertain
+card identity or an indistinguishable blank screen leaves acceptance incomplete;
+a generic blank rectangle alone is not proof. Null alone, a blank/wrong screen, container/CRC checks and
+device-side pixel samples cannot substitute for that review or physical/OEM
+qualification. Previous failed runs remain failed; the diagnostic cannot
+satisfy any of the 14 release components. An API32 Recents-admission failure may
+retain one separately labelled, ownership-bound `failure-recents-scene.png`
+within the remaining body budget (at most five seconds of diagnostic work).
+This private encrypted scene is `NOT_ACCEPTANCE`, never one of the seven
+observations or a retry; it cannot change the original failure or qualify privacy.
+On API32, the semantic card domain is the unique, root-scoped
+`com.google.android.apps.nexuslauncher:id/overview_panel`, with its actual
+`android.widget.ListView` accessibility class. Its refreshed provider/window and
+bounds must match the active root. **Every advertised descendant of that pane**
+is traversed before and after the original screenshot; missing or unrefreshable
+children, ambiguous cards, foreign owners, overflow or changed geometry still
+refuse. This is not a claim to have enumerated unrelated Launcher/Workspace UI.
+
+This scope corrects an overbroad diagnostic assumption. The pinned
+[AOSP Workspace implementation](https://android.googlesource.com/platform/packages/apps/Launcher3/+/android-12.1.0_r1/src/com/android/launcher3/Workspace.java#1577)
+deliberately returns an empty accessibility node when hidden in Overview.
+The [Recents pane](https://android.googlesource.com/platform/packages/apps/Launcher3/+/android-12.1.0_r1/quickstep/src/com/android/quickstep/views/RecentsView.java#4314)
+is a separate task-card domain. The reference source demonstrates why a full
+Launcher DFS is inappropriate; it does **not** identify the failed node or prove
+the installed Google Launcher has those exact bytes. Earlier full-tree failures
+remain failures. No failed child is skipped inside a supposedly complete pane.
+
+Initial admission may still send one public BACK only after positively matching
+the root-scoped text/arrow IDs, exact full fixture phrase, actual shared parent
+and owned DragLayer. Missing/ambiguous lookups never authorize input. The request
+and later real TaskView admission must fit the unchanged five seconds; false,
+thrown or late requests fail. API24 keeps only HOME/RECENTS, and post-capture or
+failure observers never perform this setup action.
+
+Education receipt schema 2 deliberately retires schema 1's **automated global
+popup-absence assertion**. Public empty ID/text lookup results do not distinguish
+absence from failed lookup. It records `NOT_ESTABLISHED_VISUAL_REVIEW_REQUIRED`,
+never `ABSENT`, `DISMISSED` or `NONE_REQUIRED`. A still-positively identified popup
+prevents capture; otherwise the exact original image must pass the independent
+whole-snapshot review above. Harness success remains `HARNESS_PASS_PENDING_REVIEW`,
+not privacy acceptance. Original TaskView, all seven observations, positive /
+protected / positive pixels, deadlines, source bindings and cleanup remain
+mandatory. This explicit observer-contract correction changes neither production
+privacy policy nor the scope of API24's previously accepted runtime evidence.
+
+### Accepted legacy witness scope
+
+Independent original-report and full-image review accepted seven ordered
+observations on each of these source-bound emulator executions:
+
+| API / image | Tested source | Original run |
+| --- | --- | --- |
+| API24 default x86_64 | `13d62b699f6966c888775dfef3289aeb52a26550` | [39800406410/1](https://github.com/p2pKit/P2pKit/actions/runs/39800406410/attempts/1) |
+| API32 Google APIs x86_64 | `aafce4f62c05a74ec6222cb47db3fd11d725cda7` | [39847724503/1](https://github.com/p2pKit/P2pKit/actions/runs/39847724503/attempts/1) |
+
+Both include the actual intended Recents snapshot, two original synthetic
+positive-control images, retained lifecycle/ownership and observed cleanup.
+The API32 snapshot was fully visible and unobscured; the scoped card evidence
+and original image agreed. Neither an empty lookup nor an unavailable protected
+screenshot was promoted to pixel evidence. API24 is retained by reviewed source
+impact, not described as a fresh later-source APK execution. Earlier failed
+attempts remain failures. This is synthetic MainActivity policy evidence, not
+natural-credential/RPC, installed-release, physical-device or all-OEM testing,
+and it does not replace the mandatory exact-source release components.
 
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window

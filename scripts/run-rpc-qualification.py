@@ -374,6 +374,16 @@ def junit_counts(raw):
     return counts
 
 
+# Reviewed exact Class/testMethod() identities, sorted with one final newline.
+# The 31969c70 roster (88 unit / 18 UI) is preserved in full; #495/#497/#498
+# add eleven unit and two UI cases; input observation adds four more UI-target
+# helper cases. Counts alone cannot reject a replacement.
+SWIFT_INVENTORY = {
+    "p2pkit-sample-tests": (99, "662c507a03b29725ad3e83e1aa5dfc7b1c81fecda19745dadcbdcc028f9c5d7e"),
+    "p2pkit-sample-uitests": (24, "9dd50cbc8a3659fb4c0c64d2635d530db76f68ef6b819070975456063435fdb9"),
+}
+
+
 def swift_inventory(root):
     result = {}
     for directory, target in (("DiagnosticsTests", "p2pkit-sample-tests"), ("UITests", "p2pkit-sample-uitests")):
@@ -392,8 +402,10 @@ def swift_inventory(root):
                     cases.add(name)
         need(cases, "No source XCTest methods")
         result[target] = cases
-    need(len(result["p2pkit-sample-tests"]) == 88 and len(result["p2pkit-sample-uitests"]) == 18,
-         "Maintained Swift inventory requires review")
+    for target, (count, digest) in SWIFT_INVENTORY.items():
+        identities = ("\n".join(sorted(result[target])) + "\n").encode()
+        need(len(result[target]) == count and hashlib.sha256(identities).hexdigest() == digest,
+             "Maintained Swift inventory requires review")
     return result
 
 

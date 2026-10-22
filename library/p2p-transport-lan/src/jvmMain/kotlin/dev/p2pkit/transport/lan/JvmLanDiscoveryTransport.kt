@@ -227,6 +227,8 @@ internal data class JvmTestDiscoveryAdvertisement(
  * process-local discovery bus and expose no switch that can activate one.
  */
 internal interface JvmTestDiscoveryBackend {
+    /** Callback-only fixtures may supply a snapshot without enumerating host interfaces. */
+    fun localInterfaceAddresses(): List<LanInterfaceAddress>
     fun advertise(advertisement: JvmTestDiscoveryAdvertisement)
     fun withdraw(instanceName: String)
     fun subscribe(
@@ -293,7 +295,11 @@ internal class JvmLanDiscoveryTransport(
     private val coordinator = JmdnsLifecycleCoordinator<JvmLanBindTarget, JmDNS>(
         ops = buildLifecycleOps(),
         rebindScope = lifecycleScope,
-        ioContext = Dispatchers.IO
+        ioContext = Dispatchers.IO,
+        onHandleRetiring = {
+            serviceAdmissions.drain()
+            peerEventRelay.clear()
+        }
     )
 
     /**
@@ -535,7 +541,7 @@ internal class JvmLanDiscoveryTransport(
                     .distinct().take(LanConstants.MAX_DIAL_CANDIDATES)
             } else selectDiscoveryHosts(
                 candidates = candidates,
-                localAddresses = localJvmLanInterfaceAddresses(),
+                localAddresses = testDiscoveryBackend?.localInterfaceAddresses() ?: localJvmLanInterfaceAddresses(),
                 allowTestLoopback = allowTestLoopbackCandidates
             )
             if (hosts.isEmpty()) {

@@ -38,37 +38,37 @@ Before requesting a release-facing review, follow
 
 ## CI scope policy
 
-Every CI event runs the Linux and Windows library suites. The required
-`complete-gate` aggregates those hosts, repository checks, and separate iOS,
-platform, and artifact/consumer jobs; every dependency must succeed. The repository
-job classifies the macOS work once at the exact workflow SHA. Workers validate
-that source and scope even when heavy steps are omitted. Classification remains conservative:
+The maintained [modular CI](.github/workflows/ci.yml) runs all fourteen required
+components for pull requests, main pushes and the weekly Monday 04:17 UTC
+backstop. This includes documentation-only changes: there is no Markdown-only
+qualification shortcut. [`scripts/ci_component.py`](scripts/ci_component.py)
+owns the exact tasks and host assignments for source, dependencies, JVM,
+Android, Apple, Desktop, security, compatibility, consumers and shared checks.
 
-- a non-empty Markdown-only PR/push delta runs link, layout, release-metadata, scope,
-  and whitespace checks;
-- any delta containing a non-`.md` path runs the complete module/platform, ABI, Dokka, SBOM,
-  publication-consumer, XCFramework, provenance, and Swift gate;
-- empty deltas and unavailable/non-ancestor push bases select the full gate;
-  invalid event identities or Git inspection failures fail the job;
-- every main push is classified from its complete event-before-to-HEAD delta,
-  including merges whose tree equals the pull-request head. Git topology is
-  not proof of a successful check; no previous check result is reused; and
-- manual dispatches and the weekly schedule (Monday, 04:17 UTC) always request
-  the full gate, with all-tree whitespace/dependency checking.
+A component can be dispatched independently for diagnosis or rerun after a
+failure. The final aggregation accepts only successful, unexpired results with
+the exact same source commit, canonical version and required environment. It
+rejects missing, stale, failed or mismatched results. A different source needs
+fresh matching evidence; tree similarity and a green unrelated run are not
+qualification. Optional diagnostics do not replace mandatory components.
 
-The schedule uses GitHub's default branch (`main`) and a separate concurrency
-group, so ordinary pushes/dispatches cannot cancel it; a later scheduled run
-does not cancel an already running backstop. This is defense in depth, not a
-one-week execution guarantee: GitHub can delay/drop scheduled runs, and checks
-can fail. Inspect missing/failed runs and dispatch `CI` on the intended ref
-when necessary; verify its recorded commit and actual full-gate results.
+Test reports and relevant logs are collected in source/run/attempt-bound
+`ci-evidence-*` encrypted Actions artifacts with **14-day retention**. An
+artifact or green job alone does not prove that the required tests executed:
+inspect the manifest, task outcomes and original reports. Dependency caches are
+an optimization; strict locks, verification and approved repositories remain
+mandatory on cache hits and misses.
+
+Concurrency groups do not cancel in-progress work. GitHub may queue or delay
+jobs and weekly schedules; a schedule is not a one-week execution guarantee.
+If necessary, dispatch the missing component on the intended exact source,
+then request aggregation of its complete matching result set.
 
 Keep the main ruleset's pull-request, deletion/non-fast-forward and strict
 required checks (`complete-gate`, `review`, `scan / osv-scan`, `osv-scanner`).
-The administrator bypass and branch-creation exception remain owner-controlled;
-scope classification does not assume they were unused or prevent bypass itself.
-Both scopes keep the required check name; a green lightweight result proves
-its documentation checks and the two JVM hosts, not the full macOS gate.
+A focused pass is not the complete gate. Protected merge, immutable tagging,
+Maven signing/publication, application freeze and post-build approval still
+follow the [release checklist](docs/releasing/checklist.md).
 
 ## Change rules
 

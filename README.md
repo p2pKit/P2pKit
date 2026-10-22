@@ -8,7 +8,7 @@ P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
 messaging, and durable file transfer over a reachable local network. It
 supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
-**Current source version:** `0.8.0-rc6` (published development release candidate).
+**Current source version:** `0.8.0-rc7` (unpublished development candidate; qualification pending).
 **Latest published version:** `0.8.0-rc6`.
 
 `0.8.0-rc6` is available from Maven Central under `io.github.apdelrahman1911`.
@@ -338,8 +338,13 @@ build or simulator test is not a real-device or installed-application result.
 The `iosArm64` device target still needs external hardware for runtime testing.
 Focused API35 credential-lifecycle and API37 permission/recreation/TCP cases
 have separately recorded hosted acceptance; they are not a general device suite
-or installed tests of the published packages. API24–32 task-preview privacy
-remains unresolved; see the [release limitations](docs/releases/0.8.0-rc6.md#remaining-limitations).
+or installed tests of the published packages. The published `0.8.0-rc6` retains
+its [API24–32 preview limitation](docs/releases/0.8.0-rc6.md#remaining-limitations).
+The unpublished rc7 candidate adds lifetime `FLAG_SECURE` on those APIs, including
+its foreground-capture tradeoff. The source-bound synthetic API24 and API32
+witnesses have accepted original task-preview/lifecycle evidence; this does not
+establish natural-credential, physical-device or all-OEM coverage. See the
+[current policy and evidence limits](docs/security/model.md#android-sample-credential-previews).
 Android host JVM tests (including Robolectric shadows) are not ART or physical-device evidence.
 
 The [canonical six-area status table](docs/validation/README.md#current-status)

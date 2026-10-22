@@ -122,7 +122,8 @@ class IosProjectGenerationTest(unittest.TestCase):
     def test_owned_flow_sources_use_existing_test_containers(self):
         project_text = (self.generated / "project.pbxproj").read_text()
         for name in ("OwnedFlowCollection.swift", "OwnedFlowCollectionTests.swift",
-                     "SampleRunLifecycleTests.swift", "IosLanDiagnosticsLeaseTests.swift",
+                     "SampleRunLifecycleTests.swift", "SampleFilePreparation.swift",
+                     "SampleFilePreparationTests.swift", "IosLanDiagnosticsLeaseTests.swift",
                      "SwiftFlowCancellationProbeTests.swift", "SwiftOwnedFlowCancellationTests.swift"):
             with self.subTest(source=name):
                 self.assertIn(name + " in Sources", project_text)
@@ -131,6 +132,9 @@ class IosProjectGenerationTest(unittest.TestCase):
 
     def test_generation_preserves_provenance_and_local_network_declarations(self):
         project_text = (self.generated / "project.pbxproj").read_text()
+        self.assertEqual(2, project_text.count(
+            'SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/SampleTransferPOSIX.h";'))
+        self.assertTrue((self.project / "SampleTransferPOSIX.h").is_file())
         phases = [
             json.loads(match[1])
             for match in re.finditer(r'shellScript = ("(?:\\.|[^"\\])*?");', project_text)

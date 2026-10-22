@@ -2,7 +2,7 @@ P2pKit embedded JmDNS modifications
 
 Upstream: org.jmdns:jmdns:3.6.3, tag v3.6.3,
 commit 93b326381940f3fcd250d770a14a36de4c2dfcda.
-Private component revision: 3.6.3-p2pkit.410.6.
+Private component revision: 3.6.3-p2pkit.410.7.
 
 Mechanical integration relocates the complete javax.jmdns production package
 into dev.p2pkit.transport.lan.internal.jmdns. Java source uses LF line endings,
@@ -46,6 +46,29 @@ service before disposal. The separate resource-drain budget, successful native
 TTL-zero sends, actual resource ownership/disposal proof and interruption rules
 remain required. Public service-unregister semantics and all SDK deadlines are
 unchanged. Socket-free arithmetic checks are not real-resource qualification.
+
+patches/503-cache-bounds.patch bounds the pre-admission DNS cache to 4096
+records and an 8 MiB deterministic retained-byte charge, including variable
+names, derived fields, TXT and fixed record/index overhead. This charge is not
+an exact JVM heap-size measurement. Capacity eviction prefers expired records,
+then oldest insertions; it notifies existing listeners outside cache/lifecycle
+locks. Shared RRsets, exact-value TTL refresh, cache-flush grace and TTL-zero
+goodbyes remain supported. Oversized replacements cannot flush a usable value.
+The pressure warning is emitted at most once per handle, outside mutation locks.
+
+Remote meta PTRs now obey the same cache/TTL budget as ordinary PTRs. Remote
+types and subtypes are derived from live cached PTRs rather than permanently
+registered: each has at most 4096 remote entries, backed by the record/byte
+budget. A type survives while any cached owner still advertises it. Locally
+registered or actively requested types are separately owned and survive remote
+expiry/eviction. Type-listener deduplication history is limited to 8192 names
+and an 8 MiB name/entry charge; forgotten types can be announced again. Successful
+close clears cache/type bookkeeping only after existing disposal proof succeeds.
+A package-private socket-free constructor supports deterministic original
+parser/record/cache tests; production constructors always start networking.
+This is bounded retention, not authenticated admission, fairness against Sybils,
+physical discovery/soak evidence or native lifecycle qualification. Earlier
+upstream and patch bytes are unchanged.
 
 PROVENANCE.json schema 2 preserves lifecyclePatch and lists subsequent patches
 in followupPatches application order. All are zero-context unified patches:

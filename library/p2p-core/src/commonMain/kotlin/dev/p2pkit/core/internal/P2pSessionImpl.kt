@@ -37,7 +37,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.currentCoroutineContext
@@ -102,12 +101,6 @@ internal data class SessionRegistration(
     val activeSessionId: String?,
     /** True iff this exact session instance is still in SessionStore's published sessions list. */
     val isInPublicList: Boolean
-)
-
-private data class QueuedApplicationMessage(
-    val message: P2pMessage,
-    val retainedBytes: Long,
-    val lease: PayloadLease? = null
 )
 
 /**
@@ -205,11 +198,12 @@ internal class P2pSessionImpl(
     override val incoming: SharedFlow<P2pMessage> = _incoming.asSharedFlow()
 
     /* Protocol control never waits for an application collector. */
-    private val applicationMessages = Channel<QueuedApplicationMessage>(Channel.UNLIMITED)
+    private val applicationMessages = ApplicationMessageQueue(
+        maxMessages = sessionProfile?.maxQueuedMessagesPerSession ?: MAX_QUEUED_APPLICATION_MESSAGES,
+        maxBytes = sessionProfile?.maxQueuedBytesPerSession ?: MAX_QUEUED_APPLICATION_BYTES
+    )
     private val applicationMessageQueueLock = Mutex()
     private val applicationEmissionMutex = Mutex()
-    private var queuedApplicationMessages: Int = 0
-    private var queuedApplicationBytes: Long = 0L
     private var applicationDeliveryJob: Job? = null
     private val registrationCommitted = MutableStateFlow(false)
 
@@ -1317,23 +1311,7 @@ internal class P2pSessionImpl(
 
     private suspend fun enqueueApplicationMessage(message: P2pMessage, lease: PayloadLease? = null): Boolean {
         return applicationMessageQueueLock.withLock {
-            val maxMessages = sessionProfile?.maxQueuedMessagesPerSession ?: MAX_QUEUED_APPLICATION_MESSAGES
-            val maxBytes = sessionProfile?.maxQueuedBytesPerSession ?: MAX_QUEUED_APPLICATION_BYTES
-            if (queuedApplicationMessages >= maxMessages) {
-                return@withLock false
-            }
-            val messageBytes = message.retainedSizeBytes()
-            if (messageBytes > maxBytes - queuedApplicationBytes) {
-                return@withLock false
-            }
-            queuedApplicationMessages += 1
-            queuedApplicationBytes += messageBytes
-            val sent = applicationMessages.trySend(QueuedApplicationMessage(message, messageBytes, lease))
-            if (sent.isFailure) {
-                queuedApplicationMessages -= 1
-                queuedApplicationBytes -= messageBytes
-            }
-            sent.isSuccess
+            applicationMessages.trySend(message, message.retainedSizeBytes(), lease)
         }
     }
 
@@ -1346,42 +1324,13 @@ internal class P2pSessionImpl(
                     _incoming.emit(queued.message)
                 }
             } finally {
-                queued.lease?.release()
-                // The terminal owner cancels this delivery job before it
-                // drains queued messages. Releasing ownership must therefore
-                // survive cancellation even when the accounting mutex is
-                // briefly contended; otherwise an in-flight message can leak
-                // permanently from the bounded backlog counters.
-                withContext(NonCancellable) {
-                    applicationMessageQueueLock.withLock {
-                        queuedApplicationMessages -= 1
-                        queuedApplicationBytes -= queued.retainedBytes
-                    }
-                }
+                queued.release()
             }
         }
     }
 
-    private suspend fun drainQueuedApplicationMessages() {
-        var drainedMessages = 0
-        var drainedBytes = 0L
-        while (true) {
-            val queued = applicationMessages.tryReceive().getOrNull() ?: break
-            drainedMessages += 1
-            drainedBytes += queued.retainedBytes
-            queued.lease?.release()
-        }
-        if (drainedMessages == 0) return
-        applicationMessageQueueLock.withLock {
-            check(queuedApplicationMessages >= drainedMessages) {
-                "Application backlog message ownership underflow for session $id"
-            }
-            check(queuedApplicationBytes >= drainedBytes) {
-                "Application backlog byte ownership underflow for session $id"
-            }
-            queuedApplicationMessages -= drainedMessages
-            queuedApplicationBytes -= drainedBytes
-        }
+    private fun drainQueuedApplicationMessages() {
+        applicationMessages.drain()
     }
 
     /**
@@ -1412,10 +1361,7 @@ internal class P2pSessionImpl(
     internal val runtimeJobIsActiveForTest: Boolean
         get() = sessionJob.isActive
 
-    internal suspend fun applicationBacklogForTest(): Pair<Int, Long> =
-        applicationMessageQueueLock.withLock {
-            queuedApplicationMessages to queuedApplicationBytes
-        }
+    internal suspend fun applicationBacklogForTest(): Pair<Int, Long> = applicationMessages.backlog
 
     /** Wait until every child owned by this session has terminated. */
     internal suspend fun awaitRuntimeTermination() {

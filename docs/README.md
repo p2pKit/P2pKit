@@ -20,11 +20,11 @@ the remaining runtime and independent validation scopes.
 - [Error handling and recovery](guides/error-handling.md)
 - [Custom transport providers](guides/custom-transports.md)
 - [Samples](guides/samples.md)
-- [Optional organization-LAN RPC](rpc/README.md) — published in `0.8.0-rc2`; runtime limitations remain
+- [Optional organization-LAN RPC](rpc/README.md) — published optional library; runtime limitations remain
 
 ## Test and release
 
-- [Mac continuation handoff](testing/mac-handoff.md) — current audit work on `main`
+- [Historical Mac handoff](testing/mac-handoff.md) — preserved September audit checkpoint
 - [Local testing](testing/local.md)
 - [Validation status](testing/validation-status.md)
 - [Real-world and independent validation handbook](validation/README.md)

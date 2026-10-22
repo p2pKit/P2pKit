@@ -46,11 +46,11 @@ class ModularPolicyTests < Minitest::Test
   def test_published_consumer_diagnostic_requires_choice_and_cannot_qualify
     altered('.github/workflows/ci.yml', ', published-consumers-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'published-consumers-diagnostic' && inputs.component", 'inputs.component')
-    altered('.github/workflows/ci.yml', "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component",
-            "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component")
+    altered('.github/workflows/ci.yml', "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component",
+            "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component")
   end
   def test_workflow_diagnostics_cannot_launch_matrix_or_qualify
-    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic].each do |name|
+    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview].each do |name|
       %w[plan component qualify complete-gate].each do |stage|
         original = File.read(File.join(ROOT, '.github/workflows/ci.yml'))
         section = original[/^  #{stage}:\n.*?(?=^  [a-z]|\z)/m]
@@ -60,7 +60,7 @@ class ModularPolicyTests < Minitest::Test
     end
   end
   def test_workflow_diagnostics_remain_bounded_manual_same_source_and_read_only
-    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic].each do |name|
+    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview].each do |name|
       altered('.github/workflows/ci.yml',
               "github.event_name == 'workflow_dispatch' && inputs.component == '#{name}'",
               "inputs.component == '#{name}'")
@@ -83,9 +83,56 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', consumers,', ',')
   end
 
+  def test_legacy_api_choice_and_direct_forward_contract_accepted
+    ci = ModularCI.load(File.join(ROOT, '.github/workflows/ci.yml'))
+    triggers = ci.fetch('on') { ci.fetch(true) }
+    selector = triggers.dig('workflow_dispatch', 'inputs', 'android_legacy_api')
+    assert_equal %w[both 24 32], selector.fetch('options')
+    assert_equal 'both', selector.fetch('default')
+    assert_equal({'api' => '${{ inputs.android_legacy_api }}'}, ci.dig('jobs', 'android-legacy-task-preview', 'with'))
+    assert ModularCI.check(ROOT)
+  end
+  def test_legacy_api_input_cannot_be_missing_unbounded_or_redefaulted
+    path = '.github/workflows/ci.yml'
+    original = File.read(File.join(ROOT, path))
+    section = original[/^      android_legacy_api:\n.*?(?=^      [a-z]|\z)/m]
+    assert section
+    ['', section.sub('type: choice', 'type: string'), section.sub('default: both', "default: '24'"),
+     *["[both, '24']", "[both, '32']", "['24', '32']", "[both, '24', '32', '35']"].map { |options|
+       section.sub("[both, '24', '32']", options)
+     }].each do |replacement|
+      error = altered(path, section, replacement)
+      assert_match(/Issue diagnostic selector must remain bounded/, error.message)
+    end
+  end
+  def test_legacy_api_forwarding_cannot_be_missing_changed_or_silently_defaulted
+    original = "    with:\n      api: ${{ inputs.android_legacy_api }}\n"
+    ['', original.sub('api:', 'command:'), original.sub('inputs.android_legacy_api', 'inputs.android_case'),
+     original.sub('${{ inputs.android_legacy_api }}', 'both'),
+     original.sub('${{ inputs.android_legacy_api }}', "${{ inputs.android_legacy_api || 'both' }}"),
+     original + "      command: arbitrary\n"].each do |replacement|
+      error = altered('.github/workflows/ci.yml', original, replacement)
+      assert_match(/Issue diagnostic must remain explicit, same-source/, error.message)
+    end
+  end
+
   def test_publisher_remote_consumers_cannot_revert_to_unqualified_cli_context
     altered('.github/workflows/publish-maven-central.yml',
-            'python3 -I -B -S scripts/run-published-consumers.py', 'scripts/check-published-consumers.sh')
+            "          python3 -I -B -S scripts/run-published-consumers.py\n", "          scripts/check-published-consumers.sh\n")
+  end
+  def test_publisher_http_requires_original_job_clock_before_each_stage
+    path = '.github/workflows/publish-maven-central.yml'
+    original = File.read(File.join(ROOT, path))
+    ['Revalidate approved release and credentials', 'Upload once and wait for publication',
+     'Verify immutable remote bytes and consumers'].each do |name|
+      section = original[/^      - name: #{Regexp.escape(name)}\n.*?(?=^      - name:|\z)/m]
+      clock = section.lines.find { |line| line.include?('--http-deadline ') }
+      altered(path, section, section.sub(clock, ''))
+      altered(path, section, section.sub('export P2PKIT_CENTRAL_JOB_DEADLINE', 'true'))
+      altered(path, section, section.sub('GH_TOKEN: ${{ github.token }}', 'GH_TOKEN: literal'))
+      altered(path, section, section.sub(clock, clock.sub('--http-deadline ', '--not-a-clock ')))
+    end
+    altered(path, 'timeout-minutes: 150', 'timeout-minutes: 120')
   end
   def test_writer_cannot_select_floating_or_native_toolchain_baseline
     altered('.github/workflows/dependency-update-candidate.yml', 'runs-on: macos-15-intel', 'runs-on: macos-latest')

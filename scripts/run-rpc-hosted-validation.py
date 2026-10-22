@@ -421,7 +421,8 @@ def execute(state, label, argv, timeout):
     process, code, drained = None, 125, False
     try:
         with log.open("xb") as stream:
-            process = subprocess.Popen(argv, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+            process = helper.ProcessOwner()
+            process.start(argv, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT)
             while process.poll() is None:
                 if time.monotonic() - started > timeout or log.stat().st_size > MAX_LOG:
                     code = 124

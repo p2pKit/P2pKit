@@ -162,7 +162,7 @@ class HostToolchainPolicyTest(unittest.TestCase):
         self.assertEqual(source.count('kotlinNativeHostArchives.resolve()'), 1)
         self.assertIn('    dependencyLocking {\n        lockAllConfigurations()', source)
         sbom_policy = source[source.index('    tasks.withType(CyclonedxDirectTask::class.java)'):
-                             source.index("// Kotlin's built-in ABI validation")]
+                             source.index("val androidAbiProjects = setOf(")]
         self.assertIn('            else -> null', sbom_policy)
         self.assertIn('        if (releaseConfigurations == null) {\n            enabled = false', sbom_policy)
         self.assertIn('            includeConfigs.set(releaseConfigurations)', sbom_policy)

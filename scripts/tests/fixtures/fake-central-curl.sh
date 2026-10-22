@@ -10,14 +10,14 @@ while [[ $# -gt 0 ]]; do
             output="$2"
             shift 2
             ;;
-        --write-out|--request|--form)
+        --write-out|--request|--form|--connect-timeout|--max-time)
             shift 2
             ;;
         --header)
             [[ "$2" == "Authorization: Bearer "* ]] && authorization=1
             shift 2
             ;;
-        --silent|--show-error|--location|--fail)
+        --disable|--silent|--show-error|--location|--fail)
             shift
             ;;
         *)
