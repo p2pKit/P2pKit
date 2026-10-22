@@ -167,6 +167,9 @@ done
 
 LAN_METADATA_KOTLIN_VERSION="$KOTLIN_VERSION"
 LAN_METADATA_COROUTINES_VERSION="$COROUTINES_VERSION"
+# Current-source consumers must check the current embedded producer. Published
+# contracts below pin their immutable private resource independently.
+LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"
 if [[ "${1:-}" == "--latest-published" ]]; then
     [[ $# -eq 1 ]] || { echo "FAIL: --latest-published accepts no additional arguments" >&2; exit 2; }
     [[ -n "$LATEST_PUBLISHED" && "$LATEST_PUBLISHED" != *-SNAPSHOT ]] || {
@@ -191,6 +194,7 @@ if [[ "${1:-}" == "--latest-published" ]]; then
             # isolated consumers with the current catalog toolchain instead.
             LAN_METADATA_KOTLIN_VERSION="2.4.10"
             LAN_METADATA_COROUTINES_VERSION="1.11.0"
+            LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.6"
             ;;
         0.8.0-rc3|0.8.0-rc4|0.8.0-rc5|0.8.0-rc6)
             CURRENT_SOURCE_CONSUMER=1
@@ -198,6 +202,7 @@ if [[ "${1:-}" == "--latest-published" ]]; then
             # Never infer a future publication's metadata from today's compiler.
             LAN_METADATA_KOTLIN_VERSION="2.4.20"
             LAN_METADATA_COROUTINES_VERSION="1.11.0"
+            LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.6"
             ;;
         *)
             echo "FAIL: unsupported latest-published consumer contract: $VERSION" >&2
@@ -1089,7 +1094,7 @@ private fun requirePackaging(coexist: Boolean): Any? {
     val resource = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
     check(loader.getResources(resource).toList().size == 1) { "Missing/duplicate private version resource" }
     val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(resource)).use { load(it) } }
-    check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.7")
+    check(properties.getProperty("jmdns.version") == "__P2PKIT_PRIVATE_JMDNS_VERSION__")
     check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
     check(JmDNS.VERSION == properties.getProperty("jmdns.version"))
     val privateJar = JmDNS::class.java.protectionDomain.codeSource.location
@@ -1420,7 +1425,7 @@ tasks.register("verifyEmbeddedJmdnsPackaging") {
                 val properties = Properties().apply {
                     zip.getInputStream(checkNotNull(zip.getEntry(privateVersion))).use { load(it) }
                 }
-                check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.7")
+                check(properties.getProperty("jmdns.version") == "__P2PKIT_PRIVATE_JMDNS_VERSION__")
                 check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
                 check(zip.getEntry("META-INF/services/org.slf4j.spi.SLF4JServiceProvider") == null)
                 val definitionNames = entries.filter { it.name.matches(Regex("classes[0-9]*\\.dex")) }
@@ -1507,9 +1512,9 @@ class EmbeddedLanActivity : Activity() {
         val loader = checkNotNull(JmDNS::class.java.classLoader)
         val path = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
         val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(path)).use { load(it) } }
-        check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.7")
+        check(properties.getProperty("jmdns.version") == "__P2PKIT_PRIVATE_JMDNS_VERSION__")
         check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
-        check(JmDNS.VERSION == "3.6.3-p2pkit.410.7")
+        check(JmDNS.VERSION == "__P2PKIT_PRIVATE_JMDNS_VERSION__")
         val service = ServiceInfo.create(
             "_p2pkit2._tcp.local.", "consumer", 4242, 0, 0, mapOf("fixture" to "android")
         )
@@ -1536,6 +1541,25 @@ class EmbeddedLanActivity : Activity() {
     }
 }
 EOF
+# Quoted Kotlin templates retain their own interpolation. Replace only the four
+# fixed private-version assertions with the selected producer contract.
+python3 - "$FIXTURE_DIR" "$LAN_PRIVATE_JMDNS_VERSION" <<'PY_PRIVATE_VERSION'
+from pathlib import Path
+import sys
+
+root, version = Path(sys.argv[1]), sys.argv[2]
+marker = "__P2PKIT_PRIVATE_JMDNS_VERSION__"
+for relative, count in (
+    ("lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt", 1),
+    ("androidConsumer/build.gradle.kts", 1),
+    ("androidConsumer/src/main/kotlin/consumer/EmbeddedLanActivity.kt", 2),
+):
+    path = root / relative
+    source = path.read_text()
+    if source.count(marker) != count:
+        sys.exit("FAIL: generated private JmDNS version assertion inventory changed")
+    path.write_text(source.replace(marker, version))
+PY_PRIVATE_VERSION
 fi
 
 if [[ "$CONSUMER_PROFILE" == complete ]]; then

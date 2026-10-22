@@ -205,6 +205,7 @@ GROUP = __GROUP__
 VERSION = __VERSION__
 KOTLIN_VERSION = __KOTLIN_VERSION__
 COROUTINES_VERSION = __COROUTINES_VERSION__
+PRIVATE_JMDNS_VERSION = "3.6.3-p2pkit.410.7"
 EXTERNAL_SHA256 = __EXTERNAL_SHA256__
 OWNERSHIP_FIELDS = __OWNERSHIP_FIELDS__
 CONSUMER_REPORT_BYTES = __CONSUMER_REPORT_BYTES__
@@ -452,6 +453,16 @@ def build(args):
     permissions = [name for name in PERMISSIONS if name != os.environ.get("FAKE_OMIT_PERMISSION")]
     manifest.write_text("<manifest>\n" + "\n".join(f'<uses-permission android:name="{name}" />' for name in permissions) + "\n</manifest>\n")
     if any(task in args for task in EMBEDDED_TASKS):
+        # Inspect all four actual generated assertions, independently of fake
+        # packaging outputs. This is source wiring, not Kotlin/APK execution.
+        property_check = f'check(properties.getProperty("jmdns.version") == "{PRIVATE_JMDNS_VERSION}")'
+        for relative in ("lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt",
+                         "androidConsumer/build.gradle.kts",
+                         "androidConsumer/src/main/kotlin/consumer/EmbeddedLanActivity.kt"):
+            source = (fixture / relative).read_text()
+            assert source.count(property_check) == 1, "wrong producer-private JmDNS expectation: " + relative
+        activity = (fixture / "androidConsumer/src/main/kotlin/consumer/EmbeddedLanActivity.kt").read_text()
+        assert activity.count(f'check(JmDNS.VERSION == "{PRIVATE_JMDNS_VERSION}")') == 1, "wrong producer-private JmDNS VERSION"
         # Deliberately synthetic output contracts for the shell's inspectors.
         # Neither these bytes nor this fake wrapper establish D8/R8/runtime proof.
         if not os.environ.get("FAKE_MISSING_PACKAGING_REPORT"):
@@ -1468,6 +1479,9 @@ class ConsumerGateTest(unittest.TestCase):
         for path in (self.root / "gradlew", self.tools / "executor with spaces", self.tools / "xcrun",
                      self.tools / "curl", self.tools / "git"):
             boundary = self.published_boundary_template.replace(VERSION, version)
+            if version in ("0.8.0-rc2", "0.8.0-rc3", "0.8.0-rc4", "0.8.0-rc5", "0.8.0-rc6"):
+                # Independent fixture identity from all five immutable tag resources.
+                boundary = boundary.replace("3.6.3-p2pkit.410.7", "3.6.3-p2pkit.410.6")
             if version == "0.8.0-rc2":
                 # Immutable published producer metadata, not the new consumer compiler.
                 boundary = boundary.replace(KOTLIN_VERSION, "2.4.10")
@@ -1522,6 +1536,34 @@ class ConsumerGateTest(unittest.TestCase):
         self.assert_complete_latest_published_contract(latest)
         self.assertIn(f'kotlin("jvm") version "{KOTLIN_VERSION}" apply false',
                       (self.work / "consumer/build.gradle.kts").read_text())
+
+    def test_latest_published_selection_keeps_current_source_private_version(self):
+        # No --latest-published: source-local and current remote consumers must
+        # require the new private producer, not downgrade to published rc6.
+        for remote in ("", "https://repository.example.invalid/maven"):
+            with self.subTest(remote=remote):
+                self.assert_pass(self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": remote}))
+
+    def test_latest_published_rc6_rejects_current_private_version_substitution(self):
+        script = self.root / "scripts/check-published-consumers.sh"
+        original = script.read_text()
+        self.assertIn('LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.6"', original)
+        script.write_text(original.replace('LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.6"',
+                                           'LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"'))
+        self.select_latest_published_fixture("0.8.0-rc6")
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},
+                               arguments=("--latest-published",))
+        self.assert_rejected(result, "wrong producer-private JmDNS expectation")
+        self.assertFalse(self.calls("xcrun"))
+
+    def test_latest_published_contract_cannot_downgrade_current_source_private_version(self):
+        script = self.root / "scripts/check-published-consumers.sh"
+        original = script.read_text()
+        self.assertIn('LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"', original)
+        script.write_text(original.replace('LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"',
+                                           'LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.6"'))
+        self.assert_rejected(self.run_gate(), "wrong producer-private JmDNS expectation")
+        self.assertFalse(self.calls("xcrun"))
 
     def test_latest_published_rc6_keeps_producer_coroutines_with_updated_catalog(self):
         catalog = self.root / "gradle/libs.versions.toml"
