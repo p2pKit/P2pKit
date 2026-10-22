@@ -11,7 +11,8 @@ protected approval and the final pre-upload check revalidate its original
 identity and retention. See the [exact-source release procedure](release-foundation.md)
 for owner challenge comments, post-Maven application delivery and partial-failure
 boundaries. The latest completed publication is
-[`0.8.0-rc6`](../releases/0.8.0-rc6.md), also the current source version.
+[`0.8.0-rc6`](../releases/0.8.0-rc6.md). The current source candidate is
+`0.8.0-rc7`, not yet published.
 Later source needs its own qualification and protected publication; source
 controls alone do not establish readiness for a subsequent release.
 

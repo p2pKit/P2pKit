@@ -14,7 +14,8 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The latest published release and current source version are **`0.8.0-rc6`**.
+The latest published release remains **`0.8.0-rc6`**. The current source candidate
+is **`0.8.0-rc7`**, pending its own qualification and publication.
 Its [release record](../releases/0.8.0-rc6.md) binds the actual main qualification,
 separate protected approvals and immutable public library/application bytes.
 The original Maven final-upload failure remains recorded; a successful separate
