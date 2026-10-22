@@ -182,7 +182,8 @@ def check_windows_modular_commands(commands):
         ':p2p-rpc:jvmTest', ':p2p-sample-rpc:jvmTest']], 'Windows JVM suite must remain complete, strict and unfiltered')
     require(commands['desktop-windows'] == [
         ('desktop-tests-and-installer', [wrapper, *flags, '-Pp2pkit.rpc.windows.previewAdapter=true',
-            ':p2p-sample-desktop:check', ':p2p-sample-desktop:installDist', ':p2p-sample-desktop-ui:test',
+            ':p2p-sample-diagnostics:test', ':p2p-sample-desktop:check',
+            ':p2p-sample-desktop:installDist', ':p2p-sample-desktop-ui:test',
             ':p2p-sample-desktop-ui:checkRuntime', ':p2p-sample-desktop-ui:hotRunArgfile',
             ':p2p-sample-desktop-ui:createDistributable', ':p2p-sample-desktop-ui:packageMsi']),
         ('rpc-windows-package-inspection', [sys.executable, '-B', 'scripts/inspect-rpc-windows-package.py']),
@@ -229,6 +230,21 @@ class HostedValidationTest(unittest.TestCase):
 
     def test_windows_modular_jvm_msi_image_and_runtime_commands_remain_complete(self):
         check_windows_modular_commands(component_commands())
+
+    def test_windows_modular_packaging_requires_diagnostics_in_reviewed_order(self):
+        original = component_commands()
+        task = ':p2p-sample-diagnostics:test'
+        for mutation in ('omit', 'reorder'):
+            commands = copy.deepcopy(original)
+            argv = commands['desktop-windows'][0][1]
+            self.assertEqual(argv.count(task), 1)
+            index = argv.index(task)
+            self.assertEqual(argv[index + 1], ':p2p-sample-desktop:check')
+            argv.remove(task)
+            if mutation == 'reorder':
+                argv.insert(index + 1, task)
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'Windows must build the normal MSI'):
+                check_windows_modular_commands(commands)
 
     def test_windows_modular_jvm_controls_reject_selectors_exclusions_and_bypasses(self):
         original = component_commands()
