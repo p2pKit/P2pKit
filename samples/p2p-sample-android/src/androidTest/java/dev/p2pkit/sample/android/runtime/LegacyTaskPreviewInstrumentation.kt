@@ -801,7 +801,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 val arrowMarker = educationNodes.singleOrNull { it.resource == LegacyEducationResource.ARROW }
                 val sameParent = textMarker?.observation?.parent != null &&
                     textMarker.observation.parent == arrowMarker?.observation?.parent
-                val sharedParent = if (sameParent) educationNodes[checkNotNull(textMarker?.observation?.parent)]
+                val sharedParent = if (sameParent) educationNodes[checkNotNull(textMarker.observation.parent)]
                     else null
                 val association = JSONObject().put("textMarkerUnique", textMarker != null)
                     .put("arrowMarkerUnique", arrowMarker != null).put("textExact", textMarker?.exactText == true)
