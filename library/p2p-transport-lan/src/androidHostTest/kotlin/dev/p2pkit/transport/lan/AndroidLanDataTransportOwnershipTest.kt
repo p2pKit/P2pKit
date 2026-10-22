@@ -28,6 +28,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collect
@@ -185,7 +186,7 @@ class AndroidLanDataTransportOwnershipTest {
     }
 
     private class FailBindAndFirstCloseServerSocket : TrackingServerSocket() {
-        private val closeAttempts = AtomicInteger()
+        val closeAttempts = AtomicInteger()
         val closeAttemptCount: Int get() = closeAttempts.get()
 
         override fun bind(endpoint: SocketAddress?) {
@@ -206,7 +207,7 @@ class AndroidLanDataTransportOwnershipTest {
     ) : Socket() {
         private val remote = InetAddress.getByName(remoteHost)
         private val local = InetAddress.getByName(localHost)
-        private val closeAttempts = AtomicInteger()
+        val closeAttempts = AtomicInteger()
         val optionAttempts = AtomicInteger()
         @Volatile private var noDelay = false
 
@@ -278,7 +279,7 @@ class AndroidLanDataTransportOwnershipTest {
     }
 
     private class FailRouteBindAndFirstCloseSocket : FailingRouteBindSocket() {
-        private val closeAttempts = AtomicInteger()
+        val closeAttempts = AtomicInteger()
 
         override fun close() {
             if (closeAttempts.getAndIncrement() == 0) {
@@ -918,6 +919,196 @@ class AndroidLanDataTransportOwnershipTest {
             withTimeout(TEST_TIMEOUT_MS) { result.join() }
             received.forEach { it.close() }
             failed.closeFromFixture()
+        }
+    }
+
+    @Test
+    fun firstTransfersALiveSocketWithoutClosingItWithTheCollector() = runBlocking<Unit> {
+        val socket = ImmediateConnectSocket()
+        val listener = ScriptedAcceptServerSocket(listOf(socket))
+        val transport = AndroidLanDataTransport(
+            registration = registration("first-handoff"), serverSocketFactory = { listener }
+        )
+        try {
+            transport.start().getOrThrow()
+            val raw = withTimeout(TEST_TIMEOUT_MS) { transport.incomingConnections().first() }
+            assertTrue(listener.isClosed, "the completed collector must retire its own listener")
+            assertFalse(socket.isClosed, "a successfully delivered raw belongs to the caller, not the queue")
+            raw.close()
+            raw.close()
+            assertEquals(1, socket.closeAttempts.get())
+        } finally {
+            transport.close()
+            listener.close()
+            socket.closeFromFixture()
+        }
+    }
+
+    @Test
+    fun queuedCancellationClosesSocketsReleasesLeasesAndAllowsCollectorRestart() = runBlocking<Unit> {
+        val listeners = ArrayDeque<ServerSocket>()
+        val transport = AndroidLanDataTransport(
+            registration = registration("queued-cancellation"),
+            serverSocketFactory = { listeners.removeFirst() }
+        )
+        try {
+            repeat(2) {
+                val sockets = listOf(
+                    ImmediateConnectSocket(remoteHost = "127.0.0.3"),
+                    ImmediateConnectSocket(),
+                    ImmediateConnectSocket()
+                )
+                val releaseQueued = CountDownLatch(1)
+                val listener = ScriptedAcceptServerSocket(sockets, mapOf(1 to releaseQueued))
+                listeners.addLast(listener)
+                val delivered = CompletableDeferred<Unit>()
+                val collector = launch(Dispatchers.Default) {
+                    transport.incomingConnections().collect { raw ->
+                        raw.close()
+                        delivered.complete(Unit)
+                        awaitCancellation()
+                    }
+                }
+                try {
+                    transport.start().getOrThrow()
+                    withTimeout(TEST_TIMEOUT_MS) { delivered.await() }
+                    releaseQueued.countDown()
+                    await(listener.acceptEntries[3], "two same-source queued offers completed")
+                    assertEquals(listOf(true, false, false), sockets.map(Socket::isClosed))
+                    collector.cancel()
+                    withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+                    assertTrue(listener.isClosed)
+                    assertEquals(listOf(true, true, true), sockets.map(Socket::isClosed))
+                    assertEquals(listOf(1, 1, 1), sockets.map { it.closeAttempts.get() })
+                    // Iteration two must admit both same-source sockets, not reject retained leases.
+                } finally {
+                    collector.cancel()
+                    listener.close()
+                    withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+                    sockets.forEach(ImmediateConnectSocket::closeFromFixture)
+                }
+            }
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun terminalCloseDrainsQueuedSocketsWhileDeliveredConsumerIsStillHeld() = runBlocking<Unit> {
+        val closed = List(2) { CountDownLatch(1) }
+        val queued = closed.map { signal ->
+            object : ImmediateConnectSocket() {
+                override fun close() { super.close(); signal.countDown() }
+            }
+        }
+        val first = ImmediateConnectSocket(remoteHost = "127.0.0.3")
+        val releaseQueued = CountDownLatch(1)
+        val listener = ScriptedAcceptServerSocket(listOf(first) + queued, mapOf(1 to releaseQueued))
+        val transport = AndroidLanDataTransport(
+            registration = registration("terminal-queue"),
+            serverSocketFactory = { listener }
+        )
+        val delivered = CompletableDeferred<Unit>()
+        val collector = launch(Dispatchers.Default) {
+            transport.incomingConnections().collect { raw ->
+                raw.close()
+                delivered.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        try {
+            transport.start().getOrThrow()
+            withTimeout(TEST_TIMEOUT_MS) { delivered.await() }
+            releaseQueued.countDown()
+            await(listener.acceptEntries[3], "queued offers before terminal close")
+            transport.close()
+            closed.forEach { await(it, "terminal queue disposal") }
+            assertTrue(collector.isActive, "disposal must not depend on the held consumer resuming")
+            assertEquals(listOf(1, 1), queued.map { it.closeAttempts.get() })
+            assertTrue(transport.start().isFailure)
+        } finally {
+            collector.cancel()
+            listener.close()
+            withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+            transport.close()
+            (listOf(first) + queued).forEach(ImmediateConnectSocket::closeFromFixture)
+        }
+    }
+
+    @Test
+    fun cancellationRacingSuccessfulAcceptDisposesTheLateSocket() = runBlocking<Unit> {
+        val acceptEntered = CountDownLatch(1)
+        val releaseAccept = CountDownLatch(1)
+        val socket = ImmediateConnectSocket()
+        val listener = object : TrackingServerSocket() {
+            override fun accept(): Socket {
+                acceptEntered.countDown()
+                awaitIgnoringInterrupt(releaseAccept)
+                return socket // Deliberately completes after listener retirement.
+            }
+            override fun close() {
+                try { super.close() } finally { releaseAccept.countDown() }
+            }
+        }
+        val transport = AndroidLanDataTransport(
+            registration = registration("cancel-accept"), serverSocketFactory = { listener }
+        )
+        val collector = launch(Dispatchers.Default) {
+            transport.incomingConnections().collect { error("cancelled collector cannot own late accept") }
+        }
+        try {
+            transport.start().getOrThrow()
+            await(acceptEntered, "late accept started")
+            collector.cancel()
+            withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+            assertTrue(socket.isClosed)
+            assertEquals(1, socket.closeAttempts.get())
+        } finally {
+            collector.cancel()
+            listener.close()
+            withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+            transport.close()
+            socket.closeFromFixture()
+        }
+    }
+
+    @Test
+    fun queuedCleanupFailureRemainsOwnedUntilStopRetriesIt() = runBlocking<Unit> {
+        val first = ImmediateConnectSocket(remoteHost = "127.0.0.3")
+        val pending = ImmediateConnectSocket(failFirstClose = true)
+        val releaseQueued = CountDownLatch(1)
+        val listener = ScriptedAcceptServerSocket(listOf(first, pending), mapOf(1 to releaseQueued))
+        val transport = AndroidLanDataTransport(
+            registration = registration("queued-close-failure"), serverSocketFactory = { listener }
+        )
+        val delivered = CompletableDeferred<Unit>()
+        val collector = launch(Dispatchers.Default) {
+            transport.incomingConnections().collect { raw ->
+                raw.close()
+                delivered.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        try {
+            transport.start().getOrThrow()
+            withTimeout(TEST_TIMEOUT_MS) { delivered.await() }
+            releaseQueued.countDown()
+            await(listener.acceptEntries[2], "queued socket before cleanup failure")
+            collector.cancel()
+            withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+            assertFalse(pending.isClosed)
+            assertEquals(1, pending.closeAttempts.get())
+            assertTrue(transport.start().isFailure, "uncertain close must block new listener ownership")
+            transport.stop()
+            assertTrue(pending.isClosed)
+            assertEquals(2, pending.closeAttempts.get(), "stop must retry the retained socket exactly once")
+        } finally {
+            collector.cancel()
+            listener.close()
+            withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+            transport.close()
+            first.closeFromFixture()
+            pending.closeFromFixture()
         }
     }
 
