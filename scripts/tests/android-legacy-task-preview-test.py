@@ -323,6 +323,32 @@ class LegacyTaskTests(unittest.TestCase):
                 files[name] = synthetic_png()
                 with self.subTest(api=api, name=name), self.assertRaises(ValueError): self.validate(report, files, api)
 
+    def test_unrefreshed_node_projection_is_local_finite_and_not_admitted(self):
+        path = ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt"
+        source = path.read_text()
+        diagnostic = source.split("    private fun unrefreshedNode(", 1)[1].split("    private fun retainRecentsQuery(", 1)[0]
+        branch = source.split("if (parent != null && !node.refresh()) {", 1)[1].split("val rectangle =", 1)[0]
+        self.assertLess(branch.index("complete = false"), branch.index("unrefreshedNode("))
+        self.assertIn("if (educationObserver != null && query != null)", branch)
+        self.assertIn('query.getJSONObject("incomplete").put("cachedNode", unrefreshedNode(node, root.windowId))', branch)
+        self.assertIn("return", branch)
+        self.assertEqual(source.count("unrefreshedNode(node, root.windowId)"), 1)
+        self.assertNotIn("nodes +=", branch)
+        for forbidden in ("getChild(", "getParent(", ".refresh(", "uiAutomation", "Thread.sleep", "performGlobalAction",
+                          "windowId.toString", "error.message", "stackTrace", "findLegacyRecentsCard("):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn('"UNREFRESHED_NOT_ADMITTED"', diagnostic)
+        self.assertIn("when (node.viewIdResourceName)", diagnostic)
+        self.assertIn("when (node.className?.toString())", diagnostic)
+        self.assertEqual(diagnostic.count('else -> "OTHER"'), 2)
+        for field in ("providerMatches", "windowMatches", "visible", "important", "childCount", "labelMatches",
+                      "descriptionMatches", "taskCollectionItem", "closeAction"):
+            self.assertIn(f'.put("{field}",', diagnostic)
+        # Text/package names only yield fixed public-label/owner booleans, never raw retained values.
+        self.assertIn('node.packageName?.toString() == recentsProvider', diagnostic)
+        self.assertIn('node.text?.toString() == publicAppLabel', diagnostic)
+        self.assertIn('node.contentDescription?.toString() == publicAppLabel', diagnostic)
+
     def test_failure_scene_is_separate_api32_only_and_preserves_original_failure_cleanup(self):
         root = ROOT / "samples/p2p-sample-android/src"
         source = (root / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()

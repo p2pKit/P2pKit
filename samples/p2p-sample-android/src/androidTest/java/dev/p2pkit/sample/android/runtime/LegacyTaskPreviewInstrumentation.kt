@@ -749,8 +749,12 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 checkLegacyCapture(nodes.size < 256 && depth <= 24,
                     LegacyCaptureFailureCode.RECENTS_TREE_LIMIT_EXCEEDED)
                 if (parent != null && !node.refresh()) {
-                    incomplete("NODE_REFRESH_FALSE", parent, childIndex, depth, null)
                     complete = false
+                    incomplete("NODE_REFRESH_FALSE", parent, childIndex, depth, null)
+                    if (educationObserver != null && query != null) {
+                        // Local cached fields identify the refused node; they never admit it to the tree.
+                        query.getJSONObject("incomplete").put("cachedNode", unrefreshedNode(node, root.windowId))
+                    }
                     return
                 }
                 val rectangle = Rect().also(node::getBoundsInScreen)
@@ -884,6 +888,39 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
                 if (primaryFailure == null) throw error
             } finally { @Suppress("DEPRECATION") root.recycle() }
         }
+    }
+
+    /** No remote calls or arbitrary strings: this may be obsolete and is never selection evidence. */
+    private fun unrefreshedNode(node: AccessibilityNodeInfo, windowId: Int): JSONObject {
+        val resource = when (node.viewIdResourceName) {
+            "$recentsProvider:id/snapshot" -> "SNAPSHOT"
+            "$recentsProvider:id/task_view_thumbnail" -> "THUMBNAIL"
+            "$recentsProvider:id/icon" -> "ICON"
+            "$recentsProvider:id/clear_all" -> "CLEAR_ALL"
+            "$recentsProvider:id/overview_panel" -> "OVERVIEW"
+            "$recentsProvider:id/drag_layer" -> "DRAG_LAYER"
+            "$recentsProvider:id/text" -> "EDUCATION_TEXT"
+            "$recentsProvider:id/arrow" -> "EDUCATION_ARROW"
+            else -> "OTHER"
+        }
+        val kind = when (node.className?.toString()) {
+            "android.widget.TextView" -> "TEXT_VIEW"
+            "android.widget.ImageView" -> "IMAGE_VIEW"
+            "android.widget.Button" -> "BUTTON"
+            "android.widget.FrameLayout" -> "FRAME_LAYOUT"
+            "android.widget.LinearLayout" -> "LINEAR_LAYOUT"
+            "android.view.View" -> "VIEW"
+            "android.view.ViewGroup" -> "VIEW_GROUP"
+            else -> "OTHER"
+        }
+        return JSONObject().put("scope", "UNREFRESHED_NOT_ADMITTED").put("resource", resource).put("kind", kind)
+            .put("providerMatches", node.packageName?.toString() == recentsProvider)
+            .put("windowMatches", node.windowId == windowId).put("visible", node.isVisibleToUser)
+            .put("important", node.isImportantForAccessibility).put("childCount", node.childCount)
+            .put("labelMatches", node.text?.toString() == publicAppLabel)
+            .put("descriptionMatches", node.contentDescription?.toString() == publicAppLabel)
+            .put("taskCollectionItem", node.collectionItemInfo != null)
+            .put("closeAction", recentsCloseAction != 0 && node.actionList.any { it.id == recentsCloseAction })
     }
 
     private fun retainRecentsQuery(query: JSONObject, nodes: List<LegacyRecentsNode>, complete: Boolean) {
