@@ -27,7 +27,7 @@ IMAGES = {24: "system-images;android-24;default;x86_64",
           32: "system-images;android-32;google_apis;x86_64"}
 CAPTURES = ("initial-secure-foreground", "actual-recents-original", "same-task-reentry",
             "real-activity-recreation", "synthetic-unprotected-positive-control",
-            "reapplied-production-secure-policy")
+            "reapplied-production-secure-policy", "synthetic-unprotected-closing-control")
 
 
 def validate_png(raw, width, height):
@@ -56,41 +56,116 @@ def validate_png(raw, width, height):
     raise ValueError("Missing PNG end")
 
 
+STATE_KEYS = {"activity", "window", "view", "taskId", "viewWidth", "viewHeight", "viewDraws",
+              "samplePoints", "owned", "viewAttached", "windowFocused", "secureFlag"}
+POSITIVE = {"synthetic-unprotected-positive-control", "synthetic-unprotected-closing-control"}
+
+
+def state_binding(state):
+    return tuple(state[key] for key in ("activity", "window", "view", "taskId", "viewWidth", "viewHeight", "samplePoints"))
+
+
+def validate_state(state, *, secure, activity, task):
+    need(isinstance(state, dict) and set(state) == STATE_KEYS, "Missing exact capture state")
+    for key in ("activity", "window", "view", "taskId", "viewWidth", "viewHeight", "viewDraws"):
+        need(type(state[key]) is int, "Invalid capture state scalar")
+    need(state["activity"] == activity and state["taskId"] == task and task >= 0 and
+         state["viewWidth"] > 0 and state["viewHeight"] > 0 and state["viewDraws"] > 0 and
+         state["owned"] is True and state["viewAttached"] is True and state["windowFocused"] is True and
+         state["secureFlag"] is secure, "Capture window ownership or state changed")
+    points = state["samplePoints"]
+    need(isinstance(points, list) and len(points) == 4 and
+         all(isinstance(point, list) and len(point) == 2 and
+             all(type(coordinate) is int and coordinate >= 0 for coordinate in point) for point in points) and
+         len({tuple(point) for point in points}) == 4, "Invalid synthetic sample geometry")
+
+
 def validate_report(raw, token, source, tree, api, files):
     value = owner.decode_json(raw)
     need(api in IMAGES and value.get("api") == api and value.get("case") == "479" and
          value.get("token") == token and value.get("sourceCommit") == source and
          value.get("declaredSourceTree") == tree and value.get("targetSdk") == 37 and
-         value.get("outcome") == owner.PASS and value.get("syntheticOnly") is True and
-         value.get("recentsReviewRequired") is True and
+         value.get("captureObservationSchema") == 2 and value.get("outcome") == owner.PASS and
+         value.get("syntheticOnly") is True and value.get("recentsReviewRequired") is True and
          value.get("cleanup") == "OWNED_ACTIVITIES_DESTROYED" and
          not any(key in value for key in ("failure", "cleanupFailureType")),
          "Legacy witness identity, lifecycle or cleanup failed")
-    captures = value.get("captures")
-    need(isinstance(captures, list) and [item.get("name") for item in captures] == list(CAPTURES),
-         "Missing, duplicate or reordered legacy captures")
-    need(set(files) == {"result.json", *(name + ".png" for name in CAPTURES)},
-         "Wrong legacy original evidence inventory")
-    for item in captures:
-        name = item["name"]
-        need(item.get("file") == name + ".png" and
-             type(item.get("width")) is int and item["width"] > 0 and
-             type(item.get("height")) is int and item["height"] > 0,
-             "Missing original screenshot or geometry")
-        validate_png(files[name + ".png"], item["width"], item["height"])
-        if name != "actual-recents-original":
-            visible = name == "synthetic-unprotected-positive-control"
-            need(item.get("sampleMatches") == [visible] * 4 and
-                 item.get("secureFlag") is (not visible), "Secure or positive capture control failed")
     events = value.get("lifecycle")
     need(isinstance(events, list) and events and type(value.get("taskId")) is int,
          "Missing actual task/lifecycle observations")
     created = [event.get("activity") for event in events if event.get("event") == "created"]
     destroyed = [event.get("activity") for event in events if event.get("event") == "destroyed"]
-    need(len(created) == len(set(created)) == 2 and sorted(created) == sorted(destroyed) and
+    need(all(type(identity) is int for identity in created + destroyed) and
+         len(created) == len(set(created)) == 2 and sorted(created) == sorted(destroyed) and
          all(event.get("taskId") == value["taskId"] for event in events) and
-         any(event.get("event") == "stopped" and event.get("activity") == created[0]
-             for event in events), "Task replacement or owned Activity retirement was not observed")
+         all(event.get("secureFlag") is True for event in events if event.get("event") == "destroyed") and
+         any(event.get("event") == "stopped" and event.get("activity") == created[0] for event in events),
+         "Task replacement or protected owned Activity retirement was not observed")
+    captures = value.get("captures")
+    need(isinstance(captures, list) and all(isinstance(item, dict) for item in captures) and
+         [item.get("name") for item in captures] == list(CAPTURES), "Missing, duplicate or reordered observations")
+    expected_files = {"result.json"}
+    for index, item in enumerate(captures):
+        name, kind = item["name"], item.get("observation")
+        need(kind in ("BITMAP", "UNAVAILABLE"), "Unknown capture observation")
+        need(type(item.get("elapsedMillis")) is int and item["elapsedMillis"] >= 0 and
+             (index == 0 or item["elapsedMillis"] >= captures[index - 1]["elapsedMillis"]),
+             "Missing or reordered capture timestamps")
+        if name != "actual-recents-original":
+            visible = name in POSITIVE
+            activity = created[0 if index in (0, 2) else 1]
+            for key in ("stateBefore", "stateAfter"):
+                validate_state(item.get(key), secure=not visible, activity=activity, task=value["taskId"])
+            need(state_binding(item["stateBefore"]) == state_binding(item["stateAfter"]),
+                 "Owner/window/view or geometry changed during capture")
+        else:
+            visible = None
+            need("stateBefore" not in item and "stateAfter" not in item and item.get("pixelVariation") is True,
+                 "Recents must be a nonuniform original system screenshot, not an app rendering")
+            system = item.get("systemWindowBefore")
+            need(isinstance(system, dict) and set(system) ==
+                 {"activity", "taskId", "secureFlag", "stopped", "windowFocused", "package", "windowId", "bounds"} and
+                 system == item.get("systemWindowAfter") and type(system.get("activity")) is int and
+                 system["activity"] == created[0] and type(system.get("taskId")) is int and
+                 system["taskId"] == value["taskId"] and system["secureFlag"] is True and
+                 system["stopped"] is True and system["windowFocused"] is False and
+                 isinstance(system["package"], str) and system["package"] and system["package"] != PACKAGE and
+                 type(system["windowId"]) is int and system["windowId"] >= 0,
+                 "Unbound or changed system window during Recents capture")
+            bounds = system["bounds"]
+            need(isinstance(bounds, list) and len(bounds) == 4 and all(type(x) is int for x in bounds) and
+                 bounds[2] > bounds[0] and bounds[3] > bounds[1], "Missing actual system window bounds")
+        if kind == "UNAVAILABLE":
+            need(visible is False and set(item) ==
+                 {"name", "elapsedMillis", "observation", "stateBefore", "stateAfter"},
+                 "Unavailable observation cannot invent pixels or replace required images")
+            continue
+        need(item.get("file") == name + ".png" and type(item.get("width")) is int and item["width"] > 0 and
+             type(item.get("height")) is int and item["height"] > 0 and
+             item.get("pixelReadback") == "ARGB_8888_COPY" and
+             isinstance(item.get("sourceBitmapConfig"), str) and item["sourceBitmapConfig"] and
+             item.get("sourceBitmapWidth") == item["width"] and item.get("sourceBitmapHeight") == item["height"],
+             "Missing original screenshot/readback geometry")
+        expected_files.add(item["file"])
+        need(item["file"] in files, "Missing original PNG")
+        validate_png(files[item["file"]], item["width"], item["height"])
+        if visible is not None:
+            need(isinstance(item.get("sampleMatches"), list) and
+                 all(type(match) is bool for match in item["sampleMatches"]) and
+                 item["sampleMatches"] == [visible] * 4 and
+                 all(x < item["width"] and y < item["height"] for x, y in item["stateBefore"]["samplePoints"]),
+                 "Secure or positive captured pixel control failed")
+    need(set(files) == expected_files, "Wrong actual legacy evidence inventory")
+    first, protected, closing = captures[4:7]
+    need(first["observation"] == closing["observation"] == "BITMAP" and
+         state_binding(first["stateBefore"]) == state_binding(protected["stateBefore"]) ==
+         state_binding(closing["stateBefore"]) and
+         (first["width"], first["height"]) == (closing["width"], closing["height"]) and
+         (protected["observation"] == "UNAVAILABLE" or
+          (first["width"], first["height"]) == (protected["width"], protected["height"])),
+         "Missing same-window positive/protected/positive transport bracket")
+    need(all(captures[0]["stateBefore"][key] == captures[2]["stateBefore"][key]
+             for key in ("activity", "window", "view", "taskId")), "Reentry did not retain the original window/view")
     return value
 
 

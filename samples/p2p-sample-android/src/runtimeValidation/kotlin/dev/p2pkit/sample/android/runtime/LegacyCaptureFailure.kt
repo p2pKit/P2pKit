@@ -2,6 +2,10 @@ package dev.p2pkit.sample.android.runtime
 
 /** Fixed diagnostics only: no outcome relaxation or Android capture-policy inference. */
 internal enum class LegacyCaptureFailureCode {
+    CAPTURE_STATE_INVALID,
+    CAPTURE_BRACKET_MISMATCH,
+    BITMAP_COPY_UNAVAILABLE,
+    RECENTS_IMAGE_UNIFORM,
     BODY_DEADLINE_EXCEEDED,
     SCREENSHOT_UNAVAILABLE,
     OUTPUT_DIRECTORY_UNAVAILABLE,

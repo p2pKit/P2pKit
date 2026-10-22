@@ -114,15 +114,26 @@ as the modern lane. `scripts/run-android-legacy-task-preview.py --api 24` (or
 `--api 32`) is its focused command, run under `ci_evidence.py`, not against a
 personal device. The original system-image package properties are retained.
 
-This witness mounts synthetic content in the real MainActivity, observes its
-secure window, Home/Recents, same-task reentry and recreation, and only then
-temporarily unprotects that synthetic content as a positive screenshot control.
-It reapplies production privacy and destroys both owned Activities. Its
-`HARNESS_PASS_PENDING_REVIEW` outcome is not issue closure: independent review
-must decode the original PNGs, identify the actual task card and check that it
-does not expose the synthetic representation. Container/CRC checks and
-device-side pixel samples are not a substitute for that review or physical/OEM
-qualification. The diagnostic cannot satisfy any of the 14 release components.
+This witness mounts synthetic content in the real MainActivity and records seven
+ordered observations: protected foreground, actual Home/Recents, same-task
+reentry, recreation, then same-window unprotected-positive / protected /
+unprotected-positive capture controls. Only the late synthetic controls clear
+`FLAG_SECURE`; production protection is immediately restored and both owned
+Activities are destroyed. A global screenshot may legitimately be unavailable
+while a secure layer is visible. Such a protected observation records
+`UNAVAILABLE`, not invented pixels or a unique security-error diagnosis. It
+cannot replace either positive-control PNG or the real Recents PNG. Both
+positive images must contain the known synthetic pattern, with unchanged
+window/view/geometry and before/after state binding around every app capture.
+A returned protected bitmap must exclude the sampled pattern.
+
+`HARNESS_PASS_PENDING_REVIEW` still is not issue closure: independent review
+must decode the originals, identify the intended task card on a genuine
+nonblank Recents surface, and check that it does not expose the synthetic
+representation. Null alone, a blank/wrong screen, container/CRC checks and
+device-side pixel samples cannot substitute for that review or physical/OEM
+qualification. Previous failed runs remain failed; the diagnostic cannot
+satisfy any of the 14 release components.
 
 The three previously disputed clear/reentry captures retain the first original
 full-display screenshot alongside a separately timestamped owned-Window

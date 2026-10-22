@@ -8,7 +8,7 @@ import kotlin.test.assertSame
 /** Pure fixed-diagnostic controls, not Android screenshot or FLAG_SECURE evidence. */
 class LegacyCaptureFailureTest {
     @Test
-    fun unavailableScreenshotFailsWithSpecificCodeRatherThanPassingAsSecure() {
+    fun missingRequiredScreenshotFailsWithSpecificCode() {
         val failure = assertFailsWith<LegacyCaptureFailure> {
             requireLegacyCaptureValue<Any>(null, LegacyCaptureFailureCode.SCREENSHOT_UNAVAILABLE)
         }

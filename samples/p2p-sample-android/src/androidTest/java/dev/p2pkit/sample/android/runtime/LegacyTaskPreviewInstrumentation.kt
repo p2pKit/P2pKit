@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -39,6 +40,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
     private val report = JSONObject()
     private val captures = JSONArray()
     private val captureAttempts = JSONArray()
+    private val appObservations = mutableMapOf<String, LegacyCaptureObservation>()
     private val events = CopyOnWriteArrayList<JSONObject>()
     private val created = CopyOnWriteArrayList<MainActivity>()
     private val stopped = CopyOnWriteArrayList<MainActivity>()
@@ -128,7 +130,7 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
             .put("sourceBinding", "host must bind clean checkout/tree, installed APK hashes and original run")
             .put("api", Build.VERSION.SDK_INT).put("fingerprint", Build.FINGERPRINT).put("pid", Process.myPid())
             .put("targetSdk", application.applicationInfo.targetSdkVersion)
-            .put("syntheticOnly", true).put("bodyObservationBudgetMillis", 90_000)
+            .put("syntheticOnly", true).put("captureObservationSchema", 2).put("bodyObservationBudgetMillis", 90_000)
             .put("perMainCallAndAwaitMillis", 5_000)
         deadline = SystemClock.elapsedRealtime() + 90_000
         stage = "real-activity-launch"
@@ -194,6 +196,18 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         main { secureLegacyTaskWindow(replacement.window) }
         redraw(replacementPattern)
         capture(stage, replacement, replacementPattern, false)
+        stage = "synthetic-unprotected-closing-control"
+        try {
+            main { replacement.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+            redraw(replacementPattern)
+            capture(stage, replacement, replacementPattern, true)
+        } finally { main { secureLegacyTaskWindow(replacement.window) } }
+        checkLegacyCaptureBracket(
+            appObservations.getValue("synthetic-unprotected-positive-control"),
+            appObservations.getValue("reapplied-production-secure-policy"),
+            appObservations.getValue("synthetic-unprotected-closing-control"),
+        )
+        check(captures.length() == 7 && appObservations.size == 6)
         check(SystemClock.elapsedRealtime() <= deadline)
     }
 
@@ -209,54 +223,135 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
     }
 
     private fun capture(name: String, activity: MainActivity?, view: PatternView?, visible: Boolean?) {
-        // Only fixed operation names and synthetic geometry are retained, never exception messages,
-        // UI text or stacks. A null global screenshot remains a failure, not proof of secure refusal.
+        // UNAVAILABLE is a provisional protected observation, never a unique denial or standalone PASS.
+        // Actual Recents and both late positives still require original global pixels and independent review.
         val attempt = JSONObject().put("name", name).put("elapsedMillis", SystemClock.elapsedRealtime())
-            .put("bodyRemainingMillis", deadline - SystemClock.elapsedRealtime())
-            .put("operation", "BODY_DEADLINE")
+            .put("bodyRemainingMillis", deadline - SystemClock.elapsedRealtime()).put("operation", "BODY_DEADLINE")
         captureAttempts.put(attempt)
         checkLegacyCapture(SystemClock.elapsedRealtime() <= deadline, LegacyCaptureFailureCode.BODY_DEADLINE_EXCEEDED)
         attempt.put("operation", "SAMPLE_GEOMETRY")
-        val samples = view?.let { main {
-            attempt.put("secureFlag", secure(checkNotNull(activity))).put("windowFocused", activity.hasWindowFocus())
-                .put("viewWidth", it.width).put("viewHeight", it.height).put("viewDraws", it.draws)
-            it.samplesOnScreen()
-        } }
+        val before = view?.let { captureState(checkNotNull(activity), it) }
+        before?.let {
+            attempt.put("stateBefore", stateJson(it))
+            checkLegacyCaptureState(it, secure = !checkNotNull(visible))
+        }
+        val systemBefore = if (view == null) recentsState() else null
+        systemBefore?.let { attempt.put("systemWindowBefore", it) }
         attempt.put("operation", "GLOBAL_SCREENSHOT_REQUEST")
-        val returned = uiAutomation.takeScreenshot()
-        attempt.put("screenshotReturned", true).put("screenshotAvailable", returned != null)
-        val bitmap = requireLegacyCaptureValue(returned, LegacyCaptureFailureCode.SCREENSHOT_UNAVAILABLE)
+        val bitmap = uiAutomation.takeScreenshot()
         try {
-            attempt.put("bitmapWidth", bitmap.width).put("bitmapHeight", bitmap.height)
-                .put("operation", "PNG_OUTPUT_OPEN")
-            val directory = requireLegacyCaptureValue(output, LegacyCaptureFailureCode.OUTPUT_DIRECTORY_UNAVAILABLE)
-            val file = File(directory, "$name.png")
-            file.outputStream().use {
-                attempt.put("operation", "PNG_ENCODING")
-                checkLegacyCapture(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it),
-                    LegacyCaptureFailureCode.PNG_ENCODING_FAILED)
+            attempt.put("screenshotReturned", true).put("screenshotAvailable", bitmap != null)
+            val after = view?.let { captureState(checkNotNull(activity), it) }
+            after?.let { attempt.put("stateAfter", stateJson(it)) }
+            val systemAfter = if (view == null) recentsState() else null
+            if (systemBefore != null) {
+                attempt.put("systemWindowAfter", systemAfter)
+                checkLegacyCapture(systemBefore.toString() == systemAfter?.toString(),
+                    LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
             }
-            val record = JSONObject().put("name", name).put("file", file.name)
-                .put("elapsedMillis", SystemClock.elapsedRealtime()).put("width", bitmap.width)
-                .put("height", bitmap.height).put("activity", activity?.let { System.identityHashCode(it) })
-            captures.put(record)
-            attempt.put("operation", "PIXEL_ORACLE")
-            if (samples != null) {
-                val matches = samples.map { (x, y, color) ->
-                    checkLegacyCapture(x in 0 until bitmap.width && y in 0 until bitmap.height,
-                        LegacyCaptureFailureCode.SAMPLE_OUTSIDE_SCREENSHOT)
-                    bitmap.getPixel(x, y) == color
+            val record = JSONObject().put("name", name).put("elapsedMillis", SystemClock.elapsedRealtime())
+            if (before != null) record.put("stateBefore", stateJson(before))
+                .put("stateAfter", stateJson(checkNotNull(after)))
+            if (systemBefore != null) record.put("systemWindowBefore", systemBefore)
+                .put("systemWindowAfter", systemAfter)
+            if (bitmap == null) {
+                // Null Recents or positive controls fail. No file, dimensions or invented false pixels.
+                val observation = LegacyCaptureObservation(
+                    requireLegacyCaptureValue(before, LegacyCaptureFailureCode.SCREENSHOT_UNAVAILABLE),
+                    checkNotNull(after), null, null,
+                )
+                checkLegacyCaptureObservation(observation, visible = checkNotNull(visible))
+                appObservations[name] = observation
+                captures.put(record.put("observation", "UNAVAILABLE"))
+                attempt.put("operation", "PROTECTED_UNAVAILABLE_OBSERVED")
+                return
+            }
+            // Hardware-backed global screenshots need owned software readback for getPixel/PNG.
+            // This copies actual captured pixels; it is not a View rendering or fabricated image.
+            attempt.put("operation", "BITMAP_READBACK")
+            val pixels = requireLegacyCaptureValue(bitmap.copy(Bitmap.Config.ARGB_8888, false),
+                LegacyCaptureFailureCode.BITMAP_COPY_UNAVAILABLE)
+            try {
+                checkLegacyCapture(pixels.width == bitmap.width && pixels.height == bitmap.height,
+                    LegacyCaptureFailureCode.BITMAP_COPY_UNAVAILABLE)
+                record.put("sourceBitmapConfig", bitmap.config?.name ?: "UNKNOWN")
+                    .put("sourceBitmapWidth", bitmap.width).put("sourceBitmapHeight", bitmap.height)
+                    .put("pixelReadback", "ARGB_8888_COPY")
+                attempt.put("bitmapWidth", pixels.width).put("bitmapHeight", pixels.height)
+                    .put("operation", "PNG_OUTPUT_OPEN")
+                val directory = requireLegacyCaptureValue(output, LegacyCaptureFailureCode.OUTPUT_DIRECTORY_UNAVAILABLE)
+                val file = File(directory, "$name.png")
+                file.outputStream().use {
+                    attempt.put("operation", "PNG_ENCODING")
+                    checkLegacyCapture(pixels.compress(Bitmap.CompressFormat.PNG, 100, it),
+                        LegacyCaptureFailureCode.PNG_ENCODING_FAILED)
                 }
-                record.put("sampleMatches", JSONArray(matches))
-                    .put("secureFlag", main { secure(checkNotNull(activity)) })
-                if (visible == true) checkLegacyCapture(matches.all { it },
-                    LegacyCaptureFailureCode.POSITIVE_CONTROL_NOT_CAPTURED)
-                if (visible == false) checkLegacyCapture(matches.none { it },
-                    LegacyCaptureFailureCode.SECURE_PATTERN_CAPTURED)
-            }
-            attempt.put("operation", "COMPLETE")
-        } finally { bitmap.recycle() }
+                record.put("observation", "BITMAP").put("file", file.name)
+                    .put("width", pixels.width).put("height", pixels.height)
+                captures.put(record)
+                attempt.put("operation", "PIXEL_ORACLE")
+                if (before != null) {
+                    val matches = before.points.mapIndexed { index, (x, y) ->
+                        checkLegacyCapture(x in 0 until pixels.width && y in 0 until pixels.height,
+                            LegacyCaptureFailureCode.SAMPLE_OUTSIDE_SCREENSHOT)
+                        pixels.getPixel(x, y) == PATTERN_COLORS[index]
+                    }
+                    val observation = LegacyCaptureObservation(before, checkNotNull(after),
+                        pixels.width to pixels.height, matches)
+                    checkLegacyCaptureObservation(observation, visible = checkNotNull(visible))
+                    record.put("sampleMatches", JSONArray(matches))
+                    appObservations[name] = observation
+                } else {
+                    val firstPixel = pixels.getPixel(0, 0)
+                    val varied = (0 until 8).any { y -> (0 until 8).any { x ->
+                        pixels.getPixel(x * (pixels.width - 1) / 7, y * (pixels.height - 1) / 7) != firstPixel
+                    } }
+                    record.put("pixelVariation", varied)
+                    checkLegacyCapture(varied, LegacyCaptureFailureCode.RECENTS_IMAGE_UNIFORM)
+                }
+                attempt.put("operation", "COMPLETE")
+            } finally { if (pixels !== bitmap) pixels.recycle() }
+        } finally { bitmap?.recycle() }
     }
+
+    private fun recentsState(): JSONObject {
+        val first = created.first()
+        val owner = main {
+            checkLegacyCapture(!first.isDestroyed && first in stopped && !first.hasWindowFocus() && secure(first),
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            JSONObject().put("activity", System.identityHashCode(first)).put("taskId", first.taskId)
+                .put("secureFlag", true).put("stopped", true).put("windowFocused", false)
+        }
+        val root = requireLegacyCaptureValue(uiAutomation.rootInActiveWindow,
+            LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+        try {
+            checkLegacyCapture(root.refresh() && root.isVisibleToUser,
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            val packageName = root.packageName?.toString()
+            checkLegacyCapture(!packageName.isNullOrEmpty() && packageName != targetContext.packageName,
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            val bounds = Rect().also(root::getBoundsInScreen)
+            checkLegacyCapture(bounds.width() > 0 && bounds.height() > 0 && root.windowId >= 0,
+                LegacyCaptureFailureCode.CAPTURE_STATE_INVALID)
+            return owner.put("package", packageName).put("windowId", root.windowId)
+                .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+        } finally { @Suppress("DEPRECATION") root.recycle() }
+    }
+
+    private fun captureState(activity: MainActivity, view: PatternView): LegacyCaptureState = main {
+        LegacyCaptureState(System.identityHashCode(activity), System.identityHashCode(activity.window),
+            System.identityHashCode(view), activity.taskId, view.width, view.height,
+            view.samplesOnScreen().map { (x, y, _) -> x to y },
+            activity in created && !activity.isDestroyed && view.context === activity,
+            view.isAttachedToWindow, activity.hasWindowFocus() && view.hasWindowFocus(), secure(activity), view.draws)
+    }
+
+    private fun stateJson(state: LegacyCaptureState): JSONObject = JSONObject()
+        .put("activity", state.activity).put("window", state.window).put("view", state.view).put("taskId", state.taskId)
+        .put("viewWidth", state.width).put("viewHeight", state.height).put("viewDraws", state.draws)
+        .put("samplePoints", JSONArray(state.points.map { (x, y) -> JSONArray(listOf(x, y)) }))
+        .put("owned", state.owned).put("viewAttached", state.attached)
+        .put("windowFocused", state.focused).put("secureFlag", state.secure)
 
     private fun secure(activity: Activity): Boolean =
         activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
@@ -301,9 +396,13 @@ class LegacyTaskPreviewInstrumentation : Instrumentation() {
         override fun onActivityDestroyed(activity: Activity) = record(activity, "destroyed")
     }
 
+    private companion object {
+        val PATTERN_COLORS = listOf(Color.MAGENTA, Color.CYAN, Color.GREEN, Color.YELLOW)
+    }
+
     private class PatternView(context: Context, private val label: String) : View(context) {
         private val paint = Paint()
-        private val colors = listOf(Color.MAGENTA, Color.CYAN, Color.GREEN, Color.YELLOW)
+        private val colors = PATTERN_COLORS
         var draws = 0
             private set
         override fun onDraw(canvas: Canvas) {

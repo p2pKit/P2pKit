@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline identity/completion and install-shell controls; never Android execution evidence."""
+import copy
 import importlib.util
 import json
 import os
@@ -21,28 +22,46 @@ spec.loader.exec_module(legacy)
 TOKEN, SOURCE, TREE = "a" * 32, "b" * 40, "c" * 40
 
 
-def synthetic_png():
+def synthetic_png(visible=False):
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)) +
-            chunk(b"IDAT", zlib.compress(b"\0\0\0\0")) + chunk(b"IEND", b""))
+    colors = (b"\xff\0\xff", b"\0\xff\xff", b"\0\xff\0", b"\xff\xff\0")
+    row = b"\0" + (b"".join(color * 4 for color in colors) if visible else b"\0" * 48)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 16, 16, 8, 2, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(row * 16)) + chunk(b"IEND", b""))
 
 
-def fixture(api=24):
-    captures = []
-    for name in legacy.CAPTURES:
-        item = dict(name=name, file=name + ".png", width=1, height=1)
+def fixture(api=24, unavailable=False):
+    captures, files = [], {}
+    for index, name in enumerate(legacy.CAPTURES):
+        item = dict(name=name, observation="BITMAP", file=name + ".png", width=16, height=16,
+                    sourceBitmapWidth=16, sourceBitmapHeight=16, sourceBitmapConfig="ARGB_8888",
+                    pixelReadback="ARGB_8888_COPY", elapsedMillis=100 + index)
         if name != "actual-recents-original":
-            visible = name == "synthetic-unprotected-positive-control"
-            item.update(sampleMatches=[visible] * 4, secureFlag=not visible)
+            visible = name in legacy.POSITIVE
+            identity = 1 if index in (0, 2) else 2
+            state = dict(activity=identity, window=identity + 10, view=identity + 20, taskId=7,
+                         viewWidth=16, viewHeight=16, viewDraws=1,
+                         samplePoints=[[2, 4], [6, 4], [10, 4], [14, 4]],
+                         owned=True, viewAttached=True, windowFocused=True, secureFlag=not visible)
+            item.update(sampleMatches=[visible] * 4, stateBefore=state, stateAfter=copy.deepcopy(state))
+        else:
+            visible = True
+            system = dict(activity=1, taskId=7, secureFlag=True, stopped=True, windowFocused=False,
+                          package="synthetic.system.ui", windowId=10, bounds=[0, 0, 16, 16])
+            item.update(pixelVariation=True, systemWindowBefore=system, systemWindowAfter=copy.deepcopy(system))
+        if unavailable and name not in legacy.POSITIVE and name != "actual-recents-original":
+            item = {key: item[key] for key in ("name", "elapsedMillis", "stateBefore", "stateAfter")}
+            item["observation"] = "UNAVAILABLE"
+        else:
+            files[name + ".png"] = synthetic_png(visible)
         captures.append(item)
     report = dict(case="479", token=TOKEN, sourceCommit=SOURCE, declaredSourceTree=TREE,
-        api=api, targetSdk=37, outcome=legacy.owner.PASS, syntheticOnly=True, recentsReviewRequired=True,
-        cleanup="OWNED_ACTIVITIES_DESTROYED", taskId=7, captures=captures,
-        lifecycle=[dict(event=event, activity=activity, taskId=7) for event, activity in
-                   (("created", 1), ("stopped", 1), ("created", 2), ("destroyed", 1), ("destroyed", 2))])
+        api=api, targetSdk=37, captureObservationSchema=2, outcome=legacy.owner.PASS,
+        syntheticOnly=True, recentsReviewRequired=True, cleanup="OWNED_ACTIVITIES_DESTROYED", taskId=7,
+        captures=captures, lifecycle=[dict(event=event, activity=activity, taskId=7, secureFlag=True)
+            for event, activity in (("created", 1), ("stopped", 1), ("created", 2), ("destroyed", 1), ("destroyed", 2))])
     # Clearly synthetic parser inputs, not captured images or proof of visual privacy.
-    files = {name + ".png": synthetic_png() for name in legacy.CAPTURES}
     files["result.json"] = json.dumps(report).encode()
     return report, files
 
@@ -64,8 +83,9 @@ class LegacyTaskTests(unittest.TestCase):
 
     def test_both_source_bound_reports_remain_pending_visual_review(self):
         for api in (24, 32):
-            report, files = fixture(api)
-            self.assertTrue(self.validate(report, files, api)["recentsReviewRequired"])
+            for unavailable in (False, True):
+                report, files = fixture(api, unavailable)
+                self.assertTrue(self.validate(report, files, api)["recentsReviewRequired"])
             self.assertEqual(legacy.LegacyCampaign(api).API, api)
 
     def test_identity_failure_cleanup_and_false_ready_rejected(self):
@@ -92,27 +112,30 @@ class LegacyTaskTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate(report, {"result.json": json.dumps(report).encode()})
 
-    def test_instrumentation_records_fixed_capture_boundary_without_relaxing_oracles(self):
-        path = (ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/"
-                "runtime/LegacyTaskPreviewInstrumentation.kt")
-        source = path.read_text()
-        capture = source.split("    private fun capture(", 1)[1].split("    private fun secure(", 1)[0]
-        self.assertLess(capture.index("captureAttempts.put(attempt)"),
-                        capture.index("checkLegacyCapture(SystemClock.elapsedRealtime() <= deadline"))
-        self.assertLess(capture.index('"GLOBAL_SCREENSHOT_REQUEST"'), capture.index("takeScreenshot()"))
-        self.assertLess(capture.index('"screenshotAvailable", returned != null'),
-                        capture.index("LegacyCaptureFailureCode.SCREENSHOT_UNAVAILABLE"))
-        for code in ("BODY_DEADLINE_EXCEEDED", "OUTPUT_DIRECTORY_UNAVAILABLE", "PNG_ENCODING_FAILED",
-                     "SAMPLE_OUTSIDE_SCREENSHOT", "POSITIVE_CONTROL_NOT_CAPTURED", "SECURE_PATTERN_CAPTURED"):
-            self.assertIn("LegacyCaptureFailureCode." + code, capture)
-        self.assertIn("if (visible == true) checkLegacyCapture(matches.all { it }", capture)
-        self.assertIn("if (visible == false) checkLegacyCapture(matches.none { it }", capture)
-        self.assertIn("finally { bitmap.recycle() }", capture)
-        self.assertIn('diagnostic.put("code", it.code.name)', source)
+    def test_instrumentation_preserves_capture_ownership_diagnostics_and_bounds(self):
+        base = ROOT / "samples/p2p-sample-android/src"
+        source = (base / "androidTest/java/dev/p2pkit/sample/android/runtime/LegacyTaskPreviewInstrumentation.kt").read_text()
+        policy = (base / "runtimeValidation/kotlin/dev/p2pkit/sample/android/runtime/LegacyCaptureObservation.kt").read_text()
+        capture = source.split("    private fun capture(", 1)[1].split("    private fun recentsState(", 1)[0]
+        self.assertLess(capture.index("captureAttempts.put(attempt)"), capture.index("BODY_DEADLINE_EXCEEDED"))
+        self.assertLess(capture.index("val before ="), capture.index("takeScreenshot()"))
+        self.assertLess(capture.index("takeScreenshot()"), capture.index("val after ="))
+        self.assertIn("checkLegacyCaptureObservation(observation", capture)
+        self.assertIn("checkLegacyCaptureBracket(", source)
+        self.assertIn("if (pixels !== bitmap) pixels.recycle()", capture)
+        self.assertIn("finally { bitmap?.recycle() }", capture)
+        self.assertIn("bitmap.copy(Bitmap.Config.ARGB_8888, false)", capture)
+        self.assertIn("root.refresh() && root.isVisibleToUser", source)
+        self.assertIn("checkLegacyCapture(!visible, LegacyCaptureFailureCode.SCREENSHOT_UNAVAILABLE)", policy)
+        self.assertIn("value.matches == null", policy)
+        self.assertIn("value.matches.all { it == visible }", policy)
         self.assertNotIn("error.message", source)
         self.assertNotIn("stackTrace", source)
         self.assertIn("deadline = SystemClock.elapsedRealtime() + 90_000", source)
         self.assertIn("task.get(5, TimeUnit.SECONDS)", source)
+        self.assertIn("finally { main { secureLegacyTaskWindow(replacement.window) } }", source)
+        self.assertLess(source.index('stage = "actual-recents-original"'), source.index("clearFlags("))
+        self.assertEqual(source.count("uiAutomation.takeScreenshot()"), 1)
 
     def test_missing_duplicate_reordered_captures_refused(self):
         for change in (lambda c: c.pop(), lambda c: c.append(c[0]), lambda c: c.reverse()):
@@ -122,13 +145,57 @@ class LegacyTaskTests(unittest.TestCase):
                 self.validate(report, files)
 
     def test_secure_leak_and_nonworking_positive_control_refused(self):
-        for index in (0, 2, 3, 4, 5):
+        for index in (0, 2, 3, 4, 5, 6):
             for key in ("sampleMatches", "secureFlag"):
                 report, files = fixture()
                 item = report["captures"][index]
-                item[key] = [not item[key][0]] * 4 if key == "sampleMatches" else not item[key]
+                if key == "sampleMatches": item[key] = [not item[key][0]] * 4
+                else: item["stateAfter"][key] = not item["stateAfter"][key]
                 with self.subTest(index=index, key=key), self.assertRaises(ValueError):
                     self.validate(report, files)
+
+    def test_unavailable_cannot_replace_required_images_or_invent_pixels(self):
+        for index in (1, 4, 6):
+            report, files = fixture(unavailable=True)
+            item = report["captures"][index]
+            files.pop(item["file"])
+            for key in ("file", "width", "height", "sampleMatches", "sourceBitmapWidth",
+                        "sourceBitmapHeight", "sourceBitmapConfig", "pixelReadback"):
+                item.pop(key, None)
+            item["observation"] = "UNAVAILABLE"
+            with self.subTest(index=index), self.assertRaises(ValueError): self.validate(report, files)
+        for key, value in (("file", "invented.png"), ("width", 16), ("sampleMatches", [False] * 4)):
+            report, files = fixture(unavailable=True)
+            report["captures"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_before_after_owned_state_and_complete_bracket_required(self):
+        for unavailable in (False, True):
+            for index in (0, 2, 3, 4, 5, 6):
+                for side in ("stateBefore", "stateAfter"):
+                    for key, value in (("owned", False), ("viewAttached", False), ("windowFocused", False),
+                                       ("viewDraws", 0), ("window", 999), ("view", 999),
+                                       ("activity", 999), ("taskId", 999), ("viewWidth", 17),
+                                       ("samplePoints", [[1, 1], [2, 2], [3, 3], [4, 4]])):
+                        report, files = fixture(unavailable=unavailable)
+                        report["captures"][index][side][key] = value
+                        with self.subTest(index=index, side=side, key=key), self.assertRaises(ValueError):
+                            self.validate(report, files)
+        for key in ("window", "view", "viewWidth"):
+            report, files = fixture(unavailable=True)
+            for side in ("stateBefore", "stateAfter"): report["captures"][6][side][key] += 1
+            with self.subTest(key=key), self.assertRaises(ValueError): self.validate(report, files)
+
+    def test_blank_or_changed_system_window_and_unprotected_cleanup_fail(self):
+        for change in ("uniform", "system-root", "app-focused", "wrong-task", "cleanup"):
+            report, files = fixture(unavailable=True)
+            recents = report["captures"][1]
+            if change == "uniform": recents["pixelVariation"] = False
+            elif change == "system-root": recents["systemWindowAfter"]["windowId"] += 1
+            elif change == "app-focused": recents["systemWindowBefore"]["windowFocused"] = True
+            elif change == "wrong-task": recents["systemWindowBefore"]["taskId"] += 1
+            else: report["lifecycle"][-1]["secureFlag"] = False
+            with self.subTest(change=change), self.assertRaises(ValueError): self.validate(report, files)
 
     def test_original_png_inventory_required(self):
         for variant in ("absent", "unknown", "not-png"):
@@ -146,9 +213,9 @@ class LegacyTaskTests(unittest.TestCase):
         valid = synthetic_png()
         for raw in (valid[:8], valid[:-1], valid + b"trailing", valid[:45] + bytes([valid[45] ^ 1]) + valid[46:]):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
-                legacy.validate_png(raw, 1, 1)
+                legacy.validate_png(raw, 16, 16)
         with self.assertRaises(ValueError):
-            legacy.validate_png(valid, 2, 1)
+            legacy.validate_png(valid, 17, 16)
 
     def test_wrong_task_unretired_or_no_recreation_refused(self):
         for variant in ("wrong-task", "missing-destroy", "foreign-destroy", "no-stop"):
