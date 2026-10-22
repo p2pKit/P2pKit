@@ -1,5 +1,15 @@
+# Historical September 2026 audit checkpoint
+
+This preserves the earlier 234-row campaign, exact failures and decisions. It is
+**not the current issue inventory or release gate**. Later repairs, Kotlin updates
+and the retired bootstrap must not be undone to recreate it. Read the current
+[validation status](docs/testing/validation-status.md),
+[external campaign table](docs/validation/README.md#current-status),
+[release records](docs/README.md#test-and-release) and live GitHub issue dispositions.
+Terms such as “current” inside the preserved block refer to its original date.
+
 <!-- audit-current:start -->
-# Current audit continuation — scoped repairs approved; qualification still blocked
+# September audit continuation — scoped repairs approved; qualification still blocked
 
 **Continue from `main`.** Start with the [Mac handoff](docs/testing/mac-handoff.md)
 for clean checkout, setup, ownership and the remaining verification order.

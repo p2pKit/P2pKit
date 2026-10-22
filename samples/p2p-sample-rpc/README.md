@@ -72,10 +72,12 @@ opt-in JNI controls: `:p2p-transport-lan:macTcpNativeTest` (not physical LAN qua
    requires profile unlock, not identity replacement. History is memory-only; private request data is not
    automatically copied or exported. Failed cleanup prevents role replacement and preserves its evidence.
 
-The profile is an owner-only, passphrase-encrypted POSIX file store, not an OS-backed Desktop keystore.
-Production Windows protected profiles remain unavailable; native components exist, but secure loading,
-provider integration and runtime qualification are incomplete. See [application parity work](../../docs/rpc/application-samples.md)
-for exact persistence and privacy boundaries. Existing invitation/capacity harnesses remain separate;
+The maintained Desktop application uses passphrase-encrypted profiles: an owner-only POSIX store on
+Linux/macOS and the installed Windows native provider on admitted local NTFS. These are not OS-backed
+Desktop keystores. Windows productive loading and provider integration are implemented; complete installed
+W01–W11 qualification remains open. See [Windows scope](../../docs/rpc/windows-release-scope.md) and
+[application parity work](../../docs/rpc/application-samples.md) for exact persistence and privacy boundaries.
+The older standalone preview is not a substitute for the maintained MSI/installed runtime. Existing invitation/capacity harnesses remain separate;
 normal application screens use discovery, not the old invitation-first preview flow.
 
 A second permitted, non-self endpoint is required to verify pairing and RPC. Two identities/windows on one
@@ -246,5 +248,6 @@ post-retention cleanup, each real host platform and physical interoperability
 as required by the [qualification guide](../../docs/rpc/qualification.md).
 
 The tests `RpcSampleContractTest` and `RpcCapacityDriverTest` are deterministic
-unit regressions, not a load-test pass. Release Foundation remains **NOT_READY**;
-this sample changes none of its HOLDs or existing security/release gates.
+unit regressions, not a load-test pass. The maintained release pipeline and
+[external validation requirements](../../docs/validation/README.md#current-status)
+remain separate; historical bootstrap HOLDs are not current sample prerequisites.

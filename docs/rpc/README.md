@@ -1,12 +1,16 @@
 # Optional organization-LAN RPC
 
-RPC is published as part of **`0.8.0-rc2`** under
-`io.github.apdelrahman1911:p2p-rpc:0.8.0-rc2`. The
-[release record](../releases/0.8.0-rc2.md) binds the actual combined-source hosted
-checks, Maven publication and existing sample application artifacts.
-This does not establish complete physical-LAN, protected-profile or installed-app
-qualification. **Windows sample Host/Client remains unavailable**; see the
-[Windows prerelease scope](windows-release-scope.md).
+RPC is published under `io.github.apdelrahman1911:p2p-rpc`. Use
+[`LATEST_PUBLISHED_VERSION`](../../gradle.properties) consistently for RPC, core
+and LAN; the [release records](../README.md#test-and-release) bind each immutable
+source, hosted qualification and published application set. The example below
+uses the verified rc6 publication, not unpublished source from a later commit.
+
+Windows sample Host/Client and productive profile loading are implemented.
+Complete installed-standard-user, protected-profile and physical-LAN qualification
+is still incomplete; see [Windows scope](windows-release-scope.md) and
+[external validation status](../validation/README.md#current-status). Implementation,
+manual use, hosted component tests and full qualification are different claims.
 
 Earlier [implementation checks](implementation-status.md),
 [same-host qualification](qualification.md) and the
@@ -69,7 +73,7 @@ Use the matching published core/LAN/RPC version from Maven Central:
 
 ```kotlin
 commonMain.dependencies {
-    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc2")
+    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc6")
 }
 ```
 

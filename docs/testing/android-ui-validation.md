@@ -8,9 +8,10 @@ an API29/OEM result, or a replacement for release CI.
 
 The workflow `.github/workflows/android-ui-validation.yml` accepts `case=317`,
 `case=324`, or `case=both`; reusable `workflow_call` accepts the same string
-input (default `both`). Before the workflow exists on the default branch, push
-an authorized `work/**` candidate with `[android-ui-validation]` in its tip commit
-message to select the same lane. Ordinary branch pushes do not run an emulator.
+input (default `both`). Dispatch that workflow on the exact committed ref, or
+select its optional diagnostic from modular `ci.yml`. It has no marker-triggered
+push route: `[android-ui-validation]` in a commit message does not start it.
+Ordinary PR/main qualification does not imply this emulator diagnostic ran.
 
 The hosted job uses Linux KVM, a fresh Google APIs API35 x86_64 AVD, targetSdk37,
 Java17/21, the checked-in Gradle wrapper, strict dependency locks/checksums, and
@@ -19,7 +20,7 @@ this lane does not claim the API37 runtime/module/flag profile. Dependencies and
 SDK licenses must already be authorized; the workflow does not accept licenses.
 
 The controller refuses dirty source, builds both APKs, inspects their actual
-binary manifests, checks the exact five explicit instrumentation runners, and
+binary manifests, checks the maintained explicit instrumentation-runner inventory, and
 binds commit/tree, APK hashes, runtime and synthetic evidence token. The API37
 permission instrumentation remains the default runner; this lane explicitly
 selects only the UI runner. Each case uses a fresh install and the invocation's

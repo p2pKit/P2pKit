@@ -1,8 +1,12 @@
 # Windows profile component in the existing Desktop application
 
-This is **packaging wiring, not Windows RPC runtime or release qualification**. The partial custody ABI remains 13,
-with capability bits `0x43`; the Windows Host/Client availability gate remains disabled until independent first-load
-admission, full provider capability integration and protected-profile runtime tests pass.
+This describes **packaging wiring, not full Windows runtime qualification**. The native custody component
+still reports ABI13 / `0x43`; the complete managed provider has a distinct ABI1 / `0x7f` contract. The maintained
+installed loader/provider and Desktop Host/Client route are now implemented and included in rc4 and later.
+They retain strict installed-root/runtime/byte admission, with no flag-based or unprotected fallback.
+Complete ordinary-user protected-profile, failure/recovery and installed-lifetime evidence remains open in
+[#462](https://github.com/p2pKit/P2pKit/issues/462). See [current Windows scope](windows-release-scope.md);
+static image/MSI inspection and build-image probes do not satisfy those runtime criteria.
 
 ## Producer
 

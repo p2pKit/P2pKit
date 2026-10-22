@@ -100,7 +100,7 @@ restores the selected-host preference before normal pinned reconnect.
 | Discovery | Shared advisory API and strict numeric TXT hints implemented; frontend lists/status implemented; verify native discovery/interoperability. Opaque-only Bonjour records are not silently resolved or dialed. |
 | First-use enrollment | Opt-in shared protocol implemented; equivalent client-confirmation and host approve/reject dialogs implemented; validate actual exchanges. |
 | Trusted reconnect | Shared selected-pin persistence/backoff/ownership implemented; frontends wired; validate real loss/restart/revocation behavior. Never choose the first advertised host. |
-| Desktop persistence | Persistent encrypted POSIX profile implemented. Packaged normal-runtime Host → Client → Host and a second JVM process retained the same identity; profile locks and network owners closed. The actual Swing window also passed local Host/Client lifecycle and close checks. Trusted-peer reconnect remains open. Production Windows protected profiles remain unavailable; native components exist, but secure loading, provider integration and runtime qualification are incomplete. |
+| Desktop persistence | Persistent encrypted POSIX profile implemented. Packaged normal-runtime Host → Client → Host and a second JVM process retained the same identity; profile locks and network owners closed. The actual Swing window also passed local Host/Client lifecycle and close checks. Trusted-peer reconnect remains open. Windows productive loading/provider integration is implemented in the maintained installed application; full ordinary-user W01–W11 qualification remains open ([scope](windows-release-scope.md)). |
 | Trust management | Equivalent presence lists and exact-pin revoke/forget wired on both roles and all platforms; validate actual disconnect and re-approval exchanges. |
 | Complete monitoring | Editable typed forms implemented on all three. Bounded host admission/queue/outcome capture and independent host/client lifetime counters implemented; native presentation and interoperability checks remain open. |
 | Cross-platform verification | Build/UI tests plus authenticated application exchanges in all nine host/client directions; loss/restart/revocation and approval rejection tests. Shared unit tests alone do not prove this matrix. |
@@ -119,15 +119,18 @@ The normal Desktop window opens `~/.p2pkit-rpc-desktop` only after a local profi
 Use a separate strong 12–128-character passphrase, **not the computer login password**. PBKDF2-HMAC-SHA256
 (600,000 iterations, random 16-byte salt) derives a 256-bit key; existing bounded AES-GCM vault records
 bind their namespace as authenticated data. Only the salt/version header and encrypted records are persisted.
-The profile is owner-only, POSIX-only, rejects symlinks, and holds an exclusive process lock. Unlock failures
+The Linux/macOS profile is owner-only, rejects symlinks, and holds an exclusive process lock. Windows uses
+the separate installed native provider, with handle/ACL/NTFS admission and retained ownership—not POSIX
+permission emulation or an unprotected fallback. Unlock failures
 never erase/recreate existing identities. Incomplete initialization or corruption fails closed and needs
 owner review of the retained files; there is no automatic password recovery or reset.
 
 Stop closes the network role but preserves the unlocked profile for another role. Window close closes the
 role before releasing the profile and clearing its in-memory key best effort. Restart requires unlocking
 again, but not re-pairing. This is a sample encrypted-file profile, **not an OS-backed desktop keystore**;
-Android Keystore and iOS device-only Keychain remain platform-specific implementations. Windows lacks this
-POSIX storage implementation and must not be claimed as equivalent or release-ready.
+Android Keystore and iOS device-only Keychain remain platform-specific implementations. Windows does not
+use POSIX storage; its implemented native path and remaining installed-runtime qualification are described
+in [Windows scope](windows-release-scope.md). No cross-platform durability equivalence is implied.
 
 ## Editable application requests
 

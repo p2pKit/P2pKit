@@ -69,19 +69,23 @@ tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
 
-## Optional RPC workstream
+## Optional RPC library and samples
 
-The optional `:p2p-rpc` library and `:p2p-sample-rpc` example remain unpublished.
-Earlier source-bound JVM/Android/Apple checks and generated ABI/lock inputs are
-recorded in the [validation checkpoint](../rpc/implementation-status.md) and
-[official Mac27 continuation](../rpc/mac27-continuation-status.md). These scoped
-passes do not establish current full RPC/LAN or physical-device qualification;
-see the **NOT_READY** [Mac-only checkpoint](../rpc/mac-local-closeout-20261003.md).
-Follow the [RPC validation requirements](../rpc/qualification.md) for any
-outstanding or change-affected lane. Regenerate dependency inputs only through
-the complete maintained writer, review all fourteen tracked locks, and verify
-the frozen result; do not fabricate inputs or weaken checks. The historical
-main `org.jmdns` lock correction remains separate.
+`:p2p-rpc` is a published optional library; `:p2p-sample-rpc` supplies shared
+application and diagnostic code, not another Maven library. Use the matching
+core/LAN/RPC version from [`LATEST_PUBLISHED_VERSION`](../../gradle.properties)
+and its [immutable release record](../README.md#test-and-release). Earlier
+[implementation checkpoints](../rpc/implementation-status.md) remain dated
+history, not current publication or qualification status.
+
+Current checks live in modular CI. Follow the [RPC verification requirements](../rpc/qualification.md)
+and [external status](../validation/README.md#current-status) for remaining
+change-affected or real-device work. Productive Windows loading/profile support
+is implemented; complete installed-standard-user qualification remains open in
+[#462](https://github.com/p2pKit/P2pKit/issues/462). Do not equate that evidence gap
+with an absent implementation, or claim hosted component tests satisfy it.
+Regenerate dependency inputs only through the maintained writer, review all
+fourteen tracked locks and integrity changes, and verify the frozen result.
 
 ## Kit diagnostic teardown
 
@@ -206,26 +210,23 @@ On Windows PowerShell, use `.\gradlew.bat` and one command line instead of
 Bash continuations. The symlink prerequisites above still apply; do not skip
 tests when a runner lacks them. Stop Gradle after failures as well as success.
 
-`CI` runs these tasks on Ubuntu and Windows for every pull request, main push,
-manual run and weekly schedule. macOS uses the conservative
-[CI scope policy](../../CONTRIBUTING.md#ci-scope-policy): non-Markdown changes,
-manual dispatches and the weekly backstop request the full gate; no main-merge
-check is inferred from tree equality. Keep `complete-gate`
-required in repository rules: it aggregates both JVM hosts, repository checks,
-and independent iOS, full-platform, and artifact/consumer jobs. Any failed,
-cancelled, or skipped prerequisite fails the aggregate. Repository checks resolve
-scope once against the exact workflow source (the synthetic merge for PRs).
-Each worker validates that source and scope before running; lightweight changes
-omit heavy steps, not dependency-result validation. No new required-check name is needed. The separate Desktop
-matrix remains sample-test/packaging coverage.
+The maintained [`CI`](../../.github/workflows/ci.yml) all-component route runs
+JVM library/sample tests on Linux and Windows and the shared macOS gate, alongside
+separate native and packaging components. See the
+[CI scope policy](../../CONTRIBUTING.md#ci-scope-policy): all fourteen components
+are required even for documentation changes. Manual component selections and
+diagnostics are intentionally narrower and cannot independently pass the final
+`complete-gate`. Same-source valid results can be reused through the maintained
+aggregation, not by reusing a different commit's XML or inferring a pass from a
+merge with an identical tree.
 
-Each JVM host uploads XML/HTML reports as
-`jvm-library-tests-<matrix.os>-<run_attempt>` even after a test failure (seven-day
-retention). A setup/compilation failure may have no reports and still fails the
-job. Record the source SHA, OS/JDK, task outcomes, test counts, and any skips;
-a configured workflow or another OS's pass is not host-execution evidence.
-`scripts/tests/release-workflow-test.sh` checks the matrix, actual task command,
-report paths, and fail-closed dependency guard, with negative policy controls.
+Each component retains its actual reports/logs inside encrypted
+`ci-evidence-*` artifacts for fourteen days, with source, environment, run/attempt
+and hashes in the manifest. Setup/compilation failure can leave no test reports
+and remains a failure. Inspect actual tasks, counts and skips: a configured
+workflow or another host's pass is not execution evidence. The current task,
+report and aggregation contracts are in `scripts/ci_component.py`,
+`scripts/ci_evidence.py` and their focused tests.
 
 ## Platform execution evidence
 
@@ -613,95 +614,45 @@ review succeeds.
 
 ### Hosted candidate generation without changing the controller
 
-`Prepare dependency update candidate` (`dependency-update-candidate.yml`) is
-a separate, manual maintainer operation. It is **not ordinary FULL/Desktop,
-cache bootstrap, Release qualification or publication**. Its implementation
-must receive source review and hosted qualification before operational use;
-workflow registration alone does not establish that it can be dispatched from
-a branch. Do not repurpose the historical audit lock writer as a fallback.
+[`Prepare dependency update candidate`](../../.github/workflows/dependency-update-candidate.yml)
+is a separately dispatchable maintainer operation, not a release/cache-bootstrap
+prerequisite. It accepts five exact lowercase commit/tree inputs:
+`controller_sha`, `controller_tree`, `candidate_sha`, `candidate_tree` and
+`dependency_base_sha`. The controller must match the actual workflow SHA; the
+maintained `scripts/dependency_update.py` verifies both checkouts and base/candidate
+relationships. Review source/floor changes before generation. Do not substitute
+an old audit lock writer or choose `latest` output.
 
-The workflow uses five exact lowercase commit/tree inputs: `controller_sha`,
-`controller_tree`, `candidate_sha`, `candidate_tree`, `dependency_base_sha`.
-The controller must equal the genuine workflow source on `main` (or the
-reviewed Release Foundation branch during initial delivery). Both checkouts
-must descend from the fetched main baseline. The base must be an ancestor of
-the candidate with byte-identical original lock/verification files; it may be
-the reviewed Foundation parent, not necessarily current main. Candidate source
-changes, including dependency floors, are reviewed **before** dispatch.
+The hosted job uses **macOS 15 Intel**, the maintained setup and JDK21/JDK17
+routing, full-history separate controller/candidate checkouts, and a
+**10,800-second command budget** inside a 210-minute job. It runs the complete
+`prepare-dependency-update.sh` writer. Only the admitted tracked lockfiles and
+`gradle/verification-metadata.xml` may change; source injection, unknown output,
+missing provenance or failed cleanup remains an error. There is no automatic
+whole-generator retry.
 
-The immutable controller owns the existing canonical executor, bounded Gradle
-home, wrapper stop and native process receipts. The full maintained
-`prepare-dependency-update.sh <dependency_base_sha>` runs in a separate clean
-candidate. Only content changes to its original tracked Gradle locks and
-`gradle/verification-metadata.xml` are admitted afterward; source injection,
-staging, additions/deletions, links and mode changes fail. This does not weaken
-the executor's immutable-source or strict ordinary Gradle admission rules.
+The current `ci_evidence.py` wrapper checks the configured public recipient and
+records source/run/attempt and hashes. On generation failure as well as success,
+the workflow attempts to retain protected original reports in encrypted
+`dependency-evidence-<run>-<attempt>` artifacts for fourteen days. Upload failure
+or absent originals must be reported honestly. Only successful generation emits
+the separate `dependency-candidate-<run>-<attempt>` patch and safe JSON. Failed
+evidence is not a successful candidate. Private keys and publication credentials
+are never inputs to dependency resolution.
 
-One manual macOS ARM64 job shares the existing non-cancelling heavy queue.
-It uses JDK 17/21, Xcode 26.5 and the maintained SDK platform IDs; only missing
-SDK platforms are acquired by an owned command. The full generator has a
-7,200-second product allowance and the original 120-second stop allowance,
-within a 210-minute job including setup, finalization and upload. These are
-maintenance bounds, **not** measurements or new bootstrap/native deadlines.
-There is no automatic whole-generator retry. The maintained provenance
-reviewer's bounded individual download retries/fallbacks remain unchanged.
+Before adoption, independently inspect the **complete** generated diff, all
+fourteen locks and verification records, and attribute each new signer to its
+actual publisher using trusted public material. A downloaded key matching a
+signature or a newly written checksum alone is not publisher authentication.
+Use exact artifact IDs/digests and the patch hash; review necessary private
+originals through the protected evidence procedure. Then integrate the reviewed
+source/floor/lock/checksum set through a normal PR and run range-aware dependency
+checks and required CI. Generation does not itself authorize a merge or release.
 
-The actual owner-provided public recipient/policy pins are checked before
-acquisition and through upload, including their finite policy expiry and
-remaining-time headroom. This direct manual exporter does not grant initial
-C1/C2 authority or lift either ordinary activation HOLD. No custodian private
-key, signing/Portal secret, Actions-runtime token or GitHub API token enters
-the dependency process. An unexpected authenticated provenance requirement
-fails rather than forwarding a credential or skipping review.
-
-On successful command, stop, retirement and encrypted-export return, the
-workflow retains these **separate 14-day artifacts**, named by run/attempt:
-
-- `dependency-candidate-<run>-<attempt>`: the complete generated source patch
-  and safe JSON with exact controller/candidate/base/run bindings, hashes and
-  public signer/provenance fields extracted from the closed original log.
-- `dependency-evidence-<run>-<attempt>`: only `evidence.tar.gz.gpg` and its
-  manifest. Raw command/stop/ownership/input/provenance logs remain encrypted.
-  The remote reviewer's temporary artifact/key buffers are removed by its
-  existing cleanup; they are not represented as retained originals.
-
-Before adopting anything, independently inspect the **complete** generated
-diff and attribute every new signer to its actual publisher using trusted
-public publisher material. A signature matching a retrieved key, the safe
-JSON, or an agent's own source test is not that attribution approval. The
-owner retrieves/decrypts any needed private originals through the existing
-private procedure, never through an agent-visible private key. Use the exact
-artifact IDs/digests and recorded patch hash; do not select `latest` output.
-Only after that review should a normal dependency-update PR integrate the
-reviewed source/floor/lock/checksum set and run its required gates. This manual
-operation does not authorize a merge, close the advisory, or qualify any app.
-
-The two source checkouts use exact SHAs at depth 1, followed by an explicit
-heads-only `git fetch --no-tags --unshallow`. Pinned checkout's depth-0 path
-includes a tags refspec even with `fetch-tags: false`; it is not used here.
-Both checkouts must have complete ancestry and no fetched tag refs before the
-controller admits them. This does not alter or recreate any published tag.
-
-Known-closed failed products have a **separate diagnostic path**, never a
-candidate PASS. Only an actual canonical product exit 1–123 with matching
-original receipt, successful same-home stop, unchanged controller, no survivor,
-discovery/cancellation/error and known stream/handle/receipt closure is eligible.
-After caller captures close/fsync and the real same-process exporter returns,
-the failed Step emits a distinct return hash. Exact failure-only guards admit
-`dependency-failed-product-evidence-<run>-<attempt>` containing only ciphertext
-and manifest, with the same 14-day retention and original deadline/policy
-reserves. No public patch or success record is generated, and the generator's
-actual nonzero result and the failed overall job are preserved.
-
-Timeout/reserved/signal-style exits (including 124/125), cancellation, unknown
-ownership/close, source/policy/expiry failures, missing originals or failed
-export/upload remain failures; provisional files cannot authorize custody.
-Their private bytes may remain only on the ephemeral runner and are **not**
-claimed retained. Public logs contain only bounded purpose/reason/status data.
-A diagnosed repair/new invocation needs its own exact source/run identity,
-not an automatic retry or reuse of another attempt's receipts. The unchanged
-210-minute job includes mutually exclusive success/failure tails; failure
-diagnostics do not add another allowance or weaken successful generation.
+The former C1/H1/C2/H2 registrations, expiring bootstrap exceptions, custom cache
+provider and before-upload custody chain are **retired**. They are neither
+current generation requirements nor tests that subsequently passed. Their dated
+failure records remain historical; do not revive them to perform an update.
 
 Toolchain updates must curate foreign-host artifacts as well as the updating machine's resolved graph.
 The pre-build Kotlin policy requires all four Kotlin/Native host archives (Linux x64, macOS arm64/x64,
