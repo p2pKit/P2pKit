@@ -78,6 +78,42 @@ class LegacyTaskTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.validate(report, files)
 
+    def test_null_screenshot_diagnostic_never_substitutes_for_original_images(self):
+        report, files = fixture()
+        report["failure"] = {"stage": "initial-secure-foreground", "code": "SCREENSHOT_UNAVAILABLE"}
+        report["captureAttempts"] = [{"name": "initial-secure-foreground",
+            "operation": "GLOBAL_SCREENSHOT_REQUEST", "screenshotReturned": True,
+            "screenshotAvailable": False, "secureFlag": True}]
+        # Even a forged success outcome plus otherwise complete synthetic files must fail.
+        with self.assertRaises(ValueError):
+            self.validate(report, files)
+        del report["failure"]
+        report["captures"] = []
+        with self.assertRaises(ValueError):
+            self.validate(report, {"result.json": json.dumps(report).encode()})
+
+    def test_instrumentation_records_fixed_capture_boundary_without_relaxing_oracles(self):
+        path = (ROOT / "samples/p2p-sample-android/src/androidTest/java/dev/p2pkit/sample/android/"
+                "runtime/LegacyTaskPreviewInstrumentation.kt")
+        source = path.read_text()
+        capture = source.split("    private fun capture(", 1)[1].split("    private fun secure(", 1)[0]
+        self.assertLess(capture.index("captureAttempts.put(attempt)"),
+                        capture.index("checkLegacyCapture(SystemClock.elapsedRealtime() <= deadline"))
+        self.assertLess(capture.index('"GLOBAL_SCREENSHOT_REQUEST"'), capture.index("takeScreenshot()"))
+        self.assertLess(capture.index('"screenshotAvailable", returned != null'),
+                        capture.index("LegacyCaptureFailureCode.SCREENSHOT_UNAVAILABLE"))
+        for code in ("BODY_DEADLINE_EXCEEDED", "OUTPUT_DIRECTORY_UNAVAILABLE", "PNG_ENCODING_FAILED",
+                     "SAMPLE_OUTSIDE_SCREENSHOT", "POSITIVE_CONTROL_NOT_CAPTURED", "SECURE_PATTERN_CAPTURED"):
+            self.assertIn("LegacyCaptureFailureCode." + code, capture)
+        self.assertIn("if (visible == true) checkLegacyCapture(matches.all { it }", capture)
+        self.assertIn("if (visible == false) checkLegacyCapture(matches.none { it }", capture)
+        self.assertIn("finally { bitmap.recycle() }", capture)
+        self.assertIn('diagnostic.put("code", it.code.name)', source)
+        self.assertNotIn("error.message", source)
+        self.assertNotIn("stackTrace", source)
+        self.assertIn("deadline = SystemClock.elapsedRealtime() + 90_000", source)
+        self.assertIn("task.get(5, TimeUnit.SECONDS)", source)
+
     def test_missing_duplicate_reordered_captures_refused(self):
         for change in (lambda c: c.pop(), lambda c: c.append(c[0]), lambda c: c.reverse()):
             report, files = fixture()
