@@ -95,9 +95,29 @@ assert_fails "unavailable exact device is rejected" \
     select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' "${RUNTIME_JSON//true/false}"
 assert_fails "malformed exact identity is rejected" \
     select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' "${RUNTIME_JSON//$UUID_PHONE_17_A/not-a-uuid}"
+# Construct the negative fixture separately: a failed command substitution
+# inside assert_fails would otherwise turn invalid/empty JSON into a false pass.
+DUPLICATE_RUNTIME_JSON="$(jq -ce --arg second "$UUID_PHONE_17_B" '
+    .devices["com.apple.CoreSimulator.SimRuntime.iOS-26-5"] |=
+        . + [(.[0] | .udid = $second)]
+' <<< "$RUNTIME_JSON")"
+jq -e --arg first "$UUID_PHONE_17_A" --arg second "$UUID_PHONE_17_B" '
+    .devices["com.apple.CoreSimulator.SimRuntime.iOS-26-5"]
+    | length == 2 and map(.udid) == [$first, $second]
+      and all(.[]; .name == "iPhone 17" and .isAvailable == true and .state == "Shutdown")
+' <<< "$DUPLICATE_RUNTIME_JSON" >/dev/null
+for uuid in "$UUID_PHONE_17_A" "$UUID_PHONE_17_B"; do
+    SINGLE_RUNTIME_JSON="$(jq -ce --arg uuid "$uuid" '
+        .devices["com.apple.CoreSimulator.SimRuntime.iOS-26-5"] |=
+            map(select(.udid == $uuid))
+    ' <<< "$DUPLICATE_RUNTIME_JSON")"
+    assert_equal "$uuid" \
+        "$(select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' "$SINGLE_RUNTIME_JSON")" \
+        "each duplicate-runtime candidate is independently admissible"
+done
 assert_fails "duplicate runtime device is not arbitrarily selected" \
     select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-5' \
-    "$(jq '.devices["com.apple.CoreSimulator.SimRuntime.iOS-26-5"] *= 2' <<< "$RUNTIME_JSON")"
+    "$DUPLICATE_RUNTIME_JSON"
 assert_equal "$UUID_PHONE_17_B" \
     "$(select_runtime_simulator_udid 'iPhone 17' 'com.apple.CoreSimulator.SimRuntime.iOS-26-2' "$RUNTIME_JSON")" \
     "already booted exact runtime device remains admissible"
@@ -189,5 +209,5 @@ release_ios_run_lock "$LOCK_DIR"
 acquire_ios_run_lock "$LOCK_DIR"
 release_ios_run_lock "$LOCK_DIR"
 
-echo "run-ios-app tests: 17 passed"
+echo "run-ios-app shell controls: passed"
 python3 "$REPO_ROOT/scripts/tests/ios-launcher-lifecycle-test.py"
