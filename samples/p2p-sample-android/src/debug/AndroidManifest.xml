@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Instrumented legacy overview observer reads only this provider's action resource. -->
+  <queries>
+    <package android:name="com.google.android.apps.nexuslauncher" />
+  </queries>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <application>
     <service

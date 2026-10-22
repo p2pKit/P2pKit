@@ -80,12 +80,43 @@ def validate_state(state, *, secure, activity, task):
          len({tuple(point) for point in points}) == 4, "Invalid synthetic sample geometry")
 
 
+
+def validate_presentation(item, state):
+    receipt = item.get("presentation")
+    need(isinstance(receipt, dict) and set(receipt) ==
+         {"startedElapsedMillis", "deadlineElapsedMillis", "completedElapsedMillis", "budgetMillis", "operation",
+          "root", "baselineDraws", "clearReturned", "invalidatedNano", "polls", "frameCount", "observedDraws",
+          "queriedNano", "frameIndex", "postedNano", "readyNano", "presentedNano", "lastRootGuard"},
+         "Missing exact bounded presentation observation")
+    for key in set(receipt) - {"operation", "root", "clearReturned", "lastRootGuard"}:
+        need(type(receipt[key]) is int, "Invalid presentation scalar")
+    need(receipt["operation"] == receipt["lastRootGuard"] == "READY" and receipt["clearReturned"] is True and
+         receipt["budgetMillis"] == 5000 and
+         0 <= receipt["startedElapsedMillis"] <= receipt["completedElapsedMillis"] <= receipt["deadlineElapsedMillis"] <=
+         receipt["startedElapsedMillis"] + 5000 and receipt["completedElapsedMillis"] <= item["elapsedMillis"] and
+         0 < receipt["invalidatedNano"] <= receipt["presentedNano"] <= receipt["queriedNano"] < 2**63 - 1 and
+         0 <= receipt["frameIndex"] < receipt["frameCount"] <= 1024 and receipt["polls"] > 0 and
+         0 < receipt["baselineDraws"] < receipt["observedDraws"] == state["viewDraws"],
+         "Presentation was missing, stale, undefined, late or only a CPU draw")
+    root = receipt["root"]
+    need(isinstance(root, dict) and set(root) == {"windowId", "package", "bounds", "viewBounds"} and
+         root == item.get("activeRootAfter") and type(root["windowId"]) is int and root["windowId"] >= 0 and
+         root["package"] == PACKAGE, "Wrong or changed active owned presentation window")
+    bounds, view = root["bounds"], root["viewBounds"]
+    need(all(isinstance(rect, list) and len(rect) == 4 and all(type(x) is int for x in rect)
+             for rect in (bounds, view)), "Invalid presentation rectangles")
+    need(bounds[0] <= view[0] < view[2] <= bounds[2] and bounds[1] <= view[1] < view[3] <= bounds[3] and
+         view[2] - view[0] == state["viewWidth"] and view[3] - view[1] == state["viewHeight"] and
+         all(view[0] <= x < view[2] and view[1] <= y < view[3] for x, y in state["samplePoints"]),
+         "Presentation window does not contain the actual synthetic view and sample points")
+
+
 def validate_report(raw, token, source, tree, api, files):
     value = owner.decode_json(raw)
     need(api in IMAGES and value.get("api") == api and value.get("case") == "479" and
          value.get("token") == token and value.get("sourceCommit") == source and
          value.get("declaredSourceTree") == tree and value.get("targetSdk") == 37 and
-         value.get("captureObservationSchema") == 2 and value.get("outcome") == owner.PASS and
+         value.get("captureObservationSchema") == 3 and value.get("outcome") == owner.PASS and
          value.get("syntheticOnly") is True and value.get("recentsReviewRequired") is True and
          value.get("cleanup") == "OWNED_ACTIVITIES_DESTROYED" and
          not any(key in value for key in ("failure", "cleanupFailureType")),
@@ -131,6 +162,10 @@ def validate_report(raw, token, source, tree, api, files):
          observer["serviceFlags"] & 18 == 18 and type(observer["closeActionId"]) is int and
          (observer["closeActionId"] == 0 if api == 24 else observer["closeActionId"] > 0) and
          observer["maxNodes"] == 256 and observer["maxDepth"] == 24, "Unbound Recents semantic observer")
+    lookup = value.get("recentsProviderLookup")
+    need((lookup == {"operation": "COMPLETE", "packageMatches": True, "distinctUid": True} and
+          type(lookup["packageMatches"]) is bool and type(lookup["distinctUid"]) is bool)
+         if api == 32 else lookup is None, "Actual provider identity/resources were not admitted")
     admission = value.get("recentsAdmission")
     need(isinstance(admission, dict) and set(admission) ==
          {"startedElapsedMillis", "deadlineElapsedMillis", "completedElapsedMillis", "budgetMillis",
@@ -158,6 +193,7 @@ def validate_report(raw, token, source, tree, api, files):
                 validate_state(item.get(key), secure=not visible, activity=activity, task=value["taskId"])
             need(state_binding(item["stateBefore"]) == state_binding(item["stateAfter"]),
                  "Owner/window/view or geometry changed during capture")
+            validate_presentation(item, item["stateBefore"])
         else:
             visible = None
             need("stateBefore" not in item and "stateAfter" not in item and item.get("pixelVariation") is True,
@@ -193,7 +229,7 @@ def validate_report(raw, token, source, tree, api, files):
                      outer[1] <= rectangle[1] < rectangle[3] <= outer[3], "Task-card anchor is hidden or out of bounds")
         if kind == "UNAVAILABLE":
             need(visible is False and set(item) ==
-                 {"name", "elapsedMillis", "observation", "stateBefore", "stateAfter"},
+                 {"name", "elapsedMillis", "observation", "stateBefore", "stateAfter", "presentation", "activeRootAfter"},
                  "Unavailable observation cannot invent pixels or replace required images")
             continue
         need(item.get("file") == name + ".png" and type(item.get("width")) is int and item["width"] > 0 and
@@ -216,6 +252,7 @@ def validate_report(raw, token, source, tree, api, files):
     need(first["observation"] == closing["observation"] == "BITMAP" and
          state_binding(first["stateBefore"]) == state_binding(protected["stateBefore"]) ==
          state_binding(closing["stateBefore"]) and
+         first["presentation"]["root"] == protected["presentation"]["root"] == closing["presentation"]["root"] and
          (first["width"], first["height"]) == (closing["width"], closing["height"]) and
          (protected["observation"] == "UNAVAILABLE" or
           (first["width"], first["height"]) == (protected["width"], protected["height"])),
