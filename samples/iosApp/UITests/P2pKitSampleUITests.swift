@@ -226,12 +226,18 @@ final class P2pKitSampleUITests: XCTestCase {
         }
     }
 
+    /// Share the exact readiness predicate between the live wait and semantic controls.
+    @MainActor
+    private func runningPredicate() -> NSPredicate {
+        NSPredicate(format: "label == %@", "Status: Running")
+    }
+
     /// Stop is present as soon as a kit exists, BEFORE async startup finishes.
     /// Use one existing 30-second budget for the semantic readiness boundary.
     @MainActor
     private func waitForRunning(status: Any, timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", "Status: Running"),
+            predicate: runningPredicate(),
             object: status
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
@@ -253,13 +259,16 @@ final class P2pKitSampleUITests: XCTestCase {
         let status = StartupStatusFixture()
         // Models the real state after kit assignment while advertise/discover wait.
         XCTAssertTrue(status.stopExists)
-        XCTAssertFalse(waitForRunning(status: status, timeout: 0.01),
-                       "a startup that never completes must fail its bounded wait")
+        // Predicate semantics must not depend on XCTWaiter's polling schedule.
+        // The separate delayed-publication control still exercises the real wait.
+        let predicate = runningPredicate()
+        XCTAssertFalse(predicate.evaluate(with: status),
+                       "Stop presence does not mean startup completed")
         status.label = "Status: Running"
-        XCTAssertTrue(waitForRunning(status: status, timeout: 0.01))
+        XCTAssertTrue(predicate.evaluate(with: status))
         for label in ["Status: Not started", "Status: Stopped", "Status: Starting", "Status: Failed"] {
             status.label = label
-            XCTAssertFalse(waitForRunning(status: status, timeout: 0.01))
+            XCTAssertFalse(predicate.evaluate(with: status))
         }
     }
 

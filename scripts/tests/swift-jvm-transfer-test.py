@@ -599,5 +599,54 @@ class SampleTransferPosixBindingControls(unittest.TestCase):
                 self.assert_binding(changed)
 
 
+class RunningOracleControls(unittest.TestCase):
+    """Static shared-predicate/registration checks, not native XCTest execution."""
+
+    def source(self):
+        return (ROOT / "samples/iosApp/UITests/P2pKitSampleUITests.swift").read_text()
+
+    def assert_oracle(self, source):
+        predicate = source.split("private func runningPredicate() -> NSPredicate {", 1)[1].split("\n    }", 1)[0]
+        self.assertEqual('NSPredicate(format: "label == %@", "Status: Running")', predicate.strip())
+        wait = source.split("private func waitForRunning(status: Any, timeout: TimeInterval) -> Bool {", 1)[1]
+        wait = wait.split("\n    }", 1)[0]
+        self.assertIn("predicate: runningPredicate(),\n            object: status", wait)
+        self.assertIn("return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed", wait)
+        self.assertIn("guard waitForRunning(status: status, timeout: 30) else {", source)
+        delayed = source.split("func testRunningOracleWaitsForDelayedStartupPublicationWithoutAnotherTap() {", 1)[1]
+        delayed = delayed.split("\n    }", 1)[0]
+        self.assertIn('DispatchQueue.main.async { status.label = "Status: Running" }', delayed)
+        self.assertIn("XCTAssertTrue(waitForRunning(status: status, timeout: 2))", delayed)
+        semantic = source.split("func testRunningOracleRejectsStartingEvenWhenStopIsAlreadyPresent() {", 1)[1]
+        semantic = semantic.split("\n    }", 1)[0]
+        self.assertIn("XCTAssertTrue(status.stopExists)", semantic)
+        self.assertIn("let predicate = runningPredicate()", semantic)
+        self.assertEqual(2, semantic.count("XCTAssertFalse(predicate.evaluate(with: status)"))
+        self.assertIn('status.label = "Status: Running"\n        XCTAssertTrue(predicate.evaluate(with: status))', semantic)
+        self.assertIn('for label in ["Status: Not started", "Status: Stopped", "Status: Starting", "Status: Failed"]', semantic)
+        self.assertNotIn("waitForRunning(", semantic)
+        self.assertNotIn("XCTWaiter", semantic.replace("XCTWaiter's polling schedule", ""))
+
+    def test_exact_shared_running_predicate_and_original_waits_are_preserved(self):
+        self.assert_oracle(self.source())
+
+    def test_weakened_predicate_unshared_oracle_or_short_scheduled_fixture_is_rejected(self):
+        source = self.source()
+        for before, after in (
+            ('NSPredicate(format: "label == %@", "Status: Running")',
+             'NSPredicate(format: "label != %@", "Status: Not started")'),
+            ('NSPredicate(format: "label == %@", "Status: Running")', 'NSPredicate(value: true)'),
+            ("predicate: runningPredicate(),", "predicate: NSPredicate(value: true),"),
+            ("let predicate = runningPredicate()", "let predicate = NSPredicate(value: true)"),
+            ("guard waitForRunning(status: status, timeout: 30)", "guard waitForRunning(status: status, timeout: 60)"),
+            ("XCTAssertTrue(waitForRunning(status: status, timeout: 2))", "XCTAssertTrue(status.stopExists)"),
+            ("XCTAssertTrue(predicate.evaluate(with: status))", "XCTAssertTrue(waitForRunning(status: status, timeout: 0.01))"),
+            ('"Status: Stopped", "Status: Starting", "Status: Failed"', '"Status: Stopped", "Status: Failed"'),
+        ):
+            self.assertIn(before, source)
+            with self.subTest(mutation=before), self.assertRaises(AssertionError):
+                self.assert_oracle(source.replace(before, after))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
