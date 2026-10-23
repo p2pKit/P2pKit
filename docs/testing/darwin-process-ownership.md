@@ -25,8 +25,10 @@ environment reader, process-name sweep, `killpg`, or PID-signaling fallback.
    original parent and credentials, and acquire an opaque Mach audit token.
 4. Release the gate. `exec` preserves the bound process lifetime; signaling
    reacquires/revalidates a token across exec-version changes. EOF, timeout or
-   failed admission refuses product execution. Gate admission is bounded to
-   ten seconds; it does not relax a product's test deadline.
+   failed admission refuses product execution. The parent uses a sixty-second
+   wait budget for the gate's initial readiness byte. The child's separate release
+   wait stays at ten seconds, starting after it writes readiness; neither wait
+   relaxes a product's test deadline.
 5. Pass an additional anonymous-pipe endpoint through the gate. The controller
    retains **both** endpoints until finalization, preventing kernel-object reuse.
    libproc's bounded descriptor census can identify that same kernel pipe in a
@@ -63,6 +65,26 @@ command, gate release, direct bound identity, and each ownership proof. No opaqu
 token bytes or arbitrary process arguments/environment are collected by discovery.
 Foreign-session observations confer no signaling authority; receipts record the
 reason and process lifetime, not raw session IDs.
+
+### Internal startup allowance
+
+The parent readiness wait was increased from **10 to 60 seconds** after
+[run 39968684370](https://github.com/p2pKit/P2pKit/actions/runs/39968684370)
+recorded `WAIT_TIMEOUT` before admitting the Intel `bootstatus` command
+([investigation #515](https://github.com/p2pKit/P2pKit/issues/515)). This is an
+owner-authorized operational-budget adjustment, not a demonstrated explanation
+of the OS/interpreter delay or a guarantee that it cannot recur. The old failure
+remains a failure. Its complete phase duration includes setup and retirement,
+so it is not a measurement of the readiness wait.
+
+The allowance applies to every `DarwinScope` launch and adds 50 seconds of
+configured startup headroom; deferred cancellation may consequently take longer.
+The select timeout is not a hard OS-scheduling wall-clock bound. It is still one select and
+at most one read: no retry, polling loop, early success, relaxed ownership check,
+or execution without `R`/`G`. The Intel caller's existing 120/600-second work
+deadlines start before launch and continue to include this wait. Child release,
+test, cleanup, and GitHub job budgets are unchanged. Fresh hosted execution is
+required to assess this allowance; a later pass alone cannot prove the cause.
 
 ## Fail-closed limitations
 

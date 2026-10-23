@@ -45,6 +45,9 @@ MAX_PROCESSES = 65536
 MAX_PROCESS_FDS = 65536
 SIG_TERM = 15
 SIG_KILL = 9
+# Internal interpreter-startup headroom, not a requested-command/test deadline.
+# The child gate separately retains its ten-second wait for an exact release.
+DARWIN_GATE_READY_SECONDS = 60
 # Diagnostic labels only. A kernel name never grants ownership, exclusion or
 # signal authority; unknown/shortened names are deliberately not guessed.
 DARWIN_DIAGNOSTIC_ROLES = frozenset((
@@ -1261,7 +1264,7 @@ class DarwinScope(PosixScope):
             # child exit; failed admission still retains the original leader.
             ready = None
             launch["gateReadiness"] = "WAITING"
-            if not select.select([ready_read], [], [], 10)[0]:
+            if not select.select([ready_read], [], [], DARWIN_GATE_READY_SECONDS)[0]:
                 launch["gateReadiness"] = "WAIT_TIMEOUT"
             else:
                 launch["gateReadiness"] = "READING"

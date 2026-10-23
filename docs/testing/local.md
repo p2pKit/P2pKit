@@ -259,8 +259,11 @@ reported completion just before that deadline but did not exit within it. This
 operational headroom is not permission to accept a readiness message instead of
 actual exit 0, closed output, and fresh Booted readback. Other caller-managed
 commands and the shared FULL simulator route retain a 120-second per-command
-work ceiling. The existing
-15-second TERM and 5-second KILL allowances bound cleanup, not successful work.
+work ceiling. The existing Darwin retirement allowances are 120 seconds for
+TERM and 120 seconds for KILL (other backends retain 15 and 5 seconds); these
+bound cleanup, not successful work. The separate
+[private exec-gate startup allowance](darwin-process-ownership.md#internal-startup-allowance)
+does not extend these command or cleanup budgets.
 Actual Booted readiness and owned Shutdown retirement remain required. This
 command budget changes no test timeout or assertion; one measured cold start is
 neither a reliability guarantee nor Native test qualification.
