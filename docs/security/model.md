@@ -123,7 +123,7 @@ before its first content to request theme-based task previews instead of real
 screenshots. Normal foreground screenshots remain possible; this is not
 `FLAG_SECURE` or general screenshot prevention.
 
-The unpublished rc7 candidate sets `FLAG_SECURE` before the first content on
+The rc7 Android sample sets `FLAG_SECURE` before the first content on
 API24–32 and keeps it for the window's lifetime, including stop/reentry and
 recreation. Unlike the API33+ policy, this deliberately restricts foreground
 screenshots, screen recording and non-secure displays as well as task previews.
