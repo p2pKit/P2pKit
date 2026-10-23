@@ -1,6 +1,6 @@
 # P2pKit
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.apdelrahman1911/p2p-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.apdelrahman1911/p2p-core/0.8.0-rc6)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.apdelrahman1911/p2p-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.apdelrahman1911/p2p-core/0.8.0-rc7)
 [![CI](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -8,14 +8,14 @@ P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
 messaging, and durable file transfer over a reachable local network. It
 supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
-**Current source version:** `0.8.0-rc7` (unpublished development candidate; qualification pending).
-**Latest published version:** `0.8.0-rc6`.
+**Current source version:** `0.8.0-rc7` (development release candidate).
+**Latest published version:** `0.8.0-rc7`.
 
-`0.8.0-rc6` is available from Maven Central under `io.github.apdelrahman1911`.
-The [matching development samples](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc6)
+`0.8.0-rc7` is available from Maven Central under `io.github.apdelrahman1911`.
+The [matching development samples](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc7)
 provide an Android APK, Windows x64 MSI, macOS ARM64 DMG and Linux x64 DEB.
 The library and four applications come from the same approved source commit;
-see the [release record](docs/releases/0.8.0-rc6.md) for hashes and verification.
+see the [release record](docs/releases/0.8.0-rc7.md) for hashes and verification.
 
 This is a release candidate, not a production-audit or physical-device pass.
 Campaign status remains governed by the
@@ -48,7 +48,7 @@ selected authenticated host, dial-only clients, registered typed procedures,
 bounded recovery, administrator pairing and best-effort notifications. It
 reuses core/LAN rather than changing ordinary P2P defaults.
 
-RPC is included in the `0.8.0-rc6` Maven publication and integrated as a section
+RPC is included in the `0.8.0-rc7` Maven publication and integrated as a section
 in the existing samples. **Published rc3 Windows RPC Host/Client remains
 unavailable**; its public-provider and start-gate refusals are part of those
 immutable binaries.
@@ -78,11 +78,11 @@ end-to-end SDK integration; see the [Java interop limitations](docs/compatibilit
 
 | Published module | Purpose |
 | --- | --- |
-| `io.github.apdelrahman1911:p2p-core:0.8.0-rc6` | Public API, protocol, security, sessions, and file transfer |
-| `io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc6` | Multiplatform LAN discovery and TCP transport |
-| `io.github.apdelrahman1911:p2p-rpc:0.8.0-rc6` | Optional typed organization-LAN RPC |
-| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.8.0-rc6` | Optional Android provisioning sidecar |
-| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc6` | Optional JVM/Desktop manual-endpoint sidecar |
+| `io.github.apdelrahman1911:p2p-core:0.8.0-rc7` | Public API, protocol, security, sessions, and file transfer |
+| `io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc7` | Multiplatform LAN discovery and TCP transport |
+| `io.github.apdelrahman1911:p2p-rpc:0.8.0-rc7` | Optional typed organization-LAN RPC |
+| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.8.0-rc7` | Optional Android provisioning sidecar |
+| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc7` | Optional JVM/Desktop manual-endpoint sidecar |
 
 ### Kotlin Multiplatform
 
@@ -90,8 +90,8 @@ end-to-end SDK integration; see the [Java interop limitations](docs/compatibilit
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.apdelrahman1911:p2p-core:0.8.0-rc6")
-            implementation("io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc6")
+            implementation("io.github.apdelrahman1911:p2p-core:0.8.0-rc7")
+            implementation("io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc7")
         }
     }
 }
@@ -101,9 +101,9 @@ kotlin {
 
 ```kotlin
 dependencies {
-    implementation("io.github.apdelrahman1911:p2p-transport-lan-android:0.8.0-rc6")
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-android:0.8.0-rc7")
     // Optional hotspot/Wi-Fi provisioning:
-    implementation("io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.8.0-rc6")
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.8.0-rc7")
 }
 ```
 
@@ -111,15 +111,15 @@ dependencies {
 
 ```kotlin
 dependencies {
-    implementation("io.github.apdelrahman1911:p2p-transport-lan-jvm:0.8.0-rc6")
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-jvm:0.8.0-rc7")
     // Optional manual-endpoint provisioning:
-    implementation("io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc6")
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc7")
 }
 ```
 
 Kotlin Multiplatform root coordinates select their platform variants. The
 complete 21-coordinate publication set is recorded in the
-[`0.8.0-rc6` release record](docs/releases/0.8.0-rc6.md).
+[`0.8.0-rc7` release record](docs/releases/0.8.0-rc7.md).
 
 ### Direct Swift application
 
@@ -133,7 +133,7 @@ application builds `P2pKitShared.xcframework` from this repository:
 The maintained Swift sample and provenance-checked integration live under
 [`samples/iosApp`](samples/iosApp).
 
-The `0.8.0-rc6` release uses Kotlin 2.4.20,
+The `0.8.0-rc7` release uses Kotlin 2.4.20,
 with the iOS 14 library floor retained explicitly. Kotlin Multiplatform
 applications that link their own Apple binary must apply the iOS 14 Kotlin/Native
 override documented in
@@ -319,6 +319,31 @@ and [RPC/Windows limitations](docs/rpc/windows-release-scope.md).
 
 ## Validation status
 
+The [`0.8.0-rc7` release record](docs/releases/0.8.0-rc7.md) binds release source
+`bc3a28e8e381b49585fb697160cb954bc642ea29` to thirteen successful components from
+original main run `39863595940/1`, the unchanged-source Intel replacement
+`39864735586/1`, and accepted fourteen-component aggregate `39879254089/1`.
+The original run and its Intel/derived complete gate remain **failed** after a
+CoreSimulator runtime-enumeration command timeout. The underlying cause remains
+unknown; the failed Intel job receives no native-test credit. The four original
+application packages were not rebuilt for aggregation.
+
+Protected publisher `39908887966/1` verified 242 remote Maven files against
+the signed bundle and completed the isolated remote-consumer gate. Its original
+log markers and publication-build SBOM are retained; inner consumer captures
+are not. Separate sample publisher `39914877731/1` delivered the frozen set;
+all seven complete anonymous public downloads (364,059,569 bytes) matched their
+recorded hashes. These are byte/delivery checks, not installed-app tests.
+
+Main qualification includes API/ABI, strict Dokka, dependency/SBOM, local
+publication shape and unsigned local consumers, Swift/XCFramework checks, and
+native ARM64/Intel simulator execution. It is distinct from protected signing,
+remote Maven verification and public sample delivery. Per-component counts and
+the two native diagnostic skips remain explicit in the record.
+**High #120 remains open/unresolved; stable/production remains NOT_READY.**
+
+### Historical scope and unchanged gaps
+
 The [`0.8.0-rc6` release record](docs/releases/0.8.0-rc6.md) records the exact
 main-source modular qualification, API/ABI, strict Dokka, dependency/SBOM,
 publication shape and consumers, Swift/XCFramework checks, and native ARM64
@@ -340,10 +365,11 @@ Focused API35 credential-lifecycle and API37 permission/recreation/TCP cases
 have separately recorded hosted acceptance; they are not a general device suite
 or installed tests of the published packages. The published `0.8.0-rc6` retains
 its [API24–32 preview limitation](docs/releases/0.8.0-rc6.md#remaining-limitations).
-The unpublished rc7 candidate adds lifetime `FLAG_SECURE` on those APIs, including
-its foreground-capture tradeoff. The source-bound synthetic API24 and API32
-witnesses have accepted original task-preview/lifecycle evidence; this does not
-establish natural-credential, physical-device or all-OEM coverage. See the
+The rc7 Android sample adds lifetime `FLAG_SECURE` on those APIs, including
+its foreground-capture tradeoff. The earlier-source synthetic API24 and API32
+witnesses retain their accepted original task-preview/lifecycle evidence; they
+are not re-execution at the rc7 release source and do not establish
+natural-credential, physical-device or all-OEM coverage. See the
 [current policy and evidence limits](docs/security/model.md#android-sample-credential-previews).
 Android host JVM tests (including Robolectric shadows) are not ART or physical-device evidence.
 

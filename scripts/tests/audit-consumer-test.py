@@ -1487,6 +1487,10 @@ class ConsumerGateTest(unittest.TestCase):
                 boundary = boundary.replace(KOTLIN_VERSION, "2.4.10")
             elif version in ("0.8.0-rc3", "0.8.0-rc4", "0.8.0-rc5", "0.8.0-rc6"):
                 boundary = boundary.replace(KOTLIN_VERSION, "2.4.20")
+            elif version == "0.8.0-rc7":
+                # Candidate producer contract; remote rc7 verification is a separate release prerequisite.
+                # Keep .410.7 rather than inheriting rc2–6's immutable .410.6 bytes.
+                boundary = boundary.replace(KOTLIN_VERSION, "2.4.20")
             path.write_text(boundary)
 
     def assert_complete_latest_published_contract(self, version):
@@ -1527,6 +1531,52 @@ class ConsumerGateTest(unittest.TestCase):
 
     def test_latest_published_rc6_complete_contract(self):
         self.assert_complete_latest_published_contract("0.8.0-rc6")
+
+    def test_latest_published_rc7_complete_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc7")
+
+    def test_latest_published_rc7_keeps_producer_versions_with_updated_catalog(self):
+        catalog = self.root / "gradle/libs.versions.toml"
+        catalog.write_text(catalog.read_text().replace(KOTLIN_VERSION, "98.0.0").replace(COROUTINES_VERSION, "99.0.0"))
+        self.assert_complete_latest_published_contract("0.8.0-rc7")
+        self.assertIn('kotlin("jvm") version "98.0.0" apply false',
+                      (self.work / "consumer/build.gradle.kts").read_text())
+
+    def test_latest_published_rc7_rejects_old_private_version_substitution(self):
+        script = self.root / "scripts/check-published-consumers.sh"
+        original = script.read_text()
+        prefix, block = original.split("        0.8.0-rc7)\n", 1)
+        contract, suffix = block.split("            ;;", 1)
+        self.assertIn('LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"', contract)
+        script.write_text(prefix + "        0.8.0-rc7)\n" + contract.replace(
+            'LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"',
+            'LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.6"') + "            ;;" + suffix)
+        self.select_latest_published_fixture("0.8.0-rc7")
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "P2PKIT_CONSUMER_WORK_DIR": str(self.work)},
+                               arguments=("--latest-published",), home=self.work / "gradle-home")
+        self.assert_rejected(result, "wrong producer-private JmDNS expectation")
+        self.assertFalse(self.calls("xcrun"))
+        self.assertEqual(1, len(self.calls("gradle")))
+        self.assert_ancestor_bindings(self.calls("curl") + self.calls("gradle"))
+
+    def test_latest_published_rc7_rejects_relabelled_producer_metadata(self):
+        self.select_latest_published_fixture("0.8.0-rc7")
+        for group, artifact in (("org.jetbrains.kotlin", "kotlin-stdlib"),
+                                ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm")):
+            with self.subTest(artifact=artifact):
+                mutation = {"artifact": "p2p-transport-lan-jvm",
+                            "values": {"groupId": group, "artifactId": artifact,
+                                       "version": "99.0.0", "scope": "compile"}}
+                if artifact == "kotlinx-coroutines-core-jvm":
+                    # Replace the existing dependency, rather than failing on a duplicate.
+                    mutation["name"] = artifact
+                result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                    "FAKE_LAN_POM_MUTATION": json.dumps(mutation)},
+                    arguments=("--latest-published",))
+                self.assert_rejected(result, "POM dependency version/scope mismatch")
+        self.assertFalse(self.calls("gradle"))
+        self.assertFalse(self.calls("xcrun"))
 
     def test_repository_actual_latest_published_has_reviewed_complete_contract(self):
         # Deliberately select the maintained property, not a hard-coded old RC.
@@ -1584,11 +1634,12 @@ class ConsumerGateTest(unittest.TestCase):
         cases = (
             "ConsumerGateTest.test_latest_published_selection_keeps_current_source_private_version",
             "ConsumerGateTest.test_latest_published_rc6_rejects_current_private_version_substitution",
+            "ConsumerGateTest.test_latest_published_rc7_rejects_old_private_version_substitution",
         )
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "-v", *cases],
                                 cwd=ROOT, env=environment, text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, self.output(result))
-        self.assertIn("Ran 2 tests in ", result.stderr)
+        self.assertIn("Ran 3 tests in ", result.stderr)
         for case in cases:
             self.assertIn(f'{case.rsplit(".", 1)[1]} (__main__.{case}) ... ok', result.stderr)
         self.assertTrue(result.stderr.rstrip().endswith("\nOK"), self.output(result))
@@ -1684,7 +1735,7 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertFalse(self.calls("xcrun"))
 
     def test_latest_published_unknown_contract_fails_before_remote_or_gradle_boundary(self):
-        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc7", "0.8.0-rc20", "0.8.0-rc2-extra", "0.8.0", VERSION):
+        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc8", "0.8.0-rc20", "0.8.0-rc2-extra", "0.8.0-rc7-extra", "0.8.0", VERSION):
             with self.subTest(version=version):
                 self.select_latest_published_fixture(version)
                 result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},

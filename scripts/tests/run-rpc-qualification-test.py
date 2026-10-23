@@ -211,7 +211,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_actual_xctest_inventory_is_closed_and_nonempty(self):
         cases = q.swift_inventory(ROOT)
-        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 99, 'p2pkit-sample-uitests': 24})
+        self.assertEqual({k: len(v) for k, v in cases.items()}, {'p2pkit-sample-tests': 99, 'p2pkit-sample-uitests': 25})
         self.assertLessEqual({
             'SampleFilePreparationTests/testFullBoundaryPresetRunsOffMainAndKeepsIntegrity()',
             'SampleFilePreparationTests/testGenerationAndReadbackCheckCancellationBetweenChunks()',
@@ -238,6 +238,7 @@ class AdmissionTests(unittest.TestCase):
             'KeyboardReadinessTests/testInputUnknownAndNonhittableKeysNeverProduceReadiness()',
             'KeyboardReadinessTests/testInputRemovedOrEmptyInventoryDoesNotReadFramesOrHitTests()',
             'KeyboardReadinessTests/testInputObservationDoesNotReusePriorSuccessfulKeyOrCounters()',
+            'KeyboardReadinessTests/testSingleInputCandidatePreservesGuardsAndFreshCounters()',
             'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale()',
             'ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale()',
             'ContentViewPresentationUITests/testFirstIncomingOfferRequiresConsentWithoutTransferHistory()',
@@ -278,6 +279,7 @@ class AdmissionTests(unittest.TestCase):
             'testInputUnknownAndNonhittableKeysNeverProduceReadiness',
             'testInputRemovedOrEmptyInventoryDoesNotReadFramesOrHitTests',
             'testInputObservationDoesNotReusePriorSuccessfulKeyOrCounters',
+            'testSingleInputCandidatePreservesGuardsAndFreshCounters',
         )
         for name in methods:
             method = ('func ' + name + '(').encode()
@@ -307,7 +309,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('for character in text {\n            field.typeText(String(character))', source)
         self.assertIn('app.buttons["sample-keyboard-done"]', source)
 
-    def test_input_identity_binding_cannot_change_indexed_done_or_positive_admission(self):
+    def test_input_probes_one_fresh_original_character_key_without_changing_done_or_admission(self):
         source = (ROOT / 'samples/iosApp/UITests/ContentViewPresentationUITests.swift').read_text()
 
         def check(candidate):
@@ -316,11 +318,24 @@ class AdmissionTests(unittest.TestCase):
             input_body, done = rest.split('private func dismissKeyboard(in app: XCUIApplication)', 1)
             self.assertEqual(observer.count('allElementsBoundByIndex'), 1)
             self.assertNotIn('allElementsBoundByAccessibilityElement', observer + done)
-            self.assertEqual(input_body.count('allElementsBoundByAccessibilityElement'), 1)
-            self.assertNotIn('allElementsBoundByIndex', input_body)
+            self.assertNotIn('allElementsBoundBy', input_body)
+            before, predicate = input_body.split('predicate: NSPredicate { _, _ in', 1)
+            predicate, after = predicate.split('object: nil', 1)
+            self.assertIn('guard let firstCharacter = text.first else {', before)
+            self.assertIn('XCTFail("Keyboard input requires nonempty original text")\n            return', before)
+            self.assertIn('let firstKeyIdentifier = String(firstCharacter)', before)
+            self.assertNotIn('app.keyboards', before + after)
+            self.assertEqual(input_body.count('app.keyboards.keys'), 1)
+            self.assertIn('let key = app.keyboards.keys.matching(identifier: firstKeyIdentifier).firstMatch', predicate)
+            self.assertIn('KeyboardReadiness.observeInput(\n                    [key],', predicate)
+            self.assertEqual(input_body.count('.firstMatch'), 1)
             self.assertIn('return lastObservation?.state == .hittable', input_body)
             self.assertIn('XCTWaiter.wait(for: [ready], timeout: 5)', input_body)
             self.assertIn('XCTAssertEqual(readinessResult, .completed)', input_body)
+            self.assertEqual(input_body.count('.typeText('), 1)
+            self.assertIn('for character in text {\n            field.typeText(String(character))', input_body)
+            self.assertIn('NSPredicate(format: "value == %@", text)', input_body)
+            self.assertIn('XCTWaiter.wait(for: [entered], timeout: 5), .completed', input_body)
             self.assertIn('keyboardReadiness(in: app) == .hittable', done)
             self.assertIn('keyboardReadiness(in: app) == .notHittable', done)
             self.assertIn('XCTWaiter.wait(for: [dismissed], timeout: 5)', done)
@@ -329,11 +344,23 @@ class AdmissionTests(unittest.TestCase):
         check(source)
         # Source controls only: neither XCTest nor a keyboard is executed here.
         for old, new in (
-                ('allElementsBoundByAccessibilityElement', 'allElementsBoundByIndex'),
+                ('text.first else', 'text.last else'),
+                ('guard let firstCharacter = text.first else', 'guard let firstCharacter = "1".first else'),
+                ('String(firstCharacter)', '"1"'),
+                ('app.keyboards.keys.matching(identifier: firstKeyIdentifier).firstMatch',
+                 'app.keyboards.keys.firstMatch'),
+                ('[key],', 'app.keyboards.keys.allElementsBoundByAccessibilityElement,'),
+                ('[key],', 'app.keyboards.keys.allElementsBoundByIndex,'),
+                ('[key],', '[cachedKey],'),
                 ('allElementsBoundByIndex', 'allElementsBoundByAccessibilityElement'),
                 ('return lastObservation?.state == .hittable', 'return lastObservation?.state != .notHittable'),
                 ('[ready], timeout: 5', '[ready], timeout: 10'),
+                ('field.typeText(String(character))', 'field.typeText(text)'),
+                ('NSPredicate(format: "value == %@", text)', 'NSPredicate(value: true)'),
+                ('[entered], timeout: 5', '[entered], timeout: 10'),
                 ('[dismissed], timeout: 5', '[dismissed], timeout: 10'),
+                ('frame: { $0.frame }', 'frame: { _ in CGRect(x: 0, y: 0, width: 1, height: 1) }'),
+                ('exists: { $0.exists }', 'exists: { _ in true }'),
                 ('isHittable: { $0.isHittable }', 'isHittable: { _ in true }')):
             with self.subTest(mutation=old), self.assertRaises(AssertionError):
                 check(source.replace(old, new))

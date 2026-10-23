@@ -58,8 +58,8 @@ class JvmDiscoveryAdmissionSecurityTest {
     @Test
     fun v2ClaimsCanStillOccupyEveryDiscoverySlotUntilOneIsWithdrawn() = runTest {
         // This is a callback/admission test, not a host-interface scan. Keep
-        // every resolution deterministic; the TCP/Noise cases below retain
-        // the backend's ordinary host snapshot provider.
+        // every resolution deterministic. The copied-fingerprint case below
+        // retains the backend's ordinary host snapshot provider.
         var localSnapshotReads = 0
         val backend = JvmDeterministicDiscoveryTestBackend {
             localSnapshotReads += 1
@@ -131,7 +131,21 @@ class JvmDiscoveryAdmissionSecurityTest {
     @Test
     fun fullPinAndManualEndpointStillConnectAfterTheLanDiscoveryCacheIsFull() = runBlocking {
         val diagnostics = KitTestDiagnostics()
-        val backend = JvmDeterministicDiscoveryTestBackend()
+        // This fixture routes only the existing test-only loopback candidates.
+        // Real interface prefixes cannot change that route; do not couple its
+        // 256 callback resolutions to repeated host NIC enumeration. TCP and
+        // Noise below remain real, and the backend's default is unchanged.
+        var localSnapshotReads = 0
+        val backend = JvmDeterministicDiscoveryTestBackend {
+            localSnapshotReads += 1
+            emptyList()
+        }
+        fun advertiseLoopback(candidate: JvmTestDiscoveryAdvertisement) {
+            assertTrue(candidate.candidates.isNotEmpty() && candidate.candidates.all { it.isLoopbackAddress },
+                "The no-interface-scan fixture must remain loopback-only")
+            backend.advertise(candidate)
+        }
+        var phase = "create-kits"
         var failure: Throwable? = null
         try {
             withTimeout(20_000) {
@@ -140,13 +154,20 @@ class JvmDiscoveryAdmissionSecurityTest {
                     "Remote", backend, diagnostics,
                     PeerAuthorizationPolicy.PinnedOnly(setOf(assertNotNull(observer.kit.localFingerprint)))
                 )
+                phase = "start-discovery-and-listener"
                 observer.kit.startDiscovery()
                 remote.kit.start()
-                repeat(MAX_TRACKED_LAN_PEERS) { backend.advertise(advertisement(syntheticClaim(it))) }
+                phase = "populate-discovery-cache"
+                repeat(MAX_TRACKED_LAN_PEERS) { advertiseLoopback(advertisement(syntheticClaim(it))) }
+                assertEquals(MAX_TRACKED_LAN_PEERS, localSnapshotReads)
+                phase = "await-full-discovery-cache"
                 observer.kit.peers.first { it.size == MAX_TRACKED_LAN_PEERS }
+                phase = "resolve-remote-at-capacity"
                 val remoteClaim = remote.claim()
-                backend.advertise(advertisement(remoteClaim, remote.port()))
+                advertiseLoopback(advertisement(remoteClaim, remote.port()))
+                assertEquals(MAX_TRACKED_LAN_PEERS + 1, localSnapshotReads)
 
+                phase = "register-and-check-manual-pin"
                 val registrar = observer.provisioning.context.manualPeerRegistrar
                 assertFailsWith<P2pError.SecurityConfigurationInvalid> {
                     registrar.registerManualPeer("127.0.0.1", remote.port())
@@ -161,21 +182,29 @@ class JvmDiscoveryAdmissionSecurityTest {
                 assertEquals(MAX_TRACKED_LAN_PEERS + 1, observer.kit.peers.value.size)
 
                 val incoming = async(start = CoroutineStart.UNDISPATCHED) { remote.kit.incomingSessions.first() }
+                phase = "connect-pinned-manual-route"
                 val outgoing = observer.kit.connect(manual)
+                phase = "await-authenticated-incoming"
                 val accepted = incoming.await()
                 assertEquals(remoteClaim.fingerprint, outgoing.peerIdentity.fingerprint)
                 assertEquals(observer.kit.localFingerprint, accepted.peerIdentity.fingerprint)
                 assertEquals(ConnectionState.Connected, outgoing.state.value)
                 assertEquals(ConnectionState.Connected, accepted.state.value)
                 val message = async(start = CoroutineStart.UNDISPATCHED) { accepted.incoming.first() }
+                phase = "send-authenticated-message"
                 outgoing.send(P2pMessage.Text("pinned manual route"))
+                phase = "await-authenticated-message"
                 assertEquals("pinned manual route", assertIs<P2pMessage.Text>(message.await()).value)
+                phase = "check-final-admission-state"
                 // The manual pin did not become a discovery claim, and the
                 // full upstream discovery set did not magically admit it.
                 assertNull(observer.kit.discoveryClaim(remote.kit.localPeerId))
                 assertEquals(MAX_TRACKED_LAN_PEERS + 1, observer.kit.peers.value.size)
             }
         } catch (error: Throwable) {
+            // Cached, bounded facts only. Preserve the original typed failure;
+            // this is the last entered phase, not a native timing/root-cause claim.
+            error.addSuppressed(AssertionError("Manual-route fixture phase=$phase resolutions=$localSnapshotReads"))
             failure = error
             throw error
         } finally {

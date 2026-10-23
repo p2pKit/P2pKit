@@ -14,12 +14,16 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The latest published release remains **`0.8.0-rc6`**. The current source candidate
-is **`0.8.0-rc7`**, pending its own qualification and publication.
-Its [release record](../releases/0.8.0-rc6.md) binds the actual main qualification,
-separate protected approvals and immutable public library/application bytes.
-The original Maven final-upload failure remains recorded; a successful separate
-read-only recovery authorized delivery without republishing Maven or rebuilding apps.
+The latest published development release candidate and current source version
+are both **`0.8.0-rc7`**. Its [release record](../releases/0.8.0-rc7.md) binds the
+actual same-source main selection, separate protected approvals and immutable
+public library/application bytes. The failed original main run remains failed;
+the accepted aggregate selects thirteen successful siblings and the
+unchanged-source Intel replacement without rebuilding the four applications.
+The earlier [rc6 record](../releases/0.8.0-rc6.md) retains its original Maven
+final-upload failure and successful separate read-only recovery, without Maven
+republishing or application rebuilding. Those are rc6 facts, not an assumed
+rc7 publication outcome or recovery path.
 Later source requires its own exact-source gates; neither earlier release
 evidence nor subsequent bookkeeping results replace the published originals.
 

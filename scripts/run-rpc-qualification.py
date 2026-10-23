@@ -376,11 +376,11 @@ def junit_counts(raw):
 
 # Reviewed exact Class/testMethod() identities, sorted with one final newline.
 # The 31969c70 roster (88 unit / 18 UI) is preserved in full; #495/#497/#498
-# add eleven unit and two UI cases; input observation adds four more UI-target
-# helper cases. Counts alone cannot reject a replacement.
+# add eleven unit and two UI cases; input observation adds five more UI-target
+# helper cases, including singleton guard/counter coverage. Counts alone cannot reject a replacement.
 SWIFT_INVENTORY = {
     "p2pkit-sample-tests": (99, "662c507a03b29725ad3e83e1aa5dfc7b1c81fecda19745dadcbdcc028f9c5d7e"),
-    "p2pkit-sample-uitests": (24, "9dd50cbc8a3659fb4c0c64d2635d530db76f68ef6b819070975456063435fdb9"),
+    "p2pkit-sample-uitests": (25, "1f8012924eb91f27081a0444695e97047cc255ff666b0051ca1815d834fa961b"),
 }
 
 

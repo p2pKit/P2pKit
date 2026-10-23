@@ -1,10 +1,13 @@
 version: 2
+# Manual update policy: docs/releasing/dependency-maintenance-context.md
+# Zero pauses version PRs only; security-fix PRs have a separate repository setting.
 updates:
   - package-ecosystem: gradle
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
+    rebase-strategy: disabled
     groups:
       android-gradle-toolchain:
         patterns:
@@ -14,4 +17,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
+    rebase-strategy: disabled

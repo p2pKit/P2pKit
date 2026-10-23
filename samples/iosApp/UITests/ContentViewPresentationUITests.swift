@@ -195,6 +195,11 @@ final class ContentViewPresentationUITests: XCTestCase {
 
     @MainActor
     private func enterText(_ text: String, into field: XCUIElement, in app: XCUIApplication) {
+        guard let firstCharacter = text.first else {
+            XCTFail("Keyboard input requires nonempty original text")
+            return
+        }
+        let firstKeyIdentifier = String(firstCharacter)
         // XCUITest's bulk event delivered only "127." from "127.0.0.1" on
         // a fresh hosted keyboard. Send each original character exactly once;
         // no paste, value injection, deletion, retry, or repaired port token.
@@ -206,11 +211,13 @@ final class ContentViewPresentationUITests: XCTestCase {
             predicate: NSPredicate { _, _ in
                 evaluations += 1
                 let started = ProcessInfo.processInfo.systemUptime
-                // Bind each positive probe to the same accessibility element,
-                // not a position that may now identify a different key. This
-                // is not a snapshot-only hit test or a latency guarantee.
+                // Positive input readiness needs the first original character's
+                // key, not an inventory of every key. Resolve that named query
+                // afresh for each probe; retain geometry and actual hit tests.
+                // One candidate is not a native-query latency/atomicity guarantee.
+                let key = app.keyboards.keys.matching(identifier: firstKeyIdentifier).firstMatch
                 lastObservation = KeyboardReadiness.observeInput(
-                    app.keyboards.keys.allElementsBoundByAccessibilityElement,
+                    [key],
                     exists: { $0.exists }, frame: { $0.frame }, isHittable: { $0.isHittable }
                 )
                 lastElapsed = ProcessInfo.processInfo.systemUptime - started

@@ -3,10 +3,20 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc7 — development candidate (unpublished)
+## 0.8.0-rc7 — development release candidate (2026-10-23)
 
-Release qualification and publication are pending. Latest published artifacts
-remain `0.8.0-rc6`; this source does not retroactively change their evidence.
+Published and verified on Maven Central from immutable `v0.8.0-rc7`, with
+separately approved delivery of the matching frozen APK/MSI/ARM64-DMG/DEB.
+Both original publisher attempts succeeded; all seven complete anonymous
+public downloads matched the recorded hashes.
+
+Release source is `bc3a28e8e381b49585fb697160cb954bc642ea29`, bound by immutable
+`v0.8.0-rc7`. Its main qualification explicitly combines thirteen successful
+original-main components with an unchanged-source Intel replacement; the
+original failed run is not relabeled. See the
+[release record](docs/releases/0.8.0-rc7.md) for qualification, protected
+publication, matching frozen applications and verified delivery scope.
+Earlier release binaries and their evidence remain unchanged.
 
 ### Runtime and data ownership
 
