@@ -1,7 +1,9 @@
 # macOS validation process ownership
 
 This is validation-runner infrastructure, not an RPC delivery or capacity feature.
-It does not change the Release Foundation's **NOT_READY** status or any HOLD.
+It does not by itself establish application or production readiness. The
+[current release status](../releasing/release-foundation.md) and
+[external-validation status](../validation/README.md#current-status) are separate.
 
 ## Why environment markers are insufficient
 
