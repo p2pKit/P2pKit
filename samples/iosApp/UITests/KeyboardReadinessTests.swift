@@ -181,4 +181,51 @@ final class KeyboardReadinessTests: XCTestCase {
         XCTAssertFalse(second.diagnostic.contains("HITTABLE "))
     }
 
+    @MainActor
+    func testSingleInputCandidatePreservesGuardsAndFreshCounters() {
+        let cases: [(name: String, present: Bool, bounds: CGRect, reachable: Bool,
+                     expected: KeyboardInputObservation, calls: [String])] = [
+            ("hittable", true, visible, true,
+             KeyboardInputObservation(state: .hittable, keys: 1, examined: 1,
+                 existing: 1, invalidGeometry: 0, hitTests: 1, hittable: 1),
+             ["exists", "frame", "isHittable"]),
+            ("missing after success", false, visible, true,
+             KeyboardInputObservation(state: .notHittable, keys: 1, examined: 1,
+                 existing: 0, invalidGeometry: 0, hitTests: 0, hittable: 0),
+             ["exists"]),
+            ("invalid geometry", true, .null, true,
+             KeyboardInputObservation(state: .indeterminate, keys: 1, examined: 1,
+                 existing: 1, invalidGeometry: 1, hitTests: 0, hittable: 0),
+             ["exists", "frame"]),
+            ("valid but nonhittable", true, visible, false,
+             KeyboardInputObservation(state: .notHittable, keys: 1, examined: 1,
+                 existing: 1, invalidGeometry: 0, hitTests: 1, hittable: 0),
+             ["exists", "frame", "isHittable"]),
+            ("hittable again", true, visible, true,
+             KeyboardInputObservation(state: .hittable, keys: 1, examined: 1,
+                 existing: 1, invalidGeometry: 0, hitTests: 1, hittable: 1),
+             ["exists", "frame", "isHittable"])
+        ]
+        // Seed success before refusals: a later candidate must not inherit
+        // readiness or counters. Every closure must receive this probe's key.
+        for (index, testCase) in cases.enumerated() {
+            var calls = [String]()
+            let observation = KeyboardReadiness.observeInput([index], exists: { key in
+                XCTAssertEqual(key, index, testCase.name)
+                calls.append("exists")
+                return testCase.present
+            }, frame: { key in
+                XCTAssertEqual(key, index, testCase.name)
+                calls.append("frame")
+                return testCase.bounds
+            }, isHittable: { key in
+                XCTAssertEqual(key, index, testCase.name)
+                calls.append("isHittable")
+                return testCase.reachable
+            })
+            XCTAssertEqual(observation, testCase.expected, testCase.name)
+            XCTAssertEqual(calls, testCase.calls, testCase.name)
+        }
+    }
+
 }
