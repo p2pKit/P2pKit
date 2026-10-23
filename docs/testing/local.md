@@ -210,6 +210,17 @@ On Windows PowerShell, use `.\gradlew.bat` and one command line instead of
 Bash continuations. The symlink prerequisites above still apply; do not skip
 tests when a runner lacks them. Stop Gradle after failures as well as success.
 
+The Windows CI worker uses the Java 17 and Java 21 installations selected by
+`actions/setup-java`. After restoring the optional dependency cache,
+`scripts/setup-ci-component.sh` writes `org.gradle.java.installations.fromEnv`
+with `JAVA_HOME_17_X64,JAVA_HOME_21_X64` into that job's Gradle home and disables
+automatic JDK detection/download there. This prevents a cached or separately
+auto-provisioned JDK from replacing the selected tools. Missing installations
+fail setup; existing user configuration is not overwritten. Other hosts and
+local Gradle configuration are unchanged. Strict dependency verification,
+fail-on-deprecation, and the Windows packaging supplier-archive comparison
+remain required; no toolchain repository or unverified download is added.
+
 The maintained [`CI`](../../.github/workflows/ci.yml) all-component route runs
 JVM library/sample tests on Linux and Windows and the shared macOS gate, alongside
 separate native and packaging components. See the

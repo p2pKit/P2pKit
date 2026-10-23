@@ -71,6 +71,10 @@ def commands(component):
     py = [sys.executable, '-B']
     bash = ['bash']
     gradle = [str(ROOT / 'gradlew.bat') if os.name == 'nt' else './gradlew', *FLAGS]
+    # Retain actual daemon/compiler selection in the existing encrypted command
+    # logs. A missing deprecation warning alone does not prove the intended JDK ran.
+    if component in ('jvm-windows', 'desktop-windows'):
+        gradle.append('--info')
     tests = lambda *paths: [(p, py + ['scripts/tests/' + p, '-v']) for p in paths]
     supervisor = ('supervisor-controls', py + ['scripts/tests/ci-evidence-test.py', '-v', *SUPERVISOR_TESTS])
     if component == 'source':

@@ -11,6 +11,28 @@ if [[ "$component" == source ]]; then
   tar -xzf "$dir/actionlint.tar.gz" -C "$dir" actionlint
   echo "$dir" >> "$GITHUB_PATH"
 fi
+# Windows Gradle must use the two setup-java installations, not a restored or
+# daemon-auto-provisioned JDK that the build never selected. This runs after
+# setup-gradle restores its optional cache and before the first Gradle probe.
+# Store variable names rather than Windows paths in the Java properties file.
+if [[ "${RUNNER_OS:-}" == Windows && ("$component" == jvm-windows || "$component" == desktop-windows) ]]; then
+  : "${GRADLE_USER_HOME:?Missing job-owned Gradle home}" \
+    "${JAVA_HOME_17_X64:?Missing setup-java 17 home}" "${JAVA_HOME_21_X64:?Missing setup-java 21 home}"
+  gradle_home="$(cygpath -u "$GRADLE_USER_HOME")"
+  for java_home in "$JAVA_HOME_17_X64" "$JAVA_HOME_21_X64"; do
+    java_home="$(cygpath -u "$java_home")"
+    test -x "$java_home/bin/java.exe"
+    test -x "$java_home/bin/javac.exe"
+  done
+  mkdir -p "$gradle_home"
+  (
+    set -o noclobber
+    printf '%s\n' \
+      'org.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64' \
+      'org.gradle.java.installations.auto-detect=false' \
+      'org.gradle.java.installations.auto-download=false' > "$gradle_home/gradle.properties"
+  )
+fi
 # Shared-check, consumer/writer and focused JmDNS CLI routes select one explicit
 # macOS 15 Intel baseline. Native/installer/Swift lanes retain their images.
 if [[ "$component" == macos-shared || "$component" == consumers || "$component" == published-consumers-diagnostic || "$component" == consumers-pom-diagnostic || "$component" == jmdns-diagnostic || "$component" == dependency-update ]]; then
@@ -64,8 +86,7 @@ if [[ "$component" == security ]]; then
     echo 'P2PKIT_OSV_ARGS'
   } >> "$GITHUB_ENV"
 fi
-# The Windows preview runtime is still disabled for productive RPC, but its
-# packaging tools must come from the reviewed exact supplier archive. Standard
+# The Windows runtime's packaging tools must come from the reviewed exact supplier archive. Standard
 # setup-java provides the installation; Gradle compares its actual bytes below.
 if [[ "$component" == desktop-windows ]]; then
   pin=samples/p2p-sample-rpc/native/windows-loader-jdk21/runtime-supplier.properties

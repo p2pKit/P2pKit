@@ -159,6 +159,17 @@ class ComponentTests(unittest.TestCase):
             self.assertNotIn('rpc-windows-package-inspection', dict(C.commands('desktop-windows')))
             self.assertNotIn('rpc-windows-runtime-readback', dict(C.commands('desktop-windows')))
 
+    def test_windows_gradle_work_retains_actual_toolchain_selection_logs(self):
+        for component, task in (('jvm-windows', 'jvm-tests'),
+                                ('desktop-windows', 'desktop-tests-and-installer'),
+                                ('jvm-linux', 'jvm-tests'),
+                                ('desktop-macos', 'desktop-tests-and-installer')):
+            with self.subTest(component=component):
+                argv = dict(C.commands(component))[task]
+                self.assertEqual(argv.count('--info'), int(component.endswith('-windows')))
+                self.assertNotIn('--warning-mode', argv)
+                self.assertNotIn('-Dorg.gradle.warning.mode=none', argv)
+
     def test_single_is_independent(self):
         self.assertEqual([x['component'] for x in C.matrix('android')['include']], ['android'])
 
@@ -647,6 +658,68 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 class SetupBaselineTests(unittest.TestCase):
+    def windows_toolchains(self, component='desktop-windows', *, runner_os='Windows', missing=None,
+                           existing=False, broken_jdk=False):
+        source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
+        begin = source.index('# Windows Gradle must use the two setup-java installations')
+        end = source.index('# Shared-check, consumer/writer', begin)
+        with tempfile.TemporaryDirectory(prefix='ci JDK paths ') as temporary:
+            root = Path(temporary).resolve()
+            home = root / 'gradle home'
+            home.mkdir()
+            properties = home / 'gradle.properties'
+            original = b'original configuration must not be overwritten\n'
+            if existing:
+                properties.write_bytes(original)
+            for version in (17, 21):
+                java = root / f'Java {version}' / 'bin'
+                java.mkdir(parents=True)
+                for name in ('java.exe', 'javac.exe'):
+                    executable = java / name
+                    executable.write_bytes(b'synthetic; never execute this fixture')
+                    executable.chmod(0o700)
+            if broken_jdk:
+                (root / 'Java 21/bin/javac.exe').unlink()
+            environment = {'PATH': C.os.environ['PATH'], 'component': component, 'RUNNER_OS': runner_os,
+                           'GRADLE_USER_HOME': str(home), 'JAVA_HOME_17_X64': str(root / 'Java 17'),
+                           'JAVA_HOME_21_X64': str(root / 'Java 21')}
+            if missing:
+                environment.pop(missing)
+            # Exercise the actual shell branch. Only Windows-to-POSIX conversion is synthetic;
+            # the whitespace paths, files, missing tool inputs and no-overwrite behavior are real.
+            fake = 'cygpath() { [[ $# == 2 && "$1" == -u ]] || return 91; printf "%s\\n" "$2"; }\n'
+            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', fake + source[begin:end]],
+                                    cwd=ROOT, env=environment, capture_output=True, timeout=10)
+            return result.returncode, properties.read_bytes() if properties.exists() else None
+
+    def test_windows_gradle_uses_only_explicit_setup_java_toolchains(self):
+        expected = (b'org.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64\n'
+                    b'org.gradle.java.installations.auto-detect=false\n'
+                    b'org.gradle.java.installations.auto-download=false\n')
+        for component in ('jvm-windows', 'desktop-windows'):
+            with self.subTest(component=component):
+                self.assertEqual(self.windows_toolchains(component), (0, expected))
+
+    def test_windows_gradle_refuses_missing_tools_or_existing_configuration(self):
+        for missing in ('GRADLE_USER_HOME', 'JAVA_HOME_17_X64', 'JAVA_HOME_21_X64'):
+            with self.subTest(missing=missing):
+                code, output = self.windows_toolchains(missing=missing)
+                self.assertNotEqual(code, 0)
+                self.assertIsNone(output)
+        code, output = self.windows_toolchains(broken_jdk=True)
+        self.assertNotEqual(code, 0)
+        self.assertIsNone(output)
+        code, output = self.windows_toolchains(existing=True)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(output, b'original configuration must not be overwritten\n')
+
+    def test_windows_gradle_configuration_does_not_change_other_components(self):
+        for component, runner in (('desktop-macos', 'macOS'), ('jvm-linux', 'Linux'),
+                                  ('source', 'Windows'), ('desktop-windows', 'Linux')):
+            with self.subTest(component=component, runner=runner):
+                self.assertEqual(self.windows_toolchains(component, runner_os=runner,
+                                                        missing='JAVA_HOME_21_X64'), (0, None))
+
     def test_windows_supplier_download_exports_only_after_checksum_success(self):
         source = (ROOT / 'scripts/setup-ci-component.sh').read_text()
         begin = source.index('if [[ "$component" == desktop-windows ]]; then')
