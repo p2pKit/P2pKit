@@ -10,6 +10,7 @@ import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.dsl.jvmSecureIdentityStore
 import dev.p2pkit.transport.lan.lan
+import java.net.InetAddress
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -21,14 +22,15 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * Two real [P2pKit] instances on loopback exchange a message using ONLY the
- * manual-IP fallback — no mDNS discovery is consulted. Alice and Bob each
- * advertise (so the LAN TCP server is bound) but neither side waits for the
- * peer to appear in `kit.peers`; instead, Alice publishes her
- * `ManualConnectionInfo`, Bob calls `createManualPeer` + `connect`, and the
- * session opens directly.
+ * manual-IP fallback — neither advertises nor starts mDNS discovery. Both
+ * start their TCP listeners directly. Alice's `ManualConnectionInfo` supplies
+ * her bound port and full fingerprint; Bob registers that owned listener at
+ * numeric loopback rather than selecting an environment-dependent host address.
+ * Neither side waits for a discovered peer before opening the secure session.
  */
 @OptIn(ExplicitSecurityRisk::class)
 class ManualIpLoopbackTest {
@@ -76,9 +78,13 @@ class ManualIpLoopbackTest {
         val aliceInfo = alice.networkProvisioning.getManualConnectionInfo()
         assertNotNull(aliceInfo, "Alice should have a ManualConnectionInfo from JVM provisioning")
 
-        val targetHost = aliceInfo.hostAddresses.firstOrNull { it.startsWith("127.") }
-            ?: aliceInfo.hostAddresses.firstOrNull { it.contains('.') }
-            ?: aliceInfo.hostAddresses.first()
+        // Provisioning deliberately reports non-loopback candidates for remote
+        // users, not a selected route for this same-host fixture. Those candidates
+        // need not match the LAN listener's current admitted interface. Keep that
+        // production filter intact and use its explicit same-host loopback path.
+        val targetHost = "127.0.0.1"
+        assertTrue(InetAddress.getByName(targetHost).isLoopbackAddress,
+            "The same-host manual-IP fixture must use a loopback destination")
         val targetPort = aliceInfo.port
 
         val syntheticPeer = bob.networkProvisioning.createManualPeer(
@@ -102,7 +108,7 @@ class ManualIpLoopbackTest {
         assertEquals(ConnectionState.Connected, outgoing.state.value)
         assertEquals(aliceInfo.fingerprint, outgoing.peerIdentity.fingerprint)
 
-        // Round-trip a Text message in each direction.
+        // Deliver and verify a Text message from Bob to Alice.
         val messageSubscribed = CompletableDeferred<Unit>()
         val incomingMessageDeferred = async {
             incoming.incoming
