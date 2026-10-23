@@ -662,9 +662,16 @@ class ProcessOwner:
             and type(error.args[0]) is str else None
         launches = getattr(self.scope, "launches", None)
         last = launches[-1] if type(launches) is list and launches and type(launches[-1]) is dict else {}
+        readiness = last.get("gateReadiness")
+        # Never expose the token, descriptors, argv or arbitrary error text.
+        # WAITING/READING locate an exception in an already-required operation;
+        # this projection must not query or reap the retained child.
+        readiness = {"gateReadiness": readiness} if type(readiness) is str and readiness in (
+            "WAITING", "WAIT_TIMEOUT", "READING", "READY", "EOF", "UNEXPECTED_TOKEN") else {}
         return {"phase": "START", "reason": reasons.get(message, "LAUNCH_ERROR"),
                 "nativeError": _owner_error_diagnostic(error), "scopeReturned": self.scope is not None,
                 "childReturned": self.child is not None, "recordedLaunches": _recorded_owner_count(launches),
+                **readiness,
                 **{key: last.get(key) if type(last.get(key)) is bool else None for key in ("created", "gateReleased")}}
 
     @property
