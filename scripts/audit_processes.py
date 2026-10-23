@@ -1256,7 +1256,18 @@ class DarwinScope(PosixScope):
             os.close(descriptor)
             descriptor, release_read = release_read, -1
             os.close(descriptor)
-            if not select.select([ready_read], [], [], 10)[0] or os.read(ready_read, 1) != b"R":
+            # Diagnose the original handshake without another read, process
+            # observation or retry. EOF is a pipe observation, not proof of
+            # child exit; failed admission still retains the original leader.
+            ready = None
+            launch["gateReadiness"] = "WAITING"
+            if not select.select([ready_read], [], [], 10)[0]:
+                launch["gateReadiness"] = "WAIT_TIMEOUT"
+            else:
+                launch["gateReadiness"] = "READING"
+                ready = os.read(ready_read, 1)
+                launch["gateReadiness"] = "READY" if ready == b"R" else "EOF" if ready == b"" else "UNEXPECTED_TOKEN"
+            if ready != b"R":
                 raise OwnershipError("Darwin exec gate did not establish readiness")
             # The trusted gate cannot exec/fork the product until the bound
             # lifetime and a real token have been acquired. No fast-exit race.

@@ -876,6 +876,7 @@ class IntelCommandCaptureModels(unittest.TestCase):
             child.poll.return_value = None
             scope = mock.Mock(leaders=[child], discovery_errors=set(), pending_discoveries={},
                               launches=[{"created": True, "gateReleased": False, "pid": 999,
+                                         "gateReadiness": "WAIT_TIMEOUT",
                                          "requestedArgv": ["PRIVATE_ARG"]}])
             failure = GATE.audit_processes.OwnershipError("Darwin exec gate did not establish readiness")
             scope.spawn.side_effect = failure
@@ -895,6 +896,7 @@ class IntelCommandCaptureModels(unittest.TestCase):
             drain = json.loads(next(line.split(" ", 1)[1] for line in stderr.getvalue().splitlines()
                                     if line.startswith("PLATFORM_RETIREMENT_FAILURE ")))
             self.assertEqual("GATE_NOT_READY", launch["reason"])
+            self.assertEqual("WAIT_TIMEOUT", launch["gateReadiness"])
             self.assertIs(launch["created"], True)
             self.assertIs(launch["gateReleased"], False)
             self.assertIs(launch["childReturned"], False)
@@ -985,6 +987,216 @@ class IntelCommandCaptureModels(unittest.TestCase):
                     self.assertIs(interrupted["ownedGroupDrained"], True)
                 finally:
                     signal.signal(signal.SIGTERM, previous)
+
+
+class DarwinGateReadinessModels(unittest.TestCase):
+    """Actual spawn/diagnostic branches with supplied native calls, not Darwin qualification."""
+
+    @contextlib.contextmanager
+    def spawn_model(self, *, readable=True, token=b"R", failure=None):
+        native = GATE.audit_processes
+        scope = native.DarwinScope.__new__(native.DarwinScope)  # Never run native admission.
+        scope.job, scope.invocation, scope.state, scope.home = "a" * 32, "b" * 32, "/state", "/home"
+        scope.known, scope.handles, scope.identity_history, scope.ownership_proofs = {}, {}, {}, {}
+        scope.leaders, scope.launches, scope.baseline = [], [], set()
+        scope._closed, scope._retirement_error = False, None
+        scope.pipe_fds, scope.pipe_marker = (7, 8), (101, 102, 103)
+        controller = {"pid": 74001, "uniqueId": 501, "parentUniqueId": 500,
+                      "uid": 1000, "realUid": 1000, "startSeconds": 1, "startMicroseconds": 2, "live": True}
+        worker = {**controller, "pid": 74002, "uniqueId": 502, "parentPid": controller["pid"],
+                  "parentUniqueId": controller["uniqueId"]}
+        environment = native.ownership_environment({}, scope.job, scope.invocation, scope.state, scope.home)
+
+        def identity(pid, **_kwargs):
+            if pid == controller["pid"]:
+                return controller
+            self.assertEqual(worker["pid"], pid)
+            self.assertEqual("READY", scope.launches[-1]["gateReadiness"])
+            return worker
+
+        def selected(*_args):
+            self.assertEqual("WAITING", scope.launches[-1]["gateReadiness"])
+            if failure is not None and failure[0] == "select":
+                raise failure[1]
+            return ([20] if readable else [], [], [])
+
+        def read(*_args):
+            self.assertEqual("READING", scope.launches[-1]["gateReadiness"])
+            if failure is not None and failure[0] == "read":
+                raise failure[1]
+            return token
+
+        def release(*_args):
+            launch = scope.launches[-1]
+            self.assertEqual("READY", launch["gateReadiness"])
+            self.assertEqual(worker, launch["boundIdentity"])
+            self.assertEqual(worker, scope.known[scope._key(worker)])
+            self.assertIs(scope._acquire.return_value, scope.handles[scope._key(worker)])
+            return 1
+
+        scope._identity = mock.Mock(side_effect=identity)
+        scope._inherited_pipes = mock.Mock(return_value=[])
+        scope._pipe_identity = mock.Mock(return_value=scope.pipe_marker)
+        scope._has_pipe, scope._acquire = mock.Mock(return_value=True), mock.Mock(return_value=object())
+        for name in ("_pids", "_environment", "_send", "discover", "description", "drain", "close"):
+            setattr(scope, name, mock.Mock(side_effect=AssertionError("NO_EXTRA_NATIVE_OPERATION")))
+        child = mock.Mock(pid=worker["pid"], stdout=mock.Mock(), stderr=mock.Mock(), returncode=None)
+        child.poll.side_effect = child.wait.side_effect = AssertionError("NO_EXTRA_POLL_OR_REAP")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(native.os, "getpid", return_value=controller["pid"]))
+            stack.enter_context(mock.patch.object(native.os, "getuid", return_value=1000, create=True))
+            stack.enter_context(mock.patch.object(native, "resolve_executable", return_value=[sys.executable]))
+            stack.enter_context(mock.patch.object(native.ctypes, "CDLL", side_effect=AssertionError("NO_NATIVE_API")))
+            for name in ("kill", "killpg"):
+                stack.enter_context(mock.patch.object(native.os, name, create=True,
+                    side_effect=AssertionError("NO_NATIVE_SIGNAL")))
+            calls = {
+                "popen": stack.enter_context(mock.patch.object(native.subprocess, "Popen", autospec=True,
+                    return_value=child)),
+                "pipe": stack.enter_context(mock.patch.object(native.os, "pipe", side_effect=[(20, 21), (22, 23)])),
+                "close": stack.enter_context(mock.patch.object(native.os, "close")),
+                "select": stack.enter_context(mock.patch.object(native.select, "select", side_effect=selected)),
+                "read": stack.enter_context(mock.patch.object(native.os, "read", side_effect=read)),
+                "write": stack.enter_context(mock.patch.object(native.os, "write", side_effect=release)),
+            }
+            yield scope, environment, child, calls
+
+    def assert_original_operations(self, scope, child, calls, *, read_attempted, released=False):
+        self.assertEqual(1, len(scope.launches))
+        self.assertEqual(1, len(scope.leaders))
+        self.assertIs(child, scope.leaders[0].process)
+        self.assertIs(scope.launches[-1]["created"], True)
+        self.assertIs(scope.launches[-1]["gateReleased"], released)
+        calls["popen"].assert_called_once()
+        self.assertEqual((8, 21, 22), calls["popen"].call_args.kwargs["pass_fds"])
+        scope._inherited_pipes.assert_called_once()
+        scope._pipe_identity.assert_called_once_with(74001, 8)
+        self.assertEqual([mock.call(), mock.call()], calls["pipe"].call_args_list)
+        calls["select"].assert_called_once_with([20], [], [], 10)
+        if read_attempted:
+            calls["read"].assert_called_once_with(20, 1)
+        else:
+            calls["read"].assert_not_called()
+        self.assertEqual([mock.call(21), mock.call(22), mock.call(20), mock.call(23)],
+                         calls["close"].call_args_list)
+        if released:
+            calls["write"].assert_called_once_with(23, b"G")
+            self.assertEqual([mock.call(74001, required=True), mock.call(74002, required=True)],
+                             scope._identity.call_args_list)
+            scope._has_pipe.assert_called_once_with(scope.launches[-1]["boundIdentity"])
+            scope._acquire.assert_called_once_with(scope.launches[-1]["boundIdentity"])
+            for stream in (child.stdout, child.stderr):
+                stream.close.assert_not_called()
+        else:
+            calls["write"].assert_not_called()
+            scope._identity.assert_called_once_with(74001, required=True)
+            scope._has_pipe.assert_not_called(); scope._acquire.assert_not_called()
+            self.assertEqual(({}, {}, {}), (scope.known, scope.handles, scope.ownership_proofs))
+            for stream in (child.stdout, child.stderr):
+                stream.close.assert_called_once_with()
+        child.poll.assert_not_called(); child.wait.assert_not_called()
+        for name in ("_pids", "_environment", "_send", "discover", "description", "drain", "close"):
+            getattr(scope, name).assert_not_called()
+
+    def test_timeout_eof_and_wrong_byte_keep_original_failure_without_admission_or_release(self):
+        cases = ((False, b"R", "WAIT_TIMEOUT"), (True, b"", "EOF"), (True, b"X", "UNEXPECTED_TOKEN"))
+        for readable, token, state in cases:
+            with self.subTest(state=state), self.spawn_model(readable=readable, token=token) as model:
+                scope, environment, child, calls = model
+                with self.assertRaises(GATE.audit_processes.OwnershipError) as caught:
+                    scope.spawn([sys.executable], "/", environment)
+                self.assertIs(type(caught.exception), GATE.audit_processes.OwnershipError)
+                self.assertEqual(("Darwin exec gate did not establish readiness",), caught.exception.args)
+                self.assertEqual(state, scope.launches[-1]["gateReadiness"])
+                owner = GATE.ProcessOwner()
+                owner.scope, owner.launch_error = scope, caught.exception
+                diagnostic = owner.launch_diagnostic()
+                self.assertEqual("GATE_NOT_READY", diagnostic["reason"])
+                self.assertEqual(state, diagnostic["gateReadiness"])
+                self.assertIs(diagnostic["childReturned"], False)
+                self.assert_original_operations(scope, child, calls, read_attempted=readable)
+
+    def test_ready_preserves_bound_identity_token_and_exact_release(self):
+        with self.spawn_model() as (scope, environment, child, calls):
+            returned = scope.spawn([sys.executable], "/", environment)
+            self.assertIs(returned, scope.leaders[0])
+            self.assertEqual("READY", scope.launches[-1]["gateReadiness"])
+            self.assertEqual("direct-spawn-gate", next(iter(scope.ownership_proofs.values()))["kind"])
+            self.assert_original_operations(scope, child, calls, read_attempted=True, released=True)
+
+    def test_select_and_read_exceptions_keep_original_and_pending_operation(self):
+        for operation, state in (("select", "WAITING"), ("read", "READING")):
+            failure = OSError(errno.EIO, "PRIVATE_NATIVE_READINESS_FAILURE")
+            with self.subTest(operation=operation), self.spawn_model(failure=(operation, failure)) as model:
+                scope, environment, child, calls = model
+                with self.assertRaises(OSError) as caught:
+                    scope.spawn([sys.executable], "/", environment)
+                self.assertIs(failure, caught.exception)
+                self.assertEqual(state, scope.launches[-1]["gateReadiness"])
+                owner = GATE.ProcessOwner()
+                owner.scope, owner.launch_error = scope, failure
+                diagnostic = owner.launch_diagnostic()
+                self.assertEqual(state, diagnostic["gateReadiness"])
+                self.assertEqual("LAUNCH_ERROR", diagnostic["reason"])
+                self.assertEqual(errno.EIO, diagnostic["nativeError"]["errno"])
+                self.assertNotIn("PRIVATE", json.dumps(diagnostic))
+                self.assert_original_operations(scope, child, calls, read_attempted=operation == "read")
+
+    def test_cleanup_failures_do_not_replace_readiness_cause_or_skip_originals(self):
+        for operation in (None, "select", "read"):
+            failure = None if operation is None else OSError(errno.EIO, "original readiness error")
+            with self.subTest(operation=operation), self.spawn_model(token=b"", failure=None if failure is None
+                    else (operation, failure)) as model:
+                scope, environment, child, calls = model
+                child.stdout.close.side_effect = OSError("first stream close failed")
+                def close(fd):
+                    if fd == 20:
+                        raise OSError("first final gate close failed")
+                calls["close"].side_effect = close
+                with self.assertRaises(OSError if failure is not None else GATE.audit_processes.OwnershipError) as caught:
+                    scope.spawn([sys.executable], "/", environment)
+                if failure is not None:
+                    self.assertIs(failure, caught.exception)
+                else:
+                    self.assertEqual(("Darwin exec gate did not establish readiness",), caught.exception.args)
+                self.assertEqual({None: "EOF", "select": "WAITING", "read": "READING"}[operation],
+                                 scope.launches[-1]["gateReadiness"])
+                detail = GATE.audit_processes.retirement_details(caught.exception)
+                self.assertEqual("UNKNOWN", detail["status"])
+                self.assertEqual(["stream:0", "gate:0"], [row["resource"] for row in detail["resources"]])
+                self.assertIs(caught.exception, scope._retirement_error)
+                self.assert_original_operations(scope, child, calls, read_attempted=operation != "select")
+
+    def test_launch_diagnostic_only_projects_exact_allowlisted_readiness_values_without_calls(self):
+        class StringSubclass(str):
+            pass
+        class Unprintable:
+            def __str__(self):
+                raise AssertionError("Diagnostic must not stringify arbitrary state")
+            __repr__ = __str__
+        allowed = ("WAITING", "WAIT_TIMEOUT", "READING", "READY", "EOF", "UNEXPECTED_TOKEN")
+        invalid = (None, True, 1, b"READY", ["READY"], {"state": "READY"},
+                   "PRIVATE_STATE", StringSubclass("READY"), Unprintable())
+        missing = object()
+        for ordinal, value in enumerate((*allowed, *invalid, missing)):
+            launch = {"created": True, "gateReleased": False, "private": "PRIVATE_RECORD"}
+            if value is not missing:
+                launch["gateReadiness"] = value
+            child = mock.Mock()
+            scope = mock.Mock(launches=[launch], leaders=[child])
+            owner = GATE.ProcessOwner()
+            owner.scope = scope
+            owner.launch_error = GATE.audit_processes.OwnershipError("Darwin exec gate did not establish readiness")
+            with self.subTest(ordinal=ordinal):
+                diagnostic = owner.launch_diagnostic()
+                if ordinal < len(allowed):
+                    self.assertEqual(value, diagnostic["gateReadiness"])
+                else:
+                    self.assertNotIn("gateReadiness", diagnostic)
+                self.assertEqual("GATE_NOT_READY", diagnostic["reason"])
+                self.assertNotIn("PRIVATE", json.dumps(diagnostic))
+                self.assertEqual([], scope.mock_calls)
+                self.assertEqual([], child.mock_calls)
 
 
 class OrdinarySimulatorModels(unittest.TestCase):
