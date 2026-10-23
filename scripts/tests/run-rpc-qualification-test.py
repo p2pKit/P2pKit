@@ -372,11 +372,15 @@ class AdmissionTests(unittest.TestCase):
         def check(candidate, observation):
             failure = candidate.split('if readinessResult != .completed {', 1)[1].split(
                 'XCTAssertEqual(readinessResult, .completed)', 1)[0]
-            self.assertIn('readinessResult.rawValue', failure)
-            self.assertIn('lastObservation?.diagnostic', failure)
-            self.assertIn('$0.isFinite && $0 >= 0', failure)
+            # The original finite failure line remains cached. Only the separately
+            # controlled post-wait helper below may obtain a new diagnostic snapshot.
+            cached, after = failure.split('recordKeyboardInputFailureSnapshot(in: app)', 1)
+            self.assertIn('readinessResult.rawValue', cached)
+            self.assertIn('lastObservation?.diagnostic', cached)
+            self.assertIn('$0.isFinite && $0 >= 0', cached)
+            self.assertEqual(after.strip(), '}')
             for forbidden in ('app.', 'field.', '.frame', '.exists', '.isHittable', 'XCTWaiter', 'observeInput('):
-                self.assertNotIn(forbidden, failure)
+                self.assertNotIn(forbidden, cached)
             wrapped = observation.split('static func observeInput<Key>(', 1)[1]
             self.assertEqual(wrapped.count('observe(keys,'), 1)
             self.assertEqual(wrapped.count('exists(key)'), 1)
@@ -395,6 +399,78 @@ class AdmissionTests(unittest.TestCase):
                 (source, helper.replace('frame: frame, isHittable:', 'frame: { frame($0); return frame($0) }, isHittable:'))):
             with self.subTest(candidate=candidate is source, observation=observation is helper), self.assertRaises(AssertionError):
                 check(candidate, observation)
+
+    def test_input_failure_snapshot_is_post_wait_single_bounded_and_diagnostic_only(self):
+        source = (ROOT / 'samples/iosApp/UITests/ContentViewPresentationUITests.swift').read_text()
+
+        def check(candidate):
+            call = 'recordKeyboardInputFailureSnapshot(in: app)'
+            self.assertEqual(candidate.count(call), 1)
+            entry = candidate.split('private func enterText(', 1)[1].split(
+                'private func dismissKeyboard(in app:', 1)[0]
+            before, failure = entry.split('if readinessResult != .completed {', 1)
+            failure, after = failure.split('XCTAssertEqual(readinessResult, .completed)', 1)
+            self.assertIn('let readinessResult = XCTWaiter.wait(for: [ready], timeout: 5)', before)
+            self.assertNotIn(call, before + after)
+            self.assertEqual(failure.count(call), 1)
+            self.assertLess(failure.index('print("KEYBOARD_INPUT_READINESS_FAILURE'), failure.index(call))
+            self.assertIn('for character in text {\n            field.typeText(String(character))', after)
+            self.assertIn('NSPredicate(format: "value == %@", text)', after)
+            self.assertIn('XCTWaiter.wait(for: [entered], timeout: 5), .completed', after)
+            snapshot = candidate.split(
+                'private func recordKeyboardInputFailureSnapshot(in app: XCUIApplication) {', 1)[1].split(
+                '\n    }', 1)[0]
+            self.assertEqual(re.findall(r'\bapp\.[\w.]+', snapshot), ['app.debugDescription'])
+            self.assertEqual(snapshot.count('.debugDescription'), 1)
+            self.assertEqual(snapshot.count('print('), 4)
+            for required in (
+                    'KEYBOARD_INPUT_READINESS_AX_BEGIN phase=POST_WAIT diagnosticOnly=true',
+                    'let snapshot = app.debugDescription',
+                    'let elapsed = ProcessInfo.processInfo.systemUptime - started',
+                    'let maximumBytes = 128 * 1024',
+                    'let snapshotBytes = Array(snapshot.utf8.prefix(maximumBytes + 1))',
+                    'let truncated = snapshotBytes.count > maximumBytes',
+                    'var prefixLength = min(snapshotBytes.count, maximumBytes)',
+                    'if truncated {',
+                    'while prefixLength > 0 && (snapshotBytes[prefixLength] & 0xC0) == 0x80 {',
+                    'prefixLength -= 1',
+                    'elapsed.isFinite && elapsed >= 0',
+                    'KEYBOARD_INPUT_READINESS_AX_BODY bytes=\\(prefixLength) truncated=\\(truncated)',
+                    'queryElapsedSeconds=\\(duration)',
+                    'print(String(decoding: snapshotBytes.prefix(prefixLength), as: UTF8.self))',
+                    'KEYBOARD_INPUT_READINESS_AX_END diagnosticOnly=true'):
+                self.assertIn(required, snapshot)
+            self.assertLess(snapshot.index('KEYBOARD_INPUT_READINESS_AX_BEGIN'),
+                            snapshot.index('let snapshot = app.debugDescription'))
+            for forbidden in ('XCTWaiter', 'NSPredicate', 'XCUIApplication(', 'XCUIDevice', 'XCUIScreen',
+                              '.exists', '.frame', '.isHittable', '.typeText(', '.tap(', '.press(',
+                              '.swipe', '.coordinate(', '.waitForExistence(', 'observeInput(',
+                              'readinessResult', 'lastObservation', 'XCTAssert', 'XCTFail',
+                              'Thread.sleep', 'Task.sleep', 'return '):
+                self.assertNotIn(forbidden, snapshot)
+
+        check(source)
+        # These controls constrain source, not native AX latency or the missing-key cause (#520).
+        for old, new in (
+                ('if readinessResult != .completed {',
+                 'recordKeyboardInputFailureSnapshot(in: app)\n        if readinessResult != .completed {'),
+                ('[ready], timeout: 5', '[ready], timeout: 10'),
+                ('[entered], timeout: 5', '[entered], timeout: 10'),
+                ('let snapshot = app.debugDescription', 'let snapshot = app.keyboards.debugDescription'),
+                ('let snapshot = app.debugDescription', 'let snapshot = app.debugDescription + app.debugDescription'),
+                ('let snapshot = app.debugDescription', 'let snapshot = "no query"'),
+                ('let maximumBytes = 128 * 1024', 'let maximumBytes = 256 * 1024'),
+                ('Array(snapshot.utf8.prefix(maximumBytes + 1))', 'Array(snapshot.utf8)'),
+                ('(snapshotBytes[prefixLength] & 0xC0) == 0x80', 'false'),
+                ('snapshotBytes.prefix(prefixLength)', 'snapshotBytes'),
+                ('let snapshot = app.debugDescription',
+                 'let snapshot = app.debugDescription\n        print(app.keyboards.keys.firstMatch.exists)'),
+                ('let snapshot = app.debugDescription',
+                 'let snapshot = app.debugDescription\n        app.tap()'),
+                ('let snapshot = app.debugDescription',
+                 'let snapshot = app.debugDescription\n        _ = XCTWaiter.wait(for: [], timeout: 5)')):
+            with self.subTest(mutation=old, replacement=new), self.assertRaises(AssertionError):
+                check(source.replace(old, new))
 
     def test_native_controls_reject_skipped_failed_or_partial_output(self):
         self.assertEqual(q.unittest_count('\nRan 122 tests in 190.25s\n\nOK\n'), 122)

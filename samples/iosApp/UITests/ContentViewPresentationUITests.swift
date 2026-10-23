@@ -227,12 +227,13 @@ final class ContentViewPresentationUITests: XCTestCase {
         )
         let readinessResult = XCTWaiter.wait(for: [ready], timeout: 5)
         if readinessResult != .completed {
-            // Only cached finite facts after the original wait fails: no new
-            // accessibility query, raw key/frame, input, or replacement wait.
+            // Preserve the original cached failure before a separate diagnostic
+            // snapshot. Neither observation changes readiness or repeats input.
             let elapsed = lastElapsed.flatMap { $0.isFinite && $0 >= 0 ? String($0) : nil } ?? "UNAVAILABLE"
             print("KEYBOARD_INPUT_READINESS_FAILURE waiter=\(readinessResult.rawValue) " +
                 "evaluations=\(evaluations) lastElapsedSeconds=\(elapsed) " +
                 (lastObservation?.diagnostic ?? "state=NOT_OBSERVED"))
+            recordKeyboardInputFailureSnapshot(in: app)
         }
         XCTAssertEqual(readinessResult, .completed)
         for character in text {
@@ -295,5 +296,32 @@ final class ContentViewPresentationUITests: XCTestCase {
             XCTAssertTrue(waitForAbsence(introduction), "The system sheet must be gone before using app controls")
         }
         dismissedKeyboardIntroduction = true
+    }
+
+    @MainActor
+    private func recordKeyboardInputFailureSnapshot(in app: XCUIApplication) {
+        // Diagnostic only for #520: this later AX state cannot explain the
+        // earlier missing key by itself or turn the failed wait into readiness.
+        // Bound emitted UTF-8, not the duration of the native snapshot query.
+        // Existing command stdout is retained as encrypted private CI evidence.
+        print("KEYBOARD_INPUT_READINESS_AX_BEGIN phase=POST_WAIT diagnosticOnly=true")
+        let started = ProcessInfo.processInfo.systemUptime
+        let snapshot = app.debugDescription
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        let maximumBytes = 128 * 1024
+        let snapshotBytes = Array(snapshot.utf8.prefix(maximumBytes + 1))
+        let truncated = snapshotBytes.count > maximumBytes
+        var prefixLength = min(snapshotBytes.count, maximumBytes)
+        if truncated {
+            // One lookahead byte lets the prefix end on a complete UTF-8 scalar.
+            while prefixLength > 0 && (snapshotBytes[prefixLength] & 0xC0) == 0x80 {
+                prefixLength -= 1
+            }
+        }
+        let duration = elapsed.isFinite && elapsed >= 0 ? String(elapsed) : "UNAVAILABLE"
+        print("KEYBOARD_INPUT_READINESS_AX_BODY bytes=\(prefixLength) truncated=\(truncated) " +
+            "queryElapsedSeconds=\(duration)")
+        print(String(decoding: snapshotBytes.prefix(prefixLength), as: UTF8.self))
+        print("KEYBOARD_INPUT_READINESS_AX_END diagnosticOnly=true")
     }
 }
