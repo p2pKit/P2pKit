@@ -652,12 +652,7 @@ expect_failure "wrapper without policy" "omitted required reviewed file" \
 ruby "$ROOT/scripts/check-modular-ci-policy.rb"
 grep -Fq 'scripts/check-dependency-verification.sh' "$ROOT/scripts/run-release-gate.sh" ||
     fail "release gate does not validate dependency-verification state"
-grep -Fq 'android-gradle-toolchain:' "$ROOT/.github/dependabot.yml" ||
-    fail "Dependabot does not coordinate the Android Gradle toolchain"
-grep -Fq -- '- "agp"' "$ROOT/.github/dependabot.yml" ||
-    fail "Dependabot toolchain group omits AGP"
-grep -Fq -- '- "gradle-wrapper"' "$ROOT/.github/dependabot.yml" ||
-    fail "Dependabot toolchain group omits the Gradle wrapper"
+ruby "$ROOT/scripts/tests/check-dependabot-policy-test.rb"
 
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-plugin-metadata-test.py"
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-variant-artifact-test.py"

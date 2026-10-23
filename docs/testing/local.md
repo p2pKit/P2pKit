@@ -512,9 +512,14 @@ consumer configuration check, not only the shell fixture's synthetic success.
 
 Dependency and wrapper updates remain fail closed. A version-catalog change
 must carry reviewed SHA-256 verification metadata; a wrapper change must carry
-the complete wrapper plus its pinned distribution and file checksums. AGP and
-the Gradle wrapper are grouped into one Dependabot update because they form one
-compatibility unit.
+the complete wrapper plus its pinned distribution and file checksums.
+[Automatic Dependabot PR generation is paused](../releasing/dependency-maintenance-context.md#manual-updates-while-dependabot-automation-is-paused);
+maintainers prepare deliberate updates instead. AGP and the Gradle wrapper remain
+one compatibility unit, and their Dependabot group is retained for reviewed
+resumption. `ruby scripts/tests/check-dependabot-policy-test.rb` checks the parsed
+version-PR pause, disabled rebasing and retained group; the existing dependency
+policy test runs it too. It does not query GitHub or establish repository security
+settings or queue state.
 
 From a dedicated update branch, generate candidates and independently verify
 every newly admitted artifact against its repository bytes and publisher

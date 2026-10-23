@@ -7,6 +7,42 @@ successful dependency generation or qualification. Routine maintenance no longer
 requires C1/H1/C2/H2, an owner-only actor name, a special branch prefix, recursive
 native custody, or the repository-global heavy-job queue.
 
+## Manual updates while Dependabot automation is paused
+
+Automatic dependency PR generation is paused so routine bot work does not queue
+ahead of important validation and release work. This is not a waiver of security
+review or evidence of successful dependency qualification.
+
+- `.github/dependabot.yml` sets `open-pull-requests-limit: 0` and
+  `rebase-strategy: disabled` for both root ecosystems, `gradle` and
+  `github-actions`. Their weekly schedules and the `android-gradle-toolchain`
+  group are retained for a deliberate, reviewed resumption.
+- GitHub's [zero PR limit](https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference#open-pull-requests-limit)
+  disables **version-update PRs only**. Security-update PRs have a separate limit
+  and are controlled by the repository's Dependabot security-updates setting
+  (`automated-security-fixes`), not this YAML value. On 2026-10-23 that setting
+  was disabled and read back as disabled; vulnerability alerts remained enabled.
+  These independent repository settings can change outside Git and are not
+  established by the local config tests.
+- Disabling [automatic rebasing](https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference#rebase-strategy)
+  does not immediately retire existing work: PRs open before the change can
+  continue rebasing until 30 days after they were opened. Existing bot PRs and
+  queued/running bot jobs require separate review and retirement; do not cancel
+  protected, release, manual or unrelated work to enforce this pause.
+
+Maintainers must continue triaging vulnerability alerts and prepare deliberate,
+coalesced updates using the maintained workflow below. Review AGP and the Gradle
+wrapper together as one compatibility unit. OSV scanning, dependency review,
+strict dependency verification, dependency graph submission and all required
+modular/premerge gates remain enabled. Do not replace them with actor-based CI
+skips, broad ignore rules or synthetic success.
+
+Re-enable automation only through an explicit reviewed configuration/settings
+change. The YAML pause takes effect on the default branch, not from a local
+commit or an unmerged PR. Check the live repository settings and outstanding
+bot work separately; a passing local policy test proves neither queue drainage
+nor the live security-update setting.
+
 ## Exact-source generation, not automatic application
 
 `dependency-update-candidate.yml` runs the unchanged maintained
