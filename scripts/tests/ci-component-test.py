@@ -105,7 +105,7 @@ class ComponentTests(unittest.TestCase):
             'central-http-test.py': [C.sys.executable, '-B', 'scripts/tests/central-http-test.py', '-v'],
             'kotlin-toolchain-controls': ['bash', 'scripts/tests/check-kotlin-toolchain-policy-test.sh'],
             'published-consumer-controls': [C.sys.executable, '-B', 'scripts/tests/audit-consumer-test.py',
-                                            '-v', '-k', 'latest_published'],
+                                            '-v', '-k', 'latest_published', '-k', 'pipeline'],
         }
         commands = C.commands('source')
         for name, argv in expected.items():

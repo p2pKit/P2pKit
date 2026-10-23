@@ -982,6 +982,89 @@ class ConsumerGateTest(unittest.TestCase):
                 self.assert_rejected(result, "missing or invalid published RPC API smoke report")
         self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
 
+    def test_pipeline_failure_snapshot_reads_original_immutable_state_without_locks_or_callbacks(self):
+        # Actual shell generation with fake Gradle boundaries, not a JVM run.
+        self.assert_pass(self.run_gate(self.audit_options()))
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        diagnostic = smoke.split("private fun reportPeerPipelineState", 1)[1].split(
+            "private fun reportDiscoveryState", 1)[0]
+        for required in ('if (kits.size != 2)', 'kits.forEachIndexed { index, kit ->',
+                         'kit.javaClass.name == "dev.p2pkit.core.internal.P2pKitImpl"',
+                         'field(kit, "discoveryTransports") as List<*>', 'check(transports.size == 1)',
+                         'transport.javaClass.name == "dev.p2pkit.transport.lan.JvmLanDiscoveryTransport"',
+                         'field(transport, "peerEventRelay")',
+                         '(field(relay, "state") as StateFlow<*>).value as Map<*, *>',
+                         'field(kit, "peerRegistry")',
+                         '(field(registry, "registryState") as StateFlow<*>).value',
+                         'field(registryState, "tracked") as Map<*, *>',
+                         'field(registryState, "closed") as Boolean', 'val peers = kit.peers.value',
+                         'check(relayPeers.size <= 4096 && tracked.size <= 4096 && peers.size <= 4096)'):
+            self.assertIn(required, diagnostic)
+        self.assertEqual(diagnostic.count('as StateFlow<*>).value'), 2)
+        self.assertEqual(diagnostic.count('kit.peers.value'), 1)
+        self.assertLess(diagnostic.index('check(relayPeers.size <= 4096'), diagnostic.index('peers.any'))
+        self.assertIn('Failure-only, non-atomic observations', smoke)
+        self.assertIn('not callback counts or proof that a callback completed', smoke)
+        for forbidden in ('synchronized(', '.withLock', '.lock(', '.collect', '.emit(', '.upsert(',
+                          '.refresh(', '.list(', 'requestServiceInfo(', '.getServiceInfo(',
+                          'NetworkInterface', 'InetAddress.get', '.toString()', '.hostAddress', '.textBytes',
+                          'JvmLanDiag.enabled', 'JvmTestDiscoveryBackend', '.close(', '.cancel(',
+                          '.set(', '.compareAndSet(', 'Thread.sleep(', '.javaClass.getDeclaredMethod'):
+            self.assertNotIn(forbidden, diagnostic)
+
+    def test_pipeline_failure_snapshot_is_per_kit_bounded_and_preserves_original_failure(self):
+        self.assert_pass(self.run_gate(self.audit_options()))
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        diagnostic = smoke.split("private fun reportPeerPipelineState", 1)[1].split(
+            "private fun reportDiscoveryState", 1)[0]
+        for marker in ('CONSUMER_PIPELINE_SNAPSHOT_UNAVAILABLE"',
+                       'CONSUMER_PIPELINE_SNAPSHOT_UNAVAILABLE INDEX $index',
+                       'CONSUMER_PIPELINE_SNAPSHOT INDEX $index RELAY_COUNT ${relayPeers.size}',
+                       'RELAY_OTHER ${bit(relayPeers.containsKey(other.localPeerId))}',
+                       'REGISTRY_COUNT ${tracked.size}',
+                       'REGISTRY_OTHER ${bit(tracked.containsKey(other.localPeerId))}',
+                       'REGISTRY_CLOSED ${bit(closed)} PEERS ${peers.size}',
+                       'SEES_OTHER ${bit(peers.any { it.id == other.localPeerId })}'):
+            self.assertIn(marker, diagnostic)
+        self.assertLess(diagnostic.index('kits.forEachIndexed'), diagnostic.index('try {'))
+        self.assertIn('catch (_: Throwable)', diagnostic)
+        for forbidden in ('throw ', 'recordFailure(', 'addSuppressed(', '${other.localPeerId}',
+                          '${kit.localPeerId}', '$relayPeers', '$tracked', '$peers', '${error',
+                          '.message', '.printStackTrace'):
+            self.assertNotIn(forbidden, diagnostic)
+        main = smoke.split('fun main(arguments:', 1)[1]
+        failure = main.split('} catch (error: Throwable) {', 1)[1].split('} finally {', 1)[0]
+        self.assertEqual(main.count('reportPeerPipelineState(kits)'), 1)
+        self.assertLess(failure.index('recordFailure(error)'), failure.index('reportPeerPipelineState(kits)'))
+        self.assertLess(failure.index('reportPeerPipelineState(kits)'), failure.index('reportDiscoveryState(factory, kits)'))
+        self.assertEqual(smoke.count('withTimeout(30_000)'), 2)
+        for retained in ('kit.peers.first', 'withContext(NonCancellable)', 'owner.requireDisposed(factory)',
+                         'failure?.let { throw it }'):
+            self.assertIn(retained, smoke)
+        self.assert_complete_arguments(self.calls('gradle'))
+
+    def test_pipeline_snapshot_reflection_names_match_current_production_storage(self):
+        # These source-shape checks prevent a silent field/class rename from
+        # making every diagnostic unavailable. Runtime observations stay best-effort.
+        source_fields = {
+            'library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt': (
+                'package dev.p2pkit.core.internal', 'class P2pKitImpl(',
+                'private val discoveryTransports: List<DiscoveryTransport>', 'private val peerRegistry: PeerRegistry'),
+            'library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDiscoveryTransport.kt': (
+                'package dev.p2pkit.transport.lan', 'internal class JvmLanDiscoveryTransport(',
+                'private val peerEventRelay = ReliablePeerEventRelay'),
+            'library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/ReliablePeerEventRelay.kt': (
+                'private val state = MutableStateFlow<Map<PeerId, RelayEntry>>(emptyMap())',),
+            'library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt': (
+                'private val registryState: MutableStateFlow<PeerRegistryState>',
+                'private data class PeerRegistryState(', 'val closed: Boolean', 'val tracked: Map<PeerId, TrackedPeer>'),
+        }
+        for path, fragments in source_fields.items():
+            with self.subTest(path=path):
+                source = (ROOT / path).read_text()
+                for fragment in fragments:
+                    self.assertIn(fragment, source)
+
     def test_pom_diagnostic_uses_original_published_smoke_only_without_claiming_full_qualification(self):
         result = self.run_gate({"P2PKIT_CONSUMER_WORK_DIR": str(self.work)}, arguments=("--pom-diagnostic",))
         self.assertEqual(result.returncode, 0, self.output(result))

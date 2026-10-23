@@ -977,6 +977,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -1039,6 +1040,47 @@ private fun captureOwners(factory: Any): List<NativeOwner> = installedStarters(f
     val stateTimer = timerThread(starter, "_stateTimer")
     check(timer.isAlive && stateTimer.isAlive && !stateTimer.isDaemon)
     NativeOwner(dns, checkNotNull(dns.socket), timer, stateTimer, field(dns, "_executor") as ExecutorService)
+}
+
+// Failure-only, non-atomic observations of the ORIGINAL immutable StateFlow
+// snapshots. These separate transport/registry/public-state boundaries; they
+// are not callback counts or proof that a callback completed. Do not acquire
+// production locks, invoke callbacks, query the network, or print identities.
+private fun reportPeerPipelineState(kits: List<P2pKit>) {
+    if (kits.size != 2) {
+        println("CONSUMER_PIPELINE_SNAPSHOT_UNAVAILABLE")
+        return
+    }
+    kits.forEachIndexed { index, kit ->
+        try {
+            check(kit.javaClass.name == "dev.p2pkit.core.internal.P2pKitImpl")
+            val other = kits[1 - index]
+            val transports = field(kit, "discoveryTransports") as List<*>
+            check(transports.size == 1)
+            val transport = checkNotNull(transports.single())
+            check(transport.javaClass.name == "dev.p2pkit.transport.lan.JvmLanDiscoveryTransport")
+            val relay = field(transport, "peerEventRelay")
+            val relayPeers = (field(relay, "state") as StateFlow<*>).value as Map<*, *>
+            val registry = field(kit, "peerRegistry")
+            val registryState = checkNotNull((field(registry, "registryState") as StateFlow<*>).value)
+            val tracked = field(registryState, "tracked") as Map<*, *>
+            val closed = field(registryState, "closed") as Boolean
+            val peers = kit.peers.value
+            check(relayPeers.size <= 4096 && tracked.size <= 4096 && peers.size <= 4096)
+            fun bit(value: Boolean) = if (value) 1 else 0
+            println(
+                "CONSUMER_PIPELINE_SNAPSHOT INDEX $index RELAY_COUNT ${relayPeers.size} " +
+                    "RELAY_OTHER ${bit(relayPeers.containsKey(other.localPeerId))} " +
+                    "REGISTRY_COUNT ${tracked.size} REGISTRY_OTHER ${bit(tracked.containsKey(other.localPeerId))} " +
+                    "REGISTRY_CLOSED ${bit(closed)} PEERS ${peers.size} " +
+                    "SEES_OTHER ${bit(peers.any { it.id == other.localPeerId })}"
+            )
+        } catch (_: Throwable) {
+            // An unavailable observation for one kit must not suppress the
+            // other kit's snapshot or replace the ORIGINAL test failure.
+            println("CONSUMER_PIPELINE_SNAPSHOT_UNAVAILABLE INDEX $index")
+        }
+    }
 }
 
 // Failure-only passive snapshots of ORIGINAL listener/cache/peer state. These
@@ -1199,6 +1241,7 @@ fun main(arguments: Array<String>) = runBlocking {
     } catch (error: Throwable) {
         recordFailure(error)
         println("consumer-lan failedPhase=$phase errorType=${error.javaClass.simpleName}")
+        reportPeerPipelineState(kits)
         reportDiscoveryState(factory, kits)
         try {
             reportNativeState(factory)
