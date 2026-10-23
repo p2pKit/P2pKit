@@ -1565,11 +1565,16 @@ class ConsumerGateTest(unittest.TestCase):
         for group, artifact in (("org.jetbrains.kotlin", "kotlin-stdlib"),
                                 ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm")):
             with self.subTest(artifact=artifact):
+                mutation = {"artifact": "p2p-transport-lan-jvm",
+                            "values": {"groupId": group, "artifactId": artifact,
+                                       "version": "99.0.0", "scope": "compile"}}
+                if artifact == "kotlinx-coroutines-core-jvm":
+                    # Replace the existing dependency, rather than failing on a duplicate.
+                    mutation["name"] = artifact
                 result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
-                    "FAKE_LAN_POM_MUTATION": json.dumps({"artifact": "p2p-transport-lan-jvm",
-                        "values": {"groupId": group, "artifactId": artifact, "version": "99.0.0", "scope": "compile"}})},
+                    "FAKE_LAN_POM_MUTATION": json.dumps(mutation)},
                     arguments=("--latest-published",))
-                self.assert_rejected(result, "embedded LAN publication metadata")
+                self.assert_rejected(result, "POM dependency version/scope mismatch")
         self.assertFalse(self.calls("gradle"))
         self.assertFalse(self.calls("xcrun"))
 
