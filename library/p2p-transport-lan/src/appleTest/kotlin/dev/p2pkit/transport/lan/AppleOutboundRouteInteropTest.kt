@@ -21,8 +21,8 @@ import platform.Network.nw_endpoint_create_bonjour_service
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_get_address
 import platform.Network.nw_endpoint_get_port
+import platform.darwin.NXSwapHostShortToBig
 import platform.posix.AF_INET6
-import platform.posix.htons
 import platform.posix.memset
 import platform.posix.sockaddr_in6
 import kotlin.test.Test
@@ -65,7 +65,7 @@ class AppleOutboundRouteInteropTest {
         memset(native.ptr, 0, sizeOf<sockaddr_in6>().convert())
         native.sin6_len = sizeOf<sockaddr_in6>().convert()
         native.sin6_family = AF_INET6.convert()
-        native.sin6_port = htons(54_321u)
+        native.sin6_port = NXSwapHostShortToBig(54_321u)
         native.sin6_scope_id = 17u
         val bytes = native.sin6_addr.ptr.reinterpret<UByteVar>()
         bytes[0] = 0xfeu

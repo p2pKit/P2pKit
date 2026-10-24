@@ -133,7 +133,7 @@ class IosOutboundRouteTest {
             cleanup.own { replay.close() }
             val secondAccepted = withTimeout(TEST_TIMEOUT_MILLIS) { secondIncoming.await() }
             cleanup.own { secondAccepted.close() }
-            assertEquals(listOf(originalNumeric, originalNumeric), observed)
+            assertEquals(listOf<LanTcpEndpoint?>(originalNumeric, originalNumeric), observed)
             assertSame(route, assertIs<OutboundRouteConnection>(replay).outboundRoute)
             replay.write(byteArrayOf(42))
             assertContentEquals(byteArrayOf(42), withTimeout(TEST_TIMEOUT_MILLIS) { secondAccepted.read().first() })
