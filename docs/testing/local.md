@@ -210,6 +210,17 @@ On Windows PowerShell, use `.\gradlew.bat` and one command line instead of
 Bash continuations. The symlink prerequisites above still apply; do not skip
 tests when a runner lacks them. Stop Gradle after failures as well as success.
 
+The Windows CI worker uses the Java 17 and Java 21 installations selected by
+`actions/setup-java`. After restoring the optional dependency cache,
+`scripts/setup-ci-component.sh` writes `org.gradle.java.installations.fromEnv`
+with `JAVA_HOME_17_X64,JAVA_HOME_21_X64` into that job's Gradle home and disables
+automatic JDK detection/download there. This prevents a cached or separately
+auto-provisioned JDK from replacing the selected tools. Missing installations
+fail setup; existing user configuration is not overwritten. Other hosts and
+local Gradle configuration are unchanged. Strict dependency verification,
+fail-on-deprecation, and the Windows packaging supplier-archive comparison
+remain required; no toolchain repository or unverified download is added.
+
 The maintained [`CI`](../../.github/workflows/ci.yml) all-component route runs
 JVM library/sample tests on Linux and Windows and the shared macOS gate, alongside
 separate native and packaging components. See the
@@ -259,8 +270,11 @@ reported completion just before that deadline but did not exit within it. This
 operational headroom is not permission to accept a readiness message instead of
 actual exit 0, closed output, and fresh Booted readback. Other caller-managed
 commands and the shared FULL simulator route retain a 120-second per-command
-work ceiling. The existing
-15-second TERM and 5-second KILL allowances bound cleanup, not successful work.
+work ceiling. The existing Darwin retirement allowances are 120 seconds for
+TERM and 120 seconds for KILL (other backends retain 15 and 5 seconds); these
+bound cleanup, not successful work. The separate
+[private exec-gate startup allowance](darwin-process-ownership.md#internal-startup-allowance)
+does not extend these command or cleanup budgets.
 Actual Booted readiness and owned Shutdown retirement remain required. This
 command budget changes no test timeout or assertion; one measured cold start is
 neither a reliability guarantee nor Native test qualification.

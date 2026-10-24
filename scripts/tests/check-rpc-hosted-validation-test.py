@@ -175,7 +175,8 @@ def check_windows_modular_commands(commands):
     # fixture and built MSI are not standard-user/installed provider acceptance.
     wrapper = str(ROOT / 'gradlew.bat') if os.name == 'nt' else './gradlew'
     flags = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
-             '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
+             '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain',
+             '--info']
     jvm = [argv for task, argv in commands['jvm-windows'] if task == 'jvm-tests']
     require(jvm == [[wrapper, *flags, '-Pp2pkit.rpc.windows.protectedDevelopmentFixture=true',
         ':p2p-core:jvmTest', ':p2p-transport-lan:jvmTest', ':p2p-network-provisioning-desktop:test',
@@ -231,8 +232,31 @@ class HostedValidationTest(unittest.TestCase):
     def test_windows_modular_jvm_msi_image_and_runtime_commands_remain_complete(self):
         check_windows_modular_commands(component_commands())
 
+    def test_windows_modular_commands_require_one_info_and_unchanged_flags(self):
+        original = component_commands()
+        # A stale baseline must not let every negative pass at an unrelated guard.
+        check_windows_modular_commands(original)
+        for component, task, message in (
+                ('jvm-windows', 'jvm-tests', 'Windows JVM suite must remain complete, strict and unfiltered'),
+                ('desktop-windows', 'desktop-tests-and-installer', 'Windows must build the normal MSI')):
+            for before, after in (
+                    ('--info', []), ('--info', ['--info', '--info']),
+                    ('--info', ['--debug']), ('--info', ['--info', '--debug']),
+                    ('--info', ['--quiet']), ('--info', ['--info', '--stacktrace']),
+                    ('strict', ['off']), ('--max-workers=2', ['--max-workers=3'])):
+                with self.subTest(component=component, flag=before, replacement=after):
+                    commands = copy.deepcopy(original)
+                    argv = next(argv for label, argv in commands[component] if label == task)
+                    self.assertEqual(argv.count('--info'), 1)
+                    self.assertEqual(argv.count(before), 1)
+                    index = argv.index(before)
+                    argv[index:index + 1] = after
+                    with self.assertRaisesRegex(ValueError, message):
+                        check_windows_modular_commands(commands)
+
     def test_windows_modular_packaging_requires_diagnostics_in_reviewed_order(self):
         original = component_commands()
+        check_windows_modular_commands(original)
         task = ':p2p-sample-diagnostics:test'
         for mutation in ('omit', 'reorder'):
             commands = copy.deepcopy(original)
@@ -248,36 +272,38 @@ class HostedValidationTest(unittest.TestCase):
 
     def test_windows_modular_jvm_controls_reject_selectors_exclusions_and_bypasses(self):
         original = component_commands()
+        check_windows_modular_commands(original)
         for suffix in (['--tests', 'OneTest'], ['-x', ':p2p-sample-rpc:jvmTest'],
                        ['--exclude-task', ':p2p-rpc:jvmTest'], ['--init-script', 'narrow.gradle'],
                        ['--dry-run'], ['||', 'true']):
             commands = copy.deepcopy(original)
             next(argv for task, argv in commands['jvm-windows'] if task == 'jvm-tests').extend(suffix)
-            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, 'Windows JVM suite'):
                 check_windows_modular_commands(commands)
         for task in (':p2p-rpc:jvmTest', ':p2p-sample-rpc:jvmTest'):
             commands = copy.deepcopy(original)
             next(argv for label, argv in commands['jvm-windows'] if label == 'jvm-tests').remove(task)
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, 'Windows JVM suite'):
                 check_windows_modular_commands(commands)
 
     def test_windows_modular_packaging_cannot_skip_inspection_reorder_or_use_alternate_producer(self):
         original = component_commands()
+        check_windows_modular_commands(original)
         for index in range(3):
             commands = copy.deepcopy(original)
             del commands['desktop-windows'][index]
-            with self.subTest(index=index), self.assertRaises(ValueError):
+            with self.subTest(index=index), self.assertRaisesRegex(ValueError, 'Windows must build the normal MSI'):
                 check_windows_modular_commands(commands)
         commands = copy.deepcopy(original)
         commands['desktop-windows'].reverse()
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, 'Windows must build the normal MSI'):
             check_windows_modular_commands(commands)
         for before, after in ((':p2p-sample-desktop-ui:packageMsi', ':p2p-sample-rpc:packageMsi'),
                               ('strict', 'off'), (':p2p-sample-desktop-ui:test', '--dry-run')):
             commands = copy.deepcopy(original)
             argv = commands['desktop-windows'][0][1]
             argv[argv.index(before)] = after
-            with self.subTest(mutation=before), self.assertRaises(ValueError):
+            with self.subTest(mutation=before), self.assertRaisesRegex(ValueError, 'Windows must build the normal MSI'):
                 check_windows_modular_commands(commands)
 
 

@@ -993,7 +993,7 @@ class DarwinGateReadinessModels(unittest.TestCase):
     """Actual spawn/diagnostic branches with supplied native calls, not Darwin qualification."""
 
     @contextlib.contextmanager
-    def spawn_model(self, *, readable=True, token=b"R", failure=None):
+    def spawn_model(self, *, readable=True, ready_after=0, token=b"R", failure=None):
         native = GATE.audit_processes
         scope = native.DarwinScope.__new__(native.DarwinScope)  # Never run native admission.
         scope.job, scope.invocation, scope.state, scope.home = "a" * 32, "b" * 32, "/state", "/home"
@@ -1014,11 +1014,12 @@ class DarwinGateReadinessModels(unittest.TestCase):
             self.assertEqual("READY", scope.launches[-1]["gateReadiness"])
             return worker
 
-        def selected(*_args):
+        def selected(_read, _write, _error, timeout):
             self.assertEqual("WAITING", scope.launches[-1]["gateReadiness"])
             if failure is not None and failure[0] == "select":
                 raise failure[1]
-            return ([20] if readable else [], [], [])
+            # Supplied readiness time, not a sleep or native scheduling claim.
+            return ([20] if readable and ready_after <= timeout else [], [], [])
 
         def read(*_args):
             self.assertEqual("READING", scope.launches[-1]["gateReadiness"])
@@ -1072,7 +1073,7 @@ class DarwinGateReadinessModels(unittest.TestCase):
         scope._inherited_pipes.assert_called_once()
         scope._pipe_identity.assert_called_once_with(74001, 8)
         self.assertEqual([mock.call(), mock.call()], calls["pipe"].call_args_list)
-        calls["select"].assert_called_once_with([20], [], [], 10)
+        calls["select"].assert_called_once_with([20], [], [], 60)
         if read_attempted:
             calls["read"].assert_called_once_with(20, 1)
         else:
@@ -1123,6 +1124,44 @@ class DarwinGateReadinessModels(unittest.TestCase):
             self.assertEqual("READY", scope.launches[-1]["gateReadiness"])
             self.assertEqual("direct-spawn-gate", next(iter(scope.ownership_proofs.values()))["kind"])
             self.assert_original_operations(scope, child, calls, read_attempted=True, released=True)
+
+    def test_startup_headroom_still_requires_readiness_within_single_bounded_wait(self):
+        for ready_after, admitted in ((15, True), (59, True), (61, False)):
+            with self.subTest(ready_after=ready_after), self.spawn_model(ready_after=ready_after) as model:
+                scope, environment, child, calls = model
+                if admitted:
+                    self.assertIs(scope.spawn([sys.executable], "/", environment), scope.leaders[0])
+                    self.assertEqual("READY", scope.launches[-1]["gateReadiness"])
+                else:
+                    with self.assertRaises(GATE.audit_processes.OwnershipError):
+                        scope.spawn([sys.executable], "/", environment)
+                    self.assertEqual("WAIT_TIMEOUT", scope.launches[-1]["gateReadiness"])
+                self.assert_original_operations(scope, child, calls, read_attempted=admitted, released=admitted)
+
+    def test_child_release_wait_remains_ten_seconds_and_requires_exact_token(self):
+        spec = importlib.util.spec_from_file_location("private_exec_gate", ROOT / "scripts/audit_exec_gate.py")
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        for readable, token, admitted in ((False, b"G", False), (True, b"", False),
+                                          (True, b"X", False), (True, b"G", True)):
+            with self.subTest(readable=readable, token=token), \
+                    mock.patch.object(gate.sys, "argv", ["gate", "7", "8", "/exact/command"]), \
+                    mock.patch.object(gate.os, "write", return_value=1) as write, \
+                    mock.patch.object(gate.select, "select", return_value=([8] if readable else [], [], [])) as wait, \
+                    mock.patch.object(gate.os, "read", return_value=token) as read, \
+                    mock.patch.object(gate.os, "close") as close, mock.patch.object(gate.os, "execv") as execute:
+                self.assertEqual(125, gate.main())  # Mock exec does not replace the test process.
+                write.assert_called_once_with(7, b"R")
+                wait.assert_called_once_with([8], [], [], 10)
+                if readable:
+                    read.assert_called_once_with(8, 1)
+                else:
+                    read.assert_not_called()
+                self.assertEqual([mock.call(7), mock.call(8)], close.call_args_list)
+                if admitted:
+                    execute.assert_called_once_with("/exact/command", ["/exact/command"])
+                else:
+                    execute.assert_not_called()
 
     def test_select_and_read_exceptions_keep_original_and_pending_operation(self):
         for operation, state in (("select", "WAITING"), ("read", "READING")):
