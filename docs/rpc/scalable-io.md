@@ -22,10 +22,12 @@ The 324-reader proposal is rejected. A coroutine around a blocking read does
 | iOS | Existing asynchronous `NWConnection` callbacks | Already event driven, with one outstanding receive and bounded delivery. No replacement or artificial JVM-style pool. Actual device resource/lifecycle qualification remains separate. |
 
 Each process has one lazy readiness worker per backend, not per kit/client.
-Restricted syscall lanes are shared: 16 reader, 16 writer and 16 setup workers
-(limits, not eagerly allocated threads). Waiting for socket readiness suspends
-the coroutine and releases its worker slot. Accept remains one blocking worker
-per actual listening transport; dial-only clients create no listener.
+Nonblocking reader/writer lanes use shared `Dispatchers.Default` workers, each
+capped at 16 (limits, not eagerly allocated threads or extra elastic IO pools).
+Waiting for readiness suspends the coroutine and releases its worker slot.
+Restricted setup and the legacy blocking test seam keep their separate shared
+16-slot IO lanes. Accept remains one blocking worker per actual listening
+transport; dial-only clients create no listener.
 
 The readiness worker only selects and schedules continuations. Even Unconfined
 application continuations are dispatched away from it. Each original socket
@@ -209,6 +211,23 @@ cases used 50–51 total ART threads. The 76,800 responses took 53.43 seconds (N
 and 42.59 seconds (native accepted sockets), not the nominal 30 seconds. This
 establishes original-socket functionality and bounded idle resources on that
 emulator, **not sustained 2,560 responses/second or authenticated mobile hosting**.
+
+The [repaired macOS fixture](https://github.com/p2pKit/P2pKit/actions/runs/40128239658)
+at `f99460b4` completed both 128/256 populations, 1,280/2,560 exact JNI echoes,
+one native readiness worker and final worker retirement. All 39 selected JVM
+tests and 25 native contract groups passed; the latter also passed ASan/UBSan.
+The independent [actual Apple/Android ABI comparison](https://github.com/p2pKit/P2pKit/actions/runs/40128243525)
+passed against the reviewed additive baseline. These are native byte-stream
+and compatibility results, not authenticated physical-LAN capacity.
+
+The `f99460b4` 60-second Linux **profiled** 256-client run completed 153,600
+authenticated responses with original exits zero and zero post-retention leases.
+Its new 30.153-second steady-idle window used 10.745% of one CPU core; active CPU
+was 296.499%, with 72 host native threads after load. JFR identifies remaining
+selector scans, coroutine scheduling, topology syscalls and existing crypto/hash
+work. Samples parked in native accept/epoll are **not CPU time**. Subsequent
+worker scheduling changes require their own measurement; this profile is not
+an unprofiled performance qualification or evidence for those changes.
 
 The old 128-raw-socket baseline observed 151 JVM threads (9 before connections).
 Initial new raw 128/256 tests observed 30 threads in both cases. Their short,

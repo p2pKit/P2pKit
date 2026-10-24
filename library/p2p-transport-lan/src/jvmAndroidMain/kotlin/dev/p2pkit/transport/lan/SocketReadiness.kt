@@ -21,6 +21,14 @@ internal interface ReadinessSocket {
     fun asynchronousIo(): SuspendingSocketIo?
 }
 
+/** Nonblocking syscalls must not tell the scheduler that a worker is parked in blocking IO. */
+internal object SocketIoWorkers {
+    // Shared CPU workers, capped even on many-core desktops. Waiting releases the lane. Listener,
+    // connect/setup and the legacy blocking test seam keep their separate IO dispatchers.
+    val read = Dispatchers.Default.limitedParallelism(16)
+    val write = Dispatchers.Default.limitedParallelism(16)
+}
+
 internal class ReadySocketIo<K : Any>(
     private val registration: SocketReadiness<K>.Registration,
     private val readNow: (ByteArray) -> Int?,

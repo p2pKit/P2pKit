@@ -18,8 +18,8 @@ internal class AndroidLanIo(restricted: Boolean) {
     val accept: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(1) else Dispatchers.IO
 
     private companion object {
-        // Shared across all kits, not an elastic view for every connected client. Data waits suspend on
-        // readiness and consume no slot; these lanes only execute short syscalls / finite setup calls.
+        // Shared across all kits, not an elastic view for every connected client. Read/write are the
+        // legacy blocking test seam; production data waits suspend on readiness and use SocketIoWorkers.
         val readers = Dispatchers.IO.limitedParallelism(16)
         val writers = Dispatchers.IO.limitedParallelism(16)
         val setups = Dispatchers.IO.limitedParallelism(16)

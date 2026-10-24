@@ -170,7 +170,7 @@ internal class JvmRawConnection(
             }
             try {
                 try {
-                    withContext(io.write) {
+                    withContext(if (asynchronous == null) io.write else SocketIoWorkers.write) {
                         requireAllowedPath()
                         JvmLanDiag.frame("write", "$label ${bytes.size}B")
                         if (asynchronous != null) asynchronous.write(bytes) else {
@@ -234,7 +234,7 @@ internal class JvmRawConnection(
             while (currentCoroutineContext().isActive) {
                 requireAllowedPath()
                 val n = try {
-                    if (asynchronous != null) withContext(io.read) { asynchronous.read(buffer) }
+                    if (asynchronous != null) withContext(SocketIoWorkers.read) { asynchronous.read(buffer) }
                     else suspendCancellableCoroutine<Int> { continuation ->
                         if (socketClosed.get()) {
                             continuation.resume(-1)
