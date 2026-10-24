@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // Investigative metadata only. No field value, arbitrary notification payload,

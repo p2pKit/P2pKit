@@ -228,6 +228,8 @@ class FakeRunner:
             code = self.options.get("ambientCode", 1)
         elif name == "runtime-inventory":
             out = json.dumps({"runtimes": [{"identifier": probe.RUNTIME, "isAvailable": True}]}).encode()
+        elif name == "record-controls":
+            code = self.options.get("recordCode", 0)
         elif name == "create-device":
             self.name = argv[3]
             self.rows.append(device(OWNED, self.name))
@@ -342,6 +344,21 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual([], backend.writes)
             self.assertIsNone(summary["ownedDevice"])
             self.assertFalse(any(row[0] == "create-device" for row in runner.calls))
+
+    def test_failed_native_record_controls_stop_both_conditions_before_any_fixture_mutation(self):
+        for mode in ("hardware-off", "hardware-on"):
+            with self.subTest(mode=mode):
+                code, summary, runner, backend, _ = self.execute({"recordCode": 1}, mode)
+                self.assertEqual(125, code)
+                self.assertEqual(["TOOL_FAILED_RECORD_CONTROLS"], summary["errors"])
+                for key in ("originalUiExitCode", "ownedDevice", "preference", "events", "originalXcresult"):
+                    self.assertIsNone(summary[key])
+                self.assertTrue(summary["nativeRetirementKnown"])
+                self.assertFalse(summary["underlyingHistoricalCauseEstablished"])
+                self.assertEqual([], backend.writes)
+                self.assertFalse(backend.closed)  # The preference backend was never acquired.
+                self.assertEqual(["initial-devices", "ambient-simulator-refusal", "runtime-inventory", "record-controls"],
+                                 [row[0] for row in runner.calls])
 
     def test_malformed_preexisting_and_unbound_create_responses_never_authorize_delete(self):
         for options in ({"createdId": "not-a-device"}, {"createdId": BORROWED}, {"mismatchedCreated": True}):
@@ -536,6 +553,16 @@ class RunnerTests(unittest.TestCase):
 
 
 class RetentionAndSourceTests(unittest.TestCase):
+    def test_standalone_record_and_geometry_tests_explicitly_import_coregraphics(self):
+        # Foundation exposes CGRect storage on Darwin, not the CoreGraphics
+        # overlay's maxX/maxY/isNull/isInfinite/null/infinite members. The
+        # standalone SwiftPM stage must compile without a UIKit re-export.
+        package = ROOT / "samples/iosApp/KeyboardCauseProbeControls"
+        for relative in ("Sources/KeyboardCauseProbeRecord/KeyboardCauseProbeRecord.swift",
+                         "Tests/KeyboardCauseProbeRecordTests/KeyboardCauseProbeContractTests.swift"):
+            with self.subTest(source=relative):
+                self.assertIn("import CoreGraphics", (package / relative).read_text().splitlines())
+
     def test_original_xcresult_retention_refuses_links_without_traversing_other_derived_data(self):
         with tempfile.TemporaryDirectory() as name:
             private = Path(name) / "private"
