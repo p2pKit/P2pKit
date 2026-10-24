@@ -376,6 +376,100 @@ printf 'invoked\\n' >> fake-gradle-invocations
         self.assertIn("-scheme p2pkit-sample-ui", xcode[0])
         self.assertNotIn("-only-testing:", xcode[0], "The ordinary both-target suite remains unfiltered")
 
+    def assert_keyboard_readiness_call(self, calls):
+        xcode = [call for call in calls if call.startswith("xcodebuild ")]
+        self.assertEqual(1, len(xcode), "The diagnostic must not retry either XCTest case")
+        self.assertIn(" -derivedDataPath ", xcode[0])
+        self.assertIn(" -resultBundlePath ", xcode[0])
+        derived = pathlib.Path(xcode[0].split(" -derivedDataPath ", 1)[1].split(" -resultBundlePath ", 1)[0])
+        expected = [
+            "xcodebuild", "-project", str(self.project / "p2pkit-sample.xcodeproj"),
+            "-scheme", "p2pkit-sample-ui", "-configuration", "Debug", "-sdk", "iphonesimulator",
+            "-destination", "platform=iOS Simulator,id=" + UDID, "-derivedDataPath", str(derived),
+            "-resultBundlePath", str(derived / "Logs/Test/swift-keyboard-readiness.xcresult"),
+            "-parallel-testing-enabled", "NO", "-maximum-concurrent-test-simulator-destinations", "1",
+            "-only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/"
+            "testRenderedPortRoundTripsThroughManualInputInEnglishLocale",
+            "-only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/"
+            "testRenderedPortRoundTripsThroughManualInputInGermanLocale",
+            "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "test",
+        ]
+        jobs = self.env.get("P2PKIT_XCODE_JOBS", "")
+        if jobs:
+            self.assertIn(jobs, ("1", "2"), "Only the existing bounded compilation override is admissible")
+            expected[1:1] = ["-jobs", jobs]
+        self.assertEqual(" ".join(expected), xcode[0])
+        self.assertEqual(["xcodegen generate"], [call for call in calls if call.startswith("xcodegen ")])
+        self.assertLess(calls.index("xcodegen generate"), calls.index(xcode[0]))
+        self.assertIn("xcrun simctl bootstatus " + UDID + " -b", calls)
+        return derived
+
+    def test_keyboard_readiness_action_keeps_default_runtime_generation_and_owned_cleanup(self):
+        self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-readiness",), SIM_UDID="",
+                               SIM_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"))
+        calls = (self.root / "tools.log").read_text().splitlines()
+        derived = self.assert_keyboard_readiness_call(calls)
+        self.assertEqual(self.build, derived.parent.parent)
+        self.assertTrue(derived.parent.name.startswith("ios-ui-run."))
+        self.assertEqual("DerivedData", derived.name)
+        self.assertFalse(self.lock.exists())
+        self.assertEqual([], self.run_dirs())
+
+    def test_keyboard_readiness_failure_stays_nonzero_and_retains_owned_diagnostics(self):
+        self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-readiness",),
+                               FAKE_IOS_BUILD_FAILURE="1"), expected=42)
+        derived = self.assert_keyboard_readiness_call((self.root / "tools.log").read_text().splitlines())
+        self.assertEqual([derived.parent], self.run_dirs())
+        self.assertFalse(self.lock.exists())
+
+    def test_keyboard_readiness_borrowed_directory_is_preserved_on_success_and_failure(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure):
+                external = self.root / ("borrowed-keyboard-failure" if failure else "borrowed-keyboard-success")
+                external.mkdir()
+                sentinel = external / "keep.txt"
+                sentinel.write_text("caller data")
+                before = (self.root / "tools.log").read_text().splitlines() if (self.root / "tools.log").exists() else []
+                self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-readiness",),
+                                       IOS_RUN_DIR=str(external), FAKE_IOS_BUILD_FAILURE="1" if failure else "0"),
+                            expected=42 if failure else 0)
+                calls = (self.root / "tools.log").read_text().splitlines()[len(before):]
+                self.assertEqual(external / "DerivedData", self.assert_keyboard_readiness_call(calls))
+                self.assertEqual("caller data", sentinel.read_text())
+                self.assertFalse(self.lock.exists())
+
+    def test_keyboard_readiness_action_rejects_extra_arguments_and_unknown_aliases_before_tools(self):
+        for arguments in (("run-keyboard-readiness", "extra"), ("keyboard-readiness",),
+                          ("run-keyboard-readiness-extra",)):
+            with self.subTest(arguments=arguments):
+                self.finish(self.start("run-ios-ui-tests.sh", arguments=arguments), expected=2)
+                self.assertFalse((self.root / "tools.log").exists())
+                self.assertFalse(self.build.exists())
+
+    def test_keyboard_readiness_selection_oracle_rejects_broadening_repetition_and_relaxed_policy(self):
+        self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-readiness",)))
+        calls = (self.root / "tools.log").read_text().splitlines()
+        self.assert_keyboard_readiness_call(calls)
+        selector = "-only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/"
+        english = selector + "testRenderedPortRoundTripsThroughManualInputInEnglishLocale"
+        german = selector + "testRenderedPortRoundTripsThroughManualInputInGermanLocale"
+        mutations = (
+            (english, ""), (german, ""), (english, selector.rstrip("/")),
+            (german, english), (english, english + " " + english),
+            (german, german + " -test-iterations 2"), (german, german + " -retry-tests-on-failure"),
+            (german, german + " -skip-testing:p2pkit-sample-uitests"),
+            (german, german + " -test-timeouts-enabled NO"),
+            ("-parallel-testing-enabled NO", "-parallel-testing-enabled YES"),
+            ("-maximum-concurrent-test-simulator-destinations 1", "-maximum-concurrent-test-simulator-destinations 2"),
+            ("SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "SWIFT_TREAT_WARNINGS_AS_ERRORS=NO"),
+            ("swift-keyboard-readiness.xcresult", "outside-owned-result.xcresult"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(mutation=original, replacement=replacement), self.assertRaises(AssertionError):
+                self.assert_keyboard_readiness_call([call.replace(original, replacement) for call in calls])
+        with self.assertRaises(AssertionError):
+            self.assert_keyboard_readiness_call(calls + [call for call in calls if call.startswith("xcodebuild ")])
+
     def test_cancellation_probe_selects_one_case_without_invalid_repetition_option(self):
         external = self.root / "owned-probe-output"
         self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-cancellation-probe",),

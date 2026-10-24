@@ -2373,6 +2373,17 @@ print('DEFERRED_HOME_DOMAIN_PASS')
         self.assertTrue({"prepare-android", "prepare-desktop", "inspect-android", "inspect-desktop",
                          "component-setup", "gradle-stop"} <= E.TASK_NAMES)
 
+    def test_keyboard_diagnostic_projection_retains_real_failure_and_cleanup(self):
+        directory = self.root / "build/reports/ci-component"
+        directory.mkdir(parents=True)
+        component = "apple-keyboard-diagnostic"
+        for status, stop in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            rows = [{"task": "keyboard-readiness-diagnostic", "exitCode": status},
+                    {"task": "gradle-stop", "exitCode": stop}]
+            (directory / (component + ".json")).write_text(json.dumps(
+                {"component": component, "tasks": rows, "exitCode": status or stop}))
+            self.assertEqual(E.component_tasks(self.root, component), rows)
+
 
 if __name__ == "__main__":
     unittest.main(failfast=True)

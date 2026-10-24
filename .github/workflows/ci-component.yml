@@ -67,8 +67,9 @@ jobs:
           COMPONENT: ${{ inputs.component }}
           MINUTES: ${{ inputs.minutes }}
         run: |
-          if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic ]]; then
+          if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic || "$COMPONENT" == consumers-pom-diagnostic ]]; then
             if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]
+            elif [[ "$COMPONENT" == consumers-pom-diagnostic ]]; then [[ "$MINUTES" == 60 ]]
             else [[ "$MINUTES" == 120 ]]; fi
             python3 -B scripts/run-ci-terminal-component.py --component "$COMPONENT"
           else

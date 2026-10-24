@@ -286,7 +286,12 @@ final class ContentViewPresentationUITests: XCTestCase {
         // the app's keyboard toolbar. Do not swipe through it, change keyboard
         // preferences, or dismiss arbitrary Continue buttons/permission prompts.
         let introduction = app.staticTexts["Type English and German"]
-        guard introduction.exists else { return }
+        let introductionPresent = introduction.exists
+        // This cached one-shot result adds no AX query. It describes only this
+        // check, not the introduction's state throughout a later readiness wait.
+        print("KEYBOARD_INTRODUCTION_OBSERVATION phase=PRE_ACTION " +
+            "present=\(introductionPresent) atomicWithReadiness=false diagnosticOnly=true")
+        guard introductionPresent else { return }
         XCTAssertFalse(dismissedKeyboardIntroduction, "An acknowledged system introduction must not be retried")
         XCTAssertTrue(app.staticTexts["Type both languages on the same keyboard. Customize in Settings."].exists)
         let proceed = app.buttons["Continue"]

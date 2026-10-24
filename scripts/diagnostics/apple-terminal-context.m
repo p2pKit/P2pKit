@@ -383,6 +383,7 @@ int main(int argc, const char **argv) {
          * collector retains its unchanged component command deadline. */
         NSNumber *modularCommand = @{@"modular-jmdns":@1800, @"modular-shared":@7200,
             @"modular-consumers":@7200, @"modular-published-consumers":@7200,
+            @"modular-pom-consumers":@3600,
             @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200,
             @"modular-apple-swift-jvm-transfer":@16200}[executionMode];
         if (!modularCommand) return 125;
@@ -472,6 +473,7 @@ int main(int argc, const char **argv) {
                 @{@"jmdns-diagnostic":@"modular-jmdns", @"macos-shared":@"modular-shared",
                   @"consumers":@"modular-consumers",
                   @"published-consumers-diagnostic":@"modular-published-consumers",
+                  @"consumers-pom-diagnostic":@"modular-pom-consumers",
                   @"dependency-generate":@"modular-dependency-generate",
                   @"release-consumers":@"modular-release-consumers",
                   @"apple-swift-jvm-transfer":@"modular-apple-swift-jvm-transfer"}[component] : nil;

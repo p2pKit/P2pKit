@@ -1065,6 +1065,62 @@ class ConsumerGateTest(unittest.TestCase):
                 for fragment in fragments:
                     self.assertIn(fragment, source)
 
+    def test_remote_clone_failure_snapshot_compares_original_metadata_without_admission_or_network_queries(self):
+        # Actual fixture generation; the observed values still need a JVM run.
+        self.assert_pass(self.run_gate(self.audit_options()))
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        diagnostic = smoke.split("private fun reportRemoteCloneState", 1)[1].split(
+            "// Failure-only, non-atomic observations", 1)[0]
+        for required in ('check(index in 0..1 && clones.size <= 32)', 'val reference = original()', 'text.copyOf()',
+                         'check(text.size <= 65_535)', 'val expected = metadata(reference)',
+                         'val value = metadata(info)', 'val candidates = info.inetAddresses',
+                         'candidates.size <= 4096 && addresses + candidates.size <= 4096',
+                         'value.first == expected.first', 'value.second == expected.second',
+                         'value.third.contentEquals(expected.third)', 'address is Inet4Address',
+                         'address is Inet6Address', 'address.isLinkLocalAddress', 'address.scopeId != 0',
+                         'address.isAnyLocalAddress', 'address.isLoopbackAddress',
+                         'check(unchanged(info, value) && info.inetAddresses.contentEquals(candidates))',
+                         'check(unchanged(reference, expected))'):
+            self.assertIn(required, diagnostic)
+        for forbidden in ('synchronized(', '.withLock', '.lock(', '.hasData(', '.hostAddress',
+                          'NetworkInterface', 'InetAddress.get', '.getServiceInfo(', 'requestServiceInfo(',
+                          '.refresh(', '.list(', '.upsert(', '.close(', '.cancel(', 'Thread.sleep(',
+                          'JvmLanDiag.enabled', 'JvmTestDiscoveryBackend', 'reference.inetAddresses'):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn('not callback completion or proof that', smoke)
+        self.assertIn('A stable read still cannot exclude an earlier/transient change.', diagnostic)
+
+    def test_remote_clone_failure_snapshot_is_finite_fail_soft_and_selected_by_original_event_key(self):
+        self.assert_pass(self.run_gate(self.audit_options()))
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        diagnostic = smoke.split("private fun reportRemoteCloneState", 1)[1].split(
+            "// Failure-only, non-atomic observations", 1)[0]
+        self.assertIn('CONSUMER_REMOTE_CLONE_SNAPSHOT_UNAVAILABLE INDEX $index', diagnostic)
+        self.assertIn('catch (_: Throwable)', diagnostic)
+        self.assertLess(diagnostic.index('check(unchanged(reference, expected))'), diagnostic.index('println('))
+        printed = diagnostic.split('println(', 1)[1]
+        for marker in ('CONSUMER_REMOTE_CLONE_SNAPSHOT INDEX $index CLONES ${clones.size}',
+                       'NAME_MATCH $names PORT_MATCH $ports TXT_MATCH $texts ADDRESSES $addresses',
+                       'IPV4 $ipv4 IPV6 $ipv6 OTHER ${addresses - ipv4 - ipv6}',
+                       'WILDCARD $wildcard LOOPBACK $loopback',
+                       'SCOPED_LINK_LOCAL $scopedLinkLocal UNSCOPED_LINK_LOCAL $unscopedLinkLocal'):
+            self.assertIn(marker, printed)
+        for forbidden in ('$reference', '$expected', '$value', '$candidates', '${info.',
+                          'throw ', 'recordFailure(', 'addSuppressed(', '.message', '.printStackTrace', '.toString()'):
+            self.assertNotIn(forbidden, printed)
+        discovery = smoke.split('private fun reportDiscoveryState', 1)[1].split('private fun reportNativeState', 1)[0]
+        self.assertIn('check(entries.size <= 4096)', discovery)
+        self.assertIn('.entries.map { it.key to it.value }', discovery)
+        self.assertIn('entries.filter { it.first == qualifiedName }.map { it.second }', discovery)
+        self.assertIn('handles.flatMap { it.services.values }.single { it.name == other.localPeerId.value }', discovery)
+        self.assertIn('CONSUMER_REMOTE_CLONE_SNAPSHOT_UNAVAILABLE"', discovery)
+        self.assertEqual(discovery.count('reportRemoteCloneState('), 1)
+        self.assertEqual(smoke.count('withTimeout(30_000)'), 2)
+        for retained in ('transports { lan() }', 'kit.peers.first', 'withContext(NonCancellable)',
+                         'owner.requireDisposed(factory)', 'failure?.let { throw it }'):
+            self.assertIn(retained, smoke)
+        self.assert_complete_arguments(self.calls('gradle'))
+
     def test_pom_diagnostic_uses_original_published_smoke_only_without_claiming_full_qualification(self):
         result = self.run_gate({"P2PKIT_CONSUMER_WORK_DIR": str(self.work)}, arguments=("--pom-diagnostic",))
         self.assertEqual(result.returncode, 0, self.output(result))

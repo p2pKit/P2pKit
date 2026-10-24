@@ -8,6 +8,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.transport.lan.interop.p2pkit_lan_interface_fingerprint
@@ -756,7 +757,19 @@ internal class IosLanDataTransport(
             dialGeneration
         }
         val pid8 = peer.publicPeer.id.value.take(8)
-        val cachedLease = if (policy == null) endpointRegistry.lease(peer.publicPeer.id) else null
+        // PeerRegistry puts the locally registered manual contribution first.
+        // A Bonjour result with the same claimed identity must not shadow that
+        // endpoint. A discovered hint/fingerprint alone grants no preference.
+        val hasManualLanEndpoint = peer.origin == PeerOrigin.Manual &&
+            peer.transportHints.firstOrNull()?.let { hint ->
+                hint.type == TransportKind.LAN && !hint.host.isNullOrBlank() &&
+                    (hint.port ?: 0) in 1..65_535
+            } == true
+        val cachedLease = if (policy == null && !hasManualLanEndpoint) {
+            endpointRegistry.lease(peer.publicPeer.id)
+        } else {
+            null
+        }
         IosLanDebug.log(
             "connect",
             "begin peer=$pid8 name=${peer.publicPeer.name} " +

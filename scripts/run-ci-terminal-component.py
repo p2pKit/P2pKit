@@ -41,6 +41,7 @@ APPLE_COMPONENT = 'apple-swift-jvm-transfer'
 PROFILES = {'jmdns-diagnostic': ('modular-jmdns', 1800), 'macos-shared': ('modular-shared', 7200),
             'consumers': ('modular-consumers', 7200),
             'published-consumers-diagnostic': ('modular-published-consumers', 7200),
+            'consumers-pom-diagnostic': ('modular-pom-consumers', 3600),
             'dependency-generate': ('modular-dependency-generate', 10800),
             'release-consumers': ('modular-release-consumers', 7200),
             APPLE_COMPONENT: ('modular-apple-swift-jvm-transfer', 16200)}
@@ -220,6 +221,7 @@ def environment_admit(env, component=COMPONENT):
     releasing = component == 'release-consumers'
     apple = component == APPLE_COMPONENT
     events = {'workflow_dispatch'} if component in {'jmdns-diagnostic', 'published-consumers-diagnostic',
+                                                   'consumers-pom-diagnostic',
                                                    'dependency-generate', APPLE_COMPONENT} else {'workflow_dispatch', 'push', 'pull_request', 'schedule'}
     workflow = 'dependency-update-candidate.yml' if generating else 'ci.yml'
     if releasing:

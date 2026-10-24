@@ -472,6 +472,53 @@ class AdmissionTests(unittest.TestCase):
             with self.subTest(mutation=old, replacement=new), self.assertRaises(AssertionError):
                 check(source.replace(old, new))
 
+    def test_keyboard_introduction_preflight_reports_only_one_cached_nonatomic_observation(self):
+        source = (ROOT / 'samples/iosApp/UITests/ContentViewPresentationUITests.swift').read_text()
+
+        def check(candidate):
+            body = candidate.split('private func dismissKeyboardIntroductionIfPresent(in app: XCUIApplication) {', 1)[1].split(
+                'private func recordKeyboardInputFailureSnapshot(', 1)[0]
+            self.assertIn('guard introductionPresent else { return }', body)
+            before, after = body.split('guard introductionPresent else { return }', 1)
+            self.assertEqual(re.findall(r'\bapp\.[\w.]+', before), ['app.staticTexts'])
+            self.assertEqual(before.count('.exists'), 1)
+            self.assertIn('let introduction = app.staticTexts["Type English and German"]', before)
+            self.assertIn('let introductionPresent = introduction.exists', before)
+            self.assertIn('KEYBOARD_INTRODUCTION_OBSERVATION phase=PRE_ACTION ', before)
+            self.assertIn('present=\\(introductionPresent) atomicWithReadiness=false diagnosticOnly=true', before)
+            self.assertEqual(body.count('print('), 1)
+            self.assertLess(before.index('let introductionPresent = introduction.exists'), before.index('print('))
+            for forbidden in ('XCTWaiter', 'NSPredicate', '.tap(', '.typeText(', '.frame', '.isHittable', 'while ', 'for '):
+                self.assertNotIn(forbidden, before)
+            self.assertIn('XCTAssertFalse(dismissedKeyboardIntroduction', after)
+            self.assertIn('XCTAssertTrue(app.staticTexts["Type both languages on the same keyboard. Customize in Settings."].exists)', after)
+            self.assertIn('let proceed = app.buttons["Continue"]', after)
+            self.assertIn('XCTAssertTrue(proceed.isHittable', after)
+            self.assertEqual(after.count('proceed.tap()'), 1)
+            self.assertIn('XCTAssertTrue(waitForAbsence(introduction)', after)
+            self.assertIn('dismissedKeyboardIntroduction = true', after)
+
+        check(source)
+        # These are source/diagnostic contracts, not proof a native sheet appeared.
+        for old, new in (
+                ('let introductionPresent = introduction.exists', 'let introductionPresent = true'),
+                ('let introductionPresent = introduction.exists', 'let introductionPresent = introduction.exists || introduction.exists'),
+                ('present=\\(introductionPresent)', 'present=\\(introduction.exists)'),
+                ('phase=PRE_ACTION', 'phase=DURING_READINESS'),
+                ('atomicWithReadiness=false', 'atomicWithReadiness=true'),
+                ('diagnosticOnly=true', 'diagnosticOnly=false'),
+                ('guard introductionPresent else { return }', 'guard true else { return }'),
+                ('app.staticTexts["Type English and German"]', 'app.staticTexts.firstMatch'),
+                ('Type both languages on the same keyboard. Customize in Settings.', 'Unrelated introduction'),
+                ('app.buttons["Continue"]', 'app.buttons.firstMatch'),
+                ('XCTAssertFalse(dismissedKeyboardIntroduction', 'XCTAssertFalse(false'),
+                ('XCTAssertTrue(proceed.isHittable', 'XCTAssertTrue(true'),
+                ('proceed.tap()', 'proceed.tap()\n            proceed.tap()'),
+                ('XCTAssertTrue(waitForAbsence(introduction)', 'XCTAssertTrue(true'),
+                ('dismissedKeyboardIntroduction = true', 'dismissedKeyboardIntroduction = false')):
+            with self.subTest(mutation=old, replacement=new), self.assertRaises(AssertionError):
+                check(source.replace(old, new))
+
     def test_native_controls_reject_skipped_failed_or_partial_output(self):
         self.assertEqual(q.unittest_count('\nRan 122 tests in 190.25s\n\nOK\n'), 122)
         for raw in ('OK', '\nRan 0 tests in 0.0s\nOK', '\nRan 122 tests in 190s\nOK (skipped=1)',

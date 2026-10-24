@@ -42,6 +42,8 @@ class ModularPolicyTests < Minitest::Test
   def test_pom_diagnostic_remains_explicit_and_cannot_qualify
     altered('.github/workflows/ci.yml', ', consumers-pom-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'consumers-pom-diagnostic' && inputs.component", 'inputs.component')
+    altered('.github/workflows/ci.yml', ', apple-keyboard-diagnostic,', ',')
+    altered('.github/workflows/ci.yml', "inputs.component != 'apple-keyboard-diagnostic' && inputs.component", 'inputs.component')
   end
   def test_published_consumer_diagnostic_requires_choice_and_cannot_qualify
     altered('.github/workflows/ci.yml', ', published-consumers-diagnostic,', ',')

@@ -20,8 +20,9 @@ HOME_COMMAND = 'echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-home" >> "$GITHUB_ENV
 EXCLUDES = "caches/build-cache-1\ncaches/*/kotlin-dsl\ncaches/*/scripts\ncaches/*/groovy-dsl\n"
 
 EXECUTION = <<~'BASH'
-    if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic ]]; then
+    if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic || "$COMPONENT" == consumers-pom-diagnostic ]]; then
       if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]
+      elif [[ "$COMPONENT" == consumers-pom-diagnostic ]]; then [[ "$MINUTES" == 60 ]]
       else [[ "$MINUTES" == 120 ]]; fi
       python3 -B scripts/run-ci-terminal-component.py --component "$COMPONENT"
     else
@@ -144,6 +145,8 @@ end
     "echo instead of invocation" => EXECUTION.gsub("python3 -B", "echo python3 -B"),
     "early success" => "exit 0\n" + EXECUTION,
     "changed terminal budget" => EXECUTION.sub('== 120', '== 360'),
+    "POM diagnostic bypasses Terminal context" => EXECUTION.sub(' || "$COMPONENT" == consumers-pom-diagnostic', ''),
+    "changed POM diagnostic budget" => EXECUTION.sub('[[ "$MINUTES" == 60 ]]', '[[ "$MINUTES" == 120 ]]'),
 }.each do |label, command|
     mutations[label] = ->(v) { one_step(v[:worker]["jobs"]["run"], EXECUTE)["run"] = command }
 end
