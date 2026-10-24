@@ -35,6 +35,7 @@ val embeddedJmdnsFollowupPatches = listOf(
     "patches/417-response-continuation.patch",
     "patches/418-teardown-budget.patch",
     "patches/503-cache-bounds.patch",
+    "patches/516-txt-readiness.patch",
 )
 val embeddedJmdnsSlf4j = "org.slf4j:slf4j-api:2.0.7"
 val embeddedJmdnsCompileClasspath = configurations.create("embeddedJmdnsCompileClasspath") {

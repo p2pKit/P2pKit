@@ -169,7 +169,7 @@ LAN_METADATA_KOTLIN_VERSION="$KOTLIN_VERSION"
 LAN_METADATA_COROUTINES_VERSION="$COROUTINES_VERSION"
 # Current-source consumers must check the current embedded producer. Published
 # contracts below pin their immutable private resource independently.
-LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"
+LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.8"
 if [[ "${1:-}" == "--latest-published" ]]; then
     [[ $# -eq 1 ]] || { echo "FAIL: --latest-published accepts no additional arguments" >&2; exit 2; }
     [[ -n "$LATEST_PUBLISHED" && "$LATEST_PUBLISHED" != *-SNAPSHOT ]] || {

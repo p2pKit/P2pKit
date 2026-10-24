@@ -1,0 +1,10 @@
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceInfoImpl.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceInfoImpl.java
+@@ -954,2 +954,5 @@
+-        return this.hasServer() && this.hasInetAddress() && this.getTextBytes() != null && this.getTextBytes().length > 0;
+-        // return this.getServer() != null && (this.getAddress() != null || (this.getTextBytes() != null && this.getTextBytes().length > 0));
++        // getTextBytes() supplies EMPTY_TXT even before a TXT record arrives.
++        // That wire-format fallback is not resolution evidence: publishing it
++        // can overwrite a newer complete resolution from another resolver.
++        // An explicitly supplied/received empty TXT still counts as data.
++        return this.hasServer() && this.hasInetAddress() && _text != null;

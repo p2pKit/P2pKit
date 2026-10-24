@@ -1,10 +1,10 @@
 {
   "component": {
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.7",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.8",
     "group": "dev.p2pkit.internal",
     "name": "jmdns",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.7",
-    "version": "3.6.3-p2pkit.410.7"
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.8",
+    "version": "3.6.3-p2pkit.410.8"
   },
   "followupPatches": [
     {
@@ -30,6 +30,10 @@
     {
       "path": "patches/503-cache-bounds.patch",
       "sha256": "acac1bf58e7d76fd179ed8b049e614e526ac2b2bd2412d3e5e34bffbd5c20c9a"
+    },
+    {
+      "path": "patches/516-txt-readiness.patch",
+      "sha256": "9c56a38fa6f79c377f4d745c990a05d818896a4b8745a30eb7eaff6f9376420c"
     }
   ],
   "lifecyclePatch": {
@@ -55,7 +59,7 @@
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/MODIFICATIONS.txt",
       "path": "MODIFICATIONS.txt",
-      "sha256": "781a1e2cd12815694681db74a4dc5a0fdcd1c69edafa548d25f3508b10e07e4b"
+      "sha256": "cedbec9cb69c373746620dfd307e56bf9b1d27921ca220db7e75bc4b4df44dca"
     },
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/NOTICE.txt",
@@ -65,7 +69,7 @@
     {
       "entry": "dev/p2pkit/transport/lan/internal/jmdns/version.properties",
       "path": "src/main/resources/dev/p2pkit/transport/lan/internal/jmdns/version.properties",
-      "sha256": "32280159042a049cd8571da463fe399f4d94a1ed5f431b05304543662a7d8e29"
+      "sha256": "1c089cbdfa7b78e9a814e75ef48fcc5877b856f170d1261ea77adf9ae8fd16f8"
     }
   ],
   "schema": 2,
@@ -269,7 +273,7 @@
     {
       "path": "src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceInfoImpl.java",
       "relocatedSha256": "26deab4f75807c16c0beb3b9e6e66f891d58491d0c6de6e9a5ac02ae231bce57",
-      "sha256": "e8c42e53f9885fb823dbd53a21d3ad60f1e2185a0471cfd8b8c4761a9bbdf983",
+      "sha256": "7b424ff0e945c81de7504c99f952fec45904641165ea5068b010b2a1d9e74c05",
       "upstreamPath": "src/main/java/javax/jmdns/impl/ServiceInfoImpl.java",
       "upstreamSha256": "df584fcdb2a9411d781de9973043f8ead50c6673a1d3bb6ed0d1a975ce562830"
     },
