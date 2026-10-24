@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Parser/fixture controls only, never raw socket, authenticated RPC or device capacity credit."""
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
@@ -23,6 +25,45 @@ android = load("run-android-readiness")
 
 
 class ReceiptTest(unittest.TestCase):
+    def test_android_installed_digest_does_not_require_guest_hash_utility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apk = root / "source.apk"
+            payload = b"synthetic source APK bytes"
+            apk.write_bytes(payload)
+            observed = []
+
+            def pull(command, **kwargs):
+                self.assertEqual(command[:4], ["adb", "-s", "emulator-5556", "pull"])
+                self.assertEqual(command[4], "/data/app/~~fixture==/package_1-abc+/base.apk")
+                destination = command[5]
+                self.assertFalse(destination.exists())
+                self.assertNotEqual(destination, apk)
+                observed.append(destination)
+                destination.write_bytes(payload)
+
+            actual = android.verify_installed_apk(["adb", "-s", "emulator-5556"],
+                "package:/data/app/~~fixture==/package_1-abc+/base.apk", apk, root, pull)
+            self.assertEqual(actual, hashlib.sha256(payload).hexdigest())
+            self.assertEqual(len(observed), 1)
+            self.assertFalse(observed[0].exists())
+            self.assertEqual(apk.read_bytes(), payload)
+
+    def test_android_installed_digest_rejects_mismatch_incomplete_and_ambiguous_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apk = root / "source.apk"
+            apk.write_bytes(b"original")
+            for payload in (b"modified", b"short", None):
+                def pull(command, **kwargs):
+                    if payload is not None:
+                        command[-1].write_bytes(payload)
+                with self.subTest(payload=payload), self.assertRaises(ValueError):
+                    android.verify_installed_apk(["adb"], "package:/data/app/fixture/base.apk", apk, root, pull)
+            with self.assertRaises(ValueError):
+                android.verify_installed_apk(["adb"], "package:/data/app/a/base.apk\npackage:/data/app/b/base.apk",
+                                             apk, root, lambda *args, **kwargs: self.fail("Must not pull"))
+
     def rpc_result(self, count):
         return dict(schema=1, source="a" * 40, cleanup=True,
                     scope="AUTHENTICATED_RPC_LAB_NOT_PHYSICAL_OR_MOBILE_QUALIFICATION",

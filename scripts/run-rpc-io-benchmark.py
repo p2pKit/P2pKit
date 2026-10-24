@@ -142,7 +142,7 @@ def validate_result(raw, source, clients, seconds):
 
 
 class Jvm:
-    def __init__(self, role, net, directory, java, classpath, arguments, uid, gid):
+    def __init__(self, role, net, directory, java, classpath, arguments, uid, gid, profile):
         self.output = bytearray()
         self.log = (directory / "process.log").open("xb")
         os.fchmod(self.log.fileno(), 0o600)
@@ -154,9 +154,17 @@ class Jvm:
         self.process = None
         self.selector = selectors.DefaultSelector()
         try:
+            diagnostic = []
+            if profile and role == "host":
+                # Existing reviewed sampling-only configuration: no payload, exception, environment,
+                # network address or file-content events. Raw JFR never leaves the private output.
+                diagnostic = ["-XX:StartFlightRecording=name=rpc-io,settings=" +
+                    str(ROOT / "scripts/rpc-capacity-profile.jfc") + ",filename=" +
+                    str(directory / "cpu-profile.jfr") + ",maxsize=32m,dumponexit=true"]
             with namespace(net):
                 self.process = subprocess.Popen([
                     *link.drop_command(uid, gid), str(java), "-Xms128m", "-Xmx768m",
+                    *diagnostic,
                     "-cp", classpath, "dev.p2pkit.sample.rpc.lab." + main, *arguments,
                 ], env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                    stderr=subprocess.STDOUT, cwd=ROOT, start_new_session=True)
@@ -191,7 +199,7 @@ class Jvm:
         self.log.close()
 
 
-def experiment(output, source, classpath, java, clients, seconds, uid, gid):
+def experiment(output, source, classpath, java, clients, seconds, uid, gid, profile):
     directory = output / f"clients-{clients}"
     directory.mkdir(mode=0o700)
     os.chown(directory, uid, gid)
@@ -208,7 +216,7 @@ def experiment(output, source, classpath, java, clients, seconds, uid, gid):
     with virtual_link() as (networks, topology), contextlib.ExitStack() as owners:
         private_write(directory / "topology.json", json.dumps(topology).encode(), uid, gid)
         driver = Jvm("client", networks["client"], roles["client"], java, classpath,
-                     ["--owner-authorized-io-benchmark", str(seconds)], uid, gid)
+                     ["--owner-authorized-io-benchmark", str(seconds)], uid, gid, profile)
         owners.callback(driver.close)
         host = None
         deadline = time.monotonic() + seconds + 420
@@ -226,7 +234,7 @@ def experiment(output, source, classpath, java, clients, seconds, uid, gid):
             tick()
         private_write(roles["host"] / pins.name, pins.read_bytes(), uid, gid)
         host = Jvm("host", networks["host"], roles["host"], java, classpath,
-                   ["--owner-authorized-capacity-host"], uid, gid)
+                   ["--owner-authorized-capacity-host"], uid, gid, profile)
         owners.callback(host.close)
         copied = {}
         while driver.process.poll() is None:
@@ -270,6 +278,7 @@ def experiment(output, source, classpath, java, clients, seconds, uid, gid):
         result["hostExit"] = host.process.returncode
         result["driverExit"] = driver.process.returncode
         result["jvmUidMode"] = "root-uid-no-capabilities" if uid == 0 else "ordinary-user-no-capabilities"
+        result["hostSamplingProfile"] = profile
         private_write(directory / "result.json", (json.dumps(result, indent=2) + "\n").encode(), uid, gid)
         return result
 
@@ -281,6 +290,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="New private output directory (must not exist)")
     parser.add_argument("--seconds", type=int, default=120, choices=range(60, 301), metavar="60..300")
     parser.add_argument("--clients", choices=("128", "256", "both"), default="both")
+    parser.add_argument("--profile", action="store_true", help="Opt-in private bounded host JFR CPU sampling")
     args = parser.parse_args()
     need(sys.platform == "linux" and os.geteuid() == 0, "Linux namespace setup privilege required")
     uid, gid = int(os.environ.get("SUDO_UID", "0")), int(os.environ.get("SUDO_GID", "0"))
@@ -292,7 +302,7 @@ def main():
     need(output == output.resolve() and not output.exists(), "New canonical output directory required")
     output.mkdir(mode=0o700)
     os.chown(output, uid, gid)
-    results = [experiment(output, source, classpath, java, count, args.seconds, uid, gid)
+    results = [experiment(output, source, classpath, java, count, args.seconds, uid, gid, args.profile)
                for count in ((128, 256) if args.clients == "both" else (int(args.clients),))]
     manifest = {"schema": 1, "source": source, "scope": link.SCOPE, "results": results,
                 "platform": os.uname().sysname + " " + os.uname().release + " " + os.uname().machine,

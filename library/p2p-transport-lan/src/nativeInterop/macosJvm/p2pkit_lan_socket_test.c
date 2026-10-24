@@ -433,8 +433,14 @@ static void batched_readiness(void) {
 }
 
 int main(void) {
-    /* The process default SIGPIPE handler is deliberately NOT changed. */
-    struct sigaction action;
+    /* Python/shell supervisors may inherit SIG_IGN. Establish SIG_DFL in THIS test process before
+     * any library operation, so a missing per-socket SO_NOSIGPIPE really terminates the test.
+     * Production must not change this disposition; verify it again after the complete contract. */
+    struct sigaction original_signal, action = {0};
+    assert(sigaction(SIGPIPE, NULL, &original_signal) == 0);
+    action.sa_handler = SIG_DFL;
+    assert(sigemptyset(&action.sa_mask) == 0);
+    assert(sigaction(SIGPIPE, &action, NULL) == 0);
     assert(sigaction(SIGPIPE, NULL, &action) == 0 && action.sa_handler == SIG_DFL);
     alarm(20);
     // Test-process-only budget: 256 pairs currently include a separate listener each.
@@ -461,6 +467,8 @@ int main(void) {
     assert(descriptors() == before);
     PASS("independent-open-descriptor-inventory-restored");
     assert(setrlimit(RLIMIT_NOFILE, &original) == 0);
+    assert(sigaction(SIGPIPE, NULL, &action) == 0 && action.sa_handler == SIG_DFL);
+    assert(sigaction(SIGPIPE, &original_signal, NULL) == 0);
     alarm(0);
     printf("RESULT: PASS %u native contract groups; loopback only; no JVM/RPC/LAN qualification claimed\n", tests);
     return 0;

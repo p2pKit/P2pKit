@@ -27,6 +27,23 @@ RUNNER = "dev.p2pkit.transport.lan.LanReadinessInstrumentation"
 SCOPE = "RAW_ANDROID_IO_NOT_AUTHENTICATED_RPC_OR_PHYSICAL_QUALIFICATION"
 
 
+def verify_installed_apk(device, installed, source_apk, report, run):
+    """Hash the actual installed bytes on the host; Android 24 has no sha256sum."""
+    need(re.fullmatch(r"package:/data/app/[-A-Za-z0-9_~+=/]+/base\.apk", installed),
+         "Ambiguous installed APK")
+    # A new private destination prevents adb from accidentally reusing an earlier observation.
+    # Do not retain a second APK in the evidence bundle; preserve its bound digest instead.
+    with tempfile.TemporaryDirectory(prefix="installed-apk-", dir=report) as directory:
+        pulled = Path(directory) / "base.apk"
+        run([*device, "pull", installed.removeprefix("package:"), pulled], timeout=90)
+        need(pulled.is_file() and not pulled.is_symlink() and
+             pulled.stat().st_size == source_apk.stat().st_size, "Incomplete installed APK observation")
+        actual = hashlib.sha256(pulled.read_bytes()).hexdigest()
+        need(actual == hashlib.sha256(source_apk.read_bytes()).hexdigest(),
+             "Installed bytes differ from the source-built APK")
+        return actual
+
+
 def result(raw):
     fields, codes = {}, []
     for line in raw.decode("utf-8").splitlines():
@@ -137,9 +154,8 @@ def main():
             owner.admit_android_guest(run, device, emulator, avd, args.api, report)
             run([*device, "install", "--no-streaming", apk], timeout=90)
             installed = run([*device, "shell", "pm", "path", PACKAGE])[1].decode().strip()
-            need(re.fullmatch(r"package:/data/app/[^\r\n]+/base\.apk", installed), "Ambiguous installed APK")
-            actual = run([*device, "shell", "sha256sum", installed.removeprefix("package:")])[1].decode().split()[0]
-            need(actual == digest, "Installed bytes differ from the source-built APK")
+            need(verify_installed_apk(device, installed, apk, report, run) == digest,
+                 "Source-built APK changed during installed-byte observation")
             raw = run([*device, "shell", "am", "instrument", "-w", "-r", PACKAGE + "/" + RUNNER], timeout=390)[1]
             (report / "instrumentation.txt").write_bytes(raw)
             measures = result(raw)
