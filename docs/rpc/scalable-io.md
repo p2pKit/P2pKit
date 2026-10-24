@@ -80,7 +80,9 @@ re-registering all idle peers whenever any other peer becomes ready.
 | Enrollment / inbound handshakes / pre-handshakes per source | 4 / 16 / 2 | unchanged |
 | Queue/setup/write/close concurrency, wire/parser limits, retry/deadlines | existing | unchanged |
 
-Limits remain configurable downwards within the constructor's bounded ceilings.
+Constructor-exposed limits remain configurable downwards within their bounded ceilings.
+The separate notification-admission budget is derived from the chosen client bound,
+not a new public configuration field.
 The payload budget is not process RSS: record/coroutine objects, crypto/runtime
 allocations, OS buffers, thread stacks and application handlers cost extra.
 Responses are still best-effort recoverable under cache pressure; tombstones
@@ -284,7 +286,13 @@ native contract groups; its independent API comparison also passed. API24
 additionally passed 384 Android sample host cases and all ten actual ART
 Keystore/lifecycle controls, including both trust-store populations and refusal
 of a 257th pin. Repeated platform/native builds are not additive coverage.
-The independent app-hosted iOS part is not included in these completed results.
+The independent app-hosted iOS part also passed all 77 XCTest and seven UI methods,
+including the actual Keychain 128/256-pin round trips and 257-pin refusal. Its
+219 original xcresult files were hash-verified and the original test summaries
+were independently re-parsed against the complete source inventory. Framework
+generation took 396 seconds and XCTest 400 seconds; simulator shutdown,
+deletion/readback, source recheck and outer cleanup all succeeded. This is
+simulator evidence, not physical iOS networking or authenticated capacity.
 
 The same run exercised all eight Android raw backend/population combinations
 over loopback. Original installed-APK hashes, instrumentation outputs, emulator
@@ -316,9 +324,53 @@ been attached separately to both leaf source sets, violating Dokka's unique
 source ownership. Its 41-minute generation attempt remains a failure, not a
 partial lockfile candidate. The correction uses one real `jvmAndroidMain`
 intermediate source set, with both leaves depending on it and the normal Apple
-hierarchy retained. Full supported-macOS generation must verify that change;
-Linux alone cannot analyze the Apple cinterop-backed documentation. Warning
-checks and documentation generation are not disabled.
+hierarchy retained. The [supported macOS retry](https://github.com/p2pKit/P2pKit/actions/runs/40132541154)
+at `cfc539fb` passed all five modules' strict Dokka tasks and the complete
+generator (37 minutes 51 seconds, 417 actionable tasks), followed by integrity,
+strict resolution, provenance-policy and cleanup checks. Both original artifact
+API digests and all 633 report hashes were independently verified. Linux alone
+cannot analyze the Apple cinterop-backed documentation; neither warning checks
+nor documentation generation were disabled.
+
+The complete reviewed patch changes only `library/p2p-transport-lan/gradle.lockfile`:
+Android device-test/UTP and shared-source-set configuration memberships. All 228
+original component/version entries remain; the 86 additional device-test/UTP
+entries already exist in other repository locks and the unchanged verification
+metadata. No new verification trust, artifact hash or dependency version was
+introduced to the repository. The patch SHA-256 is
+`f513c15ea723fdeda368629fb21177c817c3a41da25699ff895e7dc7b6a82feb`;
+it was applied whole and its resulting file hash rechecked against the producer.
+Dependency generation is not the final 14-component qualification.
+
+The subsequent **300-second** authenticated comparison at
+[`cfc539fb`](https://github.com/p2pKit/P2pKit/commit/cfc539fba92c6a6ec3a63d1df9d9ff320a21765d)
+used the same 12-CPU Linux virtual-link setup and host heap settings, with Ubuntu
+OpenJDK `17.0.20+8`. Core/RPC/LAN source bytes are unchanged from `95b57c2e`;
+the intervening changes reconcile source-set ownership and phone controls.
+All 874 original evidence-file hashes and both original process outcomes per
+population were verified. No sampling profiler ran.
+
+| Authenticated 1 KiB echo, 10 Hz/client, 5 minutes | 128 clients | 256 clients |
+| --- | ---: | ---: |
+| Correct measured responses | 384,000 | 768,000 |
+| Driver active seconds | 300.000518 | 300.001272 |
+| Scheduling slots at least 100 ms late | 0 | 0 |
+| Host native threads before connections / idle / after load | 37 / 44 / 46 | 37 / 44 / 46 |
+| Steady idle / active CPU (% of one core) | 5.270% / 117.167% | 8.452% / 232.027% |
+| Steady idle / post-load RSS (MiB) | 214.867 / 536.664 | 221.523 / 607.898 |
+| p50 / p95 / p99 latency bucket upper bounds (ms) | 1 / 2 / 3 | 1 / 2 / 5 |
+| Maximum latency bucket upper bound (ms) | 18 | 53 |
+| Threads at first disconnected / after-retention observations | 64 / 43 | 65 / 43 |
+
+Cleanup has its own bounded workers: **46 is not a measured lifetime maximum**.
+After at least 65 seconds, both hosts had zero connections, running/queued calls,
+retained records and payload bytes; both host and driver then exited zero.
+RSS did not reset to its pre-load value, and these counters do not prove that it
+did. The 256-client JVM observation exceeds a typical small mobile-app memory
+budget; do not equate the 128 MiB payload allowance with total app memory or
+transfer JVM performance claims to ART/iOS. This is longer steady-state coverage,
+still not the 30-minute campaign, an ordinary-user run, physical/mobile capacity,
+or a 512-client test. No published artifact has been replaced.
 
 ## Scaling beyond 256
 

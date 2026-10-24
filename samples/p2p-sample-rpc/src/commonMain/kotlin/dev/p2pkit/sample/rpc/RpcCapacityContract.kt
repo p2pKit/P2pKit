@@ -73,7 +73,9 @@ public class RpcCapacityHost private constructor(private val host: RpcHost) {
                 appId = RpcCapacityContract.appId
                 this.lan = lan
                 trustStore = localDurableTrustStore
-                limits = if (pins.size == RpcCapacityContract.HOST_256_CLIENTS) RpcLimits.host256() else RpcLimits.host128()
+                limits = if (pins.size == RpcCapacityContract.HOST_256_CLIENTS) {
+                    RpcLimits.host256()
+                } else RpcLimits.host128()
                 advertise = false // Numeric pinned fallback; no discovery dependency in the load experiment.
                 register(RpcCapacityContract.echo, authorize = { it.fingerprint in pins }) { _, value ->
                     if (value == RpcCapacityContract.payload) RpcReply.Success(value)

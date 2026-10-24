@@ -148,7 +148,8 @@ if (host.permissions.hasRequiredPermissions()) host.start()
 val endpoint = host.endpoint()
 ```
 
-The opt-in `RpcLimits.host256()` profile raises host-wide policy bounds without
+The development source adds the opt-in `RpcLimits.host256()` profile (not present
+in the published `0.8.0-rc7` artifacts). It raises host-wide policy bounds without
 changing `host128()` or defaults. It does **not** reserve 324 blocking-reader
 threads. See [shared readiness I/O, resource trade-offs, and the precise validation
 scope](scalable-io.md); policy bounds alone do not establish 256-client capacity on a device.
