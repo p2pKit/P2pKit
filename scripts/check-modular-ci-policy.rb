@@ -99,7 +99,7 @@ module ModularCI
      'android-legacy-task-preview' => ['android-legacy-task-preview', 'api', 'android_legacy_api',
                                      %w[both 24 32]],
      'rpc-io' => ['rpc-io-validation', 'part', 'rpc_io_part',
-                  %w[all jvm-linux jvm-windows macos macos-abi android-24 android-35]]}.each do |name, (workflow, argument, input, options)|
+                  %w[all jvm-linux jvm-windows macos macos-abi ios-phone android-24 android-35]]}.each do |name, (workflow, argument, input, options)|
       if input
         selector = triggers.dig('workflow_dispatch', 'inputs', input)
         default = name == 'rpc-io' ? 'all' : 'both'

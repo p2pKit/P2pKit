@@ -28,6 +28,23 @@ public object RpcPhoneIosControls {
                 store.load(AppId("wrong.namespace"), RpcTrustPurpose.HostClients)
             }.exceptionOrNull()
             check(wrongNamespace is IllegalArgumentException)
+            val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+            val tooMany = (0..256).map {
+                PeerFingerprint.parse("p2f1-${alphabet[it / 32]}${alphabet[it % 32]}" + "a".repeat(50))
+            }.toSet()
+            check(tooMany.size == 257)
+            store.replace(app, RpcTrustPurpose.SelectedHosts, setOf(pin))
+            for (count in listOf(128, 256)) {
+                val approved = tooMany.take(count).toSet()
+                store.replace(app, RpcTrustPurpose.HostClients, approved)
+                check(IosRpcPhoneTrustStore(fixture).load(app, RpcTrustPurpose.HostClients) == approved)
+                check(store.load(app, RpcTrustPurpose.SelectedHosts) == setOf(pin))
+            }
+            val excessive = runCatching {
+                store.replace(app, RpcTrustPurpose.HostClients, tooMany)
+            }.exceptionOrNull()
+            check(excessive is IllegalArgumentException)
+            check(store.load(app, RpcTrustPurpose.HostClients) == tooMany.take(256).toSet())
             store.replace(app, RpcTrustPurpose.HostClients, emptySet())
             check(store.load(app, RpcTrustPurpose.HostClients).isEmpty())
         } catch (error: Throwable) {
@@ -44,5 +61,6 @@ public object RpcPhoneIosControls {
             }
         }
         check(store.load(app, RpcTrustPurpose.HostClients).isEmpty())
+        check(store.load(app, RpcTrustPurpose.SelectedHosts).isEmpty())
     }
 }

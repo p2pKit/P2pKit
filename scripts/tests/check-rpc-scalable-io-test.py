@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -22,9 +23,45 @@ def load(name):
 
 rpc = load("run-rpc-io-benchmark")
 android = load("run-android-readiness")
+ios = load("run-rpc-io-phone-controls")
 
 
 class ReceiptTest(unittest.TestCase):
+    def test_phone_route_uses_original_full_simulator_suite_and_no_device_signing_or_test_filter(self):
+        simulator = "AB123456-1234-1234-1234-123456789012"
+        command = ios.xctest_command(Path("phone.xcodeproj"), simulator, Path("derived"), Path("tests.xcresult"))
+        self.assertIn("platform=iOS Simulator,id=" + simulator, command)
+        self.assertIn("iphonesimulator", command)
+        self.assertIn("SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", command)
+        self.assertEqual(command[-1], "test")
+        self.assertFalse(any("-only-testing" in item or "-skip-testing" in item for item in command))
+        expected = ios.phone.inventory(ROOT)
+        self.assertEqual({target: len(tests) for target, tests in expected.items()},
+                         {"p2pkit-rpc-phone-tests": 77, "p2pkit-rpc-phone-uitests": 7})
+        self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
+                      expected["p2pkit-rpc-phone-tests"])
+        for invalid in ("booted", "", "--another-device", simulator + "\n"):
+            with self.assertRaises(RuntimeError):
+                ios.xctest_command(Path("phone"), invalid, Path("derived"), Path("result"))
+
+    def test_manual_phone_inputs_fit_both_profiles_without_reclassifying_usb_campaign(self):
+        # Wiring only: actual parsing is covered by RpcPhoneLabTest, stores by ART/Keychain controls.
+        android_ui = (ROOT / "samples/p2p-sample-android/src/debug/java/dev/p2pkit/sample/android/rpclab/"
+                      "RpcLabActivity.kt").read_text()
+        apple_ui = (ROOT / "samples/p2p-sample-rpc/phone-ios/Sources/RpcPhoneApp.swift").read_text()
+        for source, pattern in ((android_ui, r'Field\("Optional: exactly 128 or 256[^"\n]*",\s*capacityPins, ([0-9_]+)'),
+                                (apple_ui, r'field\("Exactly 128 or 256[^"\n]*", \$model.capacityPins,\s*limit: ([0-9_]+)')):
+            match = re.search(pattern, source)
+            self.assertIsNotNone(match)
+            limit = int(match[1].replace("_", ""))
+            self.assertEqual(limit, 16_384)
+            # Canonical fingerprints are 57 ASCII bytes each, plus one line separator.
+            self.assertLessEqual(256 * 58, limit)
+        contract = (ROOT / "samples/p2p-sample-rpc/src/commonMain/kotlin/dev/p2pkit/sample/rpc/"
+                    "RpcCapacityContract.kt").read_text()
+        self.assertIn("public const val CLIENTS: Int = 128", contract)
+        self.assertIn("public const val STEADY_SECONDS: Int = 30 * 60", contract)
+
     def test_android_installed_digest_does_not_require_guest_hash_utility(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

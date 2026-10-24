@@ -131,9 +131,10 @@ screen to enter network settings or exchange invitations. Historical tests keep 
    denial. A timeout, disconnect or cancellation may leave a remote outcome
    unknown and never authorizes an unsafe automatic replay.
 
-The optional 128-pin import replaces this test host's approved synthetic-client
+The optional 128- or 256-pin import replaces this test host's approved synthetic-client
 set **only after an explicit local administrator acknowledgement**. It requires
-exactly 128 distinct well-formed public fingerprints, not private keys. Never
+exactly 128 or 256 distinct well-formed public fingerprints, not private keys,
+and selects the corresponding opt-in host profile. Never
 import production/custodian identities. Test provisioning and telemetry for a
 physical capacity run still require the approved coordinator and actual
 host-process measurements; filling this field is not a capacity test.

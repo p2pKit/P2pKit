@@ -36,5 +36,8 @@ PY
   android-24|android-35)
     python3 -B scripts/run-android-readiness.py --api "${1#android-}"
     ;;
+  ios-phone)
+    python3 -B scripts/run-rpc-io-phone-controls.py
+    ;;
   *) echo 'Unknown scoped I/O component' >&2; exit 2 ;;
 esac

@@ -30,6 +30,8 @@ SCOPE = "RAW_ANDROID_IO_NOT_AUTHENTICATED_RPC_OR_PHYSICAL_QUALIFICATION"
 
 def verify_installed_apk(device, installed, source_apk, report, run):
     """Hash actual installed bytes, without a guest hash utility or the adb sync STAT protocol."""
+    size = source_apk.stat().st_size
+    need(0 < size <= 256 * 1024 * 1024, "Missing/oversized source APK")
     need(re.fullmatch(r"package:/data/app/(?:[-A-Za-z0-9_.~+=]+/)+base\.apk", installed) and
          all(part not in (".", "..") for part in installed.removeprefix("package:").split("/")),
          "Ambiguous installed APK")
@@ -42,7 +44,7 @@ def verify_installed_apk(device, installed, source_apk, report, run):
         # exec-out streams exact binary bytes through the public shell API, without text conversion
         # or dependency on an older device's file-transfer metadata protocol. A failed cat still fails.
         run([*device, "shell", "ls", "-ldn", str(Path(path).parent), path], check=False)
-        run([*device, "exec-out", "cat", path], timeout=90, stdout_file=pulled)
+        run([*device, "exec-out", "cat", path], timeout=90, stdout_file=pulled, stdout_limit=size)
         need(pulled.is_file() and not pulled.is_symlink() and
              pulled.stat().st_size == source_apk.stat().st_size, "Incomplete installed APK observation")
         actual = hashlib.sha256(pulled.read_bytes()).hexdigest()
@@ -76,6 +78,46 @@ def result(raw):
     return measures
 
 
+def sample_controls(sdk, device, report, run):
+    """Existing real Keystore/app controls on the SAME owned API24 AVD, not an old handoff campaign."""
+    def module(name, filename):
+        spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
+        value = importlib.util.module_from_spec(spec)
+        sys.modules[name] = value
+        spec.loader.exec_module(value)
+        return value
+
+    admission = module("rpc_io_sample_controls", "run-rpc-android-controls.py")
+    manifest_check = module("rpc_io_sample_manifest", "run-android-art-smoke.py")
+    outputs = ROOT / "samples/p2p-sample-android/build/outputs/apk"
+    package = admission.PACKAGE
+    apks = {
+        package: outputs / "debug/p2p-sample-android-debug.apk",
+        package + ".test": outputs / "androidTest/debug/p2p-sample-android-debug-androidTest.apk",
+    }
+    installed_hashes = {}
+    for name, apk in apks.items():
+        need(apk.is_file() and not apk.is_symlink(), "Source-built sample APK missing")
+        raw = run([sdk / "cmdline-tools/latest/bin/apkanalyzer", "manifest", "print", apk], timeout=90)[1]
+        (report / ("sample-test-manifest.xml" if name.endswith(".test") else "sample-manifest.xml")).write_bytes(raw)
+        if name.endswith(".test"):
+            manifest_check.verify_test_apk_manifest(raw)
+        else:
+            need(ET.fromstring(raw).get("package") == package, "Wrong sample app package")
+        run([*device, "install", "--no-streaming", apk], timeout=120)
+        installed = run([*device, "shell", "pm", "path", name])[1].decode().strip()
+        installed_hashes[name] = verify_installed_apk(device, installed, apk, report, run)
+    token = uuid.uuid4().hex
+    raw = run([*device, "shell", "am", "instrument", "-w", "-r", "-e", "token", token,
+               "-e", "scope", "supplemental-api24-rpc-controls",
+               package + ".test/" + manifest_check.RPC_INSTRUMENTATION], timeout=120)[1]
+    (report / "sample-instrumentation.txt").write_bytes(raw)
+    observed = admission.assess_instrumentation(raw.decode(), token)
+    for name in reversed(apks):
+        run([*device, "uninstall", name], timeout=60)
+    return dict(scope=admission.SCOPE, installedApkSha256=installed_hashes, instrumentation=observed)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api", type=int, choices=(24, 35), required=True)
@@ -91,7 +133,7 @@ def main():
     counter = 0
     deadline = int(env["P2PKIT_CI_COMMAND_DEADLINE_NS"]) / 1_000_000_000
 
-    def run(command, *, timeout=30, check=True, input_bytes=None, stdout_file=None):
+    def run(command, *, timeout=30, check=True, input_bytes=None, stdout_file=None, stdout_limit=16 * 1024 * 1024):
         nonlocal counter
         counter += 1
         log = report / f"command-{counter:03d}.log"
@@ -108,7 +150,7 @@ def main():
                     process.stdin.close()
                 while process.poll() is None:
                     need(time.monotonic() < end and log.stat().st_size <= 16 * 1024 * 1024 and
-                         (stdout_file is None or stdout_file.stat().st_size <= 16 * 1024 * 1024),
+                         (stdout_file is None or stdout_file.stat().st_size <= stdout_limit),
                          f"Bounded command {counter} failed to settle")
                     time.sleep(0.1)
             finally:
@@ -123,7 +165,11 @@ def main():
 
     source, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
     need(not git("status", "--porcelain=v1"), "Clean exact source required")
-    run([ROOT / "gradlew", ":p2p-transport-lan:assembleAndroidDeviceTest",
+    tasks = [":p2p-transport-lan:assembleAndroidDeviceTest"]
+    if args.api == 24:
+        tasks += [":p2p-sample-android:testDebugUnitTest", ":p2p-sample-android:assembleDebug",
+                  ":p2p-sample-android:assembleDebugAndroidTest"]
+    run([ROOT / "gradlew", *tasks,
          "--dependency-verification=strict",
          "--no-daemon", "--max-workers=2", "--console=plain"], timeout=1800)
     apks = list((ROOT / "library/p2p-transport-lan/build/outputs/apk").rglob("*.apk"))
@@ -150,6 +196,7 @@ def main():
     avd = "p2pkit-readiness-" + uuid.uuid4().hex
     emulator = None
     measures = None
+    sample = None
     try:
         run([sdk / "cmdline-tools/latest/bin/avdmanager", "create", "avd", "--name", avd,
              "--package", image, "--path", private / "avd" / avd], timeout=90, input_bytes=b"no\n")
@@ -169,6 +216,8 @@ def main():
             raw = run([*device, "shell", "am", "instrument", "-w", "-r", PACKAGE + "/" + RUNNER], timeout=390)[1]
             (report / "instrumentation.txt").write_bytes(raw)
             measures = result(raw)
+            if args.api == 24:
+                sample = sample_controls(sdk, device, report, run)
     finally:
         if emulator is not None and emulator.poll() is None:
             emulator.terminate()
@@ -180,7 +229,7 @@ def main():
         run([*adb, "kill-server"])
     need(not git("status", "--porcelain=v1") and git("rev-parse", "HEAD") == source, "Source changed")
     owner.write_json(report / "result.json", dict(source=source, tree=tree, apkSha256=digest, api=args.api,
-                     scope=SCOPE, measurements=measures, emulatorExit=emulator.returncode,
+                     scope=SCOPE, measurements=measures, sampleControls=sample, emulatorExit=emulator.returncode,
                      cleanup="Original leader exit observed; outer native scope must verify descendants"))
     print(f"ANDROID_RAW_IO_COMPLETE api={args.api}; inspect actual measurements; no RPC/mobile-capacity credit")
 

@@ -129,7 +129,7 @@ hidden; mechanical correctness alone is not a resource-efficiency verdict.
 
 `CI — modular qualification` has an independent `rpc-io` diagnostic selection;
 `rpc_io_part` selects all or one of `jvm-linux`, `jvm-windows`, `macos`,
-`macos-abi`, `android-24`, `android-35`. The additive Apple ABI was generated and
+`macos-abi`, `ios-phone`, `android-24`, `android-35`. The additive Apple ABI was generated and
 reviewed independently from native socket tests; that part now compares the
 actual output against the maintained baseline, without rewriting it.
 Failures do not cancel another platform. Evidence uses
@@ -147,6 +147,17 @@ I/O resources and exact echoes, **not authenticated RPC, Network binding,
 installed sample behavior, Wi-Fi, Doze, physical devices or sustainable mobile
 host capacity**. The runner requires actual KVM and a fresh emulator; host JVM
 tests are not substituted if that environment is missing.
+
+The API24 part additionally installs the source-built sample and runs its existing
+ten real Keystore/lifecycle controls. The approval-store control round-trips both
+128 and 256 distinct pins, refuses 257 without replacing the prior set, and
+retains the original corruption/isolation checks. The independent `ios-phone`
+part runs the existing 77 app-hosted XCTest and seven UI methods, including the
+same expanded real Keychain control. It uses a newly owned simulator and the
+current-source XCFramework provenance phase; no retired handoff campaign is
+reactivated. These sample checks are **not authenticated mobile capacity tests**.
+Both native manual-import fields allow 16,384 characters; the USB128 campaign
+and its explicit approval remain unchanged.
 
 ### Evidence status
 
@@ -228,6 +239,36 @@ selector scans, coroutine scheduling, topology syscalls and existing crypto/hash
 work. Samples parked in native accept/epoll are **not CPU time**. Subsequent
 worker scheduling changes require their own measurement; this profile is not
 an unprofiled performance qualification or evidence for those changes.
+
+The subsequent CPU-worker comparison at
+[`95b57c2e`](https://github.com/p2pKit/P2pKit/commit/95b57c2efeea9fdb7d83827f1006e47ae577c497)
+completed **unprofiled** 128/256-client runs on the same 12-CPU Linux virtual link,
+with `-Xms128m -Xmx768m` for the host. These are measurements from one comparison,
+not statistical guarantees. Both original processes exited zero; after 65 seconds,
+all retained record/payload counters returned to zero. The evidence manifest's
+517 file hashes were independently rechecked.
+
+| Authenticated 1 KiB echo, 10 Hz/client | 128 clients | 256 clients |
+| --- | ---: | ---: |
+| Correct responses | 153,600 | 307,200 |
+| Driver active seconds | 120.000728 | 120.001312 |
+| Scheduling slots at least 100 ms late | 0 | 0 |
+| Host native threads before connections | 36 | 37 |
+| Host native threads idle / after load | 44 / 46 | 44 / 46 |
+| Steady idle CPU (% of one core, 30-second observation) | 5.105% | 7.956% |
+| Active host CPU (% of one core) | 118.151% | 230.385% |
+| Steady idle / post-load RSS (MiB) | 224.043 / 498.426 | 224.277 / 554.336 |
+| p50 / p95 / p99 latency bucket upper bounds (ms) | 1 / 2 / 7 | 2 / 4 / 9 |
+| Maximum latency bucket upper bound (ms) | 33 | 53 |
+
+The before/after **profiled** 256-client, 60-second worker comparison likewise
+completed 153,600 responses with no late slots. After-load threads fell from
+72 to 49 and active CPU from 296.499% to 236.268% of one core. RSS did **not**
+improve in that pair (532.469 to 579.199 MiB); neither profile proves a memory
+reduction. The unprofiled table is the primary resource observation. The JVMs
+still retained UID0 after dropping capabilities. This is not ordinary-user,
+physical-LAN, mobile-host, 30-minute or 512-client qualification. The unchanged
+topology checks and production authentication remain included in these costs.
 
 The old 128-raw-socket baseline observed 151 JVM threads (9 before connections).
 Initial new raw 128/256 tests observed 30 threads in both cases. Their short,

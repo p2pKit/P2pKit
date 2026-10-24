@@ -14,7 +14,7 @@ on:
         description: Scalable I/O implementation checks only (not release or physical qualification)
         default: all
         type: choice
-        options: [all, jvm-linux, jvm-windows, macos, macos-abi, android-24, android-35]
+        options: [all, jvm-linux, jvm-windows, macos, macos-abi, ios-phone, android-24, android-35]
       apple_operation:
         description: Apple diagnostic only (no release qualification or physical credit)
         default: both

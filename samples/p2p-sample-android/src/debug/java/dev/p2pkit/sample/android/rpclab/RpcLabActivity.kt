@@ -1059,7 +1059,8 @@ internal class RpcLabController(
                 Field("Fixed host port", port, 5, enabled = editable && mobileConfig == null) { port = it }
                 TextButton({ showCapacity = !showCapacity }) { Text("Capacity-test provisioning") }
                 if (showCapacity) {
-                    Field("Optional: exactly 128 public synthetic capacity pins, one per line", capacityPins, 8192,
+                    Field("Optional: exactly 128 or 256 public synthetic capacity pins, one per line",
+                        capacityPins, 16_384,
                         enabled = editable && mobileConfig == null) { capacityPins = it }
                     Row {
                         Checkbox(importApproved, { importApproved = it }, enabled = editable)
