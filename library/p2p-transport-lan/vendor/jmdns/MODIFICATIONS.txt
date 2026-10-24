@@ -2,7 +2,7 @@ P2pKit embedded JmDNS modifications
 
 Upstream: org.jmdns:jmdns:3.6.3, tag v3.6.3,
 commit 93b326381940f3fcd250d770a14a36de4c2dfcda.
-Private component revision: 3.6.3-p2pkit.410.7.
+Private component revision: 3.6.3-p2pkit.410.8.
 
 Mechanical integration relocates the complete javax.jmdns production package
 into dev.p2pkit.transport.lan.internal.jmdns. Java source uses LF line endings,
@@ -69,6 +69,17 @@ parser/record/cache tests; production constructors always start networking.
 This is bounded retention, not authenticated admission, fairness against Sybils,
 physical discovery/soak evidence or native lifecycle qualification. Earlier
 upstream and patch bytes are unchanged.
+
+patches/516-txt-readiness.patch requires received or explicitly supplied TXT
+before declaring service resolution complete. The wire-format getTextBytes()
+fallback is still an empty TXT, but no longer invents resolution evidence for
+SRV/address-only cache replay. This prevents a delayed pre-TXT callback from
+withdrawing a newer complete peer admission, including across distinct resolver
+infos. Actual empty TXT remains a complete DNS-SD record and still reaches
+application metadata validation; unchanged complete info remains deduplicated.
+Socket-free parser/cache/clone/executor and admission/relay regressions are not
+multicast, macOS consumer or native lifecycle qualification. Earlier upstream
+and patch bytes are unchanged.
 
 PROVENANCE.json schema 2 preserves lifecyclePatch and lists subsequent patches
 in followupPatches application order. All are zero-context unified patches:

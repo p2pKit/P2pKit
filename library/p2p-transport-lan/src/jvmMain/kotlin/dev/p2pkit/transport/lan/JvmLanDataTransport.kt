@@ -5,6 +5,8 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.OutboundRoute
+import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -224,11 +226,13 @@ internal class JvmLanDataTransport(
                 }
             }
             try {
+                var boundTarget: JvmLanBindTarget? = null
                 ensureDialGeneration(dialGeneration)
                 withContext(io.setup) {
                     val destination = if (policy == null) InetSocketAddress(endpoint.host, endpoint.port) else {
                         val target = selectedTarget(policy)
                             ?: throw P2pError.ConnectionFailed("Selected organization LAN route is unavailable")
+                        boundTarget = target
                         socket.bind(InetSocketAddress(target.address, 0))
                         InetSocketAddress(policy.jvmNumeric(endpoint.host), endpoint.port)
                     }
@@ -242,8 +246,10 @@ internal class JvmLanDataTransport(
                 ensureDialGeneration(dialGeneration)
                 JvmLanDiag.log(
                     "dial",
-                    "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}"
+                    "connect OK peer=$pid8 local=${socket.localSocketAddress} " +
+                        "remote=${observeOptionalLanRoute { socket.remoteSocketAddress }}"
                 )
+                val route = captureOutboundRoute(socket, dialGeneration, boundTarget)
                 beforeDialOwnershipHandoffForTest?.invoke()
                 val handedOff = synchronized(dialStateLock) {
                     if (isDialGenerationActive(dialGeneration)) {
@@ -253,7 +259,7 @@ internal class JvmLanDataTransport(
                     }
                 }
                 if (!handedOff) throw stoppedDialFailure()
-                return wrapSocket(socket)
+                return wrapSocket(socket, route)
             } catch (cancelled: CancellationException) {
                 closeSocketRetainingFailure(socket)?.let(cancelled::addSuppressed)
                 JvmLanDiag.log("dial", "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
@@ -286,6 +292,107 @@ internal class JvmLanDataTransport(
             }
         }
         throw P2pError.ConnectionFailed("TCP connect candidates failed: ${failures.joinToString("; ")}")
+    }
+
+    private data class RouteContext(
+        val localAddress: LanNumericAddress,
+        val interfaceName: String,
+        val fingerprint: String
+    )
+
+    private class ConnectedRoute(
+        override val transport: JvmLanDataTransport,
+        val generation: Long,
+        val endpoint: LanTcpEndpoint,
+        val context: RouteContext?
+    ) : OutboundRoute {
+        override val isCurrent: Boolean get() = transport.isDialGenerationActive(generation)
+        override suspend fun connect(timeoutMillis: Long): RawConnection = transport.connectRoute(this, timeoutMillis)
+    }
+
+    private fun JvmLanBindTarget.routeContext(): RouteContext? = address.lanNumericAddress()?.let {
+        RouteContext(it, interfaceName, fingerprint)
+    }
+
+    private fun captureOutboundRoute(
+        socket: Socket,
+        generation: Long,
+        boundTarget: JvmLanBindTarget?
+    ): OutboundRoute? = observeOptionalLanRoute {
+        val endpoint = socket.connectedLanEndpoint() ?: return@observeOptionalLanRoute null
+        val context = boundTarget?.routeContext()
+        if (policy != null && context == null) {
+            return@observeOptionalLanRoute null
+        }
+        ConnectedRoute(this, generation, endpoint, context)
+    }
+
+    /** This path never obtains a peer, hostname or discovery lease, and never captures a new generation. */
+    private suspend fun connectRoute(route: ConnectedRoute, timeoutMillis: Long): RawConnection {
+        require(timeoutMillis > 0) { "Route connect timeout must be positive" }
+        currentCoroutineContext().ensureActive()
+        if (!route.isCurrent) throw OutboundRouteUnavailable("LAN outbound route generation retired")
+        val budget = minOf(timeoutMillis, LanConstants.TCP_CONNECT_TIMEOUT_MS.toLong())
+        val deadline = System.nanoTime() + budget * NANOS_PER_MILLISECOND
+        fun contextAllowed(): Boolean = policy == null ||
+            selectedTarget(policy)?.routeContext() == route.context &&
+            policy.allows(route.endpoint.address.inetAddress().hostAddress.orEmpty())
+        if (!withContext(io.setup) { contextAllowed() }) {
+            throw OutboundRouteUnavailable("LAN outbound route context changed")
+        }
+        if (!route.isCurrent) throw OutboundRouteUnavailable("LAN outbound route generation retired")
+        // A throwing factory does not prove retirement of anything it may have allocated internally.
+        val socket = if (macBinding == null) socketFactory() else macBinding.socket()
+        try {
+            val admitted = synchronized(dialStateLock) {
+                if (route.isCurrent) pendingDialSockets.add(socket) else false
+            }
+            if (!admitted) throw LanRouteRejected("LAN outbound route generation retired")
+            withContext(io.setup) {
+                if (!route.isCurrent || !contextAllowed()) throw LanRouteRejected("LAN outbound route context changed")
+                route.context?.let { socket.bind(InetSocketAddress(it.localAddress.inetAddress(), 0)) }
+                socket.connect(route.endpoint.socketAddress(), routeTimeoutMillis(deadline))
+                socket.tcpNoDelay = true
+                if (policy != null && !allowsSocket(policy, socket)) {
+                    throw LanRouteRejected("Organization LAN path validation failed")
+                }
+                if (!contextAllowed() || socket.connectedLanEndpoint() != route.endpoint) {
+                    throw LanRouteRejected("LAN outbound route numeric destination or context changed")
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            routeTimeoutMillis(deadline)
+            beforeDialOwnershipHandoffForTest?.invoke()
+            if (!withContext(io.setup) { contextAllowed() }) {
+                throw LanRouteRejected("LAN outbound route context changed before handoff")
+            }
+            currentCoroutineContext().ensureActive()
+            routeTimeoutMillis(deadline)
+            val handedOff = synchronized(dialStateLock) {
+                if (route.isCurrent) pendingDialSockets.remove(socket) else false
+            }
+            if (!handedOff) throw LanRouteRejected("LAN outbound route generation retired")
+            return wrapSocket(socket, route)
+        } catch (cancelled: CancellationException) {
+            closeSocketRetainingFailure(socket, requireObserved = true)?.let(cancelled::addSuppressed)
+            throw cancelled
+        } catch (error: Throwable) {
+            val cleanupFailure = closeSocketRetainingFailure(socket, requireObserved = true)
+            rethrowRouteCancellation(error, cleanupFailure)
+            if (cleanupFailure == null && error.suppressed.isEmpty() &&
+                (error is IOException || error is LanRouteRejected)
+            ) throw OutboundRouteUnavailable("LAN outbound route unavailable after confirmed socket retirement")
+            cleanupFailure?.let(error::addSuppressed)
+            throw error
+        } finally {
+            synchronized(dialStateLock) { pendingDialSockets -= socket }
+        }
+    }
+
+    private fun routeTimeoutMillis(deadlineNanos: Long): Int {
+        val remaining = deadlineNanos - System.nanoTime()
+        if (remaining <= 0) throw LanRouteRejected("LAN outbound route probe deadline expired")
+        return ((remaining + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND).toInt()
     }
 
     private fun Exception.dialFailureReason(timeoutMillis: Int): String = when (this) {
@@ -481,11 +588,14 @@ internal class JvmLanDataTransport(
     private fun stoppedDialFailure(): P2pError.ConnectionFailed =
         P2pError.ConnectionFailed("LAN data transport stopped during connect")
 
-    private fun closeSocketRetainingFailure(socket: Socket): Throwable? =
+    private fun closeSocketRetainingFailure(socket: Socket, requireObserved: Boolean = false): Throwable? =
         synchronized(dialStateLock) {
             pendingDialSockets -= socket
             retainedSocketCleanup += socket
-            runCatching { socket.close() }.exceptionOrNull().also { failure ->
+            runCatching {
+                socket.close()
+                if (requireObserved && !socket.isClosed) throw IOException("TCP socket retirement is unconfirmed")
+            }.exceptionOrNull().also { failure ->
                 if (failure == null) retainedSocketCleanup -= socket
             }
         }
@@ -551,8 +661,9 @@ internal class JvmLanDataTransport(
     private fun allowsSocket(selected: OrganizationLan, socket: Socket): Boolean =
         if (macBinding == null) selected.allowsJvmSocket(socket) else macBinding.allows(socket)
 
-    private fun wrapSocket(socket: Socket): JvmRawConnection = JvmRawConnection(
-        socket, io = io, pathAllowed = policy?.let { selected -> { allowsSocket(selected, socket) } }
+    private fun wrapSocket(socket: Socket, route: OutboundRoute? = null): JvmRawConnection = JvmRawConnection(
+        socket, io = io, pathAllowed = policy?.let { selected -> { allowsSocket(selected, socket) } },
+        outboundRoute = route
     )
 
     internal fun isInboundAddressAllowedForTest(

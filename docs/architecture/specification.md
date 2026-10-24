@@ -82,6 +82,13 @@ before using it as an independent test oracle.
   peer and attach collectors promptly.
 - Only the outgoing owner reconnects. Clean close is terminal; interruption may
   enter bounded reconnect according to policy.
+- Optional `P2pSession.protectedRouteStatus` describes a finite, process-local
+  route retained only after the original outbound session is authenticated,
+  locally authorized and registered. The optional transport SPI supplies the
+  exact selected numeric route, not authority for copied discovery hints.
+  Existing providers remain supported without this capability. See the
+  [known-peer protection contract](../security/model.md#protected-routes-for-already-authorized-peers)
+  for capacity, revocation, recovery grace and the limits on availability.
 - SDK session terminal cleanup has one internal **8-second elapsed budget for
   controlled waits**, with individual CLOSE/resource/runtime waits capped at
   2 seconds and further limited by the remaining budget. Local close and remote

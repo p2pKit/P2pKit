@@ -79,7 +79,8 @@ The recorded rc7 selection has actual same-source results for all fourteen
 components, with the original/replacement identities above. They must not be
 reused as a pass for changed source. Deterministic callbacks, loopback TCP and
 hosted multicast still do not establish physical-network coverage.
-**High #120 remains open/unresolved; stable/production remains NOT_READY.**
+**The published rc7 source still contains the High discovery-admission limitation
+tracked in #120. Stable/production remains NOT_READY.**
 
 ## Kotlin target execution and structural gaps
 

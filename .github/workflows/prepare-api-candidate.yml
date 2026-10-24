@@ -1,0 +1,109 @@
+name: Prepare core API candidate
+on:
+  # Temporary discovery only, not generation on push or a broad branch pattern.
+  push:
+    branches: [work/readiness-source-20261024-khnosw]
+    paths: [.github/workflows/prepare-api-candidate.yml]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed workflow and source commit at this dispatch ref
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: prepare-core-api-candidate
+  cancel-in-progress: false
+jobs:
+  register:
+    name: Register the maintenance workflow without building
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' && github.ref == 'refs/heads/work/readiness-source-20261024-khnosw' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: echo 'Registration only. Explicitly dispatch the reviewed source SHA to generate an API candidate.'
+  generate:
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      API_CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha }}
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - name: Require the exact reviewed workflow and source revision
+        shell: python3 {0}
+        run: |
+          import os
+          import re
+          sha = os.environ['API_CANDIDATE_SOURCE_SHA']
+          if not (re.fullmatch('[0-9a-f]{40}', sha)
+                  and sha == os.environ['GITHUB_SHA'] == os.environ['GITHUB_WORKFLOW_SHA']
+                  and os.environ['RUNNER_ENVIRONMENT'] == 'github-hosted'
+                  and os.environ['RUNNER_OS'] == 'macOS' and os.environ['RUNNER_ARCH'] == 'X64'):
+              raise SystemExit('A matching full workflow/source SHA on the hosted macOS X64 runner is required')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write('GRADLE_USER_HOME=' + os.path.join(os.environ['RUNNER_TEMP'], 'api-candidate-gradle-home') + '\n')
+              stream.write('KONAN_DATA_DIR=' + os.path.join(os.environ['RUNNER_TEMP'], 'api-candidate-konan') + '\n')
+      - name: Check out the immutable source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check exact-source and review-output refusal controls without running Gradle
+        run: python3 -B scripts/tests/prepare-api-candidate-test.py -v
+      - name: Configure Java 21 daemon toolchain
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Configure Java 17 library toolchain
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Restore optional verified dependencies without writing the shared cache
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
+        with:
+          cache-read-only: true
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            caches/*/kotlin-dsl
+            caches/*/scripts
+            caches/*/groovy-dsl
+      - name: Install the standard macOS 15 Intel and Xcode 26.3 platform tools
+        run: bash scripts/setup-ci-component.sh consumers
+      - name: Generate only core API baselines and encrypt original logs
+        id: generation
+        run: |
+          python3 -B scripts/ci_evidence.py --component api-candidate --timeout-seconds 5400 --output-dir "$RUNNER_TEMP/api-candidate-evidence" -- python3 -B scripts/prepare-api-candidate.py --source-sha "$API_CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/core-api-candidate"
+      - name: Retain encrypted diagnostics including failed generation
+        if: ${{ always() && steps.generation.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: api-candidate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/api-candidate-evidence/manifest.json
+            ${{ runner.temp }}/api-candidate-evidence/evidence.tar.gz.gpg
+            ${{ runner.temp }}/api-candidate-evidence/failure.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+      - name: Retain review-only patch and source hashes after successful generation
+        if: ${{ success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: core-api-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/core-api-candidate/core-api-candidate.patch
+            ${{ runner.temp }}/core-api-candidate/core-api-candidate.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

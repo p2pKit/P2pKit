@@ -1543,6 +1543,28 @@ class EvidenceTests(unittest.TestCase):
                 for change in ({'GITHUB_JOB': 'other'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40}, {'RUNNER_ENVIRONMENT': 'self-hosted'}):
                     self.assertFalse(E._hosted_darwin_context({**actual, **change}))
 
+    def test_api_candidate_hosted_context_keeps_exact_workflow_source_and_job_boundary(self):
+        env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', GITHUB_REPOSITORY='p2pKit/P2pKit',
+                   GITHUB_SHA='a' * 40, GITHUB_WORKFLOW_SHA='a' * 40, GITHUB_JOB='generate',
+                   GITHUB_WORKFLOW_REF='p2pKit/P2pKit/.github/workflows/prepare-api-candidate.yml@refs/heads/fixture')
+        args = ('job', 'invocation', 'private', 'home')
+        for host in ('Darwin', 'Linux', 'Windows'):
+            for change in ({}, {'GITHUB_JOB': 'other'}, {'GITHUB_JOB': ''}, {'GITHUB_WORKFLOW_SHA': 'b' * 40},
+                           {'RUNNER_ENVIRONMENT': 'self-hosted'}, {'GITHUB_ACTIONS': 'false'},
+                           {'GITHUB_REPOSITORY': 'other/repository'},
+                           {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/other.yml@refs/heads/fixture'}):
+                actual = {**env, **change}
+                with self.subTest(host=host, change=change), mock.patch.object(E.platform, 'system', return_value=host), \
+                        mock.patch.object(E, '_HostedDarwinScope') as hosted, \
+                        mock.patch.object(E.audit_processes, 'make_scope') as original:
+                    admitted = host == 'Darwin' and not change
+                    self.assertEqual(admitted, E._hosted_darwin_context(actual))
+                    result = E._command_scope(*args, actual)
+                    selected, rejected = (hosted, original) if admitted else (original, hosted)
+                    self.assertIs(result, selected.return_value)
+                    selected.assert_called_once_with(*args)
+                    rejected.assert_not_called()
+
     def test_hosted_darwin_domain_retains_positive_proofs_and_revisits_unobserved_parent(self):
         scope = object.__new__(E._HostedDarwinScope)
         scope.known, scope.foreign_sessions, scope.outside_domain_observations, scope.controller_session = {}, {}, 0, 17

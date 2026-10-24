@@ -37,11 +37,12 @@ FOLLOWUP_PATCH_PATHS = (
     "patches/417-response-continuation.patch",
     "patches/418-teardown-budget.patch",
     "patches/503-cache-bounds.patch",
+    "patches/516-txt-readiness.patch",
 )
 EMBEDDED_IDENTITY = {
-    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.7",
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.7",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.7",
+    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.8",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.8",
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.8",
 }
 UPSTREAM = {
     "mavenCoordinate": "org.jmdns:jmdns:3.6.3", "purl": "pkg:maven/org.jmdns/jmdns@3.6.3",

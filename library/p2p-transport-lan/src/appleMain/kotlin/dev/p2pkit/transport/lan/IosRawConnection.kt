@@ -14,6 +14,7 @@ import kotlinx.cinterop.convert
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +53,9 @@ import kotlin.coroutines.resumeWithException
 /** Non-suspending cancellation ownership required by Network.framework callbacks. */
 internal interface IosConnectionHandle : RawConnection {
     fun cancelNow(reason: String)
+
+    /** False means this handle cannot attest native retirement; a cancel request is not evidence. */
+    suspend fun awaitNativeRetirement(): Boolean = false
 }
 
 /** Adds a per-source lease without changing outbound connection behavior. */
@@ -130,6 +134,7 @@ internal class IosRawConnection private constructor(
      * AtomicInt CAS makes the cancel exactly-once across queues.
      */
     private val cancelIssued = kotlin.concurrent.AtomicInt(0)
+    private val nativeRetired = CompletableDeferred<Unit>()
 
     private fun cancelOnce(reason: String) {
         if (cancelIssued.compareAndSet(0, 1)) {
@@ -217,6 +222,10 @@ internal class IosRawConnection private constructor(
                     _state.value = ConnectionState.Closed
                     // Already cancelled by the framework; just latch the flag.
                     cancelIssued.value = 1
+                    // Break native callback ownership before certifying that a route probe is retired.
+                    nw_connection_set_path_changed_handler(connection, null)
+                    nw_connection_set_state_changed_handler(connection, null)
+                    nativeRetired.complete(Unit)
                 }
 
                 else -> {
@@ -428,6 +437,11 @@ internal class IosRawConnection private constructor(
         closed = true
         _state.value = ConnectionState.Closed
         cancelOnce(reason)
+    }
+
+    override suspend fun awaitNativeRetirement(): Boolean {
+        nativeRetired.await()
+        return true
     }
 
     internal class NetworkException(message: String) : RuntimeException(message)

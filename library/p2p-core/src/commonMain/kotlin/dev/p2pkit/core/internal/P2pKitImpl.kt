@@ -317,7 +317,9 @@ internal class P2pKitImpl(
                     if (lifecycleIsActiveLocked(expectedGeneration)) block() else null
                 }
             },
-            peerLookup = peerRegistry::internalPeer,
+            peerLookup = peerRegistry::reconnectPeer,
+            onRouteProtected = peerRegistry::protectRoute,
+            onRouteRetired = peerRegistry::retireRoute,
             refreshDiscovery = {
                 // V0.4-DISCOVERY-REFRESH: fan out to every registered
                 // discovery transport. Run sequentially under each

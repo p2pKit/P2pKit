@@ -12,6 +12,7 @@ import dev.p2pkit.core.dsl.P2pKitBuilder
 import dev.p2pkit.core.internal.DEFAULT_HANDSHAKE_TIMEOUT_MS
 import dev.p2pkit.core.internal.SecureIdentityStorage
 import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportDescriptor
@@ -39,6 +40,7 @@ internal fun createSecureTestKit(
     authorization: PeerAuthorizationPolicy,
     reconnect: ReconnectPolicy = ReconnectPolicy.Disabled,
     setupTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+    discovery: DiscoveryTransport? = null,
     block: P2pKitBuilder.() -> Unit = {}
 ): P2pKit = P2pKit.create {
     this.appId = appId
@@ -52,7 +54,7 @@ internal fun createSecureTestKit(
         pingIntervalMillis = 60_000
         timeoutMillis = 120_000
     }
-    transports { register(SecureTestTransportFactory(transport)) }
+    transports { register(SecureTestTransportFactory(transport, discovery)) }
     block()
     require(securityMode is SecurityMode.AuthenticatedV2) { "Secure fixture must remain authenticated v2" }
     require(strictSessionInvariants) { "Secure fixture must retain strict session invariants" }
@@ -71,7 +73,11 @@ internal class CopyingRawConnection(private val delegate: RawConnection) : RawCo
     override suspend fun write(bytes: ByteArray) = delegate.write(bytes.copyOf())
 }
 
-private class SecureTestTransportFactory(private val transport: DataTransport) : TransportFactory {
-    override val descriptor = TransportDescriptor.dataOnly(transport.type)
-    override fun build(context: TransportContext): TransportPair = TransportPair(transport)
+private class SecureTestTransportFactory(
+    private val transport: DataTransport,
+    private val discovery: DiscoveryTransport?
+) : TransportFactory {
+    override val descriptor = if (discovery == null) TransportDescriptor.dataOnly(transport.type)
+        else TransportDescriptor.dataAndDiscovery(transport.type)
+    override fun build(context: TransportContext): TransportPair = TransportPair(transport, discovery)
 }

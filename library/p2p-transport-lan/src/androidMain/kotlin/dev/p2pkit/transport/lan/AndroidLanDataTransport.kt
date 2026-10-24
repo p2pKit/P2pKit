@@ -6,6 +6,8 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.OutboundRoute
+import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -282,8 +284,10 @@ internal class AndroidLanDataTransport(
                 ensureDialGeneration(dialGeneration)
                 Log.d(
                     TAG,
-                    "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}"
+                    "connect OK peer=$pid8 local=${socket.localSocketAddress} " +
+                        "remote=${observeOptionalLanRoute { socket.remoteSocketAddress }}"
                 )
+                val route = withContext(io.setup) { captureOutboundRoute(socket, dialGeneration, selectedRoute) }
                 beforeDialOwnershipHandoffForTest?.invoke()
                 val handedOff = synchronized(dialStateLock) {
                     if (isDialGenerationActive(dialGeneration)) {
@@ -293,7 +297,7 @@ internal class AndroidLanDataTransport(
                     }
                 }
                 if (!handedOff) throw stoppedDialFailure()
-                return wrapSocket(socket, selectedRoute?.network)
+                return wrapSocket(socket, selectedRoute?.network, route)
             } catch (cancelled: CancellationException) {
                 closeSocketRetainingFailure(socket)?.let(cancelled::addSuppressed)
                 Log.d(TAG, "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
@@ -326,6 +330,115 @@ internal class AndroidLanDataTransport(
             }
         }
         throw P2pError.ConnectionFailed("TCP connect candidates failed: ${failures.joinToString("; ")}")
+    }
+
+    private data class RouteContext(
+        val network: Network?,
+        val localAddress: LanNumericAddress,
+        val fingerprint: String,
+        val revision: Long
+    )
+
+    private class ConnectedRoute(
+        override val transport: AndroidLanDataTransport,
+        val generation: Long,
+        val endpoint: LanTcpEndpoint,
+        val context: RouteContext?
+    ) : OutboundRoute {
+        override val isCurrent: Boolean get() = transport.isDialGenerationActive(generation) &&
+            (context == null || transport.networkState?.routeRevision == context.revision)
+        override suspend fun connect(timeoutMillis: Long): RawConnection = transport.connectRoute(this, timeoutMillis)
+    }
+
+    private fun AndroidLanDialRoute.routeContext(): RouteContext? = localAddress.lanNumericAddress()?.let {
+        RouteContext(network, it, fingerprint, revision)
+    }
+
+    private fun captureOutboundRoute(
+        socket: Socket,
+        generation: Long,
+        selectedRoute: AndroidLanDialRoute?
+    ): OutboundRoute? = observeOptionalLanRoute {
+        val endpoint = socket.connectedLanEndpoint() ?: return@observeOptionalLanRoute null
+        val context = selectedRoute?.routeContext()
+        if (networkState != null && (context == null || networkState.routeRevision != context.revision)) {
+            return@observeOptionalLanRoute null
+        }
+        ConnectedRoute(this, generation, endpoint, context)
+    }
+
+    /** Replays the original network and numeric destination; never queries discovery or DNS. */
+    private suspend fun connectRoute(route: ConnectedRoute, timeoutMillis: Long): RawConnection {
+        require(timeoutMillis > 0) { "Route connect timeout must be positive" }
+        currentCoroutineContext().ensureActive()
+        if (!route.isCurrent) throw OutboundRouteUnavailable("Android LAN outbound route generation retired")
+        val budget = minOf(timeoutMillis, LanConstants.TCP_CONNECT_TIMEOUT_MS.toLong())
+        val deadline = System.nanoTime() + budget * NANOS_PER_MILLISECOND
+        fun contextAllowed(): Boolean =
+            (networkState == null || networkState.selectedRoute()?.routeContext() == route.context) &&
+                (policy == null || policy.allows(route.endpoint.address.inetAddress().hostAddress.orEmpty()))
+        if (!withContext(io.setup) { contextAllowed() }) {
+            throw OutboundRouteUnavailable("Android LAN outbound route context changed")
+        }
+        if (!route.isCurrent) throw OutboundRouteUnavailable("Android LAN outbound route generation retired")
+        // Keep the exact original Network, including an explicitly bound hotspot fallback.
+        val socket = socketFactory(route.context?.network)
+        try {
+            val admitted = synchronized(dialStateLock) {
+                if (route.isCurrent) pendingDialSockets.add(socket) else false
+            }
+            if (!admitted) throw LanRouteRejected("Android LAN outbound route generation retired")
+            withContext(io.setup) {
+                if (!route.isCurrent || !contextAllowed()) {
+                    throw LanRouteRejected("Android LAN outbound route context changed")
+                }
+                route.context?.let { context ->
+                    if (context.network == null || policy != null) {
+                        socket.bind(InetSocketAddress(context.localAddress.inetAddress(), 0))
+                    }
+                }
+                socket.connect(route.endpoint.socketAddress(), routeTimeoutMillis(deadline))
+                socket.tcpNoDelay = true
+                if (policy != null &&
+                    !policy.allowsAndroidSocket(socket, networkState?.selectedRoute(), route.context?.network)
+                ) throw LanRouteRejected("Organization LAN path validation failed")
+                if (!contextAllowed() || !route.isCurrent || socket.connectedLanEndpoint() != route.endpoint) {
+                    throw LanRouteRejected("Android LAN outbound route numeric destination or context changed")
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            routeTimeoutMillis(deadline)
+            beforeDialOwnershipHandoffForTest?.invoke()
+            if (!withContext(io.setup) { contextAllowed() }) {
+                throw LanRouteRejected("Android LAN outbound route context changed before handoff")
+            }
+            currentCoroutineContext().ensureActive()
+            routeTimeoutMillis(deadline)
+            val handedOff = synchronized(dialStateLock) {
+                if (route.isCurrent) pendingDialSockets.remove(socket) else false
+            }
+            if (!handedOff) throw LanRouteRejected("Android LAN outbound route generation retired")
+            return wrapSocket(socket, route.context?.network, route)
+        } catch (cancelled: CancellationException) {
+            closeSocketRetainingFailure(socket, requireObserved = true)?.let(cancelled::addSuppressed)
+            throw cancelled
+        } catch (error: Throwable) {
+            val cleanupFailure = closeSocketRetainingFailure(socket, requireObserved = true)
+            rethrowRouteCancellation(error, cleanupFailure)
+            if (cleanupFailure == null && error.suppressed.isEmpty() &&
+                (error is IOException || error is LanRouteRejected)
+            ) throw OutboundRouteUnavailable("Android LAN outbound route unavailable after confirmed socket retirement")
+            cleanupFailure?.let(error::addSuppressed)
+            throw error
+        } finally {
+            synchronized(dialStateLock) { pendingDialSockets -= socket }
+        }
+    }
+
+    private fun routeTimeoutMillis(deadlineNanos: Long): Int {
+        val remaining = deadlineNanos - System.nanoTime()
+        if (remaining <= 0) throw LanRouteRejected("Android LAN outbound route probe deadline expired")
+        return ((remaining + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND).toInt()
     }
 
     private fun Exception.dialFailureReason(timeoutMillis: Int): String = when (this) {
@@ -517,11 +630,14 @@ internal class AndroidLanDataTransport(
     private fun stoppedDialFailure(): P2pError.ConnectionFailed =
         P2pError.ConnectionFailed("LAN data transport stopped during connect")
 
-    private fun closeSocketRetainingFailure(socket: Socket): Throwable? =
+    private fun closeSocketRetainingFailure(socket: Socket, requireObserved: Boolean = false): Throwable? =
         synchronized(dialStateLock) {
             pendingDialSockets -= socket
             retainedSocketCleanup += socket
-            runCatching { socket.close() }.exceptionOrNull().also { failure ->
+            runCatching {
+                socket.close()
+                if (requireObserved && !socket.isClosed) throw IOException("TCP socket retirement is unconfirmed")
+            }.exceptionOrNull().also { failure ->
                 if (failure == null) retainedSocketCleanup -= socket
             }
         }
@@ -599,10 +715,14 @@ internal class AndroidLanDataTransport(
         return selected.hostAddress == actual.hostAddress
     }
 
-    private fun wrapSocket(socket: Socket, boundNetwork: Network? = null): AndroidRawConnection = AndroidRawConnection(
+    private fun wrapSocket(
+        socket: Socket,
+        boundNetwork: Network? = null,
+        route: OutboundRoute? = null
+    ): AndroidRawConnection = AndroidRawConnection(
         socket, io = io, pathAllowed = policy?.let { selected ->
             { selected.allowsAndroidSocket(socket, networkState?.selectedRoute(), boundNetwork) }
-        }
+        }, outboundRoute = route
     )
 
     internal fun isInboundAddressAllowedForTest(

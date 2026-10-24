@@ -43,10 +43,15 @@ public sealed class ReconnectPolicy {
      * lose their connection still transition directly to
      * [ConnectionState.Failed]; the remote peer is expected to redial.
      *
-     * Each attempt re-resolves the peer's endpoint from the freshest
-     * discovery data immediately before dialing, falling back to the
-     * [dev.p2pkit.core.transport.InternalPeer] captured at session creation
-     * only when the registry has no current entry. For the whole
+     * For a session with [ProtectedRouteStatus.Protected], each attempt first probes its exact
+     * previously authenticated, locally authorized numeric route, independently of discovery
+     * capacity. This optional setup probe adds at most 1,500 ms, subject to the provider's shorter
+     * deadline and the profile's remaining recovery window; existing owned cleanup still applies.
+     * Only a provider-confirmed clean refusal allows ordinary fallback in the same logical attempt.
+     * Otherwise (or after that refusal), the attempt re-resolves the freshest manual/discovery
+     * candidate immediately before dialing, falling back to the
+     * [dev.p2pkit.core.transport.InternalPeer] captured at session creation only when no such record
+     * exists. A protected peer-list projection is not itself a discovery endpoint. For the whole
      * `Reconnecting` window the SDK also nudges discovery transports with
      * periodic `refresh()` calls, so an address rotation (e.g., Wi-Fi
      * reconnect changed the peer's IP) is picked up automatically once the

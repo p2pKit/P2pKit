@@ -132,6 +132,140 @@ static inline bool p2pkit_lan_endpoint_numeric(nw_endpoint_t endpoint, char *out
     return p2pkit_lan_parse_ipv6(host, &ipv6) && inet_ntop(AF_INET6, &ipv6, output, capacity) != NULL;
 }
 
+/* Resource-free outbound routing evidence. This is distinct from the stricter organization
+ * policy parser: exact link-local routes retain their numeric IPv6 scope instead of stripping it. */
+typedef struct p2pkit_lan_tcp_endpoint {
+    uint8_t address[16];
+    uint32_t address_length;
+    uint32_t scope_id;
+    uint16_t port;
+} p2pkit_lan_tcp_endpoint_t;
+
+static inline bool p2pkit_lan_tcp_endpoint_valid(const p2pkit_lan_tcp_endpoint_t *value) {
+    if (value == NULL || value->port == 0 || value->scope_id > INT32_MAX) return false;
+    if (value->address_length != 4 && value->address_length != 16) return false;
+    bool nonzero = false;
+    for (uint32_t i = 0; i < value->address_length; i++) nonzero |= value->address[i] != 0;
+    if (!nonzero) return false;
+    if (value->address_length == 4) return value->scope_id == 0 && value->address[0] < 224;
+    if (value->address[0] == 255) return false;
+    return !(value->address[0] == 254 && (value->address[1] & 0xc0) == 0x80 && value->scope_id == 0);
+}
+
+/* The input is borrowed. No DNS, service endpoint conversion, or ownership is retained. */
+static inline bool p2pkit_lan_copy_tcp_endpoint(nw_endpoint_t endpoint, p2pkit_lan_tcp_endpoint_t *output) {
+    if (endpoint == NULL || output == NULL) return false;
+    p2pkit_lan_tcp_endpoint_t value = {0};
+    nw_endpoint_type_t type = nw_endpoint_get_type(endpoint);
+    if (type == nw_endpoint_type_address) {
+        const struct sockaddr *address = nw_endpoint_get_address(endpoint);
+        if (address == NULL) return false;
+        if (address->sa_family == AF_INET && address->sa_len >= sizeof(struct sockaddr_in)) {
+            const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)address;
+            value.address_length = 4;
+            value.port = ntohs(ipv4->sin_port);
+            memcpy(value.address, &ipv4->sin_addr, 4);
+        } else if (address->sa_family == AF_INET6 && address->sa_len >= sizeof(struct sockaddr_in6)) {
+            const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)address;
+            value.address_length = 16;
+            value.port = ntohs(ipv6->sin6_port);
+            value.scope_id = ipv6->sin6_scope_id;
+            memcpy(value.address, &ipv6->sin6_addr, 16);
+        } else return false;
+    } else if (type == nw_endpoint_type_host) {
+        const char *host = nw_endpoint_get_hostname(endpoint);
+        if (host == NULL) return false;
+        value.port = nw_endpoint_get_port(endpoint);
+        struct in_addr ipv4;
+        struct in6_addr ipv6;
+        if (p2pkit_lan_parse_ipv4(host, &ipv4)) {
+            value.address_length = 4;
+            memcpy(value.address, &ipv4, 4);
+        } else {
+            char literal[INET6_ADDRSTRLEN];
+            const char *zone = strchr(host, '%');
+            size_t length = zone == NULL ? strnlen(host, sizeof(literal)) : (size_t)(zone - host);
+            if (length == 0 || length >= sizeof(literal)) return false;
+            memcpy(literal, host, length);
+            literal[length] = '\0';
+            if (!p2pkit_lan_parse_ipv6(literal, &ipv6)) return false;
+            if (zone != NULL) {
+                zone++;
+                size_t zone_length = strnlen(zone, IFNAMSIZ);
+                if (zone_length == 0 || zone_length >= IFNAMSIZ || strchr(zone, '%') != NULL) return false;
+                bool digits = true;
+                uint64_t index = 0;
+                for (size_t i = 0; i < zone_length; i++) {
+                    if (zone[i] < '0' || zone[i] > '9') { digits = false; break; }
+                    index = index * 10 + (uint64_t)(zone[i] - '0');
+                    if (index > INT32_MAX) return false;
+                }
+                value.scope_id = digits ? (uint32_t)index : if_nametoindex(zone);
+                if (value.scope_id == 0) return false;
+            }
+            value.address_length = 16;
+            memcpy(value.address, &ipv6, 16);
+        }
+    } else return false;
+    if (!p2pkit_lan_tcp_endpoint_valid(&value)) return false;
+    *output = value;
+    return true;
+}
+
+/* copy_endpoint is the ORIGINAL Bonjour/hostname endpoint and is not routing evidence.
+ * Copy the EFFECTIVE connected destination instead, releasing both native leases immediately. */
+static inline bool p2pkit_nw_copy_connected_tcp_endpoint(
+    nw_connection_t connection, p2pkit_lan_tcp_endpoint_t *output
+) {
+    if (connection == NULL || output == NULL) return false;
+    __attribute__((objc_precise_lifetime)) nw_path_t path = nw_connection_copy_current_path(connection);
+    __attribute__((objc_precise_lifetime)) nw_endpoint_t endpoint = NULL;
+    bool copied = false;
+    if (path != NULL && nw_path_get_status(path) == nw_path_status_satisfied) {
+        endpoint = nw_path_copy_effective_remote_endpoint(path);
+        copied = p2pkit_lan_copy_tcp_endpoint(endpoint, output);
+    }
+    p2pkit_nw_release_owned((nw_object_t)endpoint);
+    p2pkit_nw_release_owned((nw_object_t)path);
+    return copied;
+}
+
+/* Reconstruct a sockaddr, never a host endpoint which could resolve a name during replay. */
+static inline nw_endpoint_t p2pkit_lan_create_tcp_endpoint(
+    const p2pkit_lan_tcp_endpoint_t *value
+) __attribute__((ns_returns_retained)) {
+    if (!p2pkit_lan_tcp_endpoint_valid(value)) return NULL;
+    if (value->address_length == 4) {
+        struct sockaddr_in address = {0};
+        address.sin_len = sizeof(address);
+        address.sin_family = AF_INET;
+        address.sin_port = htons(value->port);
+        memcpy(&address.sin_addr, value->address, 4);
+        return nw_endpoint_create_address((const struct sockaddr *)&address);
+    }
+    struct sockaddr_in6 address = {0};
+    address.sin6_len = sizeof(address);
+    address.sin6_family = AF_INET6;
+    address.sin6_port = htons(value->port);
+    address.sin6_scope_id = value->scope_id;
+    memcpy(&address.sin6_addr, value->address, 16);
+    return nw_endpoint_create_address((const struct sockaddr *)&address);
+}
+
+/* The reconstructed endpoint never crosses into Kotlin on the production route path. NWConnection
+ * retains its configuration, and this helper retires its own endpoint immediately even when creation
+ * fails. Explicit retained-return metadata gives the connection the same ARC/cinterop convention as
+ * nw_connection_create, with no manual release of a Kotlin-managed native object. */
+static inline nw_connection_t p2pkit_nw_create_route_connection(
+    const p2pkit_lan_tcp_endpoint_t *value, nw_parameters_t parameters
+) __attribute__((ns_returns_retained)) {
+    if (parameters == NULL) return NULL;
+    __attribute__((objc_precise_lifetime)) nw_endpoint_t endpoint = p2pkit_lan_create_tcp_endpoint(value);
+    nw_connection_t connection = endpoint == NULL ? NULL : nw_connection_create(endpoint, parameters);
+    p2pkit_nw_release_owned((nw_object_t)endpoint);
+    return connection;
+}
+
 static inline bool p2pkit_lan_endpoint_numeric_equal(nw_endpoint_t endpoint, const char *expected) {
     char numeric[INET6_ADDRSTRLEN];
     return p2pkit_lan_endpoint_numeric(endpoint, numeric, sizeof(numeric)) &&

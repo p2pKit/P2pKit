@@ -8,11 +8,14 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.OutboundRoute
+import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.transport.lan.interop.p2pkit_lan_interface_fingerprint
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_create_plain_tcp_parameters
+import dev.p2pkit.transport.lan.interop.p2pkit_nw_required_lan_interface_index
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.CancellationException
@@ -24,6 +27,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,6 +91,7 @@ import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_queue_t
 import kotlin.concurrent.Volatile
 import kotlin.coroutines.resume
+import kotlin.time.TimeSource
 
 /**
  * iOS LAN [DataTransport].
@@ -127,7 +133,11 @@ internal class IosLanDataTransport(
     private val connectionFactory: (nw_connection_t, dispatch_queue_t) -> IosConnectionHandle =
         { connection, connectionQueue -> IosRawConnection.wrap(connection, connectionQueue) },
     private val policy: OrganizationLan? = null,
-    private val role: LanRole = LanRole.Host
+    private val role: LanRole = LanRole.Host,
+    /** Optional numeric readback; absence must not break a previously successful ordinary dial. */
+    private val outboundEndpointProvider: (nw_connection_t) -> LanTcpEndpoint? = ::appleConnectedEndpoint,
+    /** Controlled context-observation seam, without weakening the production organization path policy. */
+    private val outboundInterfaceIndexForTest: ((nw_parameters_t) -> Int?)? = null
 ) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
@@ -250,7 +260,8 @@ internal class IosLanDataTransport(
     private val startMutex = Mutex()
     private val dialMutex = Mutex()
     private val pendingDials = mutableSetOf<IosConnectionHandle>()
-    private var dialGeneration: Long = 0
+    private val retainedRouteDialCleanups = mutableSetOf<IosConnectionHandle>()
+    @Volatile private var dialGeneration: Long = 0
 
     @Volatile
     private var closed: Boolean = false
@@ -351,6 +362,9 @@ internal class IosLanDataTransport(
         if (closed) {
             IosLanDebug.log("data", "start: refused (transport already closed)")
             return Result.failure(IllegalStateException("transport already closed"))
+        }
+        if (dialMutex.withLock { retainedRouteDialCleanups.isNotEmpty() }) {
+            return Result.failure(IllegalStateException("iOS LAN route ownership awaits native cleanup; retry stop()"))
         }
         if (role == LanRole.DialOnly) {
             return try {
@@ -791,87 +805,189 @@ internal class IosLanDataTransport(
                 IosLanDebug.log("connect", "ABORT peer=$pid8 — no transport available (no cached endpoint, no manual-IP hint)")
                 throw P2pError.NoTransportAvailable(peer.publicPeer)
             }
-        val params = selectedParameters() ?: run {
-            IosLanDebug.log(
-                "connect",
-                "ABORT peer=$pid8 — TCP parameters unavailable (cinterop helper returned null)"
-            )
-            throw P2pError.ConnectionFailed("iOS LAN TCP parameters unavailable")
+        return connectEndpoint(endpoint, expectedGeneration, CONNECT_TIMEOUT_MILLIS) { reason ->
+            invalidateFailedEndpoint(peer, cachedLease, reason)
         }
-        IosLanDebug.log(
-            "connect",
-            "peer=$pid8 endpointSource=${if (cachedLease != null) "browse(AWDL-capable)" else "manual-IP-hint"} " +
-                "connParams.include_peer_to_peer=true"
-        )
-        val conn = nw_connection_create(endpoint, params) ?: run {
-            invalidateFailedEndpoint(peer, cachedLease, "nw_connection_create returned null")
-            IosLanDebug.log("connect", "ABORT peer=$pid8 — nw_connection_create returned null")
+    }
+
+    private class ConnectedRoute(
+        override val transport: IosLanDataTransport,
+        val generation: Long,
+        val endpoint: LanTcpEndpoint,
+        val requiredInterfaceIndex: Int?
+    ) : OutboundRoute {
+        override val isCurrent: Boolean get() = transport.isDialGenerationActive(generation)
+        override suspend fun connect(timeoutMillis: Long): RawConnection {
+            require(timeoutMillis > 0) { "Route connect timeout must be positive" }
+            currentCoroutineContext().ensureActive()
+            if (!isCurrent) throw OutboundRouteUnavailable("iOS LAN outbound route generation retired")
+            return transport.connectEndpoint(
+                null, generation, minOf(timeoutMillis, CONNECT_TIMEOUT_MILLIS), this
+            )
+        }
+    }
+
+    /** One ownership transaction for ordinary dialing and exact replay of an ORIGINAL generation. */
+    private suspend fun connectEndpoint(
+        endpoint: nw_endpoint_t,
+        expectedGeneration: Long,
+        timeoutMillis: Long,
+        replayRoute: ConnectedRoute? = null,
+        failedEndpoint: (String) -> Unit = {}
+    ): RawConnection {
+        val started = TimeSource.Monotonic.markNow()
+        fun remainingMillis(): Long = if (replayRoute == null) timeoutMillis else {
+            (timeoutMillis - started.elapsedNow().inWholeMilliseconds).also {
+                if (it <= 0) throw LanRouteRejected("iOS LAN outbound route probe deadline expired")
+            }
+        }
+        fun connectionFailure(message: String): Exception =
+            if (replayRoute == null) P2pError.ConnectionFailed(message) else LanRouteRejected(message)
+        if (!isDialGenerationActive(expectedGeneration)) {
+            if (replayRoute != null) throw OutboundRouteUnavailable("iOS LAN outbound route generation retired")
+            throw stoppedDialFailure()
+        }
+        val params = if (replayRoute == null) selectedParameters() else {
+            withTimeoutOrNull(timeoutMillis) { selectedParameters() }
+        }
+        // Parameter/path-monitor failure does not attest native retirement, so cannot permit fallback.
+        if (params == null) throw P2pError.ConnectionFailed("iOS LAN TCP parameters unavailable")
+        currentCoroutineContext().ensureActive()
+        if (!isDialGenerationActive(expectedGeneration)) {
+            if (replayRoute != null) throw OutboundRouteUnavailable("iOS LAN outbound route generation retired")
+            throw stoppedDialFailure()
+        }
+        fun requiredInterfaceMatches(): Boolean = replayRoute == null ||
+            replayRoute.requiredInterfaceIndex == optionalRouteObservation { requiredInterfaceIndex(params) }
+        if (!requiredInterfaceMatches()) {
+            throw OutboundRouteUnavailable("iOS LAN outbound route required interface changed")
+        }
+        remainingMillis()
+        val conn = (if (replayRoute == null) nw_connection_create(endpoint, params)
+        else replayRoute.endpoint.appleConnection(params)) ?: run {
+            failedEndpoint("nw_connection_create returned null")
             throw P2pError.ConnectionFailed("nw_connection_create returned null")
         }
-        IosLanDebug.log("connect", "peer=$pid8 nw_connection_create OK, wrapping + awaiting Connected (<=${CONNECT_TIMEOUT_MILLIS}ms)")
         val raw = try {
             wrapConnection(conn)
         } catch (error: Throwable) {
-            // Ownership has not transferred to a wrapper or session yet.
+            // A cancel request alone cannot justify a fallback after an opaque wrapper failure.
             rejectNativeConnection(conn, "outbound connection wrapper failure")
             throw error
         }
-        val registered = dialMutex.withLock {
-            if (closed || dialGeneration != expectedGeneration) false else pendingDials.add(raw)
-        }
-        if (!registered) {
-            raw.cancelNow("transport stopped before outbound ownership commit")
-            throw stoppedDialFailure()
-        }
+        var handedOff = false
         try {
-            val terminal = try {
-                withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) {
-                    raw.state.first { it != ConnectionState.Connecting }
-                } ?: run {
-                    IosLanDebug.log("connect", "TIMEOUT peer=$pid8 after ${CONNECT_TIMEOUT_MILLIS}ms — closing wrapper")
-                    raw.cancelNow("outbound connect timeout")
-                    invalidateFailedEndpoint(peer, cachedLease, "connect timeout")
-                    throw P2pError.ConnectionFailed(
-                        "iOS LAN connect timed out after ${CONNECT_TIMEOUT_MILLIS}ms"
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                // withTimeoutOrNull consumes only its own deadline. An outer
-                // caller deadline/cancellation reaches this branch unchanged.
-                IosLanDebug.log("connect", "CANCELLED peer=$pid8 — closing wrapper")
-                raw.cancelNow("outbound connect cancelled")
-                throw cancelled
+            // Own the raw before the first suspendable pending-admission lock; cancellation here must retire it too.
+            val registered = dialMutex.withLock {
+                if (isDialGenerationActive(expectedGeneration) && requiredInterfaceMatches()) {
+                    pendingDials.add(raw)
+                } else false
             }
-            val generationStillActive = dialMutex.withLock {
-                !closed && dialGeneration == expectedGeneration
+            if (!registered) throw connectionFailure("iOS LAN transport stopped before outbound ownership commit")
+            val terminal = withTimeoutOrNull(remainingMillis()) {
+                raw.state.first { it != ConnectionState.Connecting }
+            } ?: run {
+                failedEndpoint("connect timeout")
+                throw connectionFailure("iOS LAN connect timed out after ${timeoutMillis}ms")
             }
-            if (!generationStillActive) {
-                raw.cancelNow("transport stopped during outbound connect")
-                throw stoppedDialFailure()
+            if (!isDialGenerationActive(expectedGeneration)) {
+                throw connectionFailure("iOS LAN transport stopped during outbound connect")
             }
             if (terminal != ConnectionState.Connected) {
-                raw.cancelNow("outbound connect terminal state=$terminal")
-                invalidateFailedEndpoint(peer, cachedLease, "terminal state=$terminal")
-                IosLanDebug.log("connect", "FAILED peer=$pid8 terminal=$terminal (expected Connected)")
-                throw P2pError.ConnectionFailed("iOS LAN connect failed (state=$terminal)")
+                failedEndpoint("terminal state=$terminal")
+                throw connectionFailure("iOS LAN connect failed (state=$terminal)")
             }
-            beforeDialOwnershipHandoffForTest?.invoke()
-            val handedOff = dialMutex.withLock {
-                if (!closed && dialGeneration == expectedGeneration) {
-                    pendingDials.remove(raw)
-                } else {
-                    false
+            val observedEndpoint = optionalRouteObservation { outboundEndpointProvider(conn) }
+            if (replayRoute != null && (observedEndpoint != replayRoute.endpoint || !requiredInterfaceMatches() ||
+                policy?.allowsAppleConnection(conn) == false)
+            ) throw LanRouteRejected("iOS LAN outbound route numeric destination or path changed")
+            val route = replayRoute ?: run {
+                val observedIndex = optionalRouteObservation { requiredInterfaceIndex(params) }
+                val requiresInterface = policy != null || outboundInterfaceIndexForTest != null
+                observedEndpoint?.takeIf { !requiresInterface || observedIndex != null }?.let {
+                    ConnectedRoute(this, expectedGeneration, it, observedIndex)
                 }
             }
-            if (!handedOff) {
-                raw.cancelNow("transport stopped before outbound ownership handoff")
-                throw stoppedDialFailure()
+            val result = if (route == null) raw else LanOutboundRouteConnection(raw, route)
+            remainingMillis()
+            currentCoroutineContext().ensureActive()
+            beforeDialOwnershipHandoffForTest?.invoke()
+            currentCoroutineContext().ensureActive()
+            remainingMillis()
+            if (replayRoute != null && policy?.allowsAppleConnection(conn) == false) {
+                throw LanRouteRejected("iOS LAN outbound route path changed before handoff")
             }
-            IosLanDebug.log("connect", "SUCCESS peer=$pid8 raw connection in Connected state")
-            return raw
+            handedOff = dialMutex.withLock {
+                if (isDialGenerationActive(expectedGeneration) && requiredInterfaceMatches()) {
+                    pendingDials.remove(raw)
+                } else false
+            }
+            if (!handedOff) throw connectionFailure("iOS LAN transport stopped before outbound ownership handoff")
+            return result
+        } catch (error: Throwable) {
+            val cleanupFailure = if (replayRoute == null) {
+                runCatching { raw.cancelNow("uncommitted outbound connection") }.exceptionOrNull()
+            } else {
+                retireRouteDial(raw)
+            }
+            if (replayRoute != null) rethrowRouteCancellation(error, cleanupFailure)
+            if (error is LanRouteRejected && cleanupFailure == null && error.suppressedExceptions.isEmpty()) {
+                throw OutboundRouteUnavailable("iOS LAN outbound route unavailable after observed native retirement")
+            }
+            cleanupFailure?.let(error::addSuppressed)
+            throw error
         } finally {
-            dialMutex.withLock { pendingDials.remove(raw) }
+            // No suspension after a successful ownership handoff (including prompt-result cancellation).
+            if (!handedOff) withContext(NonCancellable) {
+                dialMutex.withLock { pendingDials.remove(raw) }
+            }
         }
+    }
+
+    private fun requiredInterfaceIndex(parameters: nw_parameters_t): Int? {
+        outboundInterfaceIndexForTest?.let { return it(parameters)?.takeIf { index -> index > 0 } }
+        val selected = policy ?: return null
+        return p2pkit_nw_required_lan_interface_index(
+            parameters, selected.interfaceName, selected.localAddress
+        ).toInt().takeIf { it > 0 }
+    }
+
+    private inline fun <T> optionalRouteObservation(read: () -> T): T? = try {
+        read()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun isDialGenerationActive(expected: Long): Boolean = !closed && dialGeneration == expected
+
+    /** Unconfirmed cleanup remains transport-owned and is retried by stop/close, never hidden by fallback. */
+    private suspend fun retireRouteDial(raw: IosConnectionHandle): Throwable? = withContext(NonCancellable) {
+        dialMutex.withLock {
+            pendingDials.remove(raw)
+            retainedRouteDialCleanups.add(raw)
+        }
+        try {
+            raw.cancelNow("outbound route retirement")
+            val retired = withTimeoutOrNull(LISTENER_CANCEL_TIMEOUT_MILLIS) { raw.awaitNativeRetirement() } == true
+            if (retired) {
+                dialMutex.withLock { retainedRouteDialCleanups.remove(raw) }
+                null
+            } else {
+                IllegalStateException("iOS LAN outbound route native retirement is unconfirmed")
+            }
+        } catch (error: Throwable) {
+            error
+        }
+    }
+
+    private suspend fun releaseRetainedRouteDials() {
+        val pending = dialMutex.withLock { retainedRouteDialCleanups.toList() }
+        val failures = pending.mapNotNull { retireRouteDial(it) }
+        if (failures.isNotEmpty()) throw IllegalStateException(
+            "iOS LAN outbound route ownership remains after cleanup", failures.first()
+        ).also { failure -> failures.drop(1).forEach(failure::addSuppressed) }
     }
 
     private fun invalidateFailedEndpoint(
@@ -894,12 +1010,7 @@ internal class IosLanDataTransport(
         startMutex.withLock {
             if (closed) return@withLock
             stopStartedResources(closeQueue = false, clearEndpoints = false)
-            if (!releasePendingListeners("transport stop")) {
-                throw IllegalStateException(
-                    "iOS LAN listener did not acknowledge cancellation within " +
-                        "${LISTENER_CANCEL_TIMEOUT_MILLIS}ms"
-                )
-            }
+            finishTransportCleanup("transport stop")
         }
     }
 
@@ -912,12 +1023,7 @@ internal class IosLanDataTransport(
                 stopStartedResources(closeQueue = true, clearEndpoints = true)
             }
 
-            if (!releasePendingListeners("transport close")) {
-                throw IllegalStateException(
-                    "iOS LAN listener did not acknowledge cancellation within " +
-                        "${LISTENER_CANCEL_TIMEOUT_MILLIS}ms"
-                )
-            }
+            finishTransportCleanup("transport close")
         }
     }
 
@@ -945,6 +1051,16 @@ internal class IosLanDataTransport(
             pendingDials.toList().also { pendingDials.clear() }
         }
         pending.forEach { it.cancelNow(reason) }
+    }
+
+    /** A route-cleanup failure must not short-circuit listener/monitor retirement or a later close retry. */
+    private suspend fun finishTransportCleanup(reason: String) {
+        val listenersReleased = releasePendingListeners(reason)
+        val routeFailure = runCatching { releaseRetainedRouteDials() }.exceptionOrNull()
+        if (!listenersReleased) throw IllegalStateException(
+            "iOS LAN listener did not acknowledge cancellation within ${LISTENER_CANCEL_TIMEOUT_MILLIS}ms"
+        ).also { failure -> routeFailure?.let(failure::addSuppressed) }
+        routeFailure?.let { throw it }
     }
 
     private fun stoppedDialFailure(): P2pError.ConnectionFailed =

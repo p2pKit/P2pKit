@@ -42,10 +42,22 @@ defaults to 64 MiB beyond the declared file size. See the
 and [Android](../../library/p2p-core/src/androidMain/kotlin/dev/p2pkit/core/transfer/FileTransferDestinationAndroid.kt#L35-L53)
 factories; application-provided destinations own their storage policy.
 
-Reconnect is **disabled by default**. [`ReconnectPolicy.Enabled`](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/Config.kt#L61-L66)
+Reconnect is **disabled by default**. [`ReconnectPolicy.Enabled`](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/Config.kt#L66-L71)
 requires `maxAttempts > 0` and `retryDelayMillis >= 0`; only the outgoing owner
 retries, and a satisfied network-path transition can wake a parked retry early.
 Clean close never reconnects. A delay is not an overall retry/connection deadline.
+
+When an eligible session has `ProtectedRouteStatus.Protected`, a retry first
+probes its exact selected numeric route independently of discovery. Core gives
+this optional connection setup at most **1,500 ms** (or the shorter provider
+deadline/remaining profile window). Only a clean refusal allows the ordinary
+freshest-target fallback within the **same** logical attempt, including when
+`maxAttempts = 1`; its ordinary connect/handshake deadlines are unchanged.
+Native cleanup remains owned and can add time; cancellation still propagates.
+Any other non-marker failure of a protected probe or its handshake/rearm ends
+the episode, rather than authorizing a later fallback. After a clean refusal,
+ordinary fallback failures retain the existing retry policy. See
+[the route SPI](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transport/OutboundRoute.kt#L17-L63).
 
 The accepted/streaming-phase overall timer is `20 × offerTimeoutMillis`
 (default 600 s). In secure v2 it stops when the
@@ -82,13 +94,13 @@ These are **not** supported mesh-size or whole-process memory guarantees.
 
 | Policy or setting | Current value | Scope and observable consequence | Source |
 | --- | --- | --- | --- |
-| `MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS` | `16` setups | Per kit, inbound pre-handshake work only. At capacity, new inbound connections are warned about and closed; outgoing setups are exempt. | [SessionManager.kt:1921](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1921) |
-| `MAX_TOTAL_ACTIVE_SESSIONS` | `64` active sessions | Only active entries count. Net-new inbound registration at capacity is refused, including replacement of a terminal entry. Outgoing registrations and no-growth simultaneous-open arbitration are exempt; not a hard total-session ceiling. Warn and close; no required typed local application error. | [SessionManager.kt:1979](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1979) |
+| `MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS` | `16` setups | Per kit, inbound pre-handshake work only. At capacity, new inbound connections are warned about and closed; outgoing setups are exempt. | [SessionManager.kt:2080](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L2080) |
+| `MAX_TOTAL_ACTIVE_SESSIONS` | `64` active sessions | Only active entries count. Net-new inbound registration at capacity is refused, including replacement of a terminal entry. Outgoing registrations and no-growth simultaneous-open arbitration are exempt; not a hard total-session ceiling. Warn and close; no required typed local application error. | [SessionManager.kt:2138](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L2138) |
 | `MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE` | `2` connections/source | Per LAN transport, held until handshake settlement/close. A further connection from that source is refused before core admission; source address is not authenticated identity. | [PerSourceAdmissionLimiter.kt:89](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L89) |
 | `MAX_TRACKED_PRE_HANDSHAKE_SOURCES` | `96` sources | Per LAN transport, bounds distinct keys with outstanding admission leases. A new source is refused at capacity; this does not authorize 192 concurrent core setups. | [PerSourceAdmissionLimiter.kt:92](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/PerSourceAdmissionLimiter.kt#L92) |
 | `MAX_BUFFERED_INBOUND_CONNECTIONS` | `16` connections | Per LAN transport, accepted connections awaiting collection on JVM, Android and Apple. Distinct from active setups/sessions; overflow closes the newest connection. | [Lan.kt:194](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L194) |
-| `MAX_QUEUED_APPLICATION_MESSAGES` | `64` messages | Per session, includes the message currently being emitted to incoming. Further admission fails the session and logs the receive-backlog reason. | [P2pSessionImpl.kt:1873](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1873) |
-| `MAX_QUEUED_APPLICATION_BYTES` | `8,388,608` bytes (8 MiB) | Same backlog: approximate retention-policy charge, including the in-flight message. Exceeding it fails the session; not wire bytes or a whole-session/process heap cap. | [P2pSessionImpl.kt:1876](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1876) |
+| `MAX_QUEUED_APPLICATION_MESSAGES` | `64` messages | Per session, includes the message currently being emitted to incoming. Further admission fails the session and logs the receive-backlog reason. | [P2pSessionImpl.kt:1888](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1888) |
+| `MAX_QUEUED_APPLICATION_BYTES` | `8,388,608` bytes (8 MiB) | Same backlog: approximate retention-policy charge, including the in-flight message. Exceeding it fails the session; not wire bytes or a whole-session/process heap cap. | [P2pSessionImpl.kt:1891](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1891) |
 
 Backlog accounting charges **512 bytes per message**, plus **two bytes per
 UTF-16 code unit** of text content (or the binary payload's actual private
@@ -135,8 +147,8 @@ resources; it adds no queue residence-time deadline.
 This is **observable admission tightening in 0.8.0+**: JVM/Android
 previously inherited the coroutine default (normally 64). It is not an unchanged
 0.7 behavior promise or a new timeout, session limit, or whole-process fd bound.
-See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt#L318-L422)
-and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt#L359-L459).
+See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt#L425-L529)
+and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt#L472-L572).
 
 Subscribe to session `incoming` promptly and keep collectors fast. It has zero
 replay: with no subscriber, emitted messages are not saved for later. A slow
@@ -211,21 +223,33 @@ fit the entire TXT entry, so AppId has at most 251 UTF-8 bytes on that path,
 even though secure binding permits more. LAN display names are safely truncated
 to fit their TXT entry; an AppId is not silently truncated.
 
+Separately, current source retains at most **64 authorized outbound routes per
+kit**, outside the discovery budget. Full capacity reports
+`ProtectedRouteStatus.CapacityUnavailable` without rejecting the already-valid
+session. Routes belong to exact registered owners/generations, not arbitrary
+peer IDs. A recovery episode has at most **30,000 ms** of monotonic grace, or the
+shorter profile window. Expiry/revocation are checked before use; idle display
+removal is reconciled by the existing eviction poll. Manual peers retain their
+separate until-stop contract. These bounds do not guarantee discovery of new
+peers on a hostile LAN. See
+[`ProtectedRoutes`](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/ProtectedRoutes.kt#L13-L81)
+and the [security model](../security/model.md#protected-routes-for-already-authorized-peers).
+
 | Policy or setting | Current value | Scope and observable consequence | Source |
 | --- | --- | --- | --- |
-| `MAX_DISCOVERED_PEERS` | `1,024` peers | Distinct peers with discovery contributions per kit; manual-only entries are not counted. New discovered identities are ignored at capacity; existing updates/removals still work. | [PeerRegistry.kt:648](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L648) |
+| `MAX_DISCOVERED_PEERS` | `1,024` peers | Distinct peers with discovery contributions per kit; manual-only entries are not counted. New discovered identities are ignored at capacity; existing updates/removals still work. | [PeerRegistry.kt:705](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L705) |
 | `MAX_TRACKED_LAN_PEERS` | `256` peers | Earlier per-LAN-transport live-peer relay ceiling. New identities are ignored at capacity; it can bind before the core registry ceiling. | [ReliablePeerEventRelay.kt:118](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/ReliablePeerEventRelay.kt#L118) |
-| `DEFAULT_STALE_TIMEOUT_MS` | `15,000` ms (15 s) | Unrefreshed discovery contributions older than this are removed unless transport-managed. LAN uses transport-managed lifetime; manual entries are exempt. Not a universal LAN peer TTL. | [PeerRegistry.kt:646](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L646) |
-| `DEFAULT_EVICTION_POLL_MS` | `1,000` ms (1 s) | Core stale-eviction polling interval. Eligible stale contributions disappear on a later poll, not at an exact wall-clock instant. | [PeerRegistry.kt:647](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L647) |
-| `MAX_DISCOVERY_HINTS` | `32` hints | Per individual discovery claim/contribution. More routing hints reject that claim; merging distinct hints from multiple contributions can exceed this number for one peer. | [PeerRegistry.kt:655](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L655) |
-| `MAX_DISCOVERY_METADATA_ENTRIES` | `16` entries/hint | Per discovery transport hint; a claim exceeding this metadata count is rejected. | [PeerRegistry.kt:656](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L656) |
-| `MAX_DISCOVERY_METADATA_KEY_CHARS` | `64` characters | Discovery metadata key length; the claim is rejected if exceeded (and its UTF-8 bound also applies). | [PeerRegistry.kt:657](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L657) |
-| `MAX_DISCOVERY_METADATA_KEY_UTF8_BYTES` | `256` bytes | Discovery metadata key UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:658–659](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L658-L659) |
-| `MAX_DISCOVERY_METADATA_VALUE_CHARS` | `256` characters | Discovery metadata value length; exceeding it rejects the claim. | [PeerRegistry.kt:660](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L660) |
-| `MAX_DISCOVERY_METADATA_VALUE_UTF8_BYTES` | `1,024` bytes | Discovery metadata value UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:661–662](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L661-L662) |
-| `MAX_DISCOVERY_HOST_CHARS` | `253` characters | Discovery hint host length; excess rejects the claim. Blank, control-bearing or whitespace-containing hosts are also invalid. | [PeerRegistry.kt:653](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L653) |
-| `MAX_DISCOVERY_HOST_UTF8_BYTES` | `1,012` bytes | Discovery hint host UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:654](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L654) |
-| `MAX_MANUAL_HOST_CHARS` | `253` characters | Normalized manual host length; invalid local registration throws rather than creating a peer. | [PeerRegistry.kt:652](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L652) |
+| `DEFAULT_STALE_TIMEOUT_MS` | `15,000` ms (15 s) | Unrefreshed discovery contributions older than this are removed unless transport-managed. LAN uses transport-managed lifetime; manual entries are exempt. Not a universal LAN peer TTL. | [PeerRegistry.kt:703](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L703) |
+| `DEFAULT_EVICTION_POLL_MS` | `1,000` ms (1 s) | Core stale-eviction polling interval. Eligible stale contributions disappear on a later poll, not at an exact wall-clock instant. | [PeerRegistry.kt:704](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L704) |
+| `MAX_DISCOVERY_HINTS` | `32` hints | Per individual discovery claim/contribution. More routing hints reject that claim; merging distinct hints from multiple contributions can exceed this number for one peer. | [PeerRegistry.kt:712](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L712) |
+| `MAX_DISCOVERY_METADATA_ENTRIES` | `16` entries/hint | Per discovery transport hint; a claim exceeding this metadata count is rejected. | [PeerRegistry.kt:713](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L713) |
+| `MAX_DISCOVERY_METADATA_KEY_CHARS` | `64` characters | Discovery metadata key length; the claim is rejected if exceeded (and its UTF-8 bound also applies). | [PeerRegistry.kt:714](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L714) |
+| `MAX_DISCOVERY_METADATA_KEY_UTF8_BYTES` | `256` bytes | Discovery metadata key UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:715–716](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L715-L716) |
+| `MAX_DISCOVERY_METADATA_VALUE_CHARS` | `256` characters | Discovery metadata value length; exceeding it rejects the claim. | [PeerRegistry.kt:717](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L717) |
+| `MAX_DISCOVERY_METADATA_VALUE_UTF8_BYTES` | `1,024` bytes | Discovery metadata value UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:718–719](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L718-L719) |
+| `MAX_DISCOVERY_HOST_CHARS` | `253` characters | Discovery hint host length; excess rejects the claim. Blank, control-bearing or whitespace-containing hosts are also invalid. | [PeerRegistry.kt:710](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L710) |
+| `MAX_DISCOVERY_HOST_UTF8_BYTES` | `1,012` bytes | Discovery hint host UTF-8 ceiling; exceeding it rejects the claim. | [PeerRegistry.kt:711](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L711) |
+| `MAX_MANUAL_HOST_CHARS` | `253` characters | Normalized manual host length; invalid local registration throws rather than creating a peer. | [PeerRegistry.kt:709](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/PeerRegistry.kt#L709) |
 | `MAX_DNS_SD_TXT_ENTRY_BYTES` | `255` bytes | Whole key=value TXT entry. Oversized consumed remote fields reject the record; oversized local non-display-name fields prevent advertising. | [Lan.kt:484](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L484) |
 | `MAX_FIELD_LEN` | `512` characters | Core HELLO/peer name and identity string ceiling; invalid local fields fail validation and invalid remote claims are rejected. Not a way to bypass smaller LAN TXT limits. | [HelloPayload.kt:39](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/HelloPayload.kt#L39) |
 | `MAX_FIELD_UTF8_BYTES` | `2,048` bytes (2 KiB) | UTF-8 companion ceiling for those core string fields; the character ceiling still applies. | [HelloPayload.kt:42](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/protocol/HelloPayload.kt#L42) |
@@ -243,11 +267,11 @@ A write completing locally is still not remote processing acknowledgement.
 | `TCP_CONNECT_TIMEOUT_MS` | `5,000` ms (5 s) | JVM/Android TCP connect budget shared by candidate attempts. Exhaustion fails the dial with ConnectionFailed; not the Apple budget. | [Lan.kt:180](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L180) |
 | `MAX_DIAL_CANDIDATES` | `8` endpoints | JVM/Android selected address fan-out per dial. Further candidates are not attempted in that operation. | [Lan.kt:183](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L183) |
 | `TCP_CANDIDATE_CONNECT_TIMEOUT_MS` | `1,500` ms (1.5 s) | JVM/Android maximum slice when multiple candidates exist, within the shared connect budget. A single candidate receives the full budget. | [Lan.kt:186](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L186) |
-| `CONNECT_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple outbound NWConnection readiness wait. Timeout cancels the connection, invalidates the failed cached endpoint and throws ConnectionFailed. | [IosLanDataTransport.kt:1335](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1335) |
-| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | JVM raw socket-write watchdog. Expiry closes the socket and fails the write; excludes time waiting for the write mutex. | [JvmRawConnection.kt:307](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmRawConnection.kt#L307) |
-| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Android raw socket-write watchdog, with the same close/fail behavior and mutex-wait exclusion. | [AndroidRawConnection.kt:302](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidRawConnection.kt#L302) |
-| `WRITE_READY_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple raw write awaiting a Connecting-to-ready transition. Expiry cancels the connection and fails that write. | [IosRawConnection.kt:445](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L445) |
-| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Apple send-completion wait after readiness/write serialization. Expiry cancels the connection and fails the write; not a total send deadline. | [IosRawConnection.kt:457](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L457) |
+| `CONNECT_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple outbound NWConnection readiness wait. Timeout cancels the connection, invalidates the failed cached endpoint and throws ConnectionFailed. | [IosLanDataTransport.kt:1451](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1451) |
+| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | JVM raw socket-write watchdog. Expiry closes the socket and fails the write; excludes time waiting for the write mutex. | [JvmRawConnection.kt:310](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmRawConnection.kt#L310) |
+| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Android raw socket-write watchdog, with the same close/fail behavior and mutex-wait exclusion. | [AndroidRawConnection.kt:305](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidRawConnection.kt#L305) |
+| `WRITE_READY_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple raw write awaiting a Connecting-to-ready transition. Expiry cancels the connection and fails that write. | [IosRawConnection.kt:459](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L459) |
+| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Apple send-completion wait after readiness/write serialization. Expiry cancels the connection and fails the write; not a total send deadline. | [IosRawConnection.kt:471](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L471) |
 | `OS_CALLBACK_TIMEOUT_MS` | `60,000` ms (60 s) | Android LOHS acquisition / Wi-Fi join approval wait. Expiry returns failed result/state: HotspotStopped for hosting, JoinFailed for joining; not permission to retain a late OS resource. | [AndroidNetworkProvisioningManager.kt:621](../../library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager.kt#L621) |
 
 The shipped LAN transports enable TCP_NODELAY for accepted and dialed
@@ -288,20 +312,20 @@ leases or sockets.
 
 | Policy or setting | Current value | Scope and observable consequence | Source |
 | --- | --- | --- | --- |
-| `HANDSHAKE_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per resource/join during incomplete-handshake rollback; expiry reports incomplete cleanup. Also the best-effort CLOSE opportunity: its expiry proceeds to transport teardown without necessarily creating a cleanup issue. | [SessionManager.kt:1924](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1924) |
-| `SESSION_COMMIT_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per raw connection during failed session-publication rollback. Expiry reports incomplete cleanup. | [SessionManager.kt:1927](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1927) |
-| `DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS` | `6,000` ms (6 s) | One reconnect discovery-refresh callback. Timeout is logged and does not itself exhaust the reconnect policy. | [SessionManager.kt:1930](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1930) |
-| `SESSION_CLOSE_TIMEOUT_MS` | `10,000` ms (10 s) | Manager wait for each session/setup during background or terminal cleanup; separate from the session's 8 s controlled-wait budget. Expiry is a cleanup issue, not a clean-close guarantee. | [SessionManager.kt:1933](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L1933) |
-| `SESSION_CLOSE_BUDGET_MS` | `8,000` ms (8 s) | Aggregate elapsed allowance across terminal session controlled waits and followers; not a preemptive API or native-release guarantee. | [P2pSessionImpl.kt:1867](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1867) |
-| `CLOSE_FRAME_TIMEOUT_MS` | `2,000` ms (2 s) | Best-effort CLOSE wait, further capped by the aggregate remainder. Retirement of that exact epoch also ends the wait. Expiry proceeds to teardown; delivery is not guaranteed. | [P2pSessionImpl.kt:1859](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1859) |
-| `SESSION_RESOURCE_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Each terminal resource observation (also default application-delivery join), further capped by the aggregate remainder. Expiry reports pending cleanup, not a cancelled owner. | [P2pSessionImpl.kt:1870](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1870) |
-| `SESSION_RUNTIME_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Final runtime join, further capped by the aggregate remainder. Cancellation is still requested at zero allowance; an incomplete join reports pending runtime termination. | [P2pSessionImpl.kt:1871](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1871) |
-| `STOP_START_MUTEX_TIMEOUT_MS` | `5,000` ms (5 s) | Kit stop waiting for an active startup lock. Expiry warns, records a cleanup issue and continues terminal teardown without that lock. | [P2pKitImpl.kt:1555](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1555) |
-| `OBSERVER_CLOSE_TIMEOUT_MS` | `5,000` ms (5 s) | Kit path-observer close wait. Expiry records incomplete observer cleanup. | [P2pKitImpl.kt:1563](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1563) |
-| `INTERNAL_JOB_CLOSE_TIMEOUT_MS` | `5,000` ms (5 s) | Kit internal-job cancellation/join wait. Expiry records failure and retains the destructive-identity-reset lease fail-closed. | [P2pKitImpl.kt:1566](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1566) |
-| `STALE_OPERATION_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Each resource produced by a stale lifecycle operation. Expiry is reported; late work is not declared cleaned. | [P2pKitImpl.kt:1569](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1569) |
-| `RESOURCE_CLOSE_TIMEOUT_MS` | `6,000` ms (6 s) | Each kit-owned transport/provisioning close attempt. Expiry reports incomplete cleanup instead of claiming success. | [P2pKitImpl.kt:1580](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1580) |
-| `DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS` | `6,000` ms (6 s) | Explicit advertising/discovery stop waiting for the concurrent start owner. Expiry fails the operation with retained cleanup context. | [P2pKitImpl.kt:1622](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1622) |
+| `HANDSHAKE_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per resource/join during incomplete-handshake rollback; expiry reports incomplete cleanup. Also the best-effort CLOSE opportunity: its expiry proceeds to transport teardown without necessarily creating a cleanup issue. | [SessionManager.kt:2083](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L2083) |
+| `SESSION_COMMIT_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Per raw connection during failed session-publication rollback. Expiry reports incomplete cleanup. | [SessionManager.kt:2086](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L2086) |
+| `DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS` | `6,000` ms (6 s) | One reconnect discovery-refresh callback. Timeout is logged and does not itself exhaust the reconnect policy. | [SessionManager.kt:2089](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L2089) |
+| `SESSION_CLOSE_TIMEOUT_MS` | `10,000` ms (10 s) | Manager wait for each session/setup during background or terminal cleanup; separate from the session's 8 s controlled-wait budget. Expiry is a cleanup issue, not a clean-close guarantee. | [SessionManager.kt:2092](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/SessionManager.kt#L2092) |
+| `SESSION_CLOSE_BUDGET_MS` | `8,000` ms (8 s) | Aggregate elapsed allowance across terminal session controlled waits and followers; not a preemptive API or native-release guarantee. | [P2pSessionImpl.kt:1882](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1882) |
+| `CLOSE_FRAME_TIMEOUT_MS` | `2,000` ms (2 s) | Best-effort CLOSE wait, further capped by the aggregate remainder. Retirement of that exact epoch also ends the wait. Expiry proceeds to teardown; delivery is not guaranteed. | [P2pSessionImpl.kt:1874](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1874) |
+| `SESSION_RESOURCE_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Each terminal resource observation (also default application-delivery join), further capped by the aggregate remainder. Expiry reports pending cleanup, not a cancelled owner. | [P2pSessionImpl.kt:1885](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1885) |
+| `SESSION_RUNTIME_CLOSE_TIMEOUT_MS` | `2,000` ms (2 s) | Final runtime join, further capped by the aggregate remainder. Cancellation is still requested at zero allowance; an incomplete join reports pending runtime termination. | [P2pSessionImpl.kt:1886](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pSessionImpl.kt#L1886) |
+| `STOP_START_MUTEX_TIMEOUT_MS` | `5,000` ms (5 s) | Kit stop waiting for an active startup lock. Expiry warns, records a cleanup issue and continues terminal teardown without that lock. | [P2pKitImpl.kt:1557](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1557) |
+| `OBSERVER_CLOSE_TIMEOUT_MS` | `5,000` ms (5 s) | Kit path-observer close wait. Expiry records incomplete observer cleanup. | [P2pKitImpl.kt:1565](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1565) |
+| `INTERNAL_JOB_CLOSE_TIMEOUT_MS` | `5,000` ms (5 s) | Kit internal-job cancellation/join wait. Expiry records failure and retains the destructive-identity-reset lease fail-closed. | [P2pKitImpl.kt:1568](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1568) |
+| `STALE_OPERATION_CLEANUP_TIMEOUT_MS` | `2,000` ms (2 s) | Each resource produced by a stale lifecycle operation. Expiry is reported; late work is not declared cleaned. | [P2pKitImpl.kt:1571](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1571) |
+| `RESOURCE_CLOSE_TIMEOUT_MS` | `6,000` ms (6 s) | Each kit-owned transport/provisioning close attempt. Expiry reports incomplete cleanup instead of claiming success. | [P2pKitImpl.kt:1582](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1582) |
+| `DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS` | `6,000` ms (6 s) | Explicit advertising/discovery stop waiting for the concurrent start owner. Expiry fails the operation with retained cleanup context. | [P2pKitImpl.kt:1624](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/internal/P2pKitImpl.kt#L1624) |
 
 ## Diagnose a limit hit
 

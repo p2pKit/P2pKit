@@ -64,6 +64,12 @@ public interface P2pSession {
     /** Captured admission class. Enrollment never upgrades in place; reconnect explicitly after approval. */
     public val admission: PeerAdmission get() = PeerAdmission.Trusted
 
+    /**
+     * Current bounded known-route protection. This optional capability does not imply automatic
+     * discovery fairness or guaranteed connectivity. Existing session implementations are unsupported.
+     */
+    public val protectedRouteStatus: ProtectedRouteStatus get() = ProtectedRouteStatus.Unsupported
+
     public val state: StateFlow<ConnectionState>
 
     /** Retained connection generation and sanitized failure; generation 0 means unsupported. */

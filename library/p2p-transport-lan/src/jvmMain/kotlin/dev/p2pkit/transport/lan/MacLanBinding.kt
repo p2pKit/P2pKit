@@ -57,7 +57,8 @@ internal class MacLanBinding(
         val address = selected.addresses.map { it.address }.firstOrNull {
             it.address.size == 4 && policy.isLocal(it.hostAddress.orEmpty())
         } ?: return null
-        return JvmLanBindTarget(selected.name, address, "${selected.name}:${address.hostAddress}") to index
+        // TCP-only identity: a recycled interface name/address is not the original native scope.
+        return JvmLanBindTarget(selected.name, address, "${selected.name}:${address.hostAddress}:$index") to index
     }
 
     /** Selection is not admission: bind/connect must independently prove native scope on their actual handle. */

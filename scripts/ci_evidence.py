@@ -130,6 +130,7 @@ TASK_NAMES = frozenset({
     "wrapper", "layout", "links", "release-metadata", "ios-launcher-controls", "workflow-contract", "workflow-controls", "workflow-syntax",
     "platform-contract", "version-encoding", "signed-bundle-test",
     "ci-component-test.py", "ci-evidence-test.py", "ci-qualification-test.py", "dependency-update-test.py",
+    "prepare-api-candidate-test.py",
     "apple-issue-validation-test.py", "run-android-ui-validation-test.py", "android-legacy-task-preview-test.py",
     "tcp-nodelay-latency-test.py", "protocol-ping-latency-test.py", "run-rpc-qualification-test.py",
     "run-jmdns-interpreter-diagnostic-test.py", "jmdns-interpreter-diagnostic",
@@ -286,8 +287,10 @@ def _hosted_darwin_context(environment):
         environment.get("GITHUB_REPOSITORY") == "p2pKit/P2pKit" and separator == "@" and bool(ref) and
         workflow in {"p2pKit/P2pKit/.github/workflows/ci.yml",
                      "p2pKit/P2pKit/.github/workflows/dependency-update-candidate.yml",
+                     "p2pKit/P2pKit/.github/workflows/prepare-api-candidate.yml",
                      "p2pKit/P2pKit/.github/workflows/publish-maven-central.yml",
                      "p2pKit/P2pKit/.github/workflows/recover-maven-central.yml"} and
+        (not workflow.endswith("/prepare-api-candidate.yml") or environment.get("GITHUB_JOB") == "generate") and
         (not workflow.endswith("/publish-maven-central.yml") or environment.get("GITHUB_JOB") == "publish-release") and
         (not workflow.endswith("/recover-maven-central.yml") or environment.get("GITHUB_JOB") == "verify-recovery") and
         re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None and

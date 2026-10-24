@@ -18,7 +18,7 @@ class LimitsTest(unittest.TestCase):
         cls.rows = [line for line in cls.text.splitlines() if line.startswith('| `')]
 
     def test_current_source_values_and_all_citations(self):
-        self.assertEqual((74, 17), limits.check())
+        self.assertEqual((74, 19), limits.check())
 
     def test_each_changed_numeric_value_rejected(self):
         for row in self.rows:

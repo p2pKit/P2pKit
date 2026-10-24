@@ -1,6 +1,8 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.transport.OutboundRoute
+import dev.p2pkit.core.transport.OutboundRouteConnection
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -49,8 +51,9 @@ internal class AndroidRawConnection(
     /** Tests own detached worker completion and failure observation without changing global handlers. */
     connectionScopeForTest: CoroutineScope? = null,
     private val io: AndroidLanIo = AndroidLanIo(false),
-    private val pathAllowed: (() -> Boolean)? = null
-) : RawConnection {
+    private val pathAllowed: (() -> Boolean)? = null,
+    override val outboundRoute: OutboundRoute? = null
+) : OutboundRouteConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()

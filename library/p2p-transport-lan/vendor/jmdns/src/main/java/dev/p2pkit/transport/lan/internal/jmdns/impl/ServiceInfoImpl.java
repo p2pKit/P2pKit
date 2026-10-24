@@ -951,8 +951,11 @@ public class ServiceInfoImpl extends ServiceInfo implements DNSListener, DNSStat
      */
     @Override
     public synchronized boolean hasData() {
-        return this.hasServer() && this.hasInetAddress() && this.getTextBytes() != null && this.getTextBytes().length > 0;
-        // return this.getServer() != null && (this.getAddress() != null || (this.getTextBytes() != null && this.getTextBytes().length > 0));
+        // getTextBytes() supplies EMPTY_TXT even before a TXT record arrives.
+        // That wire-format fallback is not resolution evidence: publishing it
+        // can overwrite a newer complete resolution from another resolver.
+        // An explicitly supplied/received empty TXT still counts as data.
+        return this.hasServer() && this.hasInetAddress() && _text != null;
     }
 
     private boolean hasInetAddress() {
