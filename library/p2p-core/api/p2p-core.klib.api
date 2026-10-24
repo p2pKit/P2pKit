@@ -209,6 +209,20 @@ final enum class dev.p2pkit.core/Platform : kotlin/Enum<dev.p2pkit.core/Platform
     final fun values(): kotlin/Array<dev.p2pkit.core/Platform> // dev.p2pkit.core/Platform.values|values#static(){}[0]
 }
 
+final enum class dev.p2pkit.core/ProtectedRouteStatus : kotlin/Enum<dev.p2pkit.core/ProtectedRouteStatus> { // dev.p2pkit.core/ProtectedRouteStatus|null[0]
+    enum entry CapacityUnavailable // dev.p2pkit.core/ProtectedRouteStatus.CapacityUnavailable|null[0]
+    enum entry NotAuthorized // dev.p2pkit.core/ProtectedRouteStatus.NotAuthorized|null[0]
+    enum entry Protected // dev.p2pkit.core/ProtectedRouteStatus.Protected|null[0]
+    enum entry Retired // dev.p2pkit.core/ProtectedRouteStatus.Retired|null[0]
+    enum entry Unsupported // dev.p2pkit.core/ProtectedRouteStatus.Unsupported|null[0]
+
+    final val entries // dev.p2pkit.core/ProtectedRouteStatus.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.core/ProtectedRouteStatus> // dev.p2pkit.core/ProtectedRouteStatus.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.core/ProtectedRouteStatus // dev.p2pkit.core/ProtectedRouteStatus.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.core/ProtectedRouteStatus> // dev.p2pkit.core/ProtectedRouteStatus.values|values#static(){}[0]
+}
+
 final enum class dev.p2pkit.core/Retryability : kotlin/Enum<dev.p2pkit.core/Retryability> { // dev.p2pkit.core/Retryability|null[0]
     enum entry NOT_RETRYABLE // dev.p2pkit.core/Retryability.NOT_RETRYABLE|null[0]
     enum entry RETRY_AFTER_USER_ACTION // dev.p2pkit.core/Retryability.RETRY_AFTER_USER_ACTION|null[0]
@@ -385,6 +399,20 @@ abstract interface dev.p2pkit.core.transport/InboundConnectionAdmission { // dev
     abstract fun releasePreHandshakeAdmission() // dev.p2pkit.core.transport/InboundConnectionAdmission.releasePreHandshakeAdmission|releasePreHandshakeAdmission(){}[0]
 }
 
+abstract interface dev.p2pkit.core.transport/OutboundRoute { // dev.p2pkit.core.transport/OutboundRoute|null[0]
+    abstract val isCurrent // dev.p2pkit.core.transport/OutboundRoute.isCurrent|{}isCurrent[0]
+        abstract fun <get-isCurrent>(): kotlin/Boolean // dev.p2pkit.core.transport/OutboundRoute.isCurrent.<get-isCurrent>|<get-isCurrent>(){}[0]
+    abstract val transport // dev.p2pkit.core.transport/OutboundRoute.transport|{}transport[0]
+        abstract fun <get-transport>(): dev.p2pkit.core.transport/DataTransport // dev.p2pkit.core.transport/OutboundRoute.transport.<get-transport>|<get-transport>(){}[0]
+
+    abstract suspend fun connect(kotlin/Long): dev.p2pkit.core.transport/RawConnection // dev.p2pkit.core.transport/OutboundRoute.connect|connect(kotlin.Long){}[0]
+}
+
+abstract interface dev.p2pkit.core.transport/OutboundRouteConnection : dev.p2pkit.core.transport/RawConnection { // dev.p2pkit.core.transport/OutboundRouteConnection|null[0]
+    abstract val outboundRoute // dev.p2pkit.core.transport/OutboundRouteConnection.outboundRoute|{}outboundRoute[0]
+        abstract fun <get-outboundRoute>(): dev.p2pkit.core.transport/OutboundRoute? // dev.p2pkit.core.transport/OutboundRouteConnection.outboundRoute.<get-outboundRoute>|<get-outboundRoute>(){}[0]
+}
+
 abstract interface dev.p2pkit.core.transport/RawConnection { // dev.p2pkit.core.transport/RawConnection|null[0]
     abstract val state // dev.p2pkit.core.transport/RawConnection.state|{}state[0]
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/ConnectionState> // dev.p2pkit.core.transport/RawConnection.state.<get-state>|<get-state>(){}[0]
@@ -489,6 +517,8 @@ abstract interface dev.p2pkit.core/P2pSession { // dev.p2pkit.core/P2pSession|nu
         open fun <get-peerIdentity>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.core/P2pSession.peerIdentity.<get-peerIdentity>|<get-peerIdentity>(){}[0]
     open val pendingFileOffers // dev.p2pkit.core/P2pSession.pendingFileOffers|{}pendingFileOffers[0]
         open fun <get-pendingFileOffers>(): kotlinx.coroutines.flow/StateFlow<kotlin.collections/List<dev.p2pkit.core.transfer/P2pFileOffer>> // dev.p2pkit.core/P2pSession.pendingFileOffers.<get-pendingFileOffers>|<get-pendingFileOffers>(){}[0]
+    open val protectedRouteStatus // dev.p2pkit.core/P2pSession.protectedRouteStatus|{}protectedRouteStatus[0]
+        open fun <get-protectedRouteStatus>(): dev.p2pkit.core/ProtectedRouteStatus // dev.p2pkit.core/P2pSession.protectedRouteStatus.<get-protectedRouteStatus>|<get-protectedRouteStatus>(){}[0]
 
     abstract suspend fun close() // dev.p2pkit.core/P2pSession.close|close(){}[0]
     abstract suspend fun send(dev.p2pkit.core/P2pMessage) // dev.p2pkit.core/P2pSession.send|send(dev.p2pkit.core.P2pMessage){}[0]
@@ -878,6 +908,10 @@ final class dev.p2pkit.core.transport/LocalPeerInfo { // dev.p2pkit.core.transpo
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core.transport/LocalPeerInfo.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.p2pkit.core.transport/LocalPeerInfo.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.p2pkit.core.transport/LocalPeerInfo.toString|toString(){}[0]
+}
+
+final class dev.p2pkit.core.transport/OutboundRouteUnavailable : kotlin/Exception { // dev.p2pkit.core.transport/OutboundRouteUnavailable|null[0]
+    constructor <init>(kotlin/String) // dev.p2pkit.core.transport/OutboundRouteUnavailable.<init>|<init>(kotlin.String){}[0]
 }
 
 final class dev.p2pkit.core.transport/TransportContext { // dev.p2pkit.core.transport/TransportContext|null[0]

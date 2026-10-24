@@ -194,8 +194,9 @@ At most **64** such routes per kit survive independently of all discovery
 admission maps. Their authenticated display contribution does not supply an
 address or trusted pin to a copied discovery record. Capacity exhaustion leaves
 the authenticated session working without route protection; applications can
-inspect `session.protectedRouteStatus`. Existing/third-party transports without
-the optional selected-route SPI report `Unsupported`.
+inspect `session.protectedRouteStatus`. Otherwise-authorized sessions on
+providers without a usable selected-route SPI report `Unsupported`; outgoing
+sessions lacking the original local authorization report `NotAuthorized`.
 
 Only the exact session owner and transport generation may use a route.
 Replacement, final close, revocation, kit stop and invalid network/interface

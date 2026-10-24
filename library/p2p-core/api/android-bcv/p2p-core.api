@@ -633,6 +633,7 @@ public abstract interface class dev/p2pkit/core/P2pSession {
 	public abstract fun getPeer ()Ldev/p2pkit/core/Peer;
 	public fun getPeerIdentity ()Ldev/p2pkit/core/PeerIdentity;
 	public fun getPendingFileOffers ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun getProtectedRouteStatus ()Ldev/p2pkit/core/ProtectedRouteStatus;
 	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun send (Ldev/p2pkit/core/P2pMessage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun sendAtGeneration (Ldev/p2pkit/core/P2pMessage;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -645,6 +646,7 @@ public final class dev/p2pkit/core/P2pSession$DefaultImpls {
 	public static fun getConnectionInfo (Ldev/p2pkit/core/P2pSession;)Lkotlinx/coroutines/flow/StateFlow;
 	public static fun getPeerIdentity (Ldev/p2pkit/core/P2pSession;)Ldev/p2pkit/core/PeerIdentity;
 	public static fun getPendingFileOffers (Ldev/p2pkit/core/P2pSession;)Lkotlinx/coroutines/flow/StateFlow;
+	public static fun getProtectedRouteStatus (Ldev/p2pkit/core/P2pSession;)Ldev/p2pkit/core/ProtectedRouteStatus;
 	public static fun sendAtGeneration (Ldev/p2pkit/core/P2pSession;Ldev/p2pkit/core/P2pMessage;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun sendFile (Ldev/p2pkit/core/P2pSession;Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/transfer/PreparedFileSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -870,6 +872,17 @@ public final class dev/p2pkit/core/Platform : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/Platform;
 	public static fun values ()[Ldev/p2pkit/core/Platform;
+}
+
+public final class dev/p2pkit/core/ProtectedRouteStatus : java/lang/Enum {
+	public static final field CapacityUnavailable Ldev/p2pkit/core/ProtectedRouteStatus;
+	public static final field NotAuthorized Ldev/p2pkit/core/ProtectedRouteStatus;
+	public static final field Protected Ldev/p2pkit/core/ProtectedRouteStatus;
+	public static final field Retired Ldev/p2pkit/core/ProtectedRouteStatus;
+	public static final field Unsupported Ldev/p2pkit/core/ProtectedRouteStatus;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/ProtectedRouteStatus;
+	public static fun values ()[Ldev/p2pkit/core/ProtectedRouteStatus;
 }
 
 public abstract class dev/p2pkit/core/ReconnectPolicy {
@@ -1807,6 +1820,20 @@ public final class dev/p2pkit/core/transport/LocalPeerInfo {
 	public final fun getSupportedTransports ()Ljava/util/Set;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class dev/p2pkit/core/transport/OutboundRoute {
+	public abstract fun connect (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getTransport ()Ldev/p2pkit/core/transport/DataTransport;
+	public abstract fun isCurrent ()Z
+}
+
+public abstract interface class dev/p2pkit/core/transport/OutboundRouteConnection : dev/p2pkit/core/transport/RawConnection {
+	public abstract fun getOutboundRoute ()Ldev/p2pkit/core/transport/OutboundRoute;
+}
+
+public final class dev/p2pkit/core/transport/OutboundRouteUnavailable : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;)V
 }
 
 public abstract interface class dev/p2pkit/core/transport/PeerAuthenticationHint {
