@@ -969,6 +969,8 @@ import dev.p2pkit.transport.lan.internal.jmdns.impl.constants.DNSRecordType
 import dev.p2pkit.transport.lan.internal.jmdns.impl.DNSTaskStarter
 import dev.p2pkit.transport.lan.internal.jmdns.impl.JmDNSImpl
 import dev.p2pkit.transport.lan.lan
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.MulticastSocket
 import java.util.Properties
 import java.util.Timer
@@ -1042,6 +1044,70 @@ private fun captureOwners(factory: Any): List<NativeOwner> = installedStarters(f
     NativeOwner(dns, checkNotNull(dns.socket), timer, stateTimer, field(dns, "_executor") as ExecutorService)
 }
 
+// Compare ONLY already retained listener clones with the opposite original
+// registration after failure. No OS/network lookup, callback or repair occurs.
+// This is a non-atomic current snapshot, not callback completion or proof that
+// the same record/address state existed when production admission ran.
+private fun reportRemoteCloneState(index: Int, clones: List<ServiceInfo>, original: () -> ServiceInfo) {
+    try {
+        check(index in 0..1 && clones.size <= 32)
+        val reference = original()
+        fun metadata(info: ServiceInfo): Triple<String, Int, ByteArray> {
+            val text = info.textBytes
+            check(text.size <= 65_535)
+            return Triple(info.name, info.port, text.copyOf())
+        }
+        fun unchanged(info: ServiceInfo, value: Triple<String, Int, ByteArray>): Boolean =
+            info.name == value.first && info.port == value.second && info.textBytes.contentEquals(value.third)
+        val expected = metadata(reference)
+        check(expected.first.isNotBlank() && expected.second in 1..65_535)
+        var names = 0
+        var ports = 0
+        var texts = 0
+        var addresses = 0
+        var ipv4 = 0
+        var ipv6 = 0
+        var wildcard = 0
+        var loopback = 0
+        var scopedLinkLocal = 0
+        var unscopedLinkLocal = 0
+        clones.forEach { info ->
+            val value = metadata(info)
+            val candidates = info.inetAddresses
+            check(candidates.size <= 4096 && addresses + candidates.size <= 4096)
+            if (value.first == expected.first) names++
+            if (value.second == expected.second) ports++
+            if (value.third.contentEquals(expected.third)) texts++
+            addresses += candidates.size
+            candidates.forEach { address ->
+                if (address is Inet4Address) ipv4++
+                if (address is Inet6Address) {
+                    ipv6++
+                    if (address.isLinkLocalAddress) {
+                        if (address.scopeId != 0) scopedLinkLocal++ else unscopedLinkLocal++
+                    }
+                }
+                if (address.isAnyLocalAddress) wildcard++
+                if (address.isLoopbackAddress) loopback++
+            }
+            // Refuse a visibly changing read rather than assert consistency.
+            // A stable read still cannot exclude an earlier/transient change.
+            check(unchanged(info, value) && info.inetAddresses.contentEquals(candidates))
+        }
+        check(unchanged(reference, expected))
+        println(
+            "CONSUMER_REMOTE_CLONE_SNAPSHOT INDEX $index CLONES ${clones.size} " +
+                "NAME_MATCH $names PORT_MATCH $ports TXT_MATCH $texts ADDRESSES $addresses " +
+                "IPV4 $ipv4 IPV6 $ipv6 OTHER ${addresses - ipv4 - ipv6} " +
+                "WILDCARD $wildcard LOOPBACK $loopback " +
+                "SCOPED_LINK_LOCAL $scopedLinkLocal UNSCOPED_LINK_LOCAL $unscopedLinkLocal"
+        )
+    } catch (_: Throwable) {
+        // Never print metadata, addresses or an exception, or replace failure.
+        println("CONSUMER_REMOTE_CLONE_SNAPSHOT_UNAVAILABLE INDEX $index")
+    }
+}
+
 // Failure-only, non-atomic observations of the ORIGINAL immutable StateFlow
 // snapshots. These separate transport/registry/public-state boundaries; they
 // are not callback counts or proof that a callback completed. Do not acquire
@@ -1098,9 +1164,11 @@ private fun reportDiscoveryState(factory: Any, kits: List<P2pKit>) {
             val listeners = field(dns, "_serviceListeners") as Map<String, MutableList<Any>>
             val statuses = listeners.values.flatMap { list -> synchronized(list) { list.toList() } }
             check(statuses.size <= 32)
-            val infos = statuses.flatMap { status ->
-                (field(status, "_addedServices") as Map<String, ServiceInfo>).values.toList()
+            val entries = statuses.flatMap { status ->
+                (field(status, "_addedServices") as Map<String, ServiceInfo>).entries.map { it.key to it.value }
             }
+            check(entries.size <= 4096)
+            val infos = entries.map { it.second }
             val peerInfos = infos.filter { it.name == other.localPeerId.value }
             val cache = dns.cache.allValues()
             val remote = cache.filter { it.name == other.localPeerId.value + "." + "_p2pkit2._tcp.local." }
@@ -1115,10 +1183,17 @@ private fun reportDiscoveryState(factory: Any, kits: List<P2pKit>) {
                     "REMOTE_TXT ${bit(remote.any { it.recordType == DNSRecordType.TYPE_TXT })} " +
                     "PEERS ${peers.size} SEES_OTHER ${bit(peers.any { it.id == other.localPeerId })}"
             )
+            // The entry key is the resolved event's identity; select by it so
+            // a clone whose own name differs is observed, not filtered away.
+            val qualifiedName = other.localPeerId.value + "." + "_p2pkit2._tcp.local."
+            reportRemoteCloneState(index, entries.filter { it.first == qualifiedName }.map { it.second }) {
+                handles.flatMap { it.services.values }.single { it.name == other.localPeerId.value }
+            }
         }
     } catch (_: Throwable) {
         // Never replace the ORIGINAL failure with an optional diagnostic error.
         println("CONSUMER_DISCOVERY_SNAPSHOT_UNAVAILABLE")
+        println("CONSUMER_REMOTE_CLONE_SNAPSHOT_UNAVAILABLE")
     }
 }
 
