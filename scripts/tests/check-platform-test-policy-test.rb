@@ -7,7 +7,7 @@ require 'open3'
 
 ROOT = File.expand_path('../..', __dir__)
 REPORT = 'build/reports/platform-tests/**'
-TERMINAL_SELECTION = 'if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic ]]; then'.freeze
+TERMINAL_SELECTION = 'if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic || "$COMPONENT" == consumers-pom-diagnostic ]]; then'.freeze
 TERMINAL_COMMAND = 'python3 -B scripts/run-ci-terminal-component.py --component "$COMPONENT"'.freeze
 INTEL_NORMAL = "${{ github.event_name != 'workflow_dispatch' || inputs.diagnostics-only != true }}"
 INTEL_DIAGNOSTIC = "${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics-only == true }}"
@@ -248,6 +248,7 @@ mutations = {
   'skipped execution' => ->(v) { execution(v)['if'] = false },
   'unwrapped native output' => ->(v) { execution(v)['run'].sub!('scripts/ci_evidence.py', 'scripts/unrelated.py') },
   'changed Terminal selector' => ->(v) { execution(v)['run'].sub!(TERMINAL_SELECTION, TERMINAL_SELECTION.sub('macos-shared', 'unreviewed-profile')) },
+  'POM diagnostic bypasses Terminal' => ->(v) { execution(v)['run'].sub!(' || "$COMPONENT" == consumers-pom-diagnostic', '') },
   'ignored Terminal failure' => ->(v) { execution(v)['run'].sub!(TERMINAL_COMMAND, TERMINAL_COMMAND + ' || true') },
   'ignored shell failure' => ->(v) { execution(v)['run'] += ' || true' },
   'missing XML reports' => ->(v) { execution(v)['run'].sub!("--report-glob '**/build/test-results/**/*.xml'", '') },
