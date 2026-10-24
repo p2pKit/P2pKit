@@ -340,7 +340,8 @@ publication shape and unsigned local consumers, Swift/XCFramework checks, and
 native ARM64/Intel simulator execution. It is distinct from protected signing,
 remote Maven verification and public sample delivery. Per-component counts and
 the two native diagnostic skips remain explicit in the record.
-**High #120 remains open/unresolved; stable/production remains NOT_READY.**
+**The published rc7 source still contains the High discovery-admission limitation
+tracked in #120. Stable/production remains NOT_READY.**
 
 Unreleased source now implements bounded, locally authorized **known-route
 protection** independently of discovery admission, and corrects premature
