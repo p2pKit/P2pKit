@@ -159,7 +159,7 @@ class QualificationTests(unittest.TestCase):
 
     def test_optional_diagnostics_cannot_replace_or_extend_qualification(self):
         self.assertEqual(len(Q.COMPONENTS), 14)
-        for name in ('bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-keyboard-diagnostic', 'apple-keyboard-query-diagnostic'):
+        for name in ('bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-keyboard-diagnostic', 'apple-keyboard-query-diagnostic', 'apple-keyboard-reflow-diagnostic'):
             self.assertNotIn(name, Q.COMPONENTS)
             original = self.f.selection()
             diagnostic = {**original['components'][-1], 'component': name}

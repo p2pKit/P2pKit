@@ -135,6 +135,7 @@ TASK_NAMES = frozenset({
     "tcp-nodelay-latency-test.py", "protocol-ping-latency-test.py", "run-rpc-qualification-test.py",
     "run-jmdns-interpreter-diagnostic-test.py", "jmdns-interpreter-diagnostic",
     "run-android-permission-validation-test.py", "keyboard-readiness-diagnostic",
+    "keyboard-query-cause-diagnostic", "keyboard-reflow-cause-diagnostic",
     "swift-jvm-transfer-test.py", "run-android-art-smoke-test.py",
     "embedded-jmdns-aar-test.py", "embedded-jmdns-archive-controls", "intel-bonjour-environment-test.py",
     "central-gpg-lifecycle-controls",

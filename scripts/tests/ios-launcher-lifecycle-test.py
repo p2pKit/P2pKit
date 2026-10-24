@@ -37,7 +37,7 @@ if tool == "xcrun":
         sys.exit(0)
     if args[0] == "swiftc":
         assert "-typecheck" in args and "-warnings-as-errors" in args, args
-        if args[-1].endswith("/KeyboardQueryCauseUITests.swift"):
+        if args[-1].endswith(("/KeyboardQueryCauseUITests.swift", "/KeyboardReflowCauseUITests.swift")):
             sys.exit(int(os.environ.get("FAKE_SWIFT_TYPECHECK_UI_EXIT", "0")))
         sys.exit(int(os.environ.get("FAKE_SWIFT_TYPECHECK_EXIT", "0")))
     assert args[0] == "simctl", args
@@ -266,6 +266,53 @@ trap 'case "$BASH_COMMAND" in run_ios_xcodebuild\ *)
         for forbidden in ('xcodegen', 'xcodebuild', 'bootstatus', 'passive-capture'):
             self.assertFalse(any(forbidden in line for line in calls))
         self.assertFalse(self.lock.exists())
+
+    def test_reflow_diagnostic_runs_only_two_case_class_with_original_capture_and_cleanup(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure):
+                self.passive_capture_fixture()
+                before = (self.root / 'tools.log').read_text().splitlines() if (self.root / 'tools.log').exists() else []
+                self.finish(self.start('run-ios-ui-tests.sh', arguments=('run-keyboard-reflow-cause',),
+                    COMPONENT='apple-keyboard-reflow-diagnostic', FAKE_IOS_BUILD_FAILURE='1' if failure else '0'),
+                    expected=42 if failure else 0)
+                record = json.loads((self.root / 'passive.json').read_text())
+                self.assertEqual([UDID, '42' if failure else '0', '42' if failure else '0'], record['argv'])
+                self.assertTrue(record['lockPresent'])
+                calls = (self.root / 'tools.log').read_text().splitlines()[len(before):]
+                typechecks = [line for line in calls if line.startswith('xcrun swiftc ')]
+                self.assertEqual(2, len(typechecks))
+                self.assertTrue(typechecks[0].endswith('/KeyboardReflowProbe.swift'))
+                self.assertTrue(typechecks[1].endswith('/KeyboardReflowCauseUITests.swift'))
+                for check in typechecks:
+                    self.assertIn('-D P2PKIT_KEYBOARD_REFLOW_PROBE ', check)
+                    self.assertIn('-typecheck -warnings-as-errors -swift-version 5 ', check)
+                    self.assertLess(calls.index(check), calls.index('xcodegen generate'))
+                self.assertIn('-Isystem /synthetic-platform/Developer/usr/lib ', typechecks[1])
+                builds = [line for line in calls if line.startswith('xcodebuild ')]
+                self.assertEqual(1, len(builds))
+                self.assertIn('-scheme p2pkit-sample-keyboard-query ', builds[0])
+                self.assertIn('-only-testing:p2pkit-sample-keyboard-query-tests/KeyboardReflowCauseUITests ', builds[0])
+                self.assertIn('SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test', builds[0])
+                self.assertIn('-maximum-concurrent-test-simulator-destinations 1 ', builds[0])
+                self.assertIn('-parallel-testing-enabled NO ', builds[0])
+                self.assertNotIn('P2PKIT_KEYBOARD_QUERY_PROBE', builds[0])
+                self.assertEqual(1, calls.count('passive-capture'))
+                self.assertLess(calls.index(builds[0]), calls.index('passive-capture'))
+                self.assertFalse(self.lock.exists())
+                for forbidden in ('skip-testing', 'test-iterations', 'retry-tests', 'open ', 'simctl create', 'defaults '):
+                    self.assertFalse(any(forbidden in line for line in calls))
+
+    def test_reflow_both_typecheck_failures_stop_before_app_build(self):
+        for variable, count in (('FAKE_SWIFT_TYPECHECK_EXIT', 1), ('FAKE_SWIFT_TYPECHECK_UI_EXIT', 2)):
+            with self.subTest(variable=variable):
+                before = (self.root / 'tools.log').read_text().splitlines() if (self.root / 'tools.log').exists() else []
+                self.finish(self.start('run-ios-ui-tests.sh', arguments=('run-keyboard-reflow-cause',),
+                                       **{variable: '23'}), expected=23)
+                calls = (self.root / 'tools.log').read_text().splitlines()[len(before):]
+                self.assertEqual(count, sum(line.startswith('xcrun swiftc ') for line in calls))
+                for forbidden in ('xcodegen', 'xcodebuild', 'bootstatus', 'passive-capture'):
+                    self.assertFalse(any(forbidden in line for line in calls))
+                self.assertFalse(self.lock.exists())
 
     def test_passive_capture_is_not_added_to_focused_diagnostic(self):
         self.passive_capture_fixture()

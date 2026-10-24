@@ -380,6 +380,13 @@ struct ContentView: View {
             )
         }
         .onAppear { prepareManagedStorage() }
+        // KEYBOARD_REFLOW_PROBE_VIEW_HOOK_BEGIN
+        #if DEBUG && P2PKIT_KEYBOARD_REFLOW_PROBE && targetEnvironment(simulator)
+        .onChange(of: errorBanner) { _ in
+            KeyboardReflowProbe.bannerChangedIfInstalled()
+        }
+        #endif
+        // KEYBOARD_REFLOW_PROBE_VIEW_HOOK_END
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
@@ -1032,6 +1039,25 @@ struct ContentView: View {
     @MainActor
     private func installRunObservers(for built: P2pKit, run: SampleRunLifecycle.Run) {
         runLifecycle.withActiveRun(run) {
+            // KEYBOARD_REFLOW_PROBE_RUN_HOOK_BEGIN
+            #if DEBUG && P2PKIT_KEYBOARD_REFLOW_PROBE && targetEnvironment(simulator)
+            KeyboardReflowProbe.armIfRequested(
+                state: {
+                    KeyboardReflowProbe.State(
+                        activeRun: self.runLifecycle.acceptsWork(run),
+                        hintPresent: self.errorBanner == Self.localNetworkHint,
+                        otherBannerPresent: self.errorBanner != nil && self.errorBanner != Self.localNetworkHint,
+                        browserReady: self.browserEverReady
+                    )
+                },
+                publishHint: {
+                    guard self.runLifecycle.acceptsWork(run), self.errorBanner == nil else { return false }
+                    self.errorBanner = Self.localNetworkHint
+                    return true
+                }
+            )
+            #endif
+            // KEYBOARD_REFLOW_PROBE_RUN_HOOK_END
             let incoming = OwnedFlowCollection(flow: built.incomingSessions, of: P2pSession.self) { session in
                 self.runLifecycle.withActiveRun(run) {
                     IosLanDebug.shared.log(

@@ -84,6 +84,22 @@ class Scope:
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_reflow_route_uses_real_admission_without_relaxing_host_source_or_ownership(self):
+        env = {**environment(Path("/fixture")), "COMPONENT": "apple-keyboard-reflow-diagnostic"}
+        with patch.object(capture.ci_evidence.platform, "system", return_value="Darwin"):
+            self.assertGreater(capture.admit(env, DEVICE), time.monotonic())
+            for updates in ({"GITHUB_ACTIONS": "false"}, {"RUNNER_ENVIRONMENT": "self-hosted"},
+                            {"GITHUB_WORKFLOW_SHA": "d" * 40}, {capture.DEADLINE_ENV: ""},
+                            {capture.audit_processes.STATE_ENV: "/other"},
+                            {"COMPONENT": "apple-keyboard-reflow-diagnostic-other"}):
+                with self.subTest(updates=updates), self.assertRaises(capture.CaptureError):
+                    capture.admit({**env, **updates}, DEVICE)
+            with self.assertRaises(capture.CaptureError):
+                capture.admit(env, "booted")
+        with patch.object(capture.ci_evidence.platform, "system", return_value="Linux"):
+            with self.assertRaises(capture.CaptureError):
+                capture.admit(env, DEVICE)
+
     def test_hosted_compatibility_and_exact_device_are_required(self):
         env = environment(Path("/fixture"))
         with patch.object(capture.ci_evidence.platform, "system", return_value="Darwin"):
@@ -112,9 +128,11 @@ class AdmissionTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
-    def run_capture(self, options=None, *, command=0, launcher=0, clock=None, deadline=None, cancelled=False):
+    def run_capture(self, options=None, *, command=0, launcher=0, clock=None, deadline=None, cancelled=False,
+                    component="compatibility"):
         root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="passive-keyboard-controls-")))
         env = environment(root)
+        env["COMPONENT"] = component
         if deadline is not None:
             env[capture.DEADLINE_ENV] = str(int(deadline * 1e9))
         scope = Scope(options or {})
@@ -132,6 +150,17 @@ class CaptureTests(unittest.TestCase):
         self.assertFalse(summary["deviceMutationAuthority"])
         self.assertFalse(summary["underlyingHistoricalCauseEstablished"])
         return result, summary, scope, report, env, factory
+
+    def test_reflow_capture_keeps_exact_route_and_original_nonzero_verdict(self):
+        code, summary, scope, *_ = self.run_capture(command=65, launcher=65,
+                                                   component="apple-keyboard-reflow-diagnostic")
+        self.assertEqual(0, code)
+        self.assertEqual("apple-keyboard-reflow-diagnostic", summary["component"])
+        self.assertEqual(65, summary["originalCommandExitCode"])
+        self.assertEqual([], summary["errors"])
+        self.assertTrue(summary["capturesClosed"])
+        self.assertTrue(summary["nativeRetirementKnown"])
+        self.assertEqual(1, len(scope.calls))
 
     def test_one_read_only_exact_uuid_command_retains_both_closed_private_streams(self):
         code, summary, scope, report, env, factory = self.run_capture({"stderr": b"synthetic diagnostic\n"})
@@ -281,19 +310,23 @@ class SourceContractTests(unittest.TestCase):
             with self.subTest(name=name):
                 text = (ROOT / name).read_text()
                 if name == "scripts/ci_component.py":
+                    reflow_entry = ("'apple-keyboard-query-diagnostic': ('macos-26', 60),\n               "
+                                    "'apple-keyboard-reflow-diagnostic': ('macos-26', 60)}")
+                    self.assertEqual(1, text.count(reflow_entry))
+                    text = text.replace(reflow_entry, "'apple-keyboard-query-diagnostic': ('macos-26', 60)}")
                     text = text.replace(
                         "'apple-keyboard-diagnostic': ('macos-26', 60),\n               "
                         "'apple-keyboard-query-diagnostic': ('macos-26', 60)}",
                         "'apple-keyboard-diagnostic': ('macos-26', 60)}")
                     text, count = re.subn(
-                        r"    if component == 'apple-keyboard-query-diagnostic':\n.*?(?=    if component)",
+                        r"    if component == 'apple-keyboard-(?:query|reflow)-diagnostic':\n.*?(?=    if component)",
                         "", text, flags=re.S)
-                    self.assertEqual(1, count)
+                    self.assertEqual(2, count)
                 self.assertEqual(digest, hashlib.sha256(text.encode()).hexdigest())
 
     def test_original_project_and_full_test_targets_are_unchanged_outside_diagnostics(self):
         text = (ROOT / "samples/iosApp/project.yml").read_text()
-        for source in ("KeyboardCauseProbe.swift", "KeyboardQueryGate.swift",
+        for source in ("KeyboardCauseProbe.swift", "KeyboardQueryGate.swift", "KeyboardReflowProbe.swift",
                        "KeyboardCauseProbeControls/Sources/KeyboardCauseProbeRecord/KeyboardCauseProbeRecord.swift"):
             line = "      - " + source + "\n"
             self.assertEqual(1, text.count(line))

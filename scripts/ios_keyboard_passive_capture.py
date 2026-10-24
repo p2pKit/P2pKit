@@ -42,7 +42,8 @@ def require(condition, code):
 
 
 def admit(environment, device):
-    require(environment.get("COMPONENT") in ("compatibility", "apple-keyboard-query-diagnostic") and
+    require(environment.get("COMPONENT") in ("compatibility", "apple-keyboard-query-diagnostic",
+                                            "apple-keyboard-reflow-diagnostic") and
             ci_evidence._hosted_darwin_context(environment), "HOSTED_KEYBOARD_OBSERVATION_REQUIRED")
     require(UUID.fullmatch(device) is not None, "EXACT_SELECTED_DEVICE_REQUIRED")
     domains = audit_processes.ownership_domains(environment.get(audit_processes.CHAIN_ENV, ""),

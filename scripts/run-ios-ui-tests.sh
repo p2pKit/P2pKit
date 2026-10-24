@@ -13,7 +13,7 @@ RUN_DIR="${IOS_RUN_DIR:-}"
 action="${1:-}"
 case "$action" in
     "") [[ $# -eq 0 ]] ;;
-    run-keyboard-readiness|run-keyboard-query-cause)
+    run-keyboard-readiness|run-keyboard-query-cause|run-keyboard-reflow-cause)
         [[ $# -eq 1 ]] || {
             echo "[ios-run] Keyboard readiness diagnostic accepts no additional arguments." >&2
             exit 2
@@ -25,7 +25,7 @@ case "$action" in
             exit 2
         }
         ;;
-    *) echo "usage: $0 [run-keyboard-readiness|run-keyboard-query-cause|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
+    *) echo "usage: $0 [run-keyboard-readiness|run-keyboard-query-cause|run-keyboard-reflow-cause|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
 esac
 if [[ "$action" == "run-cancellation-probe" && -z "$SIM_UDID" ]]; then
     echo "[ios-run] Cancellation investigation requires the outer owner's exact simulator UDID." >&2
@@ -68,7 +68,7 @@ DERIVED_DATA="$RUN_DIR/DerivedData"
 
 acquire_ios_run_lock "$IOS_LAUNCH_LOCK"
 IOS_LAUNCH_OWNS_LOCK=1
-if [[ "$action" == "run-keyboard-query-cause" ]]; then
+if [[ "$action" == "run-keyboard-query-cause" || "$action" == "run-keyboard-reflow-cause" ]]; then
     # These investigative sources do not import P2pKitShared. Diagnose Swift
     # compiler failures before spending time building the unchanged framework;
     # this is not a substitute for the real app build or XCTest execution.
@@ -76,18 +76,28 @@ if [[ "$action" == "run-keyboard-query-cause" ]]; then
     query_platform="$(xcrun --sdk iphonesimulator --show-sdk-platform-path)"
     query_arch="$(uname -m)"
     case "$query_arch" in arm64|x86_64) ;; *) echo "[ios-run] Unsupported query diagnostic architecture." >&2; exit 2 ;; esac
+    if [[ "$action" == "run-keyboard-reflow-cause" ]]; then
+        query_define=P2PKIT_KEYBOARD_REFLOW_PROBE
+        query_app_source="$PROJECT_DIR/KeyboardReflowProbe.swift"
+        query_test_source="$PROJECT_DIR/KeyboardQueryCauseUITests/KeyboardReflowCauseUITests.swift"
+    else
+        query_define=P2PKIT_KEYBOARD_QUERY_PROBE
+        query_app_source="$PROJECT_DIR/KeyboardQueryGate.swift"
+        query_test_source="$PROJECT_DIR/KeyboardQueryCauseUITests/KeyboardQueryCauseUITests.swift"
+    fi
     run_ios_mutation xcrun swiftc -typecheck -warnings-as-errors -swift-version 5 \
         -sdk "$query_sdk" -target "$query_arch-apple-ios15.0-simulator" \
         -module-cache-path "$DERIVED_DATA/ModuleCache.noindex" \
-        -D DEBUG -D P2PKIT_KEYBOARD_QUERY_PROBE "$PROJECT_DIR/KeyboardQueryGate.swift"
+        -D DEBUG -D "$query_define" "$query_app_source"
     run_ios_mutation xcrun swiftc -typecheck -warnings-as-errors -swift-version 5 \
         -sdk "$query_sdk" -target "$query_arch-apple-ios15.0-simulator" \
         -module-cache-path "$DERIVED_DATA/ModuleCache.noindex" \
         -F "$query_platform/Developer/Library/Frameworks" \
         -F "$query_sdk/Developer/Library/Frameworks" \
         -Isystem "$query_platform/Developer/usr/lib" \
+        -D "$query_define" \
         "$PROJECT_DIR/UITests/KeyboardReadiness.swift" \
-        "$PROJECT_DIR/KeyboardQueryCauseUITests/KeyboardQueryCauseUITests.swift"
+        "$query_test_source"
 fi
 # Terminal/focused run actions never bootstrap/regenerate their already prepared
 # source-bound project/framework; the Xcode provenance phase remains mandatory.
@@ -101,7 +111,8 @@ boot_and_wait_for_simulator "$udid"
 keyboard_passive_flags=()
 if [[ "${GITHUB_ACTIONS:-}" == "true" &&
   ( ( -z "$action" && "${COMPONENT:-}" == "compatibility" ) ||
-    ( "$action" == "run-keyboard-query-cause" && "${COMPONENT:-}" == "apple-keyboard-query-diagnostic" ) ) ]]; then
+    ( "$action" == "run-keyboard-query-cause" && "${COMPONENT:-}" == "apple-keyboard-query-diagnostic" ) ||
+    ( "$action" == "run-keyboard-reflow-cause" && "${COMPONENT:-}" == "apple-keyboard-reflow-diagnostic" ) ) ]]; then
     # Reuse the same post-return reader for ordinary passive observation and
     # the explicit native-query comparison. No GUI or preference mutation.
     keyboard_passive_flags=('OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE')
@@ -180,6 +191,24 @@ elif [[ "$action" == "run-keyboard-query-cause" ]]; then
         -parallel-testing-enabled NO \
         -maximum-concurrent-test-simulator-destinations 1 \
         'OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE -D P2PKIT_KEYBOARD_QUERY_PROBE' \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        test
+    keyboard_command_status=0
+elif [[ "$action" == "run-keyboard-reflow-cause" ]]; then
+    # Two layout/first-focus interventions only. Do not repeat the completed
+    # native-query matrix or silently substitute these for ordinary UI tests.
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-keyboard-query \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-keyboard-reflow-cause.xcresult" \
+        -parallel-testing-enabled NO \
+        -maximum-concurrent-test-simulator-destinations 1 \
+        -only-testing:p2pkit-sample-keyboard-query-tests/KeyboardReflowCauseUITests \
+        'OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE -D P2PKIT_KEYBOARD_REFLOW_PROBE' \
         SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
         test
     keyboard_command_status=0

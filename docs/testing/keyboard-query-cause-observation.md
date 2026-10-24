@@ -75,3 +75,14 @@ this route; do not claim retained images or a failure-time screenshot. Paired
 cells use distinct app launches on one simulator, not reset first-use state or
 simultaneous observations. An A-fail/B-pass difference alone cannot prove the
 baseline cell had a ready key before its deadline.
+
+## Executed screening, not a fix
+
+[40099866397/1](https://github.com/p2pKit/P2pKit/actions/runs/40099866397)
+at `7a825850e1462b8a1d9d0cd336f7a403db4cea36` executed all three methods
+and 12 cells. Both strategies admitted the four available-key cells and refused
+never/late controls. Baseline missing-key getters took 0.066–0.533 seconds and
+repolled: the historical 4.314-second getter with internal retry activity was
+not reproduced. The candidate is **not promoted as a repair**. The distinct
+[header/first-focus investigation](keyboard-reflow-cause-observation.md) does
+not repeat this successful matrix or claim that its result explains #520.

@@ -22,6 +22,7 @@ targets:
       - P2pKitSampleApp.swift
       - KeyboardCauseProbe.swift
       - KeyboardQueryGate.swift
+      - KeyboardReflowProbe.swift
       - KeyboardCauseProbeControls/Sources/KeyboardCauseProbeRecord/KeyboardCauseProbeRecord.swift
       - ContentView.swift
       - LocalPairingView.swift
