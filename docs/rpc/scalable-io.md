@@ -276,6 +276,50 @@ sequential raw echoes and different warm-up do **not** establish authenticated
 throughput or a controlled before/after CPU/latency comparison. Final resource
 evidence must be evaluated with source, environment and workload scope intact.
 
+The [phone-store and CPU-worker checks](https://github.com/p2pKit/P2pKit/actions/runs/40131345793)
+at `52e74f5f` passed 2,086 Linux and 2,063 Windows JVM cases, with no failures,
+errors or skips: Core 961, LAN 398, RPC 86, and sample 641 Linux / 618 Windows.
+The macOS part passed the same 39 selected JVM/JNI cases and 25 strict/sanitized
+native contract groups; its independent API comparison also passed. API24
+additionally passed 384 Android sample host cases and all ten actual ART
+Keystore/lifecycle controls, including both trust-store populations and refusal
+of a 257th pin. Repeated platform/native builds are not additive coverage.
+The independent app-hosted iOS part is not included in these completed results.
+
+The same run exercised all eight Android raw backend/population combinations
+over loopback. Original installed-APK hashes, instrumentation outputs, emulator
+exit and outer descendant cleanup were verified. Each row returned exactly
+38,400 (128 peers) or 76,800 (256 peers) 1 KiB responses; CPU includes both ends
+of the raw fixture, **not** the production authenticated RPC stack.
+
+| ART API / backend | Peers | Process threads before / idle | Idle CPU over 5 s (ms) | Active wall (s) | Active CPU (s) | Idle PSS (MiB) | p95 / p99 upper (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 24 / NIO | 128 | 15 / 16 | 3 | 30.001 | 50.429 | 16.61 | 9 / 14 |
+| 24 / NIO | 256 | 15 / 16 | 4 | 30.710 | 56.841 | 23.32 | 133 / 146 |
+| 24 / native poll | 128 | 15 / 17 | 4 | 30.001 | 54.919 | 24.92 | 10 / 14 |
+| 24 / native poll | 256 | 15 / 17 | 8 | 36.309 | 69.330 | 24.72 | 143 / 153 |
+| 35 / NIO | 128 | 17 / 18 | 12 | 45.943 | 24.321 | 41.84 | 398 / 566 |
+| 35 / NIO | 256 | 17 / 18 | 5 | 30.010 | 55.334 | 38.81 | 97 / 110 |
+| 35 / native poll | 128 | 17 / 19 | 6 | 30.002 | 49.759 | 39.18 | 64 / 154 |
+| 35 / native poll | 256 | 17 / 19 | 7 | 31.175 | 60.089 | 44.12 | 119 / 130 |
+
+These are single emulator observations, not continuously measured thread maxima
+or physical/mobile authenticated qualification. Some workloads still exceeded
+their nominal 30 seconds; their successful response counts do not prove a
+sustainable 2,560 responses/second mobile service. Readiness used one NIO worker
+and, for the mixed native-accepted/NIO-client fixture, one additional native
+poll worker. Both workers retired after each fixture.
+
+The [first complete dependency generation](https://github.com/p2pKit/P2pKit/actions/runs/40128235663)
+at `f99460b4` failed in LAN Dokka generation: the shared readiness directory had
+been attached separately to both leaf source sets, violating Dokka's unique
+source ownership. Its 41-minute generation attempt remains a failure, not a
+partial lockfile candidate. The correction uses one real `jvmAndroidMain`
+intermediate source set, with both leaves depending on it and the normal Apple
+hierarchy retained. Full supported-macOS generation must verify that change;
+Linux alone cannot analyze the Apple cinterop-backed documentation. Warning
+checks and documentation generation are not disabled.
+
 ## Scaling beyond 256
 
 No dedicated-reader growth is required to reach larger populations. Memory,

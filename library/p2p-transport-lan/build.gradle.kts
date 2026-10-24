@@ -191,11 +191,14 @@ kotlin {
         }
     }
 
+    applyDefaultHierarchyTemplate()
     sourceSets {
         // Public Java NIO and readiness ownership are identical on JVM17 and Android API24+.
-        // Native scoped socket adapters remain platform-specific; no new published module/dependency.
-        jvmMain { kotlin.srcDir("src/jvmAndroidMain/kotlin") }
-        androidMain { kotlin.srcDir("src/jvmAndroidMain/kotlin") }
+        // One real intermediate source set: adding the same files to two leaf roots makes Dokka
+        // reject ambiguous source ownership. Native scoped adapters remain platform-specific.
+        val jvmAndroidMain = create("jvmAndroidMain") { dependsOn(commonMain.get()) }
+        jvmMain { dependsOn(jvmAndroidMain) }
+        androidMain { dependsOn(jvmAndroidMain) }
         commonMain.dependencies {
             // `api` rather than `implementation`: the iOS framework's
             // `export(project(":p2p-core"))` above requires the dependency to
