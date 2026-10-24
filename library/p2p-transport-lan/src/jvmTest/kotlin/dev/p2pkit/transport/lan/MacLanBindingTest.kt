@@ -1,16 +1,28 @@
 package dev.p2pkit.transport.lan
 
+import dev.p2pkit.core.AppId
+import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.Platform
+import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.OutboundRouteConnection
+import dev.p2pkit.core.transport.OutboundRouteUnavailable
+import dev.p2pkit.core.transport.TransportHint
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -23,6 +35,36 @@ class MacLanBindingTest {
         listOf(LanInterfaceAddress(local, 24)))
     private fun snapshot() = JvmLanSocketSnapshot(listOf(network,
         network.copy(name = "utun0", isPointToPoint = true)), setOf(local), mapOf("en0" to 7, "utun0" to 9))
+
+    @Test
+    fun protectedRouteRefusesChangedNativeInterfaceIndexBeforeAllocatingAnotherHandle() = runBlocking<Unit> {
+        var state = snapshot()
+        val api = FakeMacLanCalls()
+        val binding = MacLanBinding(policy, api, fakeMacErrnos(), { state })
+        val originalContext = assertNotNull(binding.target()).fingerprint
+        val transport = JvmLanDataTransport(
+            registration = LanServiceRegistration(AppId("mac-route"), PeerId("local"), "local", Platform.JVM_DESKTOP),
+            policy = policy, role = LanRole.DialOnly, macBinding = binding
+        )
+        try {
+            transport.start().getOrThrow()
+            val raw = transport.connect(InternalPeer(
+                Peer(PeerId("remote"), "remote", Platform.JVM_DESKTOP, setOf(TransportKind.LAN)),
+                listOf(TransportHint(TransportKind.LAN, "10.1.2.4", 4321))
+            ))
+            val route = assertNotNull(assertIs<OutboundRouteConnection>(raw).outboundRoute)
+            raw.close()
+            assertEquals(listOf(10L), api.closed)
+            state = state.copy(interfaceIndices = mapOf("en0" to 8, "utun0" to 9))
+            api.scope = 8 // A fresh dial could succeed on the NEW interface, but replay must not use it.
+            assertNotEquals(originalContext, assertNotNull(binding.target()).fingerprint)
+            assertFailsWith<OutboundRouteUnavailable> { route.connect(500) }
+            assertEquals(11L, api.next, "context refusal must precede native socket allocation")
+            assertEquals(listOf(10L), api.closed)
+        } finally {
+            transport.close()
+        }
+    }
 
     @Test fun nativeScopeCanAdmitTcpWhilePortableMultihomingGuardStaysRejected() {
         val api = FakeMacLanCalls(); val state = snapshot()

@@ -171,11 +171,50 @@ Updates and native removals still work, but continuous advertising can sustain
 the lockout. Secure-v2 authentication does not protect this pre-handshake stage.
 
 Advertised addresses and fingerprints are not trusted responder identities.
-The current discovery callbacks expose neither trustworthy origin accounting
-nor active-session priority. Raising the cap or evicting the oldest record is
-not a security fix; a continuing attacker can consume more memory or evict
-legitimate peers. The admission-policy redesign remains tracked in
-[#120](https://github.com/p2pKit/P2pKit/issues/120).
+Discovery callbacks do not expose trustworthy responder-origin accounting.
+Raising the cap, quotas keyed by advertised addresses, or evicting the oldest
+record cannot establish that trust; a continuing attacker can consume more
+memory or evict legitimate peers.
+
+### Protected routes for already-authorized peers
+
+Current source adds a separate, finite known-route path for
+[#120](https://github.com/p2pKit/P2pKit/issues/120). This is **not present in the
+immutable `0.8.0-rc7` binaries** and does not make unknown-peer discovery fair.
+After a successful outbound Noise/HELLO handshake and session registration,
+the kit can retain the exact numeric route selected by the transport. Original
+local authorization is required: a full explicit application pin, `PinnedOnly`,
+or a restricted profile that admitted the original session as `Trusted` and
+still trusts that identity. Authentication with `AcceptAnyAuthenticatedSameApp`
+alone, enrollment, plaintext, incoming ephemeral source ports and copied
+advertisements never earn priority. A continuity pin supplied by reconnect
+does not retroactively authorize the original session.
+
+At most **64** such routes per kit survive independently of all discovery
+admission maps. Their authenticated display contribution does not supply an
+address or trusted pin to a copied discovery record. Capacity exhaustion leaves
+the authenticated session working without route protection; applications can
+inspect `session.protectedRouteStatus`. Existing/third-party transports without
+the optional selected-route SPI report `Unsupported`.
+
+Only the exact session owner and transport generation may use a route.
+Replacement, final close, revocation, kit stop and invalid network/interface
+context retire it; stopping and restarting a transport cannot revive old
+capabilities. A reconnect episode has at most **30 seconds of monotonic grace**,
+or the shorter restricted-profile window, without renewal by stale callbacks.
+The protected numeric probe bypasses discovery and still requires a complete
+fresh handshake and current admission. Only observed clean refusal permits an
+ordinary freshest-candidate fallback in that same retry attempt. Cancellation,
+failed authentication and uncertain cleanup are not permission to try another
+route. See the [limits](../reference/limits.md#discovery-and-peer-registry) and
+[provider obligations](../guides/custom-transports.md#optional-selected-outbound-route).
+
+This protects a bounded set of **previously connected, locally authorized
+peers**, not first contact, arbitrary address changes, physical network access,
+or availability against packet dropping and connection floods. A peer without
+a usable protected route remains subject to unauthenticated discovery limits.
+It is not an assertion that the original hostile-discovery campaign or physical
+platform qualification passed.
 
 Use a controlled network when discovery availability matters. For a known,
 reachable peer, an out-of-band endpoint and full trusted fingerprint can be

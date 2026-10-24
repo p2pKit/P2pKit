@@ -11,10 +11,12 @@ import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.P2pSessionProfile
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerAdmission
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.ProtectedRouteStatus
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.SessionFailureKind
@@ -32,6 +34,9 @@ import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.InternalPeer
+import dev.p2pkit.core.transport.OutboundRoute
+import dev.p2pkit.core.transport.OutboundRouteConnection
+import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.PeerOrigin
 import dev.p2pkit.core.transport.RawConnection
@@ -167,7 +172,9 @@ internal class SessionManager(
      * production construction path still resolves to `false`.
      */
     private val strictInvariants: Boolean = false,
-    private val sessionProfile: P2pSessionProfile? = null
+    private val sessionProfile: P2pSessionProfile? = null,
+    private val onRouteProtected: (ProtectedRouteLease) -> Unit = {},
+    private val onRouteRetired: (ProtectedRouteLease) -> Unit = {}
 ) {
 
     init {
@@ -186,6 +193,7 @@ internal class SessionManager(
      */
     private val store = SessionStore(logger, strictInvariants = strictInvariants, profile = sessionProfile)
     val sessions: StateFlow<List<P2pSession>> = store.sessions
+    private val protectedRoutes = ProtectedRoutes(monotonicClock, onRouteProtected, onRouteRetired)
 
     /**
      * TEST-ONLY seam (#19 / 2026-07 P1-03) — never call from production
@@ -462,6 +470,7 @@ internal class SessionManager(
                         isIncoming = false,
                         internalPeerForReconnect = internalPeer,
                         isManualPeer = internalPeer.origin == PeerOrigin.Manual,
+                        outboundTransport = transport,
                         lifecycleGeneration = lifecycleGeneration
                     )
                 }
@@ -762,6 +771,7 @@ internal class SessionManager(
         internalPeerForReconnect: InternalPeer?,
         isManualPeer: Boolean = false,
         lifecycleGeneration: Long?,
+        outboundTransport: DataTransport? = null,
         /**
          * AUDIT-2026-07 (SEC-1): invoked exactly once, from the `finally`
          * below, the moment the handshake settles — on success AND on every
@@ -778,7 +788,8 @@ internal class SessionManager(
                 expectedPeer = expectedPeer,
                 expectedFingerprint = expectedFingerprint,
                 isManualPeer = isManualPeer,
-                isIncoming = isIncoming
+                isIncoming = isIncoming,
+                outboundTransport = outboundTransport
             )
         } finally {
             onHandshakeSettled?.invoke()
@@ -804,25 +815,68 @@ internal class SessionManager(
             admittedAs = handshake.admission
         )
 
-        // Reconnect handler is wired BEFORE start() so the very first
-        // connection-loss event is observed by the handler. Wired only when:
-        //   - this is an outgoing session (we have an InternalPeer to dial)
-        //   - the configured policy is Enabled
-        if (!isIncoming && internalPeerForReconnect != null) {
-            val policy = reconnectPolicy
-            if (policy is ReconnectPolicy.Enabled) {
-                session.reconnectHandler = SessionReconnectHandler(
-                    expectedPeer = handshake.resolvedPeer,
-                    expectedIdentity = handshake.peerIdentity,
-                    originalInternalPeer = internalPeerForReconnect,
-                    policy = policy
-                )
-            }
-        }
-
         var sessionOwnershipTransferred = false
         var committedOutgoingSession: P2pSession? = null
+        var protection: ProtectedRouteLease? = null
         try {
+            // Eligibility comes from this ORIGINAL authorization, never the identity pin which every
+            // reconnect supplies for continuity. Otherwise an AcceptAny session would acquire scarce
+            // priority merely by reconnecting successfully.
+            val route = handshake.outboundRoute
+            // The retained authorization closure must not capture HandshakeOutputs and thereby keep
+            // the original connection/reader/events alive after a later epoch replaces them.
+            val originalIdentity = handshake.peerIdentity
+            val originalAdmission = handshake.admission
+            val authorizedRoute = isProtectedRouteAuthorized(
+                originalIdentity, expectedFingerprint, originalAdmission
+            )
+            protection = if (!isIncoming && route != null && authorizedRoute) {
+                try {
+                    protectedRoutes.newLease(
+                        session = session,
+                        route = route,
+                        isAuthorized = {
+                            isProtectedRouteAuthorized(originalIdentity, expectedFingerprint, originalAdmission)
+                        },
+                        isRegistered = {
+                            val registration = store.registrationOf(session)
+                            registration.activeSessionId == session.id && registration.isInPublicList
+                        },
+                        recoveryGraceMillis = sessionProfile?.reconnect?.windowMillis ?: 30_000
+                    ).also { lease ->
+                        session.protectedRoute = lease
+                        session.retireProtectedRoute = { protectedRoutes.retire(lease) }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    session.unprotectedRouteStatus = ProtectedRouteStatus.Unsupported
+                    null
+                }
+            } else {
+                session.unprotectedRouteStatus = if (!isIncoming && !authorizedRoute) {
+                    ProtectedRouteStatus.NotAuthorized
+                } else ProtectedRouteStatus.Unsupported
+                null
+            }
+
+            // Reconnect handler is wired BEFORE start() so the very first
+            // connection-loss event is observed by the handler. Wired only when:
+            //   - this is an outgoing session (we have an InternalPeer to dial)
+            //   - the configured policy is Enabled
+            if (!isIncoming && internalPeerForReconnect != null) {
+                val policy = reconnectPolicy
+                if (policy is ReconnectPolicy.Enabled) {
+                    session.reconnectHandler = SessionReconnectHandler(
+                        expectedPeer = handshake.resolvedPeer,
+                        expectedIdentity = handshake.peerIdentity,
+                        originalInternalPeer = internalPeerForReconnect,
+                        policy = policy,
+                        protection = protection
+                    )
+                }
+            }
+
             session.start()
             currentCoroutineContext().ensureActive()
             beforeSessionCommitForTest?.invoke()
@@ -835,6 +889,10 @@ internal class SessionManager(
                 )
                 if (outcome is RegisterOutcome.Accepted || outcome is RegisterOutcome.Replaced) {
                     session.markRegistrationCommitted()
+                    if (outcome is RegisterOutcome.Replaced) {
+                        (outcome.loser as? P2pSessionImpl)?.retireProtectedRoute?.invoke()
+                    }
+                    protection?.let { protectedRoutes.install(it) }
                 }
 
                 // Outgoing callers receive the winner via performConnect's deferred
@@ -903,7 +961,10 @@ internal class SessionManager(
             }
             throw failure
         } finally {
-            if (!sessionOwnershipTransferred) closeDetachedSession(session)
+            if (!sessionOwnershipTransferred) {
+                protection?.let { protectedRoutes.retire(it) }
+                closeDetachedSession(session)
+            }
         }
     }
 
@@ -912,6 +973,7 @@ internal class SessionManager(
         session: P2pSession
     ) {
         withContext(NonCancellable) {
+            (session as? P2pSessionImpl)?.retireProtectedRoute?.invoke()
             store.removeIfMatches(peerId, session)
             closeDetachedSession(session)
         }
@@ -938,6 +1000,39 @@ internal class SessionManager(
             }?.let { issue ->
                 logCleanupIssues(logger, "detached session cleanup", listOf(issue))
             }
+        }
+    }
+
+    private fun isProtectedRouteAuthorized(
+        identity: PeerIdentity,
+        originalPin: PeerFingerprint?,
+        originalAdmission: PeerAdmission
+    ): Boolean {
+        val fingerprint = identity.fingerprint ?: return false
+        val mode = securityMode as? SecurityMode.AuthenticatedV2 ?: return false
+        sessionProfile?.let { profile ->
+            return originalAdmission == PeerAdmission.Trusted && profile.decide(identity) == PeerAdmission.Trusted
+        }
+        if (originalPin != null) return originalPin == fingerprint
+        return (mode.authorization as? PeerAuthorizationPolicy.PinnedOnly)?.fingerprints?.contains(fingerprint) == true
+    }
+
+    private fun selectedOutboundRoute(
+        raw: RawConnection,
+        transport: DataTransport?,
+        isIncoming: Boolean
+    ): OutboundRoute? {
+        if (isIncoming || transport == null) return null
+        return try {
+            (raw as? OutboundRouteConnection)?.outboundRoute?.takeIf {
+                it.transport === transport && it.isCurrent
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // This optional receipt is not part of successful authentication. Broken provider
+            // metadata grants no protection; it must not leak or reject the owned secure stream.
+            null
         }
     }
 
@@ -988,7 +1083,8 @@ internal class SessionManager(
         expectedFingerprint: PeerFingerprint?,
         isManualPeer: Boolean,
         isIncoming: Boolean,
-        expectedAdmission: PeerAdmission? = null
+        expectedAdmission: PeerAdmission? = null,
+        outboundTransport: DataTransport? = null
     ): HandshakeOutputs {
         var selectedConnection: RawConnection? = null
         var eventChannel: Channel<ProtocolEvent>? = null
@@ -1150,7 +1246,8 @@ internal class SessionManager(
                     resolvedPeer = resolvedPeer,
                     peerIdentity = peerIdentity,
                     protocolState = protocolState,
-                    admission = admission
+                    admission = admission,
+                    outboundRoute = selectedOutboundRoute(rawConnection, outboundTransport, isIncoming)
                 )
             }.also { transferred = true }
         } catch (e: TimeoutCancellationException) {
@@ -1291,7 +1388,8 @@ internal class SessionManager(
         val resolvedPeer: Peer,
         val peerIdentity: PeerIdentity,
         val protocolState: ProtocolSessionState,
-        val admission: PeerAdmission = PeerAdmission.Trusted
+        val admission: PeerAdmission = PeerAdmission.Trusted,
+        val outboundRoute: OutboundRoute? = null
     )
 
     /**
@@ -1304,8 +1402,10 @@ internal class SessionManager(
      * itself runs on the session's coroutine scope, so cancellation also
      * propagates structurally.
      *
-     * V0.4-RECONNECT: each attempt re-resolves the target [InternalPeer] via
-     * [peerLookup] (typically `PeerRegistry::internalPeer`) so address
+     * A protected attempt first probes its previously verified route with a bounded setup budget.
+     * Only a clean provider refusal permits fallback; every returned stream is freshly authenticated.
+     * Otherwise each attempt re-resolves the target [InternalPeer] via
+     * [peerLookup] (typically `PeerRegistry::reconnectPeer`) so address
      * rotation — DHCP lease change, hotspot move, captive-portal reattach,
      * Android NSD rebind after network rotation — is picked up automatically.
      * The lookup is a lock-free [kotlinx.coroutines.flow.StateFlow.value]
@@ -1321,7 +1421,8 @@ internal class SessionManager(
         private val expectedPeer: Peer,
         private val expectedIdentity: PeerIdentity,
         private val originalInternalPeer: InternalPeer,
-        private val policy: ReconnectPolicy.Enabled
+        private val policy: ReconnectPolicy.Enabled,
+        private val protection: ProtectedRouteLease? = null
     ) : ReconnectHandler {
 
         /**
@@ -1336,12 +1437,17 @@ internal class SessionManager(
         @kotlin.concurrent.Volatile
         private var recoveryStartedAt: Long = monotonicClock()
 
+        @kotlin.concurrent.Volatile
+        private var protectedRecovery: ProtectedRouteRecovery? = null
+
         override fun onWillReconnect() {
             pathWakeBaseline = pathSatisfiedGeneration.value
             recoveryStartedAt = monotonicClock()
+            protectedRecovery = protection?.beginRecovery()
         }
 
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
+            val recovery = protectedRecovery
             if (!session.retireLostEpochBeforeReconnect()) return
             var attempt = 0
             var lastResolvedHints = originalInternalPeer.transportHints
@@ -1413,38 +1519,69 @@ internal class SessionManager(
                     if (session.state.value != ConnectionState.Reconnecting) return
                     if (remainingRecoveryMillis() <= 0) break
 
-                    // Fresh per-attempt lookup. No caching between attempts; the
-                    // read happens immediately before transport selection so the
-                    // stale window between snapshot and dial is microseconds.
-                    val resolved = peerLookup(expectedPeer.id)
-                    val target = resolved ?: originalInternalPeer
-                    val registryHit = resolved != null
-                    val resolvedStr = if (resolved != null) renderHints(resolved.transportHints) else "—"
-                    val dialedStr = renderHints(target.transportHints)
-                    val changedFromPrev = target.transportHints != lastResolvedHints
-                    val source = if (registryHit) "REGISTRY" else "FALLBACK"
-                    logger.info(
-                        "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
-                            "name=${expectedPeer.name} cached=$cachedStr resolved=$resolvedStr " +
-                            "dialed=$dialedStr source=$source registryHit=$registryHit " +
-                            "changedFromPrev=$changedFromPrev"
-                    )
-                    lastResolvedHints = target.transportHints
+                    var dialedStr = "not-selected"
+                    var source = "NONE"
+                    fun recordOrdinaryTarget(resolved: InternalPeer?, target: InternalPeer) {
+                        val registryHit = resolved != null
+                        val resolvedStr = if (resolved != null) renderHints(resolved.transportHints) else "—"
+                        dialedStr = renderHints(target.transportHints)
+                        source = if (registryHit) "REGISTRY" else "FALLBACK"
+                        val changedFromPrev = target.transportHints != lastResolvedHints
+                        logger.info(
+                            "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                                "name=${expectedPeer.name} cached=$cachedStr resolved=$resolvedStr " +
+                                "dialed=$dialedStr source=$source registryHit=$registryHit " +
+                                "changedFromPrev=$changedFromPrev"
+                        )
+                        lastResolvedHints = target.transportHints
+                    }
 
                     // Retain ownership across prompt cancellation of the enclosing deadline. A
                     // successful handshake can otherwise be lost between return and caller delivery.
                     var candidate: HandshakeOutputs? = null
+                    var protectedAttempt = false
                     val outcome = runCatching {
                         suspend fun connectAndHandshake(): HandshakeOutputs {
-                            val transport = transportManager.selectBestTransport(target)
-                            val raw = transport.connect(target)
+                            val protectedRoute = protection?.routeForUse()
+                            var selectedTransport: DataTransport? = null
+                            val protectedRaw = if (protectedRoute == null) null else {
+                                protectedAttempt = true
+                                // Read provider metadata BEFORE acquiring a raw resource. A throwing
+                                // getter after connect returned would otherwise lose stream ownership.
+                                selectedTransport = protectedRoute.transport
+                                dialedStr = "exact-numeric-route"
+                                source = "PROTECTED"
+                                logger.info(
+                                    "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
+                                        "name=${expectedPeer.name} dialed=$dialedStr source=$source"
+                                )
+                                try {
+                                    protectedRoute.connect(minOf(1_500L, remainingRecoveryMillis()).coerceAtLeast(1L))
+                                } catch (_: OutboundRouteUnavailable) {
+                                    // The SPI marker promises observed clean retirement. Arbitrary transport,
+                                    // cancellation and cleanup-uncertain failures do NOT take this fallback.
+                                    protectedAttempt = false
+                                    null
+                                }
+                            }
+                            val raw = protectedRaw ?: run {
+                                // Address rotation still works with maxAttempts=1: after a clean probe
+                                // refusal use the freshest candidate within this same logical attempt.
+                                val resolved = peerLookup(expectedPeer.id)
+                                val fallback = resolved ?: originalInternalPeer
+                                recordOrdinaryTarget(resolved, fallback)
+                                val transport = transportManager.selectBestTransport(fallback)
+                                selectedTransport = transport
+                                transport.connect(fallback)
+                            }
                             return runHandshake(
                                 rawConnection = raw,
                                 expectedPeer = expectedPeer,
                                 expectedFingerprint = expectedIdentity.fingerprint,
                                 isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual,
                                 isIncoming = false,
-                                expectedAdmission = if (sessionProfile == null) null else session.admission
+                                expectedAdmission = if (sessionProfile == null) null else session.admission,
+                                outboundTransport = selectedTransport
                             ).also { candidate = it }
                         }
                         if (sessionProfile == null) {
@@ -1480,6 +1617,21 @@ internal class SessionManager(
                                 "name=${expectedPeer.name} FAILED dialed=$dialedStr source=$source " +
                                 "reason=${e::class.simpleName}: ${e.message ?: ""}"
                         )
+                        if (protectedAttempt) {
+                            // A later attempt or lease expiry must not turn uncertain cleanup or a
+                            // failed authenticated handshake into permission for another route.
+                            protection?.let { protectedRoutes.retire(it) }
+                            val kind = when (e) {
+                                is P2pError.AuthorizationRejected -> SessionFailureKind.Authorization
+                                is P2pError.AuthenticationFailed, is P2pError.AuthenticatedIdentityMismatch,
+                                is P2pError.SecurityConfigurationInvalid -> SessionFailureKind.Authentication
+                                is P2pError.ProtocolError, is P2pError.VersionMismatch,
+                                is P2pError.HandshakeRejected -> SessionFailureKind.Protocol
+                                else -> SessionFailureKind.Transport
+                            }
+                            session.markFailedAfterExhaustion(kind)
+                            return
+                        }
                         null
                     } ?: continue
 
@@ -1510,6 +1662,11 @@ internal class SessionManager(
                                 "reason=${failure::class.simpleName}: ${failure.message ?: ""}"
                         )
                         if (session.state.value != ConnectionState.Reconnecting) return
+                        if (protectedAttempt) {
+                            protection?.let { protectedRoutes.retire(it) }
+                            session.markFailedAfterExhaustion(SessionFailureKind.Transport)
+                            return
+                        }
                         continue
                     }
                     if (!rearmed) {
@@ -1519,6 +1676,7 @@ internal class SessionManager(
                         )
                         return
                     }
+                    protection?.recovered(recovery, handshake.outboundRoute)
                     logger.info(
                         "reconnect: attempt=$attempt/${policy.maxAttempts} peer=$peerShort " +
                             "name=${expectedPeer.name} SUCCEEDED dialed=$dialedStr source=$source"
@@ -1778,6 +1936,7 @@ internal class SessionManager(
 
     /** Terminal kit shutdown: detach public state before watcher scope cancellation. */
     suspend fun shutdownAllSessions(): List<CleanupIssue> {
+        protectedRoutes.close()
         // Seal and cancel setup transactions before any DataTransport is
         // closed. A setup is not present in SessionStore until after HELLO,
         // but its peer may already have published a session and therefore

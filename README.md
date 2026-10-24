@@ -342,6 +342,15 @@ remote Maven verification and public sample delivery. Per-component counts and
 the two native diagnostic skips remain explicit in the record.
 **High #120 remains open/unresolved; stable/production remains NOT_READY.**
 
+Unreleased source now implements bounded, locally authorized **known-route
+protection** independently of discovery admission, and corrects premature
+JmDNS resolution before TXT arrival. These changes are not in the immutable
+`0.8.0-rc7` artifacts above. Known-route protection is not fair discovery of
+unknown peers or physical-device qualification; review its
+[authorization, expiry and capacity contract](docs/security/model.md#protected-routes-for-already-authorized-peers)
+before relying on it. Issue status and platform qualification must be evaluated
+against the actual new source, not the historical release's passing checks.
+
 ### Historical scope and unchanged gaps
 
 The [`0.8.0-rc6` release record](docs/releases/0.8.0-rc6.md) records the exact

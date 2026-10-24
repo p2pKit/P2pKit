@@ -7,6 +7,7 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
+import dev.p2pkit.core.ProtectedRouteStatus
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.provisioning.ManualPeerRegistrar
 import dev.p2pkit.core.protocol.HelloPayload
@@ -112,7 +113,60 @@ internal class PeerRegistry(
      * its discovery-time reach information.
      */
     fun internalPeer(peerId: PeerId): InternalPeer? =
-        registryState.value.tracked[peerId]?.internalPeer
+        registryState.value.tracked[peerId]?.withLiveProtection()?.internalPeer
+
+    /** Routing candidates come only from real manual/discovery records, not a display-only lease. */
+    fun reconnectPeer(peerId: PeerId): InternalPeer? =
+        registryState.value.tracked[peerId]?.copy(protected = null)?.takeUnless { it.isEmpty }?.internalPeer
+
+    /**
+     * Independent of every untrusted discovery cap. The manager supplies only its exact committed
+     * session owner; neither PeerEvent nor an advertised pin can enter this path. The projection has
+     * authenticated HELLO identity and a transport kind, never authority over other routing hints.
+     */
+    internal fun protectRoute(lease: ProtectedRouteLease) {
+        val peerId = lease.session.peer.id
+        val projection = ProtectedContribution(
+            lease = lease,
+            internalPeer = InternalPeer(
+                publicPeer = lease.session.peer,
+                transportHints = listOf(TransportHint(type = lease.transportKind))
+            ),
+            registeredAtMillis = clock()
+        )
+        while (lease.status == ProtectedRouteStatus.Protected) {
+            val current = registryState.value
+            if (current.closed) return
+            val previous = current.tracked[peerId] ?: TrackedPeer()
+            val existing = previous.protected?.lease
+            // A delayed old callback must not overwrite a live successor's projection.
+            if (existing != null && existing !== lease && existing.status == ProtectedRouteStatus.Protected) return
+            val next = current.withTracked(
+                tracked = current.tracked + (peerId to previous.copy(protected = projection)),
+                discoveredPeerCount = current.discoveredPeerCount
+            )
+            if (registryState.compareAndSet(current, next)) {
+                if (lease.status != ProtectedRouteStatus.Protected) retireRoute(lease) else publishPeers(next)
+                return
+            }
+        }
+    }
+
+    internal fun retireRoute(lease: ProtectedRouteLease) {
+        val peerId = lease.session.peer.id
+        while (true) {
+            val current = registryState.value
+            val previous = current.tracked[peerId] ?: return
+            if (previous.protected?.lease !== lease) return
+            val retained = previous.copy(protected = null)
+            val tracked = if (retained.isEmpty) current.tracked - peerId else current.tracked + (peerId to retained)
+            val next = current.withTracked(tracked, current.discoveredPeerCount)
+            if (registryState.compareAndSet(current, next)) {
+                publishPeers(next)
+                return
+            }
+        }
+    }
 
     /** Never mix a manual application's pin/name with an untrusted discovery contribution. */
     fun discoveryClaim(peerId: PeerId): dev.p2pkit.core.PeerDiscoveryClaim? {
@@ -269,7 +323,7 @@ internal class PeerRegistry(
         val newList = if (snapshot.closed) {
             emptyList()
         } else {
-            snapshot.tracked.values.map { it.internalPeer.publicPeer }
+            snapshot.tracked.values.mapNotNull { it.withLiveProtection()?.internalPeer?.publicPeer }
         }
         val candidatePeers = immutableListSnapshot(newList)
         beforePeerPublicationForTest?.invoke(snapshot.generation)
@@ -433,6 +487,9 @@ internal class PeerRegistry(
             if (current.closed) return@updateAndGet current
             val tracked = current.tracked.mapValues { (_, trackedPeer) ->
                 trackedPeer.copy(
+                    protected = trackedPeer.protected?.takeIf {
+                        it.lease.status == ProtectedRouteStatus.Protected
+                    },
                     discoveredBy = trackedPeer.discoveredBy.filterValues { contribution ->
                         contribution.internalPeer.discoveryLifetime() ==
                             DiscoveryLifetime.TransportManaged ||
@@ -851,19 +908,34 @@ private data class ManualContribution(
     val registeredAtMillis: Long
 )
 
+private data class ProtectedContribution(
+    val lease: ProtectedRouteLease,
+    val internalPeer: InternalPeer,
+    val registeredAtMillis: Long
+)
+
 private data class TrackedPeer(
     val manual: ManualContribution? = null,
+    val protected: ProtectedContribution? = null,
     val discoveredBy: Map<DiscoverySource, DiscoveryContribution> = emptyMap()
 ) {
+    fun withLiveProtection(): TrackedPeer? {
+        val current = if (protected != null && protected.lease.status != ProtectedRouteStatus.Protected) {
+            copy(protected = null)
+        } else this
+        return current.takeUnless { it.isEmpty }
+    }
+
     val internalPeer: InternalPeer
         get() {
             val discovered = discoveredBy.entries
                 .sortedBy { it.key.index }
                 .map { it.value.internalPeer }
             // Application-supplied display identity wins; discovery only adds routing claims.
-            val primary = manual?.internalPeer ?: discovered.first()
+            val primary = manual?.internalPeer ?: protected?.internalPeer ?: discovered.first()
             val allClaims = buildList {
                 manual?.let { add(it.internalPeer) }
+                protected?.let { add(it.internalPeer) }
                 addAll(discovered)
             }
             val retainedPin = manual?.internalPeer?.authenticationHint as?
@@ -883,8 +955,9 @@ private data class TrackedPeer(
     val lastSeenAtMillis: Long
         get() = maxOf(
             manual?.registeredAtMillis ?: Long.MIN_VALUE,
+            protected?.registeredAtMillis ?: Long.MIN_VALUE,
             discoveredBy.values.maxOfOrNull { it.lastSeenAtMillis } ?: Long.MIN_VALUE
         )
 
-    val isEmpty: Boolean get() = manual == null && discoveredBy.isEmpty()
+    val isEmpty: Boolean get() = manual == null && protected == null && discoveredBy.isEmpty()
 }

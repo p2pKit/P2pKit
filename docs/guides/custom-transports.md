@@ -94,6 +94,43 @@ session liveness policies automatically; they must own deadlines and cleanup.
 Do not turn secure authentication/protocol rejection into recoverable transport
 loss or implement a plaintext retry.
 
+## Optional selected outbound route
+
+Existing providers need not change. To support bounded known-peer protection,
+an outbound raw stream may additionally implement
+[`OutboundRouteConnection`](../../library/p2p-core/src/commonMain/kotlin/dev/p2pkit/core/transport/OutboundRoute.kt).
+Its optional `outboundRoute` is an immutable, resource-inert capability for only
+the **numeric destination actually reached** (address bytes, port and IPv6
+scope), the original data-transport instance/generation, and required local
+network/interface context. It must not retain a socket, raw stream, Bonjour
+endpoint, browser, hostname, credential or a whole discovery-hint list. Incoming
+remote source ports are not proven listening endpoints.
+
+Core promotes the capability only after the original connection is both
+authenticated and locally authorized and its exact session registration commits.
+The capability itself is not authorization. Unsupported/failed optional
+observation grants no protection; preserve cancellation and owned raw cleanup.
+The bounded allowance and observable statuses are documented in the
+[security model](../security/model.md#protected-routes-for-already-authorized-peers).
+
+`isCurrent` must be fast and resource-inert. `connect(timeoutMillis)` must repeat
+the original generation and required-context checks before allocating, at
+pending-resource admission and before handing off a new raw stream. Stop/close
+permanently invalidate old capabilities, even after restart. Dial only the
+captured numeric endpoint, without DNS, discovery lookup or replacement hints,
+using the same address policy, binding, pending ownership and cleanup as an
+ordinary dial. Recheck the observed connected endpoint before handoff.
+
+Core supplies at most **1,500 ms** of additional connection-setup budget, or a
+shorter remaining profile recovery window; honor the smaller of that and the
+provider's normal connect deadline. This is not a hard bound on arbitrary native
+cleanup or the whole secure handshake. A returned stream is freshly authenticated.
+Only `OutboundRouteUnavailable` certifies pre-allocation refusal or **completed
+owned cleanup**, allowing ordinary fallback within the same logical attempt.
+Do not translate cancellation, authentication failure, or cleanup uncertainty
+into that marker. Uncertain resources stay owned and the protected episode
+fails rather than granting another dial through a later retry or lease expiry.
+
 The provider, host application, logger, identity store, OS, and dependencies are
 part of the trusted computing base. Selecting the engine in core does not
 sandbox malicious extension code or protect process memory from it. Review

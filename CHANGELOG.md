@@ -3,6 +3,26 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## Unreleased source
+
+- Add optional selected-outbound-route SPI and per-session protection status.
+  Retain at most64 exact numeric routes for originally authorized secure
+  outgoing sessions, outside the untrusted discovery budgets. Fence original
+  transport/session ownership, revocation, stop/restart and bounded recovery;
+  permit fallback only after clean probe refusal. This addresses known-peer
+  protection, not unknown-peer discovery fairness or guaranteed connectivity.
+- Correct the modified private JmDNS producer's TXT-readiness predicate:
+  SRV/address-only state no longer publishes a premature resolved clone or
+  suppresses the still-needed TXT question. A received empty TXT is still
+  DNS-SD data and remains subject to the application's metadata validation.
+  The current private producer is `.410.8`; published rc7 retains `.410.7`.
+  Deterministic regressions identify a real cause class for #516 without
+  claiming the exact interleaving of its archived macOS timeout was observed.
+
+No next release version is selected here. The records and artifact bindings
+below remain immutable; these source changes do not retrospectively qualify
+the original failed runs or complete physical/installed-application campaigns.
+
 ## 0.8.0-rc7 — development release candidate (2026-10-23)
 
 Published and verified on Maven Central from immutable `v0.8.0-rc7`, with

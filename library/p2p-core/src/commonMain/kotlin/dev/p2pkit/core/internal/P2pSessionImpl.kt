@@ -13,6 +13,7 @@ import dev.p2pkit.core.PayloadLease
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerIdentity
+import dev.p2pkit.core.ProtectedRouteStatus
 import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.SessionConnectionInfo
 import dev.p2pkit.core.SessionFailure
@@ -182,6 +183,18 @@ internal class P2pSessionImpl(
     }
 
     override val admission: PeerAdmission get() = admittedAs
+
+    @kotlin.concurrent.Volatile
+    internal var protectedRoute: ProtectedRouteLease? = null
+
+    @kotlin.concurrent.Volatile
+    internal var unprotectedRouteStatus: ProtectedRouteStatus = ProtectedRouteStatus.Unsupported
+
+    @kotlin.concurrent.Volatile
+    internal var retireProtectedRoute: (() -> Unit)? = null
+
+    override val protectedRouteStatus: ProtectedRouteStatus
+        get() = protectedRoute?.status ?: unprotectedRouteStatus
 
     private fun requireLiveAdmission() {
         val current = sessionProfile?.decide(peerIdentity) ?: return
@@ -615,6 +628,7 @@ internal class P2pSessionImpl(
                 ownsLocalClose = true
             }
         }
+        if (ownsLocalClose) retireProtectedRoute?.invoke()
         reconnectWatchdogToCancel?.cancel()
         if (!ownsLocalClose) {
             val observed = owner.budget.await(owner.completion, SESSION_CLOSE_BUDGET_MS)
@@ -1181,6 +1195,7 @@ internal class P2pSessionImpl(
             }
         }
         if (!claimed) return emptyList()
+        retireProtectedRoute?.invoke()
         reconnectWatchdogToCancel?.cancel()
 
         // Once the epoch is claimed, no competing close/rearm/terminal path
