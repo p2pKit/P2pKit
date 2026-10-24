@@ -13,13 +13,19 @@ RUN_DIR="${IOS_RUN_DIR:-}"
 action="${1:-}"
 case "$action" in
     "") [[ $# -eq 0 ]] ;;
+    run-keyboard-readiness)
+        [[ $# -eq 1 ]] || {
+            echo "[ios-run] Keyboard readiness diagnostic accepts no additional arguments." >&2
+            exit 2
+        }
+        ;;
     prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation)
         [[ $# -eq 1 && -n "$RUN_DIR" && -n "${P2PKIT_AUDIT_STATE_DIR:-}" ]] || {
             echo "[ios-run] Scoped XCTest requires an owned audit invocation and explicit IOS_RUN_DIR." >&2
             exit 2
         }
         ;;
-    *) echo "usage: $0 [prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
+    *) echo "usage: $0 [run-keyboard-readiness|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
 esac
 if [[ "$action" == "run-cancellation-probe" && -z "$SIM_UDID" ]]; then
     echo "[ios-run] Cancellation investigation requires the outer owner's exact simulator UDID." >&2
@@ -83,6 +89,24 @@ if [[ -z "$action" ]]; then
         test
 
     echo "RESULT: PASS — iOS simulator launched the sample and completed start/stop UI automation"
+elif [[ "$action" == "run-keyboard-readiness" ]]; then
+    # Diagnostic only: the same generated app and real Host/Port/pairing inputs,
+    # with exactly the two existing locale cases. The ordinary suite is unfiltered.
+    # Keep the default run-directory ownership, simulator selection and cleanup.
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-ui \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-keyboard-readiness.xcresult" \
+        -parallel-testing-enabled NO \
+        -maximum-concurrent-test-simulator-destinations 1 \
+        -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale \
+        -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        test
 elif [[ "$action" == "prepare-jvm-transfer" ]]; then
     run_ios_xcodebuild \
         -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
