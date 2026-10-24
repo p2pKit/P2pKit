@@ -395,7 +395,8 @@ class ComponentTests(unittest.TestCase):
                                        'consumers-pom-diagnostic': ('macos-15-intel', 60),
                                        'apple-keyboard-diagnostic': ('macos-26', 60),
                                        'apple-keyboard-query-diagnostic': ('macos-26', 60),
-                                       'apple-keyboard-reflow-diagnostic': ('macos-26', 60)})
+                                       'apple-keyboard-reflow-diagnostic': ('macos-26', 60),
+                                       'apple-keyboard-reproduction-diagnostic': ('macos-26', 60)})
         self.assertEqual(len(C.COMPONENTS), 14)
         self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
         self.assertEqual({row['component'] for row in C.matrix('all')['include']}, set(C.COMPONENTS))
@@ -496,6 +497,31 @@ class ComponentTests(unittest.TestCase):
             block = workflow.split('  ' + job, 1)[1].split('    runs-on:', 1)[0]
             self.assertIn("inputs.component != 'apple-keyboard-reflow-diagnostic'", block)
         for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
+                                                           component=name)
+            self.assertIsNone(error)
+            self.assertEqual(code, status or stopped)
+            self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
+                                               {'task': 'gradle-stop', 'exitCode': stopped}])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
+
+    def test_keyboard_reproduction_is_bounded_failure_acquisition_not_release_qualification(self):
+        name = 'apple-keyboard-reproduction-diagnostic'
+        self.assertEqual(C.matrix(name), {'include': [{'component': name,
+                         'os': 'macos-26', 'minutes': 60, 'job_minutes': 70}]})
+        self.assertEqual(C.commands(name), [('keyboard-reproduction-diagnostic',
+            ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5', 'bash',
+             'scripts/run-ios-ui-tests.sh', 'run-keyboard-reproduction'])])
+        self.assertNotIn(name, C.COMPONENTS)
+        self.assertEqual(len(C.matrix('all')['include']), 14)
+        for invalid in (name + ',source', 'all,' + name):
+            with self.assertRaises(ValueError):
+                C.matrix(invalid)
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        for job in ('qualify:', 'complete-gate:'):
+            block = workflow.split('  ' + job, 1)[1].split('    runs-on:', 1)[0]
+            self.assertIn("inputs.component != 'apple-keyboard-reproduction-diagnostic'", block)
+        for status, stopped in ((0, 0), (65, 0), (0, 9), (65, 9)):
             code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
                                                            component=name)
             self.assertIsNone(error)

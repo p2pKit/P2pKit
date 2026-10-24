@@ -19,13 +19,19 @@ case "$action" in
             exit 2
         }
         ;;
+    run-keyboard-reproduction)
+        [[ $# -eq 1 ]] || {
+            echo "[ios-run] Keyboard reproduction accepts no additional arguments." >&2
+            exit 2
+        }
+        ;;
     prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation)
         [[ $# -eq 1 && -n "$RUN_DIR" && -n "${P2PKIT_AUDIT_STATE_DIR:-}" ]] || {
             echo "[ios-run] Scoped XCTest requires an owned audit invocation and explicit IOS_RUN_DIR." >&2
             exit 2
         }
         ;;
-    *) echo "usage: $0 [run-keyboard-readiness|run-keyboard-query-cause|run-keyboard-reflow-cause|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
+    *) echo "usage: $0 [run-keyboard-readiness|run-keyboard-query-cause|run-keyboard-reflow-cause|run-keyboard-reproduction|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
 esac
 if [[ "$action" == "run-cancellation-probe" && -z "$SIM_UDID" ]]; then
     echo "[ios-run] Cancellation investigation requires the outer owner's exact simulator UDID." >&2
@@ -68,6 +74,21 @@ DERIVED_DATA="$RUN_DIR/DerivedData"
 
 acquire_ios_run_lock "$IOS_LAUNCH_LOCK"
 IOS_LAUNCH_OWNS_LOCK=1
+if [[ "$action" == "run-keyboard-reproduction" ]]; then
+    # Check the actual selected Xcode before framework bootstrap. Keep native
+    # help/error text in ordinary captured output as well as the owned run dir.
+    # Direct pipeline + pipefail preserves helper errexit and a failing help
+    # command; never wrap run_ios_mutation in an if/|| success-repair context.
+    reproduction_help="$RUN_DIR/xcodebuild-keyboard-reproduction-help.log"
+    run_ios_mutation xcodebuild -help 2>&1 | tee "$reproduction_help"
+    for repetition_option in -run-tests-until-failure -test-iterations -test-repetition-relaunch-enabled; do
+        if ! grep -Eq -- "^[[:space:]]*${repetition_option}([[:space:]]|$)" "$reproduction_help"; then
+            echo "[ios-run] Native xcodebuild help does not advertise required option: $repetition_option" >&2
+            exit 2
+        fi
+    done
+    echo "[ios-run] Native repetition flags available; failure acquisition is capped at 6 total iterations."
+fi
 if [[ "$action" == "run-keyboard-query-cause" || "$action" == "run-keyboard-reflow-cause" ]]; then
     # These investigative sources do not import P2pKitShared. Diagnose Swift
     # compiler failures before spending time building the unchanged framework;
@@ -175,6 +196,28 @@ elif [[ "$action" == "run-keyboard-readiness" ]]; then
         -maximum-concurrent-test-simulator-destinations 1 \
         -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale \
         -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        test
+elif [[ "$action" == "run-keyboard-reproduction" ]]; then
+    # Failure acquisition only: one unchanged English method, one Xcode test
+    # command, at most six TOTAL iterations, stopping at the first failure.
+    # Relaunching on this same simulator does not reset its warmed system state.
+    # No passive/fixture flag, receipt, readiness relaxation or retry-to-green.
+    echo "[ios-run] Reusing the same simulator; test relaunch is not a cold-state reset."
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-ui \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-keyboard-reproduction.xcresult" \
+        -parallel-testing-enabled NO \
+        -maximum-concurrent-test-simulator-destinations 1 \
+        -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale \
+        -run-tests-until-failure \
+        -test-iterations 6 \
+        -test-repetition-relaunch-enabled YES \
         SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
         test
 elif [[ "$action" == "run-keyboard-query-cause" ]]; then

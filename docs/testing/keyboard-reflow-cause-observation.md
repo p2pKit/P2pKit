@@ -49,5 +49,36 @@ observations. The failure-only hierarchy is later evidence, not readiness.
 Result bundles and screenshots are not promised by this route. Native notices
 do not prove accessibility-key presence (the earlier blank-input-view controls
 produced keyboard notifications without any actual key). A passing experiment
-can reject a tested mechanism; it cannot retrospectively explain the original
-failure or establish physical-device qualification.
+records only those particular interventions; it cannot rule out intermittent
+outcomes, explain the original failure or establish physical-device qualification.
+
+## Observed result, not a repair
+
+[40103793368/1](https://github.com/p2pKit/P2pKit/actions/runs/40103793368)
+tested `9cc419613f6535a26ed3d50d60b8478135d8cea6` and **failed** with the
+original XCTest exit 65. Both named-key predicates completed within five seconds,
+but that does not turn the failed diagnostic into a pass:
+
+- `beforeTarget` failed its stimulus assertion. The hint was inserted and moved
+  the original field, then the real browser-ready handler retracted it **3.801
+  seconds before targeting**. The rejection is correct; there was no retained
+  hint at the intended interaction. The readiness check itself took 1.618 seconds.
+- `duringEditing` passed. Original-field content and window Y moved 131.333 points
+  with the same sampled field/window/scroll ownership and focus. The deferred
+  sample preceded readiness by 0.808 seconds; readiness took 1.255 seconds. This
+  was the **second app launch on the same simulator**, not a second system-cold
+  keyboard. The later inactive-run event belonged to normal Stop.
+
+Actual totals are **two XCTest methods: one failed, one passed**. Both reached
+normal Stop and app termination. Original logs, seven report hashes, source/tree,
+artifact digest and cleanup/capture closure were independently verified. Artifact
+`12564238290` has ZIP SHA-256
+`6f9f15e294cd13e009ea0fde0faa7ea2c68d11b1ea0ea4694003a561e3255fdf`.
+
+The first absent-introduction lookup took 11.252 seconds while native observer
+callbacks were also delayed. That does not identify a snapshot, scheduling or
+application cause, and observers may perturb timing. Neither named-key check
+reproduced the historical failure. Do not force the banner to remain, repeat
+this intervention until green, or promote a speculative UI/readiness change.
+The original cause in [#520](https://github.com/p2pKit/P2pKit/issues/520) remains
+unconfirmed.

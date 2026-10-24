@@ -40,7 +40,8 @@ DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('maco
                'consumers-pom-diagnostic': ('macos-15-intel', 60),
                'apple-keyboard-diagnostic': ('macos-26', 60),
                'apple-keyboard-query-diagnostic': ('macos-26', 60),
-               'apple-keyboard-reflow-diagnostic': ('macos-26', 60)}
+               'apple-keyboard-reflow-diagnostic': ('macos-26', 60),
+               'apple-keyboard-reproduction-diagnostic': ('macos-26', 60)}
 
 FLAGS = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
          '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
@@ -189,6 +190,9 @@ def commands(component):
     if component == 'apple-keyboard-reflow-diagnostic':
         return [('keyboard-reflow-cause-diagnostic', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
                  *bash, 'scripts/run-ios-ui-tests.sh', 'run-keyboard-reflow-cause'])]
+    if component == 'apple-keyboard-reproduction-diagnostic':
+        return [('keyboard-reproduction-diagnostic', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
+                 *bash, 'scripts/run-ios-ui-tests.sh', 'run-keyboard-reproduction'])]
     if component == 'apple-keyboard-diagnostic':
         return [('keyboard-readiness-diagnostic', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
                  *bash, 'scripts/run-ios-ui-tests.sh', 'run-keyboard-readiness'])]

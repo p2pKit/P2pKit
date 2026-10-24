@@ -35,7 +35,7 @@ module ModularCI
     required = %w[source dependencies jvm-linux jvm-windows android apple-arm64 apple-x64
                   desktop-linux desktop-windows desktop-macos security compatibility consumers macos-shared]
     require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').sort ==
-             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-keyboard-diagnostic', 'apple-keyboard-query-diagnostic', 'apple-keyboard-reflow-diagnostic', 'apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic', 'android-legacy-task-preview'].sort,
+             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-keyboard-diagnostic', 'apple-keyboard-query-diagnostic', 'apple-keyboard-reflow-diagnostic', 'apple-keyboard-reproduction-diagnostic', 'apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic', 'android-legacy-task-preview'].sort,
              'Missing or extra independently selectable required component')
     writer = load(File.join(root, '.github/workflows/dependency-update-candidate.yml')).fetch('jobs').fetch('generate')
     require!(writer['runs-on'] == 'macos-15-intel' && writer.fetch('steps').any? { |s|
@@ -81,7 +81,7 @@ module ModularCI
                step.dig('env', 'GH_TOKEN') == '${{ github.token }}' && !step['if'] && !step['continue-on-error'],
                'Publisher HTTP work must admit and retain the original-job deadline before requests')
     end
-    %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic apple-keyboard-diagnostic apple-keyboard-query-diagnostic apple-keyboard-reflow-diagnostic apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview].each do |diagnostic|
+    %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic apple-keyboard-diagnostic apple-keyboard-query-diagnostic apple-keyboard-reflow-diagnostic apple-keyboard-reproduction-diagnostic apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview].each do |diagnostic|
       require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),
                'Explicit focused diagnostic route missing')
       %w[qualify complete-gate].each do |name|

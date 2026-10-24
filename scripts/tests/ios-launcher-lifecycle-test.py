@@ -57,6 +57,24 @@ if tool == "xcrun":
     else:
         assert args[1] in ("bootstatus", "launch"), args
 elif tool == "xcodebuild":
+    if args == ["-help"]:
+        build = root / "checkout with spaces/samples/iosApp/build"
+        lock = build / ".ios-launch.lock"
+        (root / "help-observation.json").write_text(json.dumps({
+            "lockPresent": lock.is_dir(),
+            "workerMatches": (lock / "worker").read_text().strip() == str(os.getpid()),
+        }))
+        missing = os.environ.get("FAKE_XCODE_HELP_MISSING", "")
+        stream = sys.stderr if os.environ.get("FAKE_XCODE_HELP_STDERR") == "1" else sys.stdout
+        print("synthetic native help output, not real Xcode support evidence", file=stream)
+        for option in ("-run-tests-until-failure", "-test-iterations", "-test-repetition-relaunch-enabled"):
+            if option != missing:
+                print("    " + option + " <synthetic option help>", file=stream)
+        if missing:
+            # Substring/prose matches must not authorize an absent option.
+            print("    " + missing + "-unsupported <not the requested option>", file=stream)
+            print("    unavailable option: " + missing, file=stream)
+        sys.exit(int(os.environ.get("FAKE_XCODE_HELP_EXIT", "0")))
     if os.environ.get("FAKE_IOS_BLOCK") == "1":
         (root / "build-started").touch()
         deadline = time.monotonic() + 20
@@ -66,6 +84,20 @@ elif tool == "xcodebuild":
             time.sleep(0.01)
     if os.environ.get("FAKE_IOS_BUILD_FAILURE") == "1":
         sys.exit(42)
+    if "-test-iterations" in args:
+        # Model only the selected native boundary. These observations test
+        # launcher policy/status plumbing, not Apple's real repetition engine.
+        cap = int(args[args.index("-test-iterations") + 1])
+        assert cap == 6 and "-run-tests-until-failure" in args, args
+        assert args[args.index("-test-repetition-relaunch-enabled") + 1] == "YES", args
+        outcomes = [int(value) for value in os.environ.get("FAKE_XCODE_ITERATION_RESULTS", "0,0,0,0,0,0").split(",")]
+        assert len(outcomes) == cap, outcomes
+        observed = []
+        for index, code in enumerate(outcomes, 1):
+            observed.append({"iteration": index, "exitCode": code})
+            (root / "native-iterations.json").write_text(json.dumps(observed))
+            if code != 0:
+                sys.exit(code)
     derived = pathlib.Path(args[args.index("-derivedDataPath") + 1])
     app = derived / "Build/Products/Debug-iphonesimulator/p2pkit-sample.app"
     app.mkdir(parents=True)
@@ -110,7 +142,9 @@ class LauncherLifecycleTest(unittest.TestCase):
         bash_env.write_text("function /usr/libexec/PlistBuddy { printf '%s\\n' p2pkit-sample; }\n")
         self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
                         FAKE_IOS_ROOT=str(self.root), BASH_ENV=str(bash_env), SIM_UDID=UDID)
-        for name in ("SIM_RUNTIME", "IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE"):
+        for name in ("SIM_RUNTIME", "IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE",
+                     "FAKE_XCODE_HELP_EXIT", "FAKE_XCODE_HELP_MISSING", "FAKE_XCODE_HELP_STDERR",
+                     "FAKE_XCODE_ITERATION_RESULTS"):
             self.env.pop(name, None)
         self.processes = []
         self.addCleanup(self.stop_processes)
@@ -666,6 +700,219 @@ printf 'invoked\\n' >> fake-gradle-invocations
                 self.assert_keyboard_readiness_call([call.replace(original, replacement) for call in calls])
         with self.assertRaises(AssertionError):
             self.assert_keyboard_readiness_call(calls + [call for call in calls if call.startswith("xcodebuild ")])
+
+    def assert_keyboard_reproduction_call(self, calls):
+        help_call = "xcodebuild -help"
+        self.assertEqual(1, calls.count(help_call), "Check the actual selected tool exactly once")
+        builds = [call for call in calls if call.startswith("xcodebuild ") and call != help_call]
+        self.assertEqual(1, len(builds), "One Xcode command owns all bounded native iterations")
+        derived = pathlib.Path(builds[0].split(" -derivedDataPath ", 1)[1].split(" -resultBundlePath ", 1)[0])
+        expected = [
+            "xcodebuild", "-project", str(self.project / "p2pkit-sample.xcodeproj"),
+            "-scheme", "p2pkit-sample-ui", "-configuration", "Debug", "-sdk", "iphonesimulator",
+            "-destination", "platform=iOS Simulator,id=" + UDID, "-derivedDataPath", str(derived),
+            "-resultBundlePath", str(derived / "Logs/Test/swift-keyboard-reproduction.xcresult"),
+            "-parallel-testing-enabled", "NO", "-maximum-concurrent-test-simulator-destinations", "1",
+            "-only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/"
+            "testRenderedPortRoundTripsThroughManualInputInEnglishLocale",
+            "-run-tests-until-failure", "-test-iterations", "6", "-test-repetition-relaunch-enabled", "YES",
+            "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "test",
+        ]
+        jobs = self.env.get("P2PKIT_XCODE_JOBS", "")
+        if jobs:
+            self.assertIn(jobs, ("1", "2"))
+            expected[1:1] = ["-jobs", jobs]
+        self.assertEqual(" ".join(expected), builds[0])
+        self.assertEqual(["xcodegen generate"], [call for call in calls if call.startswith("xcodegen ")])
+        boot_call = "xcrun simctl bootstatus " + UDID + " -b"
+        self.assertEqual(1, calls.count(boot_call))
+        self.assertLess(calls.index(help_call), calls.index("xcodegen generate"))
+        self.assertLess(calls.index("xcodegen generate"), calls.index(boot_call))
+        self.assertLess(calls.index(boot_call), calls.index(builds[0]))
+        for forbidden in ("retry-tests", "skip-testing", "OTHER_SWIFT_FLAGS", "P2PKIT_KEYBOARD_",
+                          "swiftc", "passive-capture", "open ", "simctl create", "simctl delete",
+                          "simctl erase", "simctl shutdown", "defaults "):
+            self.assertFalse(any(forbidden in call for call in calls), forbidden)
+        return derived
+
+    def missing_framework_tripwire(self):
+        # A synthetic shell stub, never a real Gradle invocation. Any accidental
+        # bootstrap before a refused help preflight becomes an observable error.
+        shutil.rmtree(self.repo / "library")
+        (self.repo / "gradlew").write_text('''#!/bin/sh
+printf 'unexpected bootstrap\\n' > "$FAKE_IOS_ROOT/framework-started"
+exit 47
+''')
+
+    def assert_reproduction_help_refused_before_build(self, calls):
+        self.assertEqual(["xcodebuild -help"], [call for call in calls if call.startswith("xcodebuild ")])
+        for forbidden in ("xcodegen", "bootstatus", "swiftc", "passive-capture"):
+            self.assertFalse(any(forbidden in call for call in calls), forbidden)
+        self.assertFalse((self.root / "framework-started").exists())
+        self.assertFalse((self.root / "native-iterations.json").exists())
+        self.assertFalse(self.lock.exists())
+
+    def test_keyboard_reproduction_runs_six_total_native_iterations_on_same_runtime_and_cleans(self):
+        output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",),
+                                       SIM_UDID="", SIM_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"))
+        calls = (self.root / "tools.log").read_text().splitlines()
+        derived = self.assert_keyboard_reproduction_call(calls)
+        self.assertEqual(self.build, derived.parent.parent)
+        self.assertTrue(derived.parent.name.startswith("ios-ui-run."))
+        self.assertEqual([{"iteration": n, "exitCode": 0} for n in range(1, 7)],
+                         json.loads((self.root / "native-iterations.json").read_text()))
+        self.assertEqual({"lockPresent": True, "workerMatches": True},
+                         json.loads((self.root / "help-observation.json").read_text()))
+        self.assertIn("capped at 6 total iterations", output)
+        self.assertIn("same simulator; test relaunch is not a cold-state reset", output)
+        self.assertNotIn("RESULT: PASS", output)
+        self.assertFalse(self.lock.exists())
+        self.assertEqual([], self.run_dirs())
+
+    def test_keyboard_reproduction_preserves_first_failure_and_never_relaunches_xcode_to_green(self):
+        for failed_iteration in (1, 3, 6):
+            with self.subTest(failed_iteration=failed_iteration):
+                before = (self.root / "tools.log").read_text().splitlines() if (self.root / "tools.log").exists() else []
+                outcomes = [0] * (failed_iteration - 1) + [65] + [77] * (6 - failed_iteration)
+                output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",),
+                    FAKE_XCODE_ITERATION_RESULTS=",".join(map(str, outcomes))), expected=65)
+                calls = (self.root / "tools.log").read_text().splitlines()[len(before):]
+                derived = self.assert_keyboard_reproduction_call(calls)
+                self.assertEqual([{"iteration": n, "exitCode": outcomes[n - 1]} for n in range(1, failed_iteration + 1)],
+                                 json.loads((self.root / "native-iterations.json").read_text()))
+                self.assertTrue(derived.parent.is_dir())
+                self.assertTrue((derived.parent / "xcodebuild-keyboard-reproduction-help.log").is_file())
+                self.assertIn("Run artifacts retained", output)
+                self.assertNotIn("RESULT: PASS", output)
+                self.assertFalse(self.lock.exists())
+
+    def test_keyboard_reproduction_help_nonzero_keeps_native_text_status_and_precedes_framework(self):
+        self.missing_framework_tripwire()
+        output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",),
+                                       FAKE_XCODE_HELP_EXIT="23", FAKE_XCODE_HELP_STDERR="1"), expected=23)
+        self.assert_reproduction_help_refused_before_build((self.root / "tools.log").read_text().splitlines())
+        self.assertIn("synthetic native help output", output)
+        self.assertIn("-run-tests-until-failure", output)
+        self.assertNotIn("Native repetition flags available", output)
+        self.assertEqual(1, len(self.run_dirs()))
+        self.assertIn("synthetic native help output",
+                      (self.run_dirs()[0] / "xcodebuild-keyboard-reproduction-help.log").read_text())
+
+    def test_keyboard_reproduction_requires_each_exact_help_option_not_substring_or_prose(self):
+        self.missing_framework_tripwire()
+        for option in ("-run-tests-until-failure", "-test-iterations", "-test-repetition-relaunch-enabled"):
+            with self.subTest(missing=option):
+                before = (self.root / "tools.log").read_text().splitlines() if (self.root / "tools.log").exists() else []
+                output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",),
+                                               FAKE_XCODE_HELP_MISSING=option), expected=2)
+                calls = (self.root / "tools.log").read_text().splitlines()[len(before):]
+                self.assert_reproduction_help_refused_before_build(calls)
+                self.assertIn("does not advertise required option: " + option, output)
+                self.assertNotIn("Native repetition flags available", output)
+
+    def test_keyboard_reproduction_help_pipeline_preserves_helper_errexit(self):
+        environment = pathlib.Path(self.env["BASH_ENV"])
+        with environment.open("a") as stream:
+            stream.write(r'''
+trap 'case "$BASH_COMMAND" in run_ios_mutation\ xcodebuild\ -help*)
+    run_ios_mutation() { false; echo ERREXIT_WAS_DISABLED; }
+    trap - DEBUG;; esac' DEBUG
+''')
+        output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",)), expected=1)
+        self.assertNotIn("ERREXIT_WAS_DISABLED", output)
+        calls = (self.root / "tools.log").read_text().splitlines()
+        self.assertFalse(any("xcodebuild" in call or "xcodegen" in call or "bootstatus" in call for call in calls))
+        self.assertFalse(self.lock.exists())
+        self.assertEqual(1, len(self.run_dirs()))
+
+    def test_keyboard_reproduction_test_call_preserves_helper_errexit(self):
+        environment = pathlib.Path(self.env["BASH_ENV"])
+        with environment.open("a") as stream:
+            stream.write(r'''
+trap 'case "$BASH_COMMAND" in run_ios_xcodebuild\ *)
+    run_ios_xcodebuild() { false; echo ERREXIT_WAS_DISABLED; }
+    trap - DEBUG;; esac' DEBUG
+''')
+        output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",)), expected=1)
+        self.assertNotIn("ERREXIT_WAS_DISABLED", output)
+        calls = (self.root / "tools.log").read_text().splitlines()
+        self.assertEqual(["xcodebuild -help"], [call for call in calls if call.startswith("xcodebuild ")])
+        self.assertFalse((self.root / "native-iterations.json").exists())
+        self.assertFalse(self.lock.exists())
+        self.assertEqual(1, len(self.run_dirs()))
+
+    def test_keyboard_reproduction_borrowed_directory_keeps_help_and_caller_data_on_each_outcome(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure):
+                external = self.root / ("borrowed-reproduction-failure" if failure else "borrowed-reproduction-success")
+                external.mkdir()
+                (external / "keep.txt").write_text("caller data")
+                before = (self.root / "tools.log").read_text().splitlines() if (self.root / "tools.log").exists() else []
+                output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",),
+                    IOS_RUN_DIR=str(external), FAKE_XCODE_HELP_STDERR="1",
+                    FAKE_XCODE_ITERATION_RESULTS="65,0,0,0,0,0" if failure else "0,0,0,0,0,0"), expected=65 if failure else 0)
+                calls = (self.root / "tools.log").read_text().splitlines()[len(before):]
+                self.assertEqual(external / "DerivedData", self.assert_keyboard_reproduction_call(calls))
+                self.assertIn("synthetic native help output", output)
+                self.assertIn("-test-repetition-relaunch-enabled",
+                              (external / "xcodebuild-keyboard-reproduction-help.log").read_text())
+                self.assertEqual("caller data", (external / "keep.txt").read_text())
+                self.assertFalse(self.lock.exists())
+
+    def test_keyboard_reproduction_never_enters_any_passive_or_fixture_route(self):
+        self.passive_capture_fixture()
+        for component in ("compatibility", "apple-keyboard-query-diagnostic", "apple-keyboard-reflow-diagnostic",
+                          "apple-keyboard-reproduction-diagnostic"):
+            with self.subTest(component=component):
+                before = (self.root / "tools.log").read_text().splitlines() if (self.root / "tools.log").exists() else []
+                self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",), COMPONENT=component))
+                calls = (self.root / "tools.log").read_text().splitlines()[len(before):]
+                self.assert_keyboard_reproduction_call(calls)
+                self.assertFalse((self.root / "passive.json").exists())
+                self.assertFalse(self.lock.exists())
+                self.assertEqual([], self.run_dirs())
+
+    def test_keyboard_reproduction_invalid_action_arguments_stop_before_native_tools(self):
+        for arguments in (("run-keyboard-reproduction", "7"), ("run-keyboard-reproduction", "extra"),
+                          ("keyboard-reproduction",), ("run-keyboard-reproduction-extra",)):
+            with self.subTest(arguments=arguments):
+                self.finish(self.start("run-ios-ui-tests.sh", arguments=arguments), expected=2)
+                self.assertFalse((self.root / "tools.log").exists())
+                self.assertFalse(self.build.exists())
+
+    def test_keyboard_reproduction_keeps_existing_exact_runtime_refusal_before_help(self):
+        self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",),
+            SIM_UDID="22222222-2222-2222-2222-222222222222",
+            SIM_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"), expected=1)
+        calls = (self.root / "tools.log").read_text().splitlines()
+        self.assertFalse(any("xcodebuild" in call or "xcodegen" in call or "bootstatus" in call for call in calls))
+        self.assertFalse(self.build.exists())
+
+    def test_keyboard_reproduction_oracle_rejects_cap_scope_retry_flag_and_policy_mutations(self):
+        self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-reproduction",)))
+        calls = (self.root / "tools.log").read_text().splitlines()
+        self.assert_keyboard_reproduction_call(calls)
+        selector = "-only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/"
+        english = selector + "testRenderedPortRoundTripsThroughManualInputInEnglishLocale"
+        mutations = (
+            (english, ""), (english, selector.rstrip("/")), (english, english + " " + english),
+            (english, english + " " + selector + "testRenderedPortRoundTripsThroughManualInputInGermanLocale"),
+            ("-run-tests-until-failure", ""), ("-run-tests-until-failure", "-retry-tests-on-failure"),
+            ("-test-iterations 6", "-test-iterations 7"), ("-test-iterations 6", "-test-iterations 1"),
+            ("-test-repetition-relaunch-enabled YES", "-test-repetition-relaunch-enabled NO"),
+            ("-parallel-testing-enabled NO", "-parallel-testing-enabled YES"),
+            ("-maximum-concurrent-test-simulator-destinations 1", "-maximum-concurrent-test-simulator-destinations 2"),
+            ("SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "SWIFT_TREAT_WARNINGS_AS_ERRORS=NO"),
+            ("swift-keyboard-reproduction.xcresult", "swift-keyboard-readiness.xcresult"),
+            (english, english + " OTHER_SWIFT_FLAGS=-DP2PKIT_KEYBOARD_CAUSE_PROBE"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(original=original, replacement=replacement), self.assertRaises(AssertionError):
+                self.assert_keyboard_reproduction_call([call.replace(original, replacement) for call in calls])
+        with self.assertRaises(AssertionError):
+            self.assert_keyboard_reproduction_call([call for call in calls if call != "xcodebuild -help"])
+        with self.assertRaises(AssertionError):
+            self.assert_keyboard_reproduction_call(calls + [call for call in calls if call.startswith("xcodebuild ")])
 
     def test_cancellation_probe_selects_one_case_without_invalid_repetition_option(self):
         external = self.root / "owned-probe-output"

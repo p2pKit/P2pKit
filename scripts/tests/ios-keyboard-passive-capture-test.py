@@ -105,7 +105,8 @@ class AdmissionTests(unittest.TestCase):
         with patch.object(capture.ci_evidence.platform, "system", return_value="Darwin"):
             self.assertGreater(capture.admit(env, DEVICE), time.monotonic())
             self.assertGreater(capture.admit({**env, "COMPONENT": "apple-keyboard-query-diagnostic"}, DEVICE), time.monotonic())
-            for updates in ({"COMPONENT": "source"}, {"COMPONENT": "apple-keyboard-diagnostic"}, {"GITHUB_ACTIONS": "false"},
+            for updates in ({"COMPONENT": "source"}, {"COMPONENT": "apple-keyboard-diagnostic"},
+                            {"COMPONENT": "apple-keyboard-reproduction-diagnostic"}, {"GITHUB_ACTIONS": "false"},
                             {"GITHUB_WORKFLOW_SHA": "d" * 40}, {"RUNNER_ENVIRONMENT": "self-hosted"},
                             {capture.DEADLINE_ENV: ""}, {capture.audit_processes.STATE_ENV: "/other"}):
                 with self.subTest(updates=updates), self.assertRaises(capture.CaptureError):
@@ -310,6 +311,10 @@ class SourceContractTests(unittest.TestCase):
             with self.subTest(name=name):
                 text = (ROOT / name).read_text()
                 if name == "scripts/ci_component.py":
+                    reproduction_entry = ("'apple-keyboard-reflow-diagnostic': ('macos-26', 60),\n               "
+                                          "'apple-keyboard-reproduction-diagnostic': ('macos-26', 60)}")
+                    self.assertEqual(1, text.count(reproduction_entry))
+                    text = text.replace(reproduction_entry, "'apple-keyboard-reflow-diagnostic': ('macos-26', 60)}")
                     reflow_entry = ("'apple-keyboard-query-diagnostic': ('macos-26', 60),\n               "
                                     "'apple-keyboard-reflow-diagnostic': ('macos-26', 60)}")
                     self.assertEqual(1, text.count(reflow_entry))
@@ -319,9 +324,9 @@ class SourceContractTests(unittest.TestCase):
                         "'apple-keyboard-query-diagnostic': ('macos-26', 60)}",
                         "'apple-keyboard-diagnostic': ('macos-26', 60)}")
                     text, count = re.subn(
-                        r"    if component == 'apple-keyboard-(?:query|reflow)-diagnostic':\n.*?(?=    if component)",
+                        r"    if component == 'apple-keyboard-(?:query|reflow|reproduction)-diagnostic':\n.*?(?=    if component)",
                         "", text, flags=re.S)
-                    self.assertEqual(2, count)
+                    self.assertEqual(3, count)
                 self.assertEqual(digest, hashlib.sha256(text.encode()).hexdigest())
 
     def test_original_project_and_full_test_targets_are_unchanged_outside_diagnostics(self):
