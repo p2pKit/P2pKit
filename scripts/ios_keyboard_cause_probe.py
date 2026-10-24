@@ -36,6 +36,9 @@ MODE_ENV = "P2PKIT_KEYBOARD_CAUSE_MODE"
 BUILD_ENV = "P2PKIT_KEYBOARD_CAUSE_BUILD"
 ISOLATED_ENV = "P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST"
 MAX_EVENTS_BYTES = 512 * 1024
+# Cold CoreSimulator setup only, not any XCTest keyboard/input deadline.
+# Runner.run still clamps this ceiling to the original outer work end.
+COLD_BOOT_SECONDS = 600
 FINALIZATION_SECONDS = 120
 UUID = re.compile(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
 
@@ -414,7 +417,7 @@ def run_probe(mode, environment, *, cancelled=lambda: False):
         require(candidate.upper() not in {row["udid"].upper() for row in inventory}, "CREATED_DEVICE_WAS_PREEXISTING")
         created = devices(runner.checked("created-device-readback", list_devices))
         device = created_device(candidate, name, inventory, created)
-        runner.checked("boot-owned-device", ["/usr/bin/xcrun", "simctl", "bootstatus", device, "-b"], 120)
+        runner.checked("boot-owned-device", ["/usr/bin/xcrun", "simctl", "bootstatus", device, "-b"], COLD_BOOT_SECONDS)
         developer = Path(runner.checked("developer-directory", ["/usr/bin/xcode-select", "-p"], 30).decode().strip())
         simulator = developer / "Applications/Simulator.app/Contents/MacOS/Simulator"
         require(developer.is_absolute() and simulator.is_file(), "SIMULATOR_EXECUTABLE_UNAVAILABLE")

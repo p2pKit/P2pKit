@@ -51,6 +51,14 @@ The controller:
 - Binds cleanup authority to a newly created UUID absent from the initial
   inventory and the exact fresh name/runtime/type readback. Boots that device
   and launches the selected Xcode's Simulator application in both conditions.
+- Allows up to **600 seconds for that one cold simulator boot only** (previously
+  120 seconds). A retained controlled run exhausted the former setup ceiling
+  before CoreSimulator migration/system-app startup completed and before any
+  original UI case ran; its later boot-complete message does not reverse that
+  failure. This setup-only ceiling remains clamped to the original outer work
+  deadline, preserving the existing 120-second finalization reserve. There is
+  no warm-up, boot retry, post-timeout UI admission, or change to any original
+  five-second key-readiness, equality, or dismissal deadline.
 - Compiles four pure Swift metadata controls, then runs each original EN/DE UI
   method once. The opt-in test build arms passive DEBUG-only UIKit focus and
   keyboard notification logging: closed field classifications, focus boolean,

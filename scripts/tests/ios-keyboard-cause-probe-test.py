@@ -237,6 +237,9 @@ class FakeRunner:
                 self.rows[-1]["name"] = "unrelated"
             out = self.options.get("createdId", OWNED).encode() + b"\n"
         elif name == "boot-owned-device":
+            if self.options.get("bootTimeout"):
+                self.rows[-1]["state"] = "Booting"
+                raise probe.ProbeError("COMMAND_DEADLINE")
             self.rows[-1]["state"] = "Booted"
         elif name == "developer-directory":
             out = str(self.developer).encode()
@@ -317,6 +320,10 @@ class OrchestrationTests(unittest.TestCase):
                 self.assertEqual([mode == "hardware-on", None], backend.writes)
                 self.assertTrue(backend.closed)
                 self.assertFalse(runner.root.is_relative_to(report))
+                boot = [row for row in runner.calls if row[0] == "boot-owned-device"]
+                self.assertEqual(1, len(boot))
+                self.assertEqual(600, boot[0][2])
+                self.assertEqual(120, probe.FINALIZATION_SECONDS)
                 ui = [row for row in runner.calls if row[0] == "original-ui-tests"]
                 self.assertEqual(1, len(ui))
                 self.assertEqual(["scripts/run-ios-ui-tests.sh", "run-keyboard-readiness"], ui[0][1][-2:])
@@ -378,6 +385,30 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(summary["ownedDeletionObserved"])
         self.assertFalse(any(row[0] == "shutdown-owned-device" for row in runner.calls))
         self.assertIsNone(backend.value)
+
+    def test_cold_boot_timeout_never_launches_ui_or_retries_and_finalizes_both_conditions(self):
+        for mode in ("hardware-off", "hardware-on"):
+            with self.subTest(mode=mode):
+                code, summary, runner, backend, _ = self.execute({"bootTimeout": True}, mode)
+                self.assertEqual(125, code)
+                self.assertEqual(["COMMAND_DEADLINE"], summary["errors"])
+                self.assertIsNone(summary["originalUiExitCode"])
+                self.assertIsNone(summary["events"])
+                self.assertIsNone(summary["originalXcresult"])
+                self.assertTrue(summary["nativeRetirementKnown"])
+                self.assertTrue(summary["ownedShutdownObserved"])
+                self.assertTrue(summary["ownedDeletionObserved"])
+                self.assertTrue(summary["preference"]["restorationVerified"])
+                self.assertFalse(summary["underlyingHistoricalCauseEstablished"])
+                self.assertEqual([mode == "hardware-on", None], backend.writes)
+                self.assertTrue(backend.closed)
+                names = [row[0] for row in runner.calls]
+                for name in ("boot-owned-device", "shutdown-owned-device", "delete-owned-device"):
+                    self.assertEqual(1, names.count(name))
+                    call = next(row for row in runner.calls if row[0] == name)
+                    self.assertIn(OWNED, call[1])
+                for name in ("developer-directory", "simulator-application", "original-ui-tests", "keyboard-events"):
+                    self.assertNotIn(name, names)
 
     def test_missing_telemetry_is_failure_with_unchanged_original_ui_status(self):
         code, summary, _, _, report = self.execute({"events": b""})
@@ -479,6 +510,33 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(0, self.runner.commands[0]["exitCode"])
         self.assertFalse(self.runner.commands[0]["completedWithinDeadline"])
         self.assertEqual([], self.close_runner())
+
+    def test_cold_boot_can_finish_past_the_old_setup_ceiling_without_changing_outer_end(self):
+        self.scope.after_poll = lambda: self.clock.__setitem__(0, 140.0)
+        code, _, _ = self.runner.run("cold-boot", ["synthetic"], probe.COLD_BOOT_SECONDS)
+        self.assertEqual(0, code)
+        self.assertTrue(self.runner.commands[0]["completedWithinDeadline"])
+        self.assertEqual(1000, self.runner.end)
+        self.assertEqual([], self.close_runner())
+
+    def test_cold_boot_completion_at_the_setup_ceiling_is_still_a_failure(self):
+        self.scope.after_poll = lambda: self.clock.__setitem__(0, 610.0)
+        with self.assertRaisesRegex(probe.ProbeError, "COMMAND_DEADLINE"):
+            self.runner.run("cold-boot", ["synthetic"], probe.COLD_BOOT_SECONDS)
+        self.assertEqual(0, self.runner.commands[0]["exitCode"])
+        self.assertFalse(self.runner.commands[0]["completedWithinDeadline"])
+        self.assertEqual([], self.close_runner())
+
+    def test_cold_boot_ceiling_cannot_consume_the_original_outer_finalization_reserve(self):
+        self.clock[0] = 850.0
+        self.scope.after_poll = lambda: self.clock.__setitem__(0, 880.0)
+        with self.assertRaisesRegex(probe.ProbeError, "COMMAND_DEADLINE"):
+            self.runner.run("cold-boot", ["synthetic"], probe.COLD_BOOT_SECONDS)
+        self.assertEqual(0, self.runner.commands[0]["exitCode"])
+        self.assertFalse(self.runner.commands[0]["completedWithinDeadline"])
+        self.assertEqual(1000, self.runner.end)
+        self.assertEqual([], self.close_runner())
+        self.assertEqual(1000, self.runner.finalization_end)
 
     def test_cancellation_after_spawn_is_not_bypassed_by_already_exited_child(self):
         self.scope.after_spawn = lambda: self.cancelled.__setitem__(0, True)
