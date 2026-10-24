@@ -104,7 +104,7 @@ def commands(component):
                                                 '-k', 'latest_published', '-k', 'pipeline']),
             ('platform-contract', ['ruby', 'scripts/tests/check-platform-test-policy-test.rb']),
             ('version-encoding', bash + ['scripts/tests/check-application-release-version.sh']),
-            *tests('check-rpc-hosted-validation-test.py', 'central-http-test.py', 'ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
+            *tests('check-rpc-hosted-validation-test.py', 'check-rpc-scalable-io-test.py', 'central-http-test.py', 'ci-component-test.py', 'ci-evidence-test.py', 'ci-qualification-test.py',
                    'apple-issue-validation-test.py', 'run-android-ui-validation-test.py', 'android-legacy-task-preview-test.py',
                    'tcp-nodelay-latency-test.py', 'protocol-ping-latency-test.py', 'run-rpc-qualification-test.py',
                    'run-jmdns-interpreter-diagnostic-test.py', 'run-android-permission-validation-test.py',

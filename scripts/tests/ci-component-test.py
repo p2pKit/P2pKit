@@ -75,6 +75,10 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(command[0], 'actionlint')
         self.assertIn('.github/workflows/ci-component.yml', command)
         self.assertIn('.github/workflows/publish-maven-central.yml', command)
+
+    def test_source_runs_scalable_io_receipt_controls(self):
+        self.assertEqual(dict(C.commands('source'))['check-rpc-scalable-io-test.py'],
+                         [C.sys.executable, '-B', 'scripts/tests/check-rpc-scalable-io-test.py', '-v'])
     def test_retained_publication_security_controls_are_in_source_component(self):
         expected = {
             'release-tag-controls': 'check-release-tag',

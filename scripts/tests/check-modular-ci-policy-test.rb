@@ -52,7 +52,7 @@ class ModularPolicyTests < Minitest::Test
             "  complete-gate:\n    needs: [qualify]\n    if: ${{ always() && inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component")
   end
   def test_workflow_diagnostics_cannot_launch_matrix_or_qualify
-    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview].each do |name|
+    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview rpc-io].each do |name|
       %w[plan component qualify complete-gate].each do |stage|
         original = File.read(File.join(ROOT, '.github/workflows/ci.yml'))
         section = original[/^  #{stage}:\n.*?(?=^  [a-z]|\z)/m]
@@ -62,13 +62,13 @@ class ModularPolicyTests < Minitest::Test
     end
   end
   def test_workflow_diagnostics_remain_bounded_manual_same_source_and_read_only
-    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview].each do |name|
+    %w[apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview rpc-io].each do |name|
       altered('.github/workflows/ci.yml',
               "github.event_name == 'workflow_dispatch' && inputs.component == '#{name}'",
               "inputs.component == '#{name}'")
       original = File.read(File.join(ROOT, '.github/workflows/ci.yml'))
       section = original[/^  #{name}:\n.*?(?=^  [a-z]|\z)/m]
-      ['contents: write', "contents: read\n      actions: write"].each do |permissions|
+      ['contents: write', "contents: read\n      id-token: write"].each do |permissions|
         altered('.github/workflows/ci.yml', section, section.sub('contents: read', permissions))
       end
       altered('.github/workflows/ci.yml', section, section + "    secrets: inherit\n")
@@ -83,6 +83,21 @@ class ModularPolicyTests < Minitest::Test
   end
   def test_complete_consumers_remain_independently_required
     altered('.github/workflows/ci.yml', ', consumers,', ',')
+  end
+
+  def test_rpc_io_selector_is_bounded_and_never_silently_redefaulted
+    path = '.github/workflows/ci.yml'
+    original = File.read(File.join(ROOT, path))
+    section = original[/^      rpc_io_part:\n.*?(?=^      [a-z]|\z)/m]
+    assert section
+    ['', section.sub('type: choice', 'type: string'), section.sub('default: all', 'default: macos'),
+     section.sub('android-35]', 'android-35, arbitrary]')].each do |replacement|
+      error = altered(path, section, replacement)
+      assert_match(/Issue diagnostic selector must remain bounded/, error.message)
+    end
+    altered(path, 'part: ${{ inputs.rpc_io_part }}', "part: ${{ inputs.rpc_io_part || 'all' }}")
+    caller = original[/^  rpc-io:\n.*?(?=^  [a-z]|\z)/m]
+    altered(path, caller, caller.sub('actions: read', 'actions: write'))
   end
 
   def test_legacy_api_choice_and_direct_forward_contract_accepted

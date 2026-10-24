@@ -30,12 +30,12 @@ module ModularCI
     ci = load(File.join(root, '.github/workflows/ci.yml'))
     worker = load(File.join(root, '.github/workflows/ci-component.yml'))
     jobs = ci.fetch('jobs')
-    require!(jobs.keys.sort == %w[android-legacy-task-preview android-permission-diagnostic android-ui-diagnostic apple-issue-diagnostic complete-gate component plan qualify], 'Missing or extra active CI stage')
+    require!(jobs.keys.sort == %w[android-legacy-task-preview android-permission-diagnostic android-ui-diagnostic apple-issue-diagnostic complete-gate component plan qualify rpc-io], 'Missing or extra active CI stage')
     triggers = ci.fetch('on') { ci.fetch(true) }
     required = %w[source dependencies jvm-linux jvm-windows android apple-arm64 apple-x64
                   desktop-linux desktop-windows desktop-macos security compatibility consumers macos-shared]
     require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').sort ==
-             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-keyboard-diagnostic', 'apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic', 'android-legacy-task-preview'].sort,
+             ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-keyboard-diagnostic', 'apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic', 'android-legacy-task-preview', 'rpc-io'].sort,
              'Missing or extra independently selectable required component')
     writer = load(File.join(root, '.github/workflows/dependency-update-candidate.yml')).fetch('jobs').fetch('generate')
     require!(writer['runs-on'] == 'macos-15-intel' && writer.fetch('steps').any? { |s|
@@ -81,7 +81,7 @@ module ModularCI
                step.dig('env', 'GH_TOKEN') == '${{ github.token }}' && !step['if'] && !step['continue-on-error'],
                'Publisher HTTP work must admit and retain the original-job deadline before requests')
     end
-    %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic apple-keyboard-diagnostic apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview].each do |diagnostic|
+    %w[bundle-diagnostic jmdns-diagnostic published-consumers-diagnostic consumers-pom-diagnostic apple-keyboard-diagnostic apple-issue-diagnostic android-ui-diagnostic android-permission-diagnostic android-legacy-task-preview rpc-io].each do |diagnostic|
       require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').include?(diagnostic),
                'Explicit focused diagnostic route missing')
       %w[qualify complete-gate].each do |name|
@@ -97,19 +97,24 @@ module ModularCI
                                 %w[both 317 324]],
      'android-permission-diagnostic' => ['android-permission-validation', nil, nil, nil],
      'android-legacy-task-preview' => ['android-legacy-task-preview', 'api', 'android_legacy_api',
-                                     %w[both 24 32]]}.each do |name, (workflow, argument, input, options)|
+                                     %w[both 24 32]],
+     'rpc-io' => ['rpc-io-validation', 'part', 'rpc_io_part',
+                  %w[all jvm-linux jvm-windows macos macos-abi android-24 android-35]]}.each do |name, (workflow, argument, input, options)|
       if input
         selector = triggers.dig('workflow_dispatch', 'inputs', input)
-        require!(selector && selector['type'] == 'choice' && selector['default'] == 'both' &&
+        default = name == 'rpc-io' ? 'all' : 'both'
+        require!(selector && selector['type'] == 'choice' && selector['default'] == default &&
                  selector['options'] == options, 'Issue diagnostic selector must remain bounded')
         # Legacy defaults are declared inputs; explicit empty/invalid values must reach its rejecting selector.
-        forwarded = name == 'android-legacy-task-preview' ? "${{ inputs.#{input} }}" :
-                                                          "${{ inputs.#{input} || 'both' }}"
+        forwarded = %w[android-legacy-task-preview rpc-io].include?(name) ? "${{ inputs.#{input} }}" :
+                                                                         "${{ inputs.#{input} || 'both' }}"
       end
+      permissions = {'contents' => 'read'}
+      permissions['actions'] = 'read' if name == 'rpc-io'
       job = jobs.fetch(name)
       require!(job.keys.sort == (input ? %w[if permissions uses with] : %w[if permissions uses]) &&
                job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.component == '#{name}' }}" &&
-               job['permissions'] == {'contents' => 'read'} &&
+               job['permissions'] == permissions &&
                job['uses'] == "./.github/workflows/#{workflow}.yml" &&
                job['with'] == (input ? {argument => forwarded} : nil),
                'Issue diagnostic must remain explicit, same-source and without secrets or publication rights')

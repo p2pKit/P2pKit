@@ -74,9 +74,12 @@ jobs:
   # branch. They never run the component matrix or mint qualification evidence.
   rpc-io:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.component == 'rpc-io' }}
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/rpc-io-validation.yml
     with:
-      part: ${{ inputs.rpc_io_part || 'all' }}
+      part: ${{ inputs.rpc_io_part }}
   apple-issue-diagnostic:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.component == 'apple-issue-diagnostic' }}
     permissions:
@@ -106,7 +109,7 @@ jobs:
   qualify:
     name: Qualify release components
     needs: [plan, component]
-    if: ${{ always() && inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'apple-keyboard-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && needs.plan.result == 'success' && (inputs.qualification_selection != '' || ((inputs.component == 'all' || inputs.component == '') && needs.component.result == 'success')) }}
+    if: ${{ always() && inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'apple-keyboard-diagnostic' && inputs.component != 'rpc-io' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && needs.plan.result == 'success' && (inputs.qualification_selection != '' || ((inputs.component == 'all' || inputs.component == '') && needs.component.result == 'success')) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -129,7 +132,7 @@ jobs:
           overwrite: false
   complete-gate:
     needs: [qualify]
-    if: ${{ always() && inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'apple-keyboard-diagnostic' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name != 'workflow_dispatch' || inputs.component == 'all' || inputs.qualification_selection != '') }}
+    if: ${{ always() && inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.component != 'published-consumers-diagnostic' && inputs.component != 'consumers-pom-diagnostic' && inputs.component != 'apple-keyboard-diagnostic' && inputs.component != 'rpc-io' && inputs.component != 'jmdns-diagnostic' && inputs.component != 'bundle-diagnostic' && (github.event_name != 'workflow_dispatch' || inputs.component == 'all' || inputs.qualification_selection != '') }}
     runs-on: ubuntu-24.04
     steps:
       - name: Require real complete qualification, including all failed/skipped dependencies

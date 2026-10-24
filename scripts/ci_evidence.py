@@ -122,7 +122,7 @@ DEPENDENCY_UPDATE_EXCEPTIONS = frozenset({
 })
 
 TASK_NAMES = frozenset({
-    "check-rpc-hosted-validation-test.py", "central-http-test.py", "kotlin-toolchain-controls", "published-consumer-controls",
+    "check-rpc-hosted-validation-test.py", "check-rpc-scalable-io-test.py", "central-http-test.py", "kotlin-toolchain-controls", "published-consumer-controls",
     'rpc-apple-bonjour-environment-test.py', 'intel-bonjour-advertising-test.py',
     'intel-advertising-prepare', 'intel-advertising-restore',
     "release-tag-controls", "release-identity-controls", "maven-environment-controls",
