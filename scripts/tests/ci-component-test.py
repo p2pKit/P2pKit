@@ -392,7 +392,8 @@ class ComponentTests(unittest.TestCase):
     def test_bundle_diagnostic_explicit_only_and_never_in_required_all(self):
         self.assertEqual(C.DIAGNOSTICS, {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
                                        'published-consumers-diagnostic': ('macos-15-intel', 120),
-                                       'consumers-pom-diagnostic': ('macos-15-intel', 60)})
+                                       'consumers-pom-diagnostic': ('macos-15-intel', 60),
+                                       'apple-keyboard-diagnostic': ('macos-26', 60)})
         self.assertEqual(len(C.COMPONENTS), 14)
         self.assertNotIn('bundle-diagnostic', C.COMPONENTS)
         self.assertEqual({row['component'] for row in C.matrix('all')['include']}, set(C.COMPONENTS))
@@ -425,6 +426,31 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(calls[-1].args[0][-1], '--stop')
             self.assertEqual(calls[-1].kwargs['timeout'], 90)
             self.assertEqual(len(calls), 2)
+
+    def test_keyboard_diagnostic_selects_real_input_tests_without_qualification_credit(self):
+        name = 'apple-keyboard-diagnostic'
+        self.assertEqual(C.matrix(name), {'include': [{'component': name,
+                         'os': 'macos-26', 'minutes': 60, 'job_minutes': 70}]})
+        self.assertEqual(C.commands(name), [('keyboard-readiness-diagnostic',
+            ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5', 'bash',
+             'scripts/run-ios-ui-tests.sh', 'run-keyboard-readiness'])])
+        self.assertNotIn(name, C.COMPONENTS)
+        self.assertEqual(len(C.matrix('all')['include']), 14)
+        for invalid in (name + ',source', 'all,' + name):
+            with self.assertRaises(ValueError):
+                C.matrix(invalid)
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        for job in ('qualify:', 'complete-gate:'):
+            block = workflow.split('  ' + job, 1)[1].split('    runs-on:', 1)[0]
+            self.assertIn("inputs.component != 'apple-keyboard-diagnostic'", block)
+        for status, stopped in ((0, 0), (7, 0), (0, 9), (7, 9)):
+            code, report, calls, error = self.execute_model([Mock(returncode=status), Mock(returncode=stopped)],
+                                                           component=name)
+            self.assertIsNone(error)
+            self.assertEqual(code, status or stopped)
+            self.assertEqual(report['tasks'], [{'task': 'actual-tests', 'exitCode': status},
+                                               {'task': 'gradle-stop', 'exitCode': stopped}])
+            self.assertEqual(calls[-1].args[0][-1], '--stop')
 
     def test_published_consumer_diagnostic_has_fixed_remote_scope_and_preserves_failure_cleanup(self):
         name = 'published-consumers-diagnostic'
@@ -991,8 +1017,9 @@ class TerminalDiagnosticTests(unittest.TestCase):
             '--report-glob', '**/build/test-results/**/*.xml', '--report-glob', 'build/reports/**/*', '--',
             python, '-B', str(ROOT / 'scripts/ci_component.py'), 'jmdns-diagnostic'])
         workflow = (ROOT / '.github/workflows/ci-component.yml').read_text()
-        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic ]]; then', workflow)
+        self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic || "$COMPONENT" == consumers-pom-diagnostic ]]; then', workflow)
         self.assertIn('if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]', workflow)
+        self.assertIn('elif [[ "$COMPONENT" == consumers-pom-diagnostic ]]; then [[ "$MINUTES" == 60 ]]', workflow)
         self.assertIn('else [[ "$MINUTES" == 120 ]]; fi', workflow)
         self.assertEqual(workflow.count('python3 -B scripts/run-ci-terminal-component.py'), 1)
         self.assertIn('else\n            python3 -B scripts/ci_evidence.py', workflow)
@@ -1102,7 +1129,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
         with self.assertRaises(T.ContextFailure):
             T.validate_result(app, admission, dict(source={'commit': 'c' * 40, 'tree': 'b' * 40}, exitCode=0), source, 0)
         native = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
-        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200,\n            @"modular-apple-swift-jvm-transfer":@16200}[executionMode]', native)
+        self.assertIn('@{@"modular-jmdns":@1800, @"modular-shared":@7200,\n            @"modular-consumers":@7200, @"modular-published-consumers":@7200,\n            @"modular-pom-consumers":@3600,\n            @"modular-dependency-generate":@10800, @"modular-release-consumers":@7200,\n            @"modular-apple-swift-jvm-transfer":@16200}[executionMode]', native)
         self.assertIn('if (!modularCommand) return 125;', native)
         self.assertIn('childBound = @(modularCommand.doubleValue + 240);', native)
         self.assertIn('![expectedMode isEqualToString:executionMode]', native)
@@ -1227,7 +1254,7 @@ class TerminalDiagnosticTests(unittest.TestCase):
 
     def test_terminal_shared_fixed_profile_has_original_full_shared_command_not_a_test_subset(self):
         T = self.T
-        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'dependency-generate', 'release-consumers', T.APPLE_COMPONENT})
+        self.assertEqual(set(T.PROFILES), {'jmdns-diagnostic', 'macos-shared', 'consumers', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'dependency-generate', 'release-consumers', T.APPLE_COMPONENT})
         argv = T.command(self.environment(), 'macos-shared')
         self.assertEqual(argv[argv.index('--component') + 1], 'macos-shared')
         self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')
@@ -1267,17 +1294,19 @@ class TerminalDiagnosticTests(unittest.TestCase):
         source = {'commit': 'a' * 40, 'tree': 'b' * 40}
         admission = dict(source=source, ancestry=dict(method=T.terminal.ANCESTRY_METHOD, depth=3,
             systemLoginAncestors=1, restrictedCombinedDenials=1))
-        for component, mode in (('consumers', 'modular-consumers'),
-                                ('published-consumers-diagnostic', 'modular-published-consumers')):
+        for component, mode, seconds in (('consumers', 'modular-consumers', 7200),
+                ('published-consumers-diagnostic', 'modular-published-consumers', 7200),
+                ('consumers-pom-diagnostic', 'modular-pom-consumers', 3600)):
             argv = T.command(self.environment(), component)
             self.assertEqual(argv[argv.index('--component') + 1], component)
-            self.assertEqual(argv[argv.index('--timeout-seconds') + 1], '7200')
+            self.assertEqual(argv[argv.index('--timeout-seconds') + 1], str(seconds))
             self.assertEqual(argv[argv.index('--output-dir') + 1], '/tmp/ci-evidence-' + component)
             self.assertEqual(argv[-2:], [str(ROOT / 'scripts/ci_component.py'), component])
             self.assertEqual(T.bounds(component),
-                dict(mode=mode, command=7200, child=7380, native=7440, controller=7500, wrapper=7650))
+                dict(mode=mode, command=seconds, child=seconds + 180, native=seconds + 240,
+                     controller=seconds + 300, wrapper=seconds + 450))
             self.assertIn('@"' + component + '":@"' + mode + '"', native)
-            self.assertIn('@"' + mode + '":@7200', native)
+            self.assertIn('@"' + mode + '":@' + str(seconds), native)
             app = dict(schema=3, executionMode=mode, stage='FINALIZED', exitCode=0, failureCheck='NONE',
                 openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(T.terminal.APPLICATION_FLAGS, True))
             T.validate_result(app, admission, dict(source=source, exitCode=0), source, 0, component)
@@ -1291,12 +1320,13 @@ class TerminalDiagnosticTests(unittest.TestCase):
             for event in ('workflow_dispatch', 'push', 'pull_request', 'schedule'):
                 env = {**self.environment(), 'GITHUB_EVENT_NAME': event}
                 T.environment_admit(env, 'consumers')
-                if event == 'workflow_dispatch':
-                    T.environment_admit(env, 'published-consumers-diagnostic')
-                else:
-                    with self.assertRaisesRegex(T.ContextFailure, '^HOST_CONTEXT$'):
-                        T.environment_admit(env, 'published-consumers-diagnostic')
-            for component in ('consumers', 'published-consumers-diagnostic'):
+                for diagnostic in ('published-consumers-diagnostic', 'consumers-pom-diagnostic'):
+                    if event == 'workflow_dispatch':
+                        T.environment_admit(env, diagnostic)
+                    else:
+                        with self.assertRaisesRegex(T.ContextFailure, '^HOST_CONTEXT$'):
+                            T.environment_admit(env, diagnostic)
+            for component in ('consumers', 'published-consumers-diagnostic', 'consumers-pom-diagnostic'):
                 for changes in ({'GITHUB_EVENT_NAME': 'workflow_run'}, {'GITHUB_WORKFLOW_SHA': 'b' * 40},
                     {'GITHUB_WORKFLOW_REF': 'p2pKit/P2pKit/.github/workflows/publish-maven-central.yml@refs/tags/v1'}):
                     with self.subTest(component=component, changes=changes), self.assertRaisesRegex(T.ContextFailure, '^HOST_CONTEXT$'):

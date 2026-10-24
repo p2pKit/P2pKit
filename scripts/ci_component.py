@@ -37,7 +37,8 @@ COMPONENTS = {
 # ci.yml dispatches them separately, never through this component executor.
 DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
                'published-consumers-diagnostic': ('macos-15-intel', 120),
-               'consumers-pom-diagnostic': ('macos-15-intel', 60)}
+               'consumers-pom-diagnostic': ('macos-15-intel', 60),
+               'apple-keyboard-diagnostic': ('macos-26', 60)}
 
 FLAGS = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
          '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
@@ -162,7 +163,7 @@ def commands(component):
                 [('rpc-windows-package-inspection', py + ['scripts/inspect-rpc-windows-package.py']),
                  ('rpc-windows-runtime-readback', py + ['scripts/check-rpc-windows-image-runtime.py'])]
                 if options else [])
-    if component.startswith('apple-'):
+    if component in ('apple-arm64', 'apple-x64'):
         return [('native-platform-tests', py + ['scripts/run-platform-tests.py',
                  'ios-arm64' if component == 'apple-arm64' else 'ios-x64'])]
     if component == 'macos-shared':
@@ -179,6 +180,9 @@ def commands(component):
                  *bash, 'scripts/check-published-consumers.sh', '--latest-published'])]
     if component == 'consumers-pom-diagnostic':
         return [('published-pom-diagnostic', bash + ['scripts/check-published-consumers.sh', '--pom-diagnostic'])]
+    if component == 'apple-keyboard-diagnostic':
+        return [('keyboard-readiness-diagnostic', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
+                 *bash, 'scripts/run-ios-ui-tests.sh', 'run-keyboard-readiness'])]
     if component == 'consumers':
         return [('isolated-consumers', bash + ['scripts/check-published-consumers.sh'])]
     if component == 'compatibility':

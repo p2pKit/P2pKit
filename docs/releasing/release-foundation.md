@@ -300,3 +300,18 @@ no unsafe load or inferred installed-runtime pass is permitted.
 
 For focused published-POM discovery diagnosis, dispatch CI with `component=consumers-pom-diagnostic`.
 This runs the original source-local POM smoke and cleanup, not the required complete consumer gate or release qualification.
+It uses the same supervised Terminal execution context as the full macOS
+consumer lane. Its existing 60-minute build envelope and 30-second discovery
+assertion are unchanged; a passing diagnostic does not establish the cause of
+the intermittent failure tracked in [#516](https://github.com/p2pKit/P2pKit/issues/516).
+
+For [#520](https://github.com/p2pKit/P2pKit/issues/520), dispatch
+`component=apple-keyboard-diagnostic`. This selects the existing English and
+German manual-Host/Port UI methods on the pinned iOS simulator, without rerunning
+unrelated compatibility tests. It keeps actual keyboard input, the five-second
+readiness assertion, exact field values and dismissal checks. Its XCTest stdout,
+cached introduction preflight and failure-only accessibility snapshot are private
+encrypted evidence, not physical-device qualification. The local failed
+`.xcresult` is not included in the existing uploaded report globs.
+Neither diagnostic can replace or extend the
+fourteen required release components. A retry passing is not a causal fix.
