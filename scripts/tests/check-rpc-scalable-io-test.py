@@ -34,9 +34,13 @@ class ReceiptTest(unittest.TestCase):
             observed = []
 
             def pull(command, **kwargs):
-                self.assertEqual(command[:4], ["adb", "-s", "emulator-5556", "pull"])
-                self.assertEqual(command[4], "/data/app/~~fixture==/dev.p2pkit.transport.lan.test-1/base.apk")
-                destination = command[5]
+                if command[3] == "shell":
+                    self.assertEqual(command[4:6], ["ls", "-ldn"])
+                    self.assertFalse(kwargs["check"])
+                    return
+                self.assertEqual(command[:5], ["adb", "-s", "emulator-5556", "exec-out", "cat"])
+                self.assertEqual(command[5], "/data/app/~~fixture==/dev.p2pkit.transport.lan.test-1/base.apk")
+                destination = kwargs["stdout_file"]
                 self.assertFalse(destination.exists())
                 self.assertNotEqual(destination, apk)
                 observed.append(destination)
@@ -51,8 +55,10 @@ class ReceiptTest(unittest.TestCase):
 
             # API24 uses the dotted package directly beneath /data/app, without the newer random parent.
             def old_layout_pull(command, **kwargs):
-                self.assertEqual(command[1:3], ["pull", "/data/app/dev.p2pkit.transport.lan.test-1/base.apk"])
-                command[-1].write_bytes(payload)
+                if command[1] == "shell":
+                    return
+                self.assertEqual(command[1:4], ["exec-out", "cat", "/data/app/dev.p2pkit.transport.lan.test-1/base.apk"])
+                kwargs["stdout_file"].write_bytes(payload)
             self.assertEqual(actual, android.verify_installed_apk(["adb"],
                 "package:/data/app/dev.p2pkit.transport.lan.test-1/base.apk", apk, root, old_layout_pull))
 
@@ -63,13 +69,26 @@ class ReceiptTest(unittest.TestCase):
             apk.write_bytes(b"original")
             for payload in (b"modified", b"short", None):
                 def pull(command, **kwargs):
-                    if payload is not None:
-                        command[-1].write_bytes(payload)
+                    if payload is not None and "stdout_file" in kwargs:
+                        kwargs["stdout_file"].write_bytes(payload)
                 with self.subTest(payload=payload), self.assertRaises(ValueError):
                     android.verify_installed_apk(["adb"], "package:/data/app/fixture/base.apk", apk, root, pull)
             with self.assertRaises(ValueError):
                 android.verify_installed_apk(["adb"], "package:/data/app/a/base.apk\npackage:/data/app/b/base.apk",
                                              apk, root, lambda *args, **kwargs: self.fail("Must not pull"))
+
+    def test_android_installed_byte_reader_failure_is_not_an_integrity_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apk = root / "source.apk"
+            apk.write_bytes(b"original")
+            def failed_cat(command, **kwargs):
+                if "stdout_file" in kwargs:
+                    kwargs["stdout_file"].write_bytes(b"original")
+                    raise RuntimeError("synthetic nonzero byte-reader exit")
+            with self.assertRaisesRegex(RuntimeError, "nonzero"):
+                android.verify_installed_apk(["adb"], "package:/data/app/fixture/base.apk",
+                                             apk, root, failed_cat)
 
     def rpc_result(self, count):
         return dict(schema=1, source="a" * 40, cleanup=True,

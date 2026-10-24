@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -28,7 +29,7 @@ SCOPE = "RAW_ANDROID_IO_NOT_AUTHENTICATED_RPC_OR_PHYSICAL_QUALIFICATION"
 
 
 def verify_installed_apk(device, installed, source_apk, report, run):
-    """Hash the actual installed bytes on the host; Android 24 has no sha256sum."""
+    """Hash actual installed bytes, without a guest hash utility or the adb sync STAT protocol."""
     need(re.fullmatch(r"package:/data/app/(?:[-A-Za-z0-9_.~+=]+/)+base\.apk", installed) and
          all(part not in (".", "..") for part in installed.removeprefix("package:").split("/")),
          "Ambiguous installed APK")
@@ -36,7 +37,12 @@ def verify_installed_apk(device, installed, source_apk, report, run):
     # Do not retain a second APK in the evidence bundle; preserve its bound digest instead.
     with tempfile.TemporaryDirectory(prefix="installed-apk-", dir=report) as directory:
         pulled = Path(directory) / "base.apk"
-        run([*device, "pull", installed.removeprefix("package:"), pulled], timeout=90)
+        path = installed.removeprefix("package:")
+        # Preserve the OS observation too: API24's adb sync pull reported ENOENT for pm's path.
+        # exec-out streams exact binary bytes through the public shell API, without text conversion
+        # or dependency on an older device's file-transfer metadata protocol. A failed cat still fails.
+        run([*device, "shell", "ls", "-ldn", str(Path(path).parent), path], check=False)
+        run([*device, "exec-out", "cat", path], timeout=90, stdout_file=pulled)
         need(pulled.is_file() and not pulled.is_symlink() and
              pulled.stat().st_size == source_apk.stat().st_size, "Incomplete installed APK observation")
         actual = hashlib.sha256(pulled.read_bytes()).hexdigest()
@@ -85,21 +91,24 @@ def main():
     counter = 0
     deadline = int(env["P2PKIT_CI_COMMAND_DEADLINE_NS"]) / 1_000_000_000
 
-    def run(command, *, timeout=30, check=True, input_bytes=None):
+    def run(command, *, timeout=30, check=True, input_bytes=None, stdout_file=None):
         nonlocal counter
         counter += 1
         log = report / f"command-{counter:03d}.log"
         end = min(deadline, time.monotonic() + timeout)
-        with log.open("xb") as capture:
+        with contextlib.ExitStack() as files:
+            capture = files.enter_context(log.open("xb"))
+            output = capture if stdout_file is None else files.enter_context(stdout_file.open("xb"))
             process = subprocess.Popen([str(item) for item in command], cwd=ROOT, env=env,
                                        stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
-                                       stdout=capture, stderr=subprocess.STDOUT)
+                                       stdout=output, stderr=capture)
             try:
                 if input_bytes is not None:
                     process.stdin.write(input_bytes)
                     process.stdin.close()
                 while process.poll() is None:
-                    need(time.monotonic() < end and log.stat().st_size <= 16 * 1024 * 1024,
+                    need(time.monotonic() < end and log.stat().st_size <= 16 * 1024 * 1024 and
+                         (stdout_file is None or stdout_file.stat().st_size <= 16 * 1024 * 1024),
                          f"Bounded command {counter} failed to settle")
                     time.sleep(0.1)
             finally:

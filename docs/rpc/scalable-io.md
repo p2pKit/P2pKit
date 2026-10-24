@@ -37,7 +37,9 @@ waiting or interleave another frame into its unfinished stream.
 Readiness registration/cancellation/close wake the same backend. Snapshot
 identity prevents an old event from resuming a replacement waiter. A single
 1-second backend safety ceiling contains wake failures; there is no added
-per-connection readiness polling timer. Last-owner close wakes, joins and
+per-connection readiness polling timer. Changes before the next snapshot share
+one sticky wake signal: a 256-peer burst must not send hundreds of redundant
+datagrams. Actual native wake errors still fail the backend. Last-owner close wakes, joins and
 retires the poller. Failed startup/retirement stays failed and retained rather
 than creating an unobserved replacement. Original socket close is still attempted
 if backend cleanup fails; explicit close observes its original failure.
@@ -165,8 +167,24 @@ and covers both old/new layouts; the failed attempts remain failures.
 passed 25 actual C contract groups in both strict and ASan/UBSan builds, plus
 the existing JNI controls, but the new 128/256 async JNI integration failed.
 That failure and Apple ABI/mobile qualification remain open at this checkpoint.
-New optimization results require fresh, exact-source checks. No physical mobile
-capacity or 512-client capability is claimed.
+[The next exact-source run](https://github.com/p2pKit/P2pKit/actions/runs/40126050613)
+at `b89f4821` confirmed the native cause: redundant wake datagrams exhausted
+Darwin's queue (`ENOBUFS`, errno 55). Coalescing fixes the source of that burst,
+not its error classification; new actual macOS verification is still required.
+The independent macOS ABI producer generated exactly the additive `host256()`
+entry for all Apple targets, now reviewed into the maintained baseline.
+Android24's later `adb pull` could not read the path returned by `pm path`;
+the replacement uses an independently hashed binary `adb exec-out cat` stream,
+with original OS path observations. Neither failed attempt is an ART test pass.
+
+The `b89f4821` authenticated Linux 120-second comparison completed both original
+processes and the retention observation successfully. It returned 153,600 /
+307,200 correct responses (128 / 256 clients), with 66 / 76 host native threads
+after load. Idle CPU was 7.94% / 20.47% of one core, active CPU 147.15% / 313.11%,
+p95 upper buckets 12 / 10 ms and p99 27 / 73 ms. Post-load RSS was 379.1 / 650.4 MiB.
+This is improved idle cost but **not yet low-overhead mobile-host qualification**;
+5-second idle windows also include JVM warm-up/GC effects. These figures precede
+wake coalescing. No physical mobile capacity or 512-client capability is claimed.
 
 The old 128-raw-socket baseline observed 151 JVM threads (9 before connections).
 Initial new raw 128/256 tests observed 30 threads in both cases. Their short,

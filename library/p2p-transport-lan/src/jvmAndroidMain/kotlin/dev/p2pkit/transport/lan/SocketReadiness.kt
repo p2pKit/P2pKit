@@ -190,8 +190,16 @@ internal class SocketReadiness<K : Any>(
         var stopping = false
         var failure: Throwable? = null
         private var retired = false
+        private var wakePending = false
         fun wakeup() {
-            if (!retired) try { poller.wakeup() } catch (error: Throwable) {
+            // Mutations are serialized by lock. One sticky signal is sufficient until select
+            // returns and the next snapshot can include ALL of them. Sending one datagram per
+            // waiter exhausts Darwin's wake queue (ENOBUFS) during a 256-connection burst.
+            // Do not reinterpret that error as success: avoid redundant sends instead.
+            if (!retired && !wakePending) try {
+                poller.wakeup()
+                wakePending = true
+            } catch (error: Throwable) {
                 // Native select has a finite failure ceiling. Never lose a registered continuation if
                 // wakeup fails, and never report a healthy backend after that failure.
                 failure = error
@@ -216,6 +224,10 @@ internal class SocketReadiness<K : Any>(
                     val events = poller.select(snapshot.map { SocketInterest(it.member.key, it.operations) })
                     check(events.size == snapshot.size) { "Invalid readiness batch" }
                     val ready = synchronized(lock) {
+                        // Even a mutation after the backend drained its wake is in the NEXT
+                        // snapshot. Reset under the mutation lock only after select returned;
+                        // a later mutation can then send another sticky signal without a lost wake.
+                        wakePending = false
                         buildList {
                             snapshot.forEachIndexed { index, pending ->
                                 val member = pending.member

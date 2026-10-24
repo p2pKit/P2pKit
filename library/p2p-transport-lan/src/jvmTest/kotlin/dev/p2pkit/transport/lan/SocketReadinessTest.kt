@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
@@ -173,4 +174,67 @@ class SocketReadinessTest {
         } finally { owner.close() }
         assertEquals(1, poller.closed.get())
     } }
+
+    @Test fun waiterBurstAndCancellationNeedOnlyOneStickyWakeUntilTheNextSnapshot() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = Semaphore(0)
+        val pulses = Semaphore(0)
+        val wakes = AtomicInteger()
+        val polls = AtomicInteger()
+        val poller = object : SocketPoller<Int> {
+            override fun wakeup() { wakes.incrementAndGet(); pulses.release() }
+            override fun select(interests: List<SocketInterest<Int>>): IntArray {
+                if (polls.incrementAndGet() == 1) {
+                    // Hold the original empty snapshot while many original owners start waiting.
+                    entered.complete(Unit)
+                    check(release.tryAcquire(5, TimeUnit.SECONDS))
+                    pulses.drainPermits()
+                } else if (interests.isEmpty()) check(pulses.tryAcquire(5, TimeUnit.SECONDS))
+                return IntArray(interests.size) { READABLE }
+            }
+            override fun close() = Unit
+        }
+        val readiness = SocketReadiness("readiness-test-coalesced") { poller }
+        val owners = List(512) { readiness.register(it) }
+        val readers = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
+        try {
+            withTimeout(5_000) { entered.await() }
+            owners.forEach { owner -> readers += async(start = CoroutineStart.UNDISPATCHED) { owner.await(READABLE) } }
+            readers.take(256).forEach { it.cancelAndJoin() }
+            assertEquals(1, wakes.get(), "A burst is one snapshot change, not 768 wake datagrams")
+            assertTrue(readers.drop(256).none { it.isCompleted })
+            release.release()
+            withTimeout(5_000) { readers.drop(256).awaitAll() }
+        } finally {
+            release.release()
+            owners.forEach { it.close() }
+            readers.forEach { it.cancelAndJoin() }
+        }
+        assertFalse(Thread.getAllStackTraces().keys.any { it.name == "readiness-test-coalesced" })
+    }
+
+    @Test fun aRealWakeFailureStillFailsTheBackendRatherThanBeingCoalescedIntoSuccess() = runBlocking {
+        supervisorScope {
+            val release = CountDownLatch(1)
+            val original = IOException("synthetic native wake failure")
+            val closed = AtomicInteger()
+            val poller = object : SocketPoller<Int> {
+                override fun wakeup() { release.countDown(); throw original }
+                override fun select(interests: List<SocketInterest<Int>>): IntArray {
+                    check(release.await(5, TimeUnit.SECONDS))
+                    return IntArray(interests.size)
+                }
+                override fun close() { closed.incrementAndGet() }
+            }
+            val readiness = SocketReadiness("readiness-test-wake-failure") { poller }
+            val owner = readiness.register(1)
+            try {
+                withTimeout(5_000) {
+                    assertFailsWith<IOException> { owner.await(READABLE) }
+                }
+                assertFailsWith<IOException> { readiness.register(2) }
+            } finally { owner.close() }
+            assertEquals(1, closed.get())
+        }
+    }
 }
