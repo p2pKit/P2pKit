@@ -78,6 +78,39 @@ fi
 boot_and_wait_for_simulator "$udid"
 
 if [[ -z "$action" ]]; then
+    keyboard_passive_flags=()
+    if [[ "${COMPONENT:-}" == "compatibility" && "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        # Temporary #520 observation of the ORDINARY full target. No simulator
+        # GUI/preference/fixture change and no extra test, input or readiness wait.
+        keyboard_passive_flags=('OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE')
+        keyboard_command_status=UNOBSERVED
+        keyboard_signal_status=0
+        finish_keyboard_observation() {
+            local status="$1" capture_status=0
+            trap - EXIT
+            trap '' INT TERM
+            if [[ "$keyboard_command_status" == UNOBSERVED && "$keyboard_signal_status" -eq 0 ]]; then
+                keyboard_command_status="$status"
+            fi
+            # Register this foreground reader under the still-held launcher
+            # lock. The helper owns only its log child, never this borrowed device.
+            if python3 "$IOS_LAUNCH_HELPER" run "$IOS_LAUNCH_LOCK" "$$" \
+                python3 -B "$SCRIPT_DIR/ios_keyboard_passive_capture.py" \
+                "$udid" "$keyboard_command_status" "$status"; then
+                :
+            else
+                capture_status="$?"
+                echo "[ios-run] Passive keyboard capture failed; original command result is retained." >&2
+            fi
+            if [[ "$status" -eq 0 && "$capture_status" -ne 0 ]]; then status=125; fi
+            cleanup_ios_run "$status"
+        }
+        trap 'keyboard_signal_status=130; exit 130' INT
+        trap 'keyboard_signal_status=143; exit 143' TERM
+        trap 'finish_keyboard_observation "$?"' EXIT
+    fi
+    # Do not put this function in an if/||/! context: that disables Bash's
+    # existing errexit semantics inside the original launcher helpers.
     run_ios_xcodebuild \
         -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
         -scheme p2pkit-sample-ui \
@@ -86,7 +119,9 @@ if [[ -z "$action" ]]; then
         -destination "platform=iOS Simulator,id=$udid" \
         -derivedDataPath "$DERIVED_DATA" \
         -parallel-testing-enabled NO \
+        ${keyboard_passive_flags[@]+"${keyboard_passive_flags[@]}"} \
         test
+    keyboard_command_status=0
 
     echo "RESULT: PASS — iOS simulator launched the sample and completed start/stop UI automation"
 elif [[ "$action" == "run-keyboard-readiness" ]]; then

@@ -20,6 +20,8 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - P2pKitSampleApp.swift
+      - KeyboardCauseProbe.swift
+      - KeyboardCauseProbeControls/Sources/KeyboardCauseProbeRecord/KeyboardCauseProbeRecord.swift
       - ContentView.swift
       - LocalPairingView.swift
       - IosLanDiagnosticsLease.swift
