@@ -12,6 +12,7 @@ import java.util.IdentityHashMap
 
 /** Public Android APIs only: no reflection, hidden APIs, process binding, root, or interface-name exceptions. */
 internal object AndroidOsSocketOps : AndroidSocketOps {
+    override fun readiness(): SocketReadiness<AndroidSocketHandle> = AndroidSocketPoller.readiness
     // Strong ownership keeps ParcelFileDescriptor's finalizer from closing a leased socket.
     // Keys are the exact descriptor objects returned to AndroidSocketHandle, never descriptor numbers.
     private val owners = IdentityHashMap<FileDescriptor, ParcelFileDescriptor>()

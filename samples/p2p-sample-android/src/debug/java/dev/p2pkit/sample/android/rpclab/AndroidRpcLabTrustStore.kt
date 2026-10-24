@@ -102,14 +102,14 @@ internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = nu
         val bytes = read(target(purpose)) ?: return@locked emptySet()
         val text = decrypt(bytes, name).toString(Charsets.US_ASCII)
         val values = text.split('\n').filter(String::isNotEmpty)
-        require(values.size <= 128 && values.toSet().size == values.size)
+        require(values.size <= 256 && values.toSet().size == values.size)
         values.map(PeerFingerprint::parse).toSet()
     }
 
     override suspend fun replace(appId: AppId, purpose: RpcTrustPurpose, fingerprints: Set<PeerFingerprint>) {
         locked {
             val name = namespace(appId, purpose)
-            require(fingerprints.size <= 128)
+            require(fingerprints.size <= 256)
             val file = target(purpose)
             // A missing wrapping key must never erase an older authenticated approval set.
             val existing = read(file)

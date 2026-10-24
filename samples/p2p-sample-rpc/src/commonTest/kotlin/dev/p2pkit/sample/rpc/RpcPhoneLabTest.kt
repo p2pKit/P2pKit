@@ -26,15 +26,20 @@ import kotlin.test.assertNull
 class RpcPhoneLabTest {
     private class ReportingError(message: String) : Error(message) { val retainedOwner = Any() }
 
-    private fun pins(): List<String> {
+    private fun pins(count: Int = 128): List<String> {
         val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
-        return List(128) { "p2f1-${alphabet[it / 32]}${alphabet[it % 32]}" + "a".repeat(50) }
+        return List(count) { "p2f1-${alphabet[it / 32]}${alphabet[it % 32]}" + "a".repeat(50) }
     }
 
     @Test
-    fun importRequiresExactly128DistinctWellFormedPins() {
+    fun importRequiresExactly128Or256DistinctWellFormedPins() {
         val pins = pins()
         assertEquals(128, RpcPhoneLab.parseCapacityPins(pins.joinToString("\n")).size)
+        assertEquals(256, RpcPhoneLab.parseCapacityPins(pins(256).joinToString("\n")).size)
+        assertEquals(14847, pins(256).joinToString("\n").encodeToByteArray().size)
+        for (count in listOf(129, 255, 257)) {
+            assertFailsWith<IllegalArgumentException> { RpcPhoneLab.parseCapacityPins(pins(count).joinToString("\n")) }
+        }
         assertFailsWith<IllegalArgumentException> { RpcPhoneLab.parseCapacityPins("") }
         assertFailsWith<IllegalArgumentException> { RpcPhoneLab.parseCapacityPins(pins.dropLast(1).joinToString("\n")) }
         assertFailsWith<IllegalArgumentException> {
@@ -43,7 +48,7 @@ class RpcPhoneLabTest {
         assertFailsWith<IllegalArgumentException> {
             RpcPhoneLab.parseCapacityPins((pins.dropLast(1) + "not-a-pin").joinToString("\n"))
         }
-        assertFailsWith<IllegalArgumentException> { RpcPhoneLab.parseCapacityPins("a".repeat(8193)) }
+        assertFailsWith<IllegalArgumentException> { RpcPhoneLab.parseCapacityPins("a".repeat(16385)) }
     }
 
     @Test

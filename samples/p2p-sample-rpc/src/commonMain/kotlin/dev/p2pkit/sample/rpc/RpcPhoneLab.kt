@@ -526,13 +526,13 @@ public class RpcPhoneLab private constructor(
             }
         }
 
-        /** Import is an explicit local administrator action for exactly 128 synthetic test clients. */
+        /** Import is an explicit local administrator action for exactly 128 or 256 synthetic test clients. */
         @Throws(Exception::class)
         public fun parseCapacityPins(text: String): Set<PeerFingerprint> {
-            require(text.length <= 8192)
+            require(text.length <= 16384)
             val lines = text.lineSequence().filter(String::isNotEmpty).toList()
-            require(lines.size == 128 && lines.toSet().size == 128)
-            return lines.map(PeerFingerprint::parse).toSet().also { require(it.size == 128) }
+            require(lines.size in setOf(128, 256) && lines.toSet().size == lines.size)
+            return lines.map(PeerFingerprint::parse).toSet().also { require(it.size == lines.size) }
         }
 
         @Throws(Exception::class)
@@ -560,9 +560,9 @@ public class RpcPhoneLab private constructor(
             explicitlyApprovedCapacityPins: String, application: RpcApplicationSession?, nearby: Boolean = false,
         ): RpcPhoneLab {
             val policy = settings.policy(host = true)
-            if (explicitlyApprovedCapacityPins.isNotEmpty()) {
-                trustStore.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients,
-                    parseCapacityPins(explicitlyApprovedCapacityPins))
+            val capacityPins = explicitlyApprovedCapacityPins.takeIf(String::isNotEmpty)?.let(::parseCapacityPins)
+            if (capacityPins != null) {
+                trustStore.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients, capacityPins)
             }
             val owner = PhoneFactoryOwner<RpcHost>(RpcHost::close)
             val scope = owner.scope
@@ -571,7 +571,7 @@ public class RpcPhoneLab private constructor(
                     appId = RpcCapacityContract.appId
                     lan = policy
                     this.trustStore = trustStore
-                    limits = RpcLimits.host128()
+                    limits = if (capacityPins?.size == 256) RpcLimits.host256() else RpcLimits.host128()
                     advertise = nearby
                     allowNearbyPairing = nearby
                     application?.register(this, authorize = { it.fingerprint != null })

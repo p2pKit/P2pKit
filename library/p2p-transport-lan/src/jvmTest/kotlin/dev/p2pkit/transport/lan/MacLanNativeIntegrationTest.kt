@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
 class MacLanNativeIntegrationTest {
     private fun load(): MacLanErrnos {
         assertNotNull(MacLanNativeLoader.configuredBinding(OrganizationLan(listOf("10.0.0.0/8"), "en0", "10.1.2.3")))
-        assertEquals(1, MacLanNative.abi())
+        assertEquals(2, MacLanNative.abi())
         return MacLanErrnos(MacLanNative.constants())
     }
     @Test fun realNativeRoundTripReadsBackScopeEndpointsAndReleasesAllOwners() {

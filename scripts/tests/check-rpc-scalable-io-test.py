@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Parser/fixture controls only, never raw socket, authenticated RPC or device capacity credit."""
+import copy
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import unittest
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+rpc = load("run-rpc-io-benchmark")
+android = load("run-android-readiness")
+
+
+class ReceiptTest(unittest.TestCase):
+    def rpc_result(self, count):
+        return dict(schema=1, source="a" * 40, cleanup=True,
+                    scope="AUTHENTICATED_RPC_LAB_NOT_PHYSICAL_OR_MOBILE_QUALIFICATION",
+                    measurements=dict(clients=count, seconds=120, responses=count * 120 * 10,
+                        activeWallNs=120_000_000_000, late100msSlots=0, hostThreadsBeforeConnections=20,
+                        hostThreadsIdle=30, hostThreadsAfter=30, hostRssBeforeBytes=100_000_000,
+                        hostRssIdleBytes=110_000_000, hostRssAfterBytes=200_000_000, hostIdleWallMs=5_000,
+                        hostIdleCpuNs=1_000_000, hostActiveCpuNs=50_000_000_000, hostActiveWallMs=120_000,
+                        hostRetainedRecords=count * 600, hostPayloadBytes=count * 600 * 1024),
+                    latencyUpperMs=dict(p50=5, p95=10, p99=20, max=30))
+
+    def encode(self, value):
+        return rpc.PREFIX + json.dumps(value).encode() + b"\n"
+
+    def test_both_rpc_profiles_are_exact_source_bound(self):
+        for count in (128, 256):
+            value = self.rpc_result(count)
+            self.assertEqual(value, rpc.validate_result(self.encode(value), "a" * 40, count, 120))
+            with self.assertRaises(RuntimeError):
+                rpc.validate_result(self.encode(value), "b" * 40, count, 120)
+
+    def test_missing_duplicate_incomplete_failed_rpc_is_not_success(self):
+        value = self.rpc_result(256)
+        invalid = [b"", self.encode(value) * 2]
+        for field, replacement in (("cleanup", False), ("scope", "physical")):
+            changed = copy.deepcopy(value)
+            changed[field] = replacement
+            invalid.append(self.encode(changed))
+        for field, replacement in (("clients", 128), ("seconds", 60), ("responses", 0)):
+            changed = copy.deepcopy(value)
+            changed["measurements"][field] = replacement
+            invalid.append(self.encode(changed))
+        for raw in invalid:
+            with self.subTest(raw=raw), self.assertRaises(RuntimeError):
+                rpc.validate_result(raw, "a" * 40, 256, 120)
+
+    def test_rpc_requires_actual_resources_durations_and_ordered_percentiles(self):
+        value = self.rpc_result(256)
+        for field in value["measurements"]:
+            changed = copy.deepcopy(value)
+            del changed["measurements"][field]
+            with self.subTest(field=field), self.assertRaises((RuntimeError, KeyError)):
+                rpc.validate_result(self.encode(changed), "a" * 40, 256, 120)
+        for latency in ({}, dict(p50=1, p95=20, p99=10, max=30), dict(p50=1, p95=True, p99=20, max=30)):
+            with self.subTest(latency=latency), self.assertRaises(RuntimeError):
+                rpc.validate_result(self.encode({**value, "latencyUpperMs": latency}), "a" * 40, 256, 120)
+
+    def android_result(self):
+        measurements = [dict(backend=backend, clients=count, responses=count * 300, bytesPerResponse=1024,
+                             readinessThreads=1 if backend == "nio-selector" else 2,
+                             threadsBefore=20, threadsIdle=30, idleWallNs=5_100_000_000, activeWallNs=30_000_000_000)
+                        for backend in ("nio-selector", "native-os-poll") for count in (128, 256)]
+        return {"scope": android.SCOPE, "outcome": "PASS", "completed": "4",
+                "measurements": json.dumps(measurements)}
+
+    def android_encode(self, value):
+        return ("".join(f"INSTRUMENTATION_RESULT: {key}={item}\n" for key, item in value.items()) +
+                "INSTRUMENTATION_CODE: -1\n").encode()
+
+    def test_android_requires_four_actual_backend_population_combinations(self):
+        value = self.android_result()
+        self.assertEqual(4, len(android.result(self.android_encode(value))))
+        for key, item in (("completed", "3"), ("scope", "rpc-qualified"), ("outcome", "FAIL"),
+                          ("failurePhase", "cleanup")):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                android.result(self.android_encode({**value, key: item}))
+
+    def test_android_rejects_missing_response_counts_and_per_client_threads(self):
+        value = self.android_result()
+        for key, item in (("responses", 0), ("threadsIdle", 324), ("readinessThreads", 256)):
+            changed = json.loads(value["measurements"])
+            changed[0][key] = item
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                android.result(self.android_encode({**value, "measurements": json.dumps(changed)}))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -6,6 +6,7 @@ import java.nio.file.Path
 import java.security.MessageDigest
 
 internal class LabConfig(val directory: Path, val values: Map<String, String>) {
+    val clientCount: Int = values["clientCount"]?.toInt() ?: 128
     val role: String = values.getValue("role")
     val runLabel: String = values.getValue("runLabel")
     val sourceSha: String = values.getValue("sourceSha")
@@ -17,11 +18,13 @@ internal class LabConfig(val directory: Path, val values: Map<String, String>) {
     )
 
     init {
-        require(values.keys == setOf(
+        val countField = if (values["schema"] == "2") setOf("clientCount") else emptySet()
+        require(values.keys == countField + setOf(
             "schema", "role", "runLabel", "sourceSha", "endpointAddress", "port", "subnets",
             "interface", "localAddress",
         ))
-        require(values.getValue("schema") == "1" && role in setOf("host", "client"))
+        require(values.getValue("schema") in setOf("1", "2") && role in setOf("host", "client"))
+        require(clientCount in setOf(128, 256))
         require(runLabel.matches(Regex("[a-z0-9-]{1,64}")) && sourceSha.matches(Regex("[a-f0-9]{40}")))
         require(port in 1024..65535 && lan.allows(endpointAddress))
     }

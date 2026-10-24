@@ -138,6 +138,13 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
         optimization.consumerKeepRules.file("src/nativeInterop/androidSockets/consumer-rules.pro")
         withHostTest { }
+        // Opt-in real ART/Os.poll validation. It is not silently selected by portable check, and
+        // uses the platform Instrumentation class rather than a new third-party test dependency.
+        if (providers.gradleProperty("p2pkit.lan.readinessDeviceTest").orNull == "true") {
+            withDeviceTest {
+                instrumentationRunner = "dev.p2pkit.transport.lan.LanReadinessInstrumentation"
+            }
+        }
     }
 
     // iOS LAN/TCP via Bonjour + Network.framework. Same public API as
@@ -186,6 +193,10 @@ kotlin {
     }
 
     sourceSets {
+        // Public Java NIO and readiness ownership are identical on JVM17 and Android API24+.
+        // Native scoped socket adapters remain platform-specific; no new published module/dependency.
+        jvmMain { kotlin.srcDir("src/jvmAndroidMain/kotlin") }
+        androidMain { kotlin.srcDir("src/jvmAndroidMain/kotlin") }
         commonMain.dependencies {
             // `api` rather than `implementation`: the iOS framework's
             // `export(project(":p2p-core"))` above requires the dependency to

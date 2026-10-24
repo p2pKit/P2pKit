@@ -29,6 +29,7 @@ import java.time.Instant
 /** Loaded only by the separate lab compilation, with explicit owner-scoped configuration. */
 public class LabEnvironment : RpcCapacityEnvironment {
     private val config = LabConfig.load("client")
+    internal val clientCount: Int get() = config.clientCount
     private val directory = config.directory
     private val mobile = LabMobile.load(config)
     private val identities = mutableListOf<LabVault>()
@@ -43,7 +44,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
 
     init {
         try {
-            repeat(128) { index ->
+            repeat(config.clientCount) { index ->
                 val vault = LabVault(LabFiles.newDirectory(directory, "client-$index"))
                 identities += vault
                 trusts += LabTrustStore(vault)
@@ -62,7 +63,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
                     }
                 } finally { scope.cancel() }
             }
-            require(preparedPins.toSet().size == 128)
+            require(preparedPins.toSet().size == config.clientCount)
             LabFiles.write(directory.resolve("client-pins.txt"), preparedPins.joinToString("\n", postfix = "\n") {
                 it.value
             }.toByteArray())
@@ -121,7 +122,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
     override suspend fun sampleHost(): RpcCapacityHostTelemetry = withTimeout(4_500) {
         // A just-copied sample may be the previous one. Wait for a new sample inside
         // the driver's unchanged five-second limit, rather than misclassify copy timing.
-        val sample = awaitLabTelemetry(directory, config.runLabel, sequence, mobile)
+        val sample = awaitLabTelemetry(directory, config.runLabel, sequence, mobile, config.clientCount)
         sequence = sample.first
         sample.second
     }
@@ -131,6 +132,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
 
 internal suspend fun awaitLabTelemetry(
     directory: java.nio.file.Path, runLabel: String, previous: Long, mobile: LabMobile? = null,
+    clientCount: Int = 128,
 ): Pair<Long, RpcCapacityHostTelemetry> {
     val file = directory.resolve("host-telemetry.txt")
     while (true) {
@@ -141,7 +143,7 @@ internal suspend fun awaitLabTelemetry(
             val received = Files.getLastModifiedTime(file, LinkOption.NOFOLLOW_LINKS).toMillis()
             val age = Instant.now().toEpochMilli() - received
             require(age in 0..15_000 && next >= previous) { "Stale/replayed host telemetry" }
-            val sample = mobile?.telemetry(values) ?: LabTelemetry.decode(values, runLabel)
+            val sample = mobile?.telemetry(values) ?: LabTelemetry.decode(values, runLabel, clientCount)
             if (next > previous) return next to sample
         }
         delay(100)

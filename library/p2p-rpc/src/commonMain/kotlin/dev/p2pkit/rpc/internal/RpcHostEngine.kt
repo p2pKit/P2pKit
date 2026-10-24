@@ -50,6 +50,10 @@ internal class RpcHostEngine(
     val incarnation: String = newWireId(),
     requestHistoryCapacity: Int = 0,
 ) {
+    // Host-wide notification admission stays separate from per-peer limits and inside the shared
+    // body accounting. Keeping it with the existing engine avoids changing RpcHost's constructor ABI.
+    val notificationBudget = PayloadBudget(if (limits.trustedClients > 128) 2L * 1_048_576 else 1L * 1_048_576)
+
     private data class Key(val peer: PeerFingerprint, val id: String)
     private enum class Stage { Queued, Running, Finalizing, Complete }
     private class Record(

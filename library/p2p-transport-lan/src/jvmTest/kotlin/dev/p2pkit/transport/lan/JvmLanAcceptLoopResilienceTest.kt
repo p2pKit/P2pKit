@@ -34,6 +34,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.channels.AsynchronousCloseException
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
@@ -145,7 +146,9 @@ class JvmLanAcceptLoopResilienceTest {
                 val entry = entries.single()
                 assertEquals(KitTestDiagnostics.Recording.Level.WARN, entry.level)
                 assertEquals("inbound acceptance ended for LAN", entry.message)
-                val cause = assertIs<SocketException>(entry.throwable)
+                // The default listener now owns a ServerSocketChannel. Its original close error
+                // must still be reported exactly once, not replaced by a generic transport failure.
+                val cause = assertIs<AsynchronousCloseException>(entry.throwable)
                 assertTrue(cause.suppressedExceptions.isEmpty())
             }
             bob.start()

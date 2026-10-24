@@ -320,3 +320,78 @@ int32_t p2p_lan_socket_close(uint64_t handle) {
     pthread_mutex_unlock(&registry_lock);
     return result;
 }
+
+int32_t p2p_lan_socket_wake_open(uint64_t handles[2]) {
+    if (handles == NULL) return EINVAL;
+    handles[0] = 0; handles[1] = 0;
+    int32_t result = own(-1, &handles[0]);
+    if (result != 0) return result;
+    result = own(-1, &handles[1]);
+    if (result != 0) return result;
+    owned_socket *first = acquire(handles[0]), *second = acquire(handles[1]);
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, pair) < 0) result = errno;
+    else {
+        first->fd = pair[0]; second->fd = pair[1];
+        result = configure(pair[0]);
+        if (result == 0) result = configure(pair[1]);
+    }
+    release(second); release(first);
+    return result;
+}
+
+int32_t p2p_lan_socket_wake(uint64_t handle) {
+    owned_socket *slot = acquire(handle);
+    if (slot == NULL) return EBADF;
+    const unsigned char signal = 1;
+    ssize_t count;
+    do { count = send(slot->fd, &signal, 1, 0); } while (count < 0 && errno == EINTR);
+    int32_t result = count == 1 || (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) ? 0 :
+        (count < 0 ? errno : EIO);
+    release(slot);
+    return result;
+}
+
+int32_t p2p_lan_socket_poll_many(uint64_t wake, const uint64_t *handles, const int32_t *operations,
+    uint32_t count, int32_t *ready) {
+    if (count > P2P_LAN_SOCKET_MAX_HANDLES || handles == NULL || operations == NULL || ready == NULL) return EINVAL;
+    memset(ready, 0, count * sizeof(*ready));
+    for (uint32_t i = 0; i < count; ++i) if (operations[i] < 1 || operations[i] > 3) return EINVAL;
+    owned_socket *signal = acquire(wake);
+    if (signal == NULL) return EBADF;
+    owned_socket *leases[P2P_LAN_SOCKET_MAX_HANDLES] = {0};
+    struct pollfd rows[P2P_LAN_SOCKET_MAX_HANDLES + 1] = {0};
+    rows[0] = (struct pollfd){ .fd = signal->fd, .events = POLLIN };
+    int timeout = 1000;
+    for (uint32_t i = 0; i < count; ++i) {
+        leases[i] = acquire(handles[i]);
+        rows[i + 1].fd = leases[i] == NULL ? -1 : leases[i]->fd;
+        rows[i + 1].events = (short)(((operations[i] & 1) ? POLLIN : 0) | ((operations[i] & 2) ? POLLOUT : 0));
+        if (leases[i] == NULL) { ready[i] = operations[i]; timeout = 0; }
+    }
+#ifdef P2P_LAN_SOCKET_TESTING
+    p2p_lan_test_poll_leased();
+#endif
+    int polled = poll(rows, (nfds_t)count + 1, timeout);
+    int32_t result = polled < 0 && errno != EINTR ? errno : 0;
+    if (result == 0 && (rows[0].revents & (POLLERR | POLLHUP | POLLNVAL))) result = EIO;
+    if (result == 0 && (rows[0].revents & POLLIN)) {
+        unsigned char ignored[128];
+        for (unsigned int drained = 0; drained < 256; ++drained) {
+            ssize_t n = recv(signal->fd, ignored, sizeof(ignored), 0);
+            if (n >= 0) continue;
+            if (errno == EINTR) continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK) result = errno;
+            break;
+        }
+    }
+    if (result == 0) for (uint32_t i = 0; i < count; ++i) {
+        short events = rows[i + 1].revents;
+        if (events & POLLIN) ready[i] |= 1;
+        if (events & POLLOUT) ready[i] |= 2;
+        if (events & (POLLERR | POLLHUP | POLLNVAL)) ready[i] = operations[i];
+    }
+    for (uint32_t i = 0; i < count; ++i) if (leases[i] != NULL) release(leases[i]);
+    release(signal);
+    return result;
+}

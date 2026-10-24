@@ -36,6 +36,8 @@ import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import dev.p2pkit.transport.lan.AndroidLanDiag as Log
@@ -47,10 +49,8 @@ import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 internal class AndroidLanDataTransport(
     private val registration: LanServiceRegistration,
     private val networkState: AndroidLanNetworkState? = null,
-    private val socketFactory: (Network?) -> Socket = { network ->
-        network?.socketFactory?.createSocket() ?: Socket()
-    },
-    private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
+    private val socketFactory: (Network?) -> Socket = { SocketChannel.open().socket() },
+    private val serverSocketFactory: () -> ServerSocket = { ServerSocketChannel.open().socket() },
     private val beforeListenerResourceCheckForTest: (() -> Unit)? = null,
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
     private val afterListenerDetachForTest: (() -> Unit)? = null,
@@ -225,6 +225,9 @@ internal class AndroidLanDataTransport(
             val socket = try {
                 socketFactory(selectedRoute?.network).also { candidate ->
                     createdSocket = candidate
+                    // Public Network.bindSocket(Socket) binds this original unconnected channel.
+                    // Retain it above first, so a binding failure stays under existing cleanup ownership.
+                    if (candidate.channel != null) selectedRoute?.network?.bindSocket(candidate)
                     // Hotspot/AP host mode is often absent from
                     // ConnectivityManager, so the discovery selector exposes
                     // an explicit Java-interface address with network=null.
@@ -393,6 +396,7 @@ internal class AndroidLanDataTransport(
                     throw LanRouteRejected("Android LAN outbound route context changed")
                 }
                 route.context?.let { context ->
+                    if (socket.channel != null) context.network?.bindSocket(socket)
                     if (context.network == null || policy != null) {
                         socket.bind(InetSocketAddress(context.localAddress.inetAddress(), 0))
                     }

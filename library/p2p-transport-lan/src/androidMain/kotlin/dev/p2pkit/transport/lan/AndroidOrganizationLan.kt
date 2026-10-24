@@ -11,10 +11,19 @@ import java.net.NetworkInterface
 import java.net.Socket
 
 internal class AndroidLanIo(restricted: Boolean) {
-    val read: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(164) else Dispatchers.IO
-    val write: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(16) else Dispatchers.IO
-    val setup: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(16) else Dispatchers.IO
+    val read: CoroutineDispatcher = if (restricted) readers else Dispatchers.IO
+    val write: CoroutineDispatcher = if (restricted) writers else Dispatchers.IO
+    val setup: CoroutineDispatcher = if (restricted) setups else Dispatchers.IO
+    // Accept remains one bounded blocking operation per listening transport (DialOnly creates none).
     val accept: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(1) else Dispatchers.IO
+
+    private companion object {
+        // Shared across all kits, not an elastic view for every connected client. Data waits suspend on
+        // readiness and consume no slot; these lanes only execute short syscalls / finite setup calls.
+        val readers = Dispatchers.IO.limitedParallelism(16)
+        val writers = Dispatchers.IO.limitedParallelism(16)
+        val setups = Dispatchers.IO.limitedParallelism(16)
+    }
 }
 
 /** No hotspot/null-Network or process-default fallback for the strict profile. */

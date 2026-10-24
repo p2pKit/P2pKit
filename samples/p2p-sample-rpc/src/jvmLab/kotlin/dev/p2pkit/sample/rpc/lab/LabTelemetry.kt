@@ -58,7 +58,7 @@ internal object LabTelemetry {
         )
     }
 
-    fun decode(values: Map<String, String>, runLabel: String): RpcCapacityHostTelemetry {
+    fun decode(values: Map<String, String>, runLabel: String, clientCount: Int = 128): RpcCapacityHostTelemetry {
         require(values.keys == setOf(
             "schema", "runLabel", "sequence", "uptimeMillis", "cpuNanos", "residentBytes", "nativeThreads",
             "jvmThreads",
@@ -71,9 +71,12 @@ internal object LabTelemetry {
             it.toLong().also { value -> require(value >= 0) }
         }
         fun int(name: String): Int = long(name).also { require(it <= Int.MAX_VALUE) }.toInt()
-        require(long("sequence") >= 0 && int("connected") in 0..128 && int("jvmThreads") > 0)
-        require(int("running") in 0..128 && int("queued") in 0..256 && int("records") in 0..131_072)
-        require(long("payloadBytes") in 0..64L * 1_048_576)
+        require(clientCount in setOf(128, 256))
+        val limits = if (clientCount == 256) dev.p2pkit.rpc.RpcLimits.host256() else dev.p2pkit.rpc.RpcLimits.host128()
+        require(long("sequence") >= 0 && int("connected") in 0..clientCount && int("jvmThreads") > 0)
+        require(int("running") in 0..limits.runningCalls && int("queued") in 0..limits.queuedCalls &&
+            int("records") in 0..limits.totalRecords)
+        require(long("payloadBytes") in 0..limits.payloadBytes)
         return RpcCapacityHostTelemetry(
             RpcCapacityHostSnapshot(
                 int("connected"), RpcDiagnostics(

@@ -11,7 +11,10 @@ public sealed class RpcRetry(public val maxAttempts: Int) {
     public class Idempotent(maxAttempts: Int = 3) : RpcRetry(maxAttempts)
 }
 
-/** Upper bounds, not qualified performance. Values may be lowered but never exceed the approved profile. */
+/**
+ * Upper bounds, not qualified performance. Values may be lowered but never exceed the host256 profile.
+ * Defaults and host128() retain their original bounds.
+ */
 public class RpcLimits(
     public val trustedClients: Int = 128,
     public val runningCalls: Int = 128,
@@ -23,16 +26,26 @@ public class RpcLimits(
     public val totalRecords: Int = 131_072,
 ) {
     init {
-        require(trustedClients in 1..128 && runningCalls in 1..128 && queuedCalls in 0..256)
+        require(trustedClients in 1..256 && runningCalls in 1..256 && queuedCalls in 0..512)
         require(callsPerClient in 1..8)
-        require(payloadBytes in 1..(64L * 1_048_576))
-        require(resultCacheBytes in 0..minOf(payloadBytes, 32L * 1_048_576))
-        require(recordsPerClient in 1..1_024 && totalRecords in 1..131_072)
+        require(payloadBytes in 1..(128L * 1_048_576))
+        require(resultCacheBytes in 0..minOf(payloadBytes, 64L * 1_048_576))
+        require(recordsPerClient in 1..1_024 && totalRecords in 1..262_144)
     }
 
     public companion object {
         /** Required qualification is still separate on each actual host platform. */
         public fun host128(): RpcLimits = RpcLimits()
+
+        /**
+         * Opt-in capacity policy, NOT a guarantee of measured device capacity. Uses shared readiness I/O,
+         * not a larger blocking-reader pool. Per-client, enrollment, wire and deadline limits do not grow.
+         * The result cache is part of (not in addition to) the shared 128MiB payload allowance.
+         */
+        public fun host256(): RpcLimits = RpcLimits(
+            trustedClients = 256, runningCalls = 256, queuedCalls = 512,
+            payloadBytes = 128L * 1_048_576, resultCacheBytes = 64L * 1_048_576, totalRecords = 262_144,
+        )
     }
 }
 

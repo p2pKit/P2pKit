@@ -237,6 +237,51 @@ static void *close_owned(void *opaque) {
     return NULL;
 }
 
+typedef struct { uint64_t wake, handle; int32_t result, ready; } batch_job;
+static void *poll_batch(void *opaque) {
+    batch_job *job = opaque;
+    int32_t operation = 1;
+    job->result = p2p_lan_socket_poll_many(job->wake, &job->handle, &operation, 1, &job->ready);
+    return NULL;
+}
+
+static void batch_close_lifecycle(void) {
+    pair p = connected_pair();
+    uint64_t wake[2];
+    OK(p2p_lan_socket_wake_open(wake));
+    batch_job batch = {.wake = wake[0], .handle = p.incoming};
+    socket_job closing = {.handle = p.incoming};
+    pthread_t worker, closer;
+    pthread_mutex_lock(&poll_barrier);
+    pause_poll = true; poll_leased = false;
+    assert(pthread_create(&worker, NULL, poll_batch, &batch) == 0);
+    while (!poll_leased) pthread_cond_wait(&poll_changed, &poll_barrier);
+    pthread_mutex_unlock(&poll_barrier);
+    assert(pthread_create(&closer, NULL, close_owned, &closing) == 0);
+    uint32_t index;
+    int64_t deadline = nanos() + INT64_C(1000000000);
+    int32_t gate;
+    do {
+        gate = p2p_lan_socket_bound_interface(p.incoming, &index);
+        assert(gate == 0 || gate == EBADF);
+        assert(nanos() < deadline);
+    } while (gate == 0);
+    assert(!atomic_load(&closing.completed));
+    OK(p2p_lan_socket_wake(wake[1]));
+    pthread_mutex_lock(&poll_barrier);
+    pause_poll = false;
+    pthread_cond_broadcast(&poll_changed);
+    pthread_mutex_unlock(&poll_barrier);
+    assert(pthread_join(worker, NULL) == 0 && pthread_join(closer, NULL) == 0);
+    assert(batch.result == 0 && batch.ready == 0 && closing.result == 0);
+    assert(nanos() < deadline);
+    OK(p2p_lan_socket_close(p.outgoing));
+    OK(p2p_lan_socket_close(p.listener));
+    OK(p2p_lan_socket_close(wake[1]));
+    OK(p2p_lan_socket_close(wake[0]));
+    PASS("batch-close-drains-original-lease-and-sticky-wake-without-fd-reuse");
+}
+
 static void lifecycle(void) {
     pair p = connected_pair();
     socket_job poll_job = {.handle = p.incoming};
@@ -326,20 +371,96 @@ static void failures(void) {
     PASS("bounded-registry-exhaustion-and-recovery-without-descriptor-leak");
 }
 
+static void batched_readiness(void) {
+    unsigned int before = descriptors();
+    uint64_t wake[2] = {0};
+    OK(p2p_lan_socket_wake_open(wake));
+    assert(wake[0] != 0 && wake[1] != 0 && wake[0] != wake[1]);
+    uint64_t tokens[256] = {0};
+    int32_t ops[256] = {0}, events[256] = {0};
+    assert(p2p_lan_socket_poll_many(wake[0], tokens, ops, 257 + P2P_LAN_SOCKET_MAX_HANDLES, events) == EINVAL);
+    OK(p2p_lan_socket_wake(wake[1]));
+    int64_t start = nanos();
+    OK(p2p_lan_socket_poll_many(wake[0], tokens, ops, 0, events));
+    assert(nanos() - start < INT64_C(500000000));
+    PASS("batched-sticky-wake-without-socket-or-per-client-timer");
+    pair peers[256];
+    for (unsigned int i = 0; i < 256; ++i) {
+        peers[i] = connected_pair();
+        tokens[i] = peers[i].incoming;
+        ops[i] = 1;
+        uint8_t byte = (uint8_t)i;
+        uint32_t sent = 0;
+        OK(p2p_lan_socket_write(peers[i].outgoing, &byte, 1, &sent));
+        assert(sent == 1);
+    }
+    unsigned int received = 0;
+    bool done[256] = {false};
+    int64_t deadline = nanos() + INT64_C(2000000000);
+    while (received != 256) {
+        assert(nanos() < deadline);
+        OK(p2p_lan_socket_poll_many(wake[0], tokens, ops, 256, events));
+        for (unsigned int i = 0; i < 256; ++i) if (!done[i] && (events[i] & 1)) {
+            uint8_t byte = 0;
+            uint32_t count = 0;
+            OK(p2p_lan_socket_read(tokens[i], &byte, 1, &count));
+            assert(count == 1 && byte == (uint8_t)i);
+            done[i] = true; ++received;
+        }
+    }
+    PASS("one-batch-256-original-scoped-sockets-delivers-every-byte");
+    uint64_t stale = tokens[0];
+    OK(p2p_lan_socket_close(stale));
+    tokens[1] = UINT64_MAX;
+    OK(p2p_lan_socket_poll_many(wake[0], tokens, ops, 2, events));
+    assert(events[0] == 1 && events[1] == 1);
+    assert(p2p_lan_socket_close(stale) == EBADF);
+    // Real children remain owned even when a stale-token waiter is present in another batch.
+    OK(p2p_lan_socket_close(peers[0].outgoing));
+    OK(p2p_lan_socket_close(peers[0].listener));
+    for (unsigned int i = 1; i < 256; ++i) close_pair(peers[i]);
+    OK(p2p_lan_socket_close(wake[1]));
+    OK(p2p_lan_socket_close(wake[0]));
+    assert(p2p_lan_socket_wake(wake[1]) == EBADF);
+    assert(descriptors() == before);
+    PASS("batch-stale-token-refusal-and-all-socket-wake-descriptors-retired");
+    atomic_store(&configure_error, EIO);
+    assert(p2p_lan_socket_wake_open(wake) == EIO && wake[0] != 0 && wake[1] != 0);
+    OK(p2p_lan_socket_close(wake[1]));
+    OK(p2p_lan_socket_close(wake[0]));
+    assert(descriptors() == before);
+    PASS("failed-wake-pair-setup-preserves-both-closeable-owners");
+}
+
 int main(void) {
     /* The process default SIGPIPE handler is deliberately NOT changed. */
     struct sigaction action;
     assert(sigaction(SIGPIPE, NULL, &action) == 0 && action.sa_handler == SIG_DFL);
     alarm(20);
+    // Test-process-only budget: 256 pairs currently include a separate listener each.
+    // Raising a finite soft limit here neither changes product defaults nor leaks host settings.
+    struct rlimit original, capacity;
+    assert(getrlimit(RLIMIT_NOFILE, &original) == 0);
+    capacity = original;
+    if (capacity.rlim_cur < 1024) {
+        assert(capacity.rlim_max >= 1024);
+        capacity.rlim_cur = 1024;
+        assert(setrlimit(RLIMIT_NOFILE, &capacity) == 0);
+    }
+    printf("TEST_NOFILE original=%llu active=%llu\n",
+        (unsigned long long)original.rlim_cur, (unsigned long long)capacity.rlim_cur);
     lo = if_nametoindex("lo0");
     assert(lo != 0);
     unsigned int before = descriptors();
     inputs();
     exchange();
     lifecycle();
+    batch_close_lifecycle();
     failures();
+    batched_readiness();
     assert(descriptors() == before);
     PASS("independent-open-descriptor-inventory-restored");
+    assert(setrlimit(RLIMIT_NOFILE, &original) == 0);
     alarm(0);
     printf("RESULT: PASS %u native contract groups; loopback only; no JVM/RPC/LAN qualification claimed\n", tests);
     return 0;

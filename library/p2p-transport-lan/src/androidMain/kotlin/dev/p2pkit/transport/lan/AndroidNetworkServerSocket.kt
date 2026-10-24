@@ -121,7 +121,18 @@ private class AndroidNetworkSocket(
     private val ops: AndroidSocketOps,
     private val local: InetSocketAddress,
     private val remote: InetSocketAddress,
-) : Socket() {
+) : Socket(), ReadinessSocket {
+    private var asynchronous: SuspendingSocketIo? = null
+    override fun asynchronousIo(): SuspendingSocketIo? = synchronized(this) {
+        asynchronous ?: ops.readiness()?.let { readiness ->
+            ReadySocketIo(readiness.register(handle),
+                readNow = { bytes -> handle.use { fd ->
+                    ops.read(fd, bytes, 0, bytes.size)?.let { if (it == 0) -1 else it }
+                } },
+                writeNow = { bytes, offset, length -> handle.use { ops.write(it, bytes, offset, length) } },
+            ).also { asynchronous = it }
+        }
+    }
     override fun getLocalAddress(): InetAddress = local.address
     override fun getInetAddress(): InetAddress = remote.address
     override fun getLocalPort(): Int = local.port
@@ -132,7 +143,14 @@ private class AndroidNetworkSocket(
     override fun isConnected(): Boolean = true
     override fun isClosed(): Boolean = handle.closed
     override fun setTcpNoDelay(on: Boolean) { handle.use { ops.noDelay(it, on) } }
-    override fun close() { handle.close(); super.close() }
+    override fun close() {
+        var failure: Throwable? = null
+        try { synchronized(this) { asynchronous?.close() } } catch (error: Throwable) { failure = error }
+        try { handle.close(); super.close() } catch (error: Throwable) {
+            if (failure == null) failure = error else failure.addSuppressed(error)
+        }
+        failure?.let { throw it }
+    }
 
     override fun getInputStream(): InputStream = object : InputStream() {
         override fun read(): Int {

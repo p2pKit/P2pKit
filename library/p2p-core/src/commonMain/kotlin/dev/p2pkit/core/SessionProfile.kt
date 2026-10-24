@@ -40,7 +40,7 @@ public class P2pSessionProfile(
     public val reconnect: BoundedReconnect = BoundedReconnect(),
 ) {
     init {
-        require(maxTrustedSessions in 1..128)
+        require(maxTrustedSessions in 1..256)
         require(maxEnrollmentSessions in 0..4)
         require(maxInboundHandshakes in 1..16)
         require(maxApplicationBytes in 1..(1_048_576 + 4_096))

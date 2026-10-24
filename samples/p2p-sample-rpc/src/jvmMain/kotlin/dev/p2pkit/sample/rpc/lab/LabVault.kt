@@ -210,12 +210,12 @@ internal class LabTrustStore(private val vault: LabVault) : RpcTrustStore {
     override suspend fun load(appId: AppId, purpose: RpcTrustPurpose): Set<PeerFingerprint> {
         val bytes = vault.read(namespace(appId, purpose)) ?: return emptySet()
         val entries = bytes.toString(Charsets.UTF_8).split('\n').filter { it.isNotEmpty() }
-        require(entries.size <= 128 && entries.size == entries.toSet().size)
+        require(entries.size <= 256 && entries.size == entries.toSet().size)
         return entries.map(PeerFingerprint::parse).toSet()
     }
 
     override suspend fun replace(appId: AppId, purpose: RpcTrustPurpose, fingerprints: Set<PeerFingerprint>) {
-        require(fingerprints.size <= 128)
+        require(fingerprints.size <= 256)
         vault.replace(namespace(appId, purpose), fingerprints.map { it.value }.sorted()
             .joinToString("\n").toByteArray(Charsets.UTF_8))
     }

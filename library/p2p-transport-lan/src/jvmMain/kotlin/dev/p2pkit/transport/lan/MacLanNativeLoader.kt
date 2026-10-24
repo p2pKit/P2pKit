@@ -62,7 +62,7 @@ internal object MacLanNativeLoader {
             // Recheck identity/content and the installed signature after dyld. No extraction or fallback.
             check(verify() == verified)
             check(MacBonjourNative.abi() == 1) { "Scoped Bonjour native ABI mismatch" }
-            check(MacLanNative.abi() == 1) { "Scoped TCP native ABI mismatch" }
+            check(MacLanNative.abi() == 2) { "Scoped TCP native ABI mismatch" }
             check(MacLanNative.source() == "${verified.source}:${verified.tree}") {
                 "Scoped TCP native source mismatch"
             }

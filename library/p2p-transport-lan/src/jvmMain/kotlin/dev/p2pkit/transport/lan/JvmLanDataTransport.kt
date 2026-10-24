@@ -36,13 +36,15 @@ import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 internal class JvmLanDataTransport(
     private val registration: LanServiceRegistration,
-    private val socketFactory: () -> Socket = ::Socket,
-    private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
+    private val socketFactory: () -> Socket = { SocketChannel.open().socket() },
+    private val serverSocketFactory: () -> ServerSocket = { ServerSocketChannel.open().socket() },
     private val selectedLanAddress: (() -> InetAddress?)? = null,
     private val beforeListenerResourceCheckForTest: (() -> Unit)? = null,
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
