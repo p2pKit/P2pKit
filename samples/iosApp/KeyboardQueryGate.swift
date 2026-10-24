@@ -71,11 +71,10 @@ final class KeyboardQueryGate {
     }
 
     private func receive(_ command: String) {
-        switch command {
-        case name("install").rawValue as String: installGate()
-        case name("wait").rawValue as String: startRelease()
-        default: break
-        }
+        // In a switch pattern, `as String` is a type-cast pattern, not this
+        // CFString bridge. Compare explicit String expressions instead.
+        if command == (name("install").rawValue as String) { installGate() }
+        else if command == (name("wait").rawValue as String) { startRelease() }
     }
 
     private func installGate() {

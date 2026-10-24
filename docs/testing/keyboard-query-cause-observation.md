@@ -5,7 +5,10 @@ result. It does not alter the ordinary English/German input methods. Run it only
 with explicit `component=apple-keyboard-query-diagnostic` in the existing CI
 workflow, or `bash scripts/run-ios-ui-tests.sh run-keyboard-query-cause` on macOS.
 The former retains source-bound encrypted observations; the local command alone
-does not claim that evidence. It is never a required aggregate component.
+does not claim that evidence. It is never a required aggregate component. Two
+warning-strict native Swift typechecks run first, before framework preparation,
+so fixture compiler errors fail cheaply; they do not replace actual app/XCTest
+execution. They retain the existing launcher ownership and run-directory cache.
 
 ## Falsifiable hypothesis
 

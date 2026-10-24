@@ -31,6 +31,13 @@ args = sys.argv[1:]
 with (root / "tools.log").open("a") as log:
     log.write(tool + " " + " ".join(args) + "\n")
 if tool == "xcrun":
+    if args[:2] == ["--sdk", "iphonesimulator"]:
+        assert args[2:] in (["--show-sdk-path"], ["--show-sdk-platform-path"]), args
+        print("/synthetic-sdk" if args[2] == "--show-sdk-path" else "/synthetic-platform")
+        sys.exit(0)
+    if args[0] == "swiftc":
+        assert "-typecheck" in args and "-warnings-as-errors" in args, args
+        sys.exit(int(os.environ.get("FAKE_SWIFT_TYPECHECK_EXIT", "0")))
     assert args[0] == "simctl", args
     if args[1:3] == ["list", "--json"]:
         print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
@@ -226,9 +233,23 @@ trap 'case "$BASH_COMMAND" in run_ios_xcodebuild\ *)
                 self.assertIn('SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test', builds[0])
                 self.assertEqual(1, calls.count('passive-capture'))
                 self.assertLess(calls.index(builds[0]), calls.index('passive-capture'))
+                typechecks = [line for line in calls if line.startswith('xcrun swiftc ')]
+                self.assertEqual(2, len(typechecks))
+                for check in typechecks:
+                    self.assertLess(calls.index(check), calls.index('xcodegen generate'))
+                    self.assertIn('-typecheck -warnings-as-errors -swift-version 5 ', check)
                 self.assertFalse(self.lock.exists())
                 for forbidden in ('skip-testing', 'test-iterations', 'retry-tests', 'open ', 'simctl create', 'defaults '):
                     self.assertFalse(any(forbidden in line for line in calls))
+
+    def test_query_typecheck_failure_precedes_native_build_and_preserves_nonzero(self):
+        self.finish(self.start('run-ios-ui-tests.sh', arguments=('run-keyboard-query-cause',),
+                               FAKE_SWIFT_TYPECHECK_EXIT='19'), expected=19)
+        calls = (self.root / 'tools.log').read_text().splitlines()
+        self.assertEqual(1, sum(line.startswith('xcrun swiftc ') for line in calls))
+        for forbidden in ('xcodegen', 'xcodebuild', 'bootstatus', 'passive-capture'):
+            self.assertFalse(any(forbidden in line for line in calls))
+        self.assertFalse(self.lock.exists())
 
     def test_passive_capture_is_not_added_to_focused_diagnostic(self):
         self.passive_capture_fixture()

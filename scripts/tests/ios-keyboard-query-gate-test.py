@@ -89,9 +89,9 @@ class KeyboardQueryGateSourceTests(unittest.TestCase):
                       self.body("name"))
         self.assertIn('for suffix in ["install", "wait"]', self.body("observe"))
         receive = self.body("receive")
-        self.assertIn('case name("install").rawValue as String: installGate()', receive)
-        self.assertIn('case name("wait").rawValue as String: startRelease()', receive)
-        self.assertIn("default: break", receive)
+        self.assertIn('if command == (name("install").rawValue as String) { installGate() }', receive)
+        self.assertIn('else if command == (name("wait").rawValue as String) { startRelease() }', receive)
+        self.assertNotIn("switch command", receive)
         self.assertNotIn("hasSuffix", receive)
         self.assertNotIn("contains(", receive)
 

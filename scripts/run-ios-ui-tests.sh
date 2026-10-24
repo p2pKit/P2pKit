@@ -68,6 +68,26 @@ DERIVED_DATA="$RUN_DIR/DerivedData"
 
 acquire_ios_run_lock "$IOS_LAUNCH_LOCK"
 IOS_LAUNCH_OWNS_LOCK=1
+if [[ "$action" == "run-keyboard-query-cause" ]]; then
+    # These investigative sources do not import P2pKitShared. Diagnose Swift
+    # compiler failures before spending time building the unchanged framework;
+    # this is not a substitute for the real app build or XCTest execution.
+    query_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+    query_platform="$(xcrun --sdk iphonesimulator --show-sdk-platform-path)"
+    query_arch="$(uname -m)"
+    case "$query_arch" in arm64|x86_64) ;; *) echo "[ios-run] Unsupported query diagnostic architecture." >&2; exit 2 ;; esac
+    run_ios_mutation xcrun swiftc -typecheck -warnings-as-errors -swift-version 5 \
+        -sdk "$query_sdk" -target "$query_arch-apple-ios15.0-simulator" \
+        -module-cache-path "$DERIVED_DATA/ModuleCache.noindex" \
+        -D DEBUG -D P2PKIT_KEYBOARD_QUERY_PROBE "$PROJECT_DIR/KeyboardQueryGate.swift"
+    run_ios_mutation xcrun swiftc -typecheck -warnings-as-errors -swift-version 5 \
+        -sdk "$query_sdk" -target "$query_arch-apple-ios15.0-simulator" \
+        -module-cache-path "$DERIVED_DATA/ModuleCache.noindex" \
+        -F "$query_platform/Developer/Library/Frameworks" \
+        -F "$query_sdk/Developer/Library/Frameworks" \
+        "$PROJECT_DIR/UITests/KeyboardReadiness.swift" \
+        "$PROJECT_DIR/KeyboardQueryCauseUITests/KeyboardQueryCauseUITests.swift"
+fi
 # Terminal/focused run actions never bootstrap/regenerate their already prepared
 # source-bound project/framework; the Xcode provenance phase remains mandatory.
 if [[ "$action" != "run-jvm-transfer" && "$action" != "run-cancellation-probe" &&
