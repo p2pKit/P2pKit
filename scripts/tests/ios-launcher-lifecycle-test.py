@@ -37,6 +37,8 @@ if tool == "xcrun":
         sys.exit(0)
     if args[0] == "swiftc":
         assert "-typecheck" in args and "-warnings-as-errors" in args, args
+        if args[-1].endswith("/KeyboardQueryCauseUITests.swift"):
+            sys.exit(int(os.environ.get("FAKE_SWIFT_TYPECHECK_UI_EXIT", "0")))
         sys.exit(int(os.environ.get("FAKE_SWIFT_TYPECHECK_EXIT", "0")))
     assert args[0] == "simctl", args
     if args[1:3] == ["list", "--json"]:
@@ -238,6 +240,11 @@ trap 'case "$BASH_COMMAND" in run_ios_xcodebuild\ *)
                 for check in typechecks:
                     self.assertLess(calls.index(check), calls.index('xcodegen generate'))
                     self.assertIn('-typecheck -warnings-as-errors -swift-version 5 ', check)
+                # Match Xcode's test compiler search paths: the framework
+                # headers alone do not expose XCTest's Swift assertions.
+                self.assertIn('-F /synthetic-platform/Developer/Library/Frameworks ', typechecks[1])
+                self.assertIn('-F /synthetic-sdk/Developer/Library/Frameworks ', typechecks[1])
+                self.assertIn('-Isystem /synthetic-platform/Developer/usr/lib ', typechecks[1])
                 self.assertFalse(self.lock.exists())
                 for forbidden in ('skip-testing', 'test-iterations', 'retry-tests', 'open ', 'simctl create', 'defaults '):
                     self.assertFalse(any(forbidden in line for line in calls))
@@ -247,6 +254,15 @@ trap 'case "$BASH_COMMAND" in run_ios_xcodebuild\ *)
                                FAKE_SWIFT_TYPECHECK_EXIT='19'), expected=19)
         calls = (self.root / 'tools.log').read_text().splitlines()
         self.assertEqual(1, sum(line.startswith('xcrun swiftc ') for line in calls))
+        for forbidden in ('xcodegen', 'xcodebuild', 'bootstatus', 'passive-capture'):
+            self.assertFalse(any(forbidden in line for line in calls))
+        self.assertFalse(self.lock.exists())
+
+    def test_query_xctest_typecheck_failure_preserves_nonzero_before_framework_build(self):
+        self.finish(self.start('run-ios-ui-tests.sh', arguments=('run-keyboard-query-cause',),
+                               FAKE_SWIFT_TYPECHECK_UI_EXIT='23'), expected=23)
+        calls = (self.root / 'tools.log').read_text().splitlines()
+        self.assertEqual(2, sum(line.startswith('xcrun swiftc ') for line in calls))
         for forbidden in ('xcodegen', 'xcodebuild', 'bootstatus', 'passive-capture'):
             self.assertFalse(any(forbidden in line for line in calls))
         self.assertFalse(self.lock.exists())

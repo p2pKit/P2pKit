@@ -85,6 +85,7 @@ if [[ "$action" == "run-keyboard-query-cause" ]]; then
         -module-cache-path "$DERIVED_DATA/ModuleCache.noindex" \
         -F "$query_platform/Developer/Library/Frameworks" \
         -F "$query_sdk/Developer/Library/Frameworks" \
+        -Isystem "$query_platform/Developer/usr/lib" \
         "$PROJECT_DIR/UITests/KeyboardReadiness.swift" \
         "$PROJECT_DIR/KeyboardQueryCauseUITests/KeyboardQueryCauseUITests.swift"
 fi
