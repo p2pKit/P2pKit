@@ -45,6 +45,26 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', apple-keyboard-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'apple-keyboard-diagnostic' && inputs.component", 'inputs.component')
   end
+  def test_keyboard_conditions_remain_bounded_opt_in_and_forwarded_to_same_source
+    altered('.github/workflows/ci.yml', 'options: [none, hardware-off, hardware-on]',
+            'options: [none, hardware-off, hardware-on, arbitrary]')
+    altered('.github/workflows/ci.yml', 'default: none', 'default: hardware-off')
+    altered('.github/workflows/ci.yml', "      keyboard_cause_mode: ${{ inputs.keyboard_cause_mode || 'none' }}\n", '')
+    altered('.github/workflows/ci.yml', "-${{ inputs.keyboard_cause_mode || 'none' }}\n", "\n")
+    altered('.github/workflows/ci.yml', 'cancel-in-progress: false', 'cancel-in-progress: true')
+    altered('.github/workflows/ci.yml',
+            '[[ "$COMPONENT" == apple-keyboard-diagnostic && -z "$QUALIFICATION_SELECTION" ]]', 'true')
+    altered('.github/workflows/ci-component.yml', 'default: none', 'default: hardware-on')
+    altered('.github/workflows/ci-component.yml',
+            "P2PKIT_KEYBOARD_CAUSE_MODE: ${{ inputs.keyboard_cause_mode != 'none' && inputs.keyboard_cause_mode || '' }}",
+            "P2PKIT_KEYBOARD_CAUSE_MODE: ''")
+    altered('.github/workflows/ci-component.yml',
+            "P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST: ${{ inputs.keyboard_cause_mode != 'none' && inputs.keyboard_cause_mode != '' && '1' || '' }}",
+            "P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST: '1'")
+  end
+  def test_failed_original_keyboard_condition_cannot_be_dropped_from_evidence_upload
+    altered('.github/workflows/ci-component.yml', "${{ always() && steps.execution.outcome != 'skipped' }}", "${{ success() }}")
+  end
   def test_published_consumer_diagnostic_requires_choice_and_cannot_qualify
     altered('.github/workflows/ci.yml', ', published-consumers-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'published-consumers-diagnostic' && inputs.component", 'inputs.component')

@@ -211,3 +211,4 @@ release_ios_run_lock "$LOCK_DIR"
 
 echo "run-ios-app shell controls: passed"
 python3 "$REPO_ROOT/scripts/tests/ios-launcher-lifecycle-test.py"
+python3 -B "$REPO_ROOT/scripts/tests/ios-keyboard-cause-probe-test.py"

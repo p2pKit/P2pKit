@@ -44,8 +44,12 @@ tasks.register<Exec>("checkIosLauncherScripts") {
         rootProject.file("scripts/run-ios-app.sh"),
         rootProject.file("scripts/run-ios-ui-tests.sh"),
         rootProject.file("scripts/ios-run-lock.py"),
+        rootProject.file("scripts/ios_keyboard_cause_probe.py"),
         rootProject.file("scripts/tests/run-ios-app-test.sh"),
         rootProject.file("scripts/tests/ios-launcher-lifecycle-test.py"),
+        rootProject.file("scripts/tests/ios-keyboard-cause-probe-test.py"),
+        project.file("KeyboardCauseProbe.swift"),
+        project.file("UITests/ContentViewPresentationUITests.swift"),
         project.file("scripts/check-xcframework.sh"),
     )
     commandLine("bash", "scripts/tests/run-ios-app-test.sh")

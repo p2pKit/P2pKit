@@ -37,6 +37,21 @@ module ModularCI
     require!(triggers.dig('workflow_dispatch', 'inputs', 'component', 'options').sort ==
              ['all', *required, 'bundle-diagnostic', 'jmdns-diagnostic', 'published-consumers-diagnostic', 'consumers-pom-diagnostic', 'apple-keyboard-diagnostic', 'apple-issue-diagnostic', 'android-ui-diagnostic', 'android-permission-diagnostic', 'android-legacy-task-preview'].sort,
              'Missing or extra independently selectable required component')
+    keyboard = triggers.dig('workflow_dispatch', 'inputs', 'keyboard_cause_mode')
+    require!(keyboard && keyboard['type'] == 'choice' && keyboard['default'] == 'none' &&
+             keyboard['options'] == %w[none hardware-off hardware-on], 'Keyboard cause selector must stay opt-in and bounded')
+    require!(jobs.dig('component', 'with', 'keyboard_cause_mode') == "${{ inputs.keyboard_cause_mode || 'none' }}" &&
+             ci.dig('concurrency', 'group').end_with?("-${{ inputs.keyboard_cause_mode || 'none' }}") &&
+             ci.dig('concurrency', 'cancel-in-progress') == false,
+             'Independent keyboard conditions must reach the same-source non-cancelling component route')
+    worker_triggers = worker.fetch('on') { worker.fetch(true) }
+    require!(worker_triggers.dig('workflow_call', 'inputs', 'keyboard_cause_mode') ==
+             {'default' => 'none', 'type' => 'string'}, 'Reusable keyboard cause selector must default to unconfigured')
+    plan = jobs.fetch('plan').fetch('steps').find { |step| step['id'] == 'components' }
+    require!(plan.dig('env', 'KEYBOARD_CAUSE_MODE') == "${{ inputs.keyboard_cause_mode || 'none' }}" &&
+             plan.dig('env', 'QUALIFICATION_SELECTION') == '${{ inputs.qualification_selection }}' &&
+             plan['run'].include?('[[ "$COMPONENT" == apple-keyboard-diagnostic && -z "$QUALIFICATION_SELECTION" ]]'),
+             'Keyboard conditions must refuse nonfocused or aggregation matrix requests')
     writer = load(File.join(root, '.github/workflows/dependency-update-candidate.yml')).fetch('jobs').fetch('generate')
     require!(writer['runs-on'] == 'macos-15-intel' && writer.fetch('steps').any? { |s|
                s['run'] == 'bash scripts/setup-ci-component.sh dependency-update' },
@@ -128,6 +143,14 @@ module ModularCI
     steps = worker.fetch('jobs').fetch('run').fetch('steps')
     run = steps.find { |s| s['id'] == 'execution' }
     require!(run && run['run'].include?('scripts/ci_evidence.py') && run['run'].include?('scripts/ci_component.py'), 'Missing genuine component/evidence invocation')
+    require!(run.dig('env', 'P2PKIT_KEYBOARD_CAUSE_MODE') ==
+               "${{ inputs.keyboard_cause_mode != 'none' && inputs.keyboard_cause_mode || '' }}" &&
+             run.dig('env', 'P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST') ==
+               "${{ inputs.keyboard_cause_mode != 'none' && inputs.keyboard_cause_mode != '' && '1' || '' }}",
+             'Only opt-in keyboard conditions may reach the existing encrypted execution boundary')
+    evidence = steps.find { |s| s['name'] == 'Retain genuine component evidence, including failures' }
+    require!(evidence && evidence['if'] == "${{ always() && steps.execution.outcome != 'skipped' }}",
+             'Original failed component artifacts must remain retained')
     require!(steps.any? { |s| s['run'].to_s.include?('scripts/setup-ci-component.sh') }, 'Missing platform setup')
     require!(!run['continue-on-error'], 'Real component failure cannot be ignored')
     require!(worker.dig('jobs', 'run', 'env', 'CI_EVIDENCE_RECIPIENT_SHA256') == '${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}', 'Recipient must be independently pinned')

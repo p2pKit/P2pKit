@@ -27,6 +27,22 @@ case "$action" in
         ;;
     *) echo "usage: $0 [run-keyboard-readiness|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
 esac
+if [[ -n "${P2PKIT_KEYBOARD_CAUSE_MODE:-}" ]]; then
+    [[ "$action" == "run-keyboard-readiness" && -z "${P2PKIT_KEYBOARD_CAUSE_BUILD:-}" ]] || {
+        echo "[ios-run] Keyboard cause conditions are confined to the focused diagnostic." >&2
+        exit 2
+    }
+    exec python3 -B "$SCRIPT_DIR/ios_keyboard_cause_probe.py" "$P2PKIT_KEYBOARD_CAUSE_MODE"
+fi
+keyboard_probe_flags=()
+if [[ -n "${P2PKIT_KEYBOARD_CAUSE_BUILD:-}" ]]; then
+    [[ "$action" == "run-keyboard-readiness" && "$P2PKIT_KEYBOARD_CAUSE_BUILD" == "1" &&
+       "${P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST:-}" == "1" && -n "$SIM_UDID" && -n "$RUN_DIR" ]] || {
+        echo "[ios-run] Keyboard cause build requires the controlled focused fixture." >&2
+        exit 2
+    }
+    keyboard_probe_flags=('OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE')
+fi
 if [[ "$action" == "run-cancellation-probe" && -z "$SIM_UDID" ]]; then
     echo "[ios-run] Cancellation investigation requires the outer owner's exact simulator UDID." >&2
     exit 2
@@ -106,6 +122,7 @@ elif [[ "$action" == "run-keyboard-readiness" ]]; then
         -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInEnglishLocale \
         -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale \
         SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        ${keyboard_probe_flags[@]+"${keyboard_probe_flags[@]}"} \
         test
 elif [[ "$action" == "prepare-jvm-transfer" ]]; then
     run_ios_xcodebuild \

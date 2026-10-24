@@ -452,6 +452,34 @@ class ComponentTests(unittest.TestCase):
                                                {'task': 'gradle-stop', 'exitCode': stopped}])
             self.assertEqual(calls[-1].args[0][-1], '--stop')
 
+    def test_keyboard_conditions_are_confined_to_explicit_isolated_focused_component(self):
+        for component in (*C.COMPONENTS, *C.DIAGNOSTICS):
+            C.admit_keyboard_cause(component, {})
+            for mode in ('hardware-off', 'hardware-on'):
+                environment = {'P2PKIT_KEYBOARD_CAUSE_MODE': mode, 'P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST': '1'}
+                if component == 'apple-keyboard-diagnostic':
+                    C.admit_keyboard_cause(component, environment)
+                else:
+                    with self.assertRaises(ValueError):
+                        C.admit_keyboard_cause(component, environment)
+        for environment in ({'P2PKIT_KEYBOARD_CAUSE_MODE': 'hardware-off'},
+                            {'P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST': '1'},
+                            {'P2PKIT_KEYBOARD_CAUSE_BUILD': '1'},
+                            {'P2PKIT_KEYBOARD_CAUSE_MODE': 'unknown', 'P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST': '1'},
+                            {'P2PKIT_KEYBOARD_CAUSE_MODE': 'hardware-on', 'P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST': '1',
+                             'P2PKIT_KEYBOARD_CAUSE_BUILD': '1'}):
+            with self.subTest(environment=environment), self.assertRaises(ValueError):
+                C.admit_keyboard_cause('apple-keyboard-diagnostic', environment)
+
+    def test_keyboard_condition_misrouting_refuses_before_component_work(self):
+        environment = {'P2PKIT_KEYBOARD_CAUSE_MODE': 'hardware-off', 'P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST': '1'}
+        with patch.dict(C.os.environ, environment), patch.object(C, 'record_tools') as tools, \
+             patch.object(C.subprocess, 'run') as run:
+            with self.assertRaises(ValueError):
+                C.execute('compatibility')
+        tools.assert_not_called()
+        run.assert_not_called()
+
     def test_published_consumer_diagnostic_has_fixed_remote_scope_and_preserves_failure_cleanup(self):
         name = 'published-consumers-diagnostic'
         self.assertEqual(C.matrix(name), {'include': [{'component': name,

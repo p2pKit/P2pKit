@@ -130,6 +130,14 @@ final class ContentViewPresentationUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", locale] + arguments
+        #if P2PKIT_KEYBOARD_CAUSE_PROBE
+        // Only the opt-in investigative build arms passive app-side events.
+        // The ordinary suite/focused readiness action has no additional query
+        // or input and does not compile this branch.
+        app.launchArguments.append("--p2pkit-ui-test-keyboard-cause-probe")
+        print("KEYBOARD_CAUSE_TEST_BEGIN locale=\(locale) " +
+            "uptimeSeconds=\(ProcessInfo.processInfo.systemUptime)")
+        #endif
         let monitor = addUIInterruptionMonitor(withDescription: "Local Network permission") { alert in
             for label in ["Allow", "OK"] where alert.buttons[label].exists {
                 alert.buttons[label].tap()

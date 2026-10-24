@@ -14,6 +14,9 @@ on:
       job_minutes:
         required: true
         type: number
+      keyboard_cause_mode:
+        default: none
+        type: string
 permissions:
   contents: read
   actions: read
@@ -66,6 +69,8 @@ jobs:
         env:
           COMPONENT: ${{ inputs.component }}
           MINUTES: ${{ inputs.minutes }}
+          P2PKIT_KEYBOARD_CAUSE_MODE: ${{ inputs.keyboard_cause_mode != 'none' && inputs.keyboard_cause_mode || '' }}
+          P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST: ${{ inputs.keyboard_cause_mode != 'none' && inputs.keyboard_cause_mode != '' && '1' || '' }}
         run: |
           if [[ "$COMPONENT" == jmdns-diagnostic || "$COMPONENT" == macos-shared || "$COMPONENT" == consumers || "$COMPONENT" == published-consumers-diagnostic || "$COMPONENT" == consumers-pom-diagnostic ]]; then
             if [[ "$COMPONENT" == jmdns-diagnostic ]]; then [[ "$MINUTES" == 30 ]]

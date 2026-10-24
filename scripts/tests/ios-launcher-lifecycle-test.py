@@ -48,6 +48,7 @@ if tool == "xcrun":
     else:
         assert args[1] in ("bootstatus", "launch"), args
 elif tool == "xcodebuild":
+    (root / "xcode-argv.json").write_text(json.dumps(args))
     if os.environ.get("FAKE_IOS_BLOCK") == "1":
         (root / "build-started").touch()
         deadline = time.monotonic() + 20
@@ -101,7 +102,8 @@ class LauncherLifecycleTest(unittest.TestCase):
         bash_env.write_text("function /usr/libexec/PlistBuddy { printf '%s\\n' p2pkit-sample; }\n")
         self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
                         FAKE_IOS_ROOT=str(self.root), BASH_ENV=str(bash_env), SIM_UDID=UDID)
-        for name in ("SIM_RUNTIME", "IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE"):
+        for name in ("SIM_RUNTIME", "IOS_RUN_DIR", "KEEP_IOS_RUN_ARTIFACTS", "FAKE_IOS_BLOCK", "FAKE_IOS_BUILD_FAILURE",
+                     "P2PKIT_KEYBOARD_CAUSE_MODE", "P2PKIT_KEYBOARD_CAUSE_BUILD", "P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST"):
             self.env.pop(name, None)
         self.processes = []
         self.addCleanup(self.stop_processes)
@@ -376,7 +378,7 @@ printf 'invoked\\n' >> fake-gradle-invocations
         self.assertIn("-scheme p2pkit-sample-ui", xcode[0])
         self.assertNotIn("-only-testing:", xcode[0], "The ordinary both-target suite remains unfiltered")
 
-    def assert_keyboard_readiness_call(self, calls):
+    def assert_keyboard_readiness_call(self, calls, cause_probe=False):
         xcode = [call for call in calls if call.startswith("xcodebuild ")]
         self.assertEqual(1, len(xcode), "The diagnostic must not retry either XCTest case")
         self.assertIn(" -derivedDataPath ", xcode[0])
@@ -394,6 +396,8 @@ printf 'invoked\\n' >> fake-gradle-invocations
             "testRenderedPortRoundTripsThroughManualInputInGermanLocale",
             "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "test",
         ]
+        if cause_probe:
+            expected.insert(-1, 'OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE')
         jobs = self.env.get("P2PKIT_XCODE_JOBS", "")
         if jobs:
             self.assertIn(jobs, ("1", "2"), "Only the existing bounded compilation override is admissible")
@@ -443,6 +447,44 @@ printf 'invoked\\n' >> fake-gradle-invocations
                           ("run-keyboard-readiness-extra",)):
             with self.subTest(arguments=arguments):
                 self.finish(self.start("run-ios-ui-tests.sh", arguments=arguments), expected=2)
+                self.assertFalse((self.root / "tools.log").exists())
+                self.assertFalse(self.build.exists())
+
+    def test_keyboard_cause_conditions_dispatch_only_to_opt_in_controller_before_tools(self):
+        stub = self.repo / "scripts/ios_keyboard_cause_probe.py"
+        stub.write_text('import sys\nprint("SYNTHETIC_PROBE_DISPATCH:" + sys.argv[1])\nraise SystemExit(93)\n')
+        for mode in ("hardware-off", "hardware-on"):
+            output = self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-readiness",),
+                                 P2PKIT_KEYBOARD_CAUSE_MODE=mode), expected=93)
+            self.assertIn("SYNTHETIC_PROBE_DISPATCH:" + mode, output)
+            self.assertFalse((self.root / "tools.log").exists())
+            self.assertFalse(self.build.exists())
+
+    def test_keyboard_cause_build_keeps_exact_two_cases_and_one_debug_only_setting(self):
+        external = self.root / "controlled-keyboard"
+        self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-keyboard-readiness",),
+                               IOS_RUN_DIR=str(external), P2PKIT_KEYBOARD_CAUSE_BUILD="1",
+                               P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST="1"))
+        calls = (self.root / "tools.log").read_text().splitlines()
+        self.assertEqual(external / "DerivedData", self.assert_keyboard_readiness_call(calls, cause_probe=True))
+        argv = json.loads((self.root / "xcode-argv.json").read_text())
+        self.assertEqual(1, argv.count('OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE'))
+        self.assertTrue(external.is_dir())
+        self.assertFalse(self.lock.exists())
+
+    def test_keyboard_cause_misrouting_and_uncontrolled_internal_build_refuse_before_tools(self):
+        for arguments, overrides in (
+            ((), {"P2PKIT_KEYBOARD_CAUSE_MODE": "hardware-off"}),
+            ((), {"P2PKIT_KEYBOARD_CAUSE_BUILD": "1"}),
+            (("run-keyboard-readiness",), {"P2PKIT_KEYBOARD_CAUSE_MODE": "hardware-on", "P2PKIT_KEYBOARD_CAUSE_BUILD": "1"}),
+            (("run-keyboard-readiness",), {"P2PKIT_KEYBOARD_CAUSE_BUILD": "1"}),
+            (("run-keyboard-readiness",), {"P2PKIT_KEYBOARD_CAUSE_BUILD": "2", "P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST": "1",
+                                          "IOS_RUN_DIR": str(self.root / "invalid-build")}),
+            (("run-keyboard-readiness",), {"P2PKIT_KEYBOARD_CAUSE_BUILD": "1", "P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST": "1",
+                                          "IOS_RUN_DIR": str(self.root / "invalid-build"), "SIM_UDID": ""}),
+        ):
+            with self.subTest(arguments=arguments, overrides=overrides):
+                self.finish(self.start("run-ios-ui-tests.sh", arguments=arguments, **overrides), expected=2)
                 self.assertFalse((self.root / "tools.log").exists())
                 self.assertFalse(self.build.exists())
 

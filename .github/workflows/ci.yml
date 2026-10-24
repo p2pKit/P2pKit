@@ -10,6 +10,11 @@ on:
         default: all
         type: choice
         options: [all, source, dependencies, jvm-linux, jvm-windows, android, apple-arm64, apple-x64, desktop-linux, desktop-windows, desktop-macos, security, compatibility, consumers, macos-shared, bundle-diagnostic, jmdns-diagnostic, published-consumers-diagnostic, consumers-pom-diagnostic, apple-keyboard-diagnostic, apple-issue-diagnostic, android-ui-diagnostic, android-permission-diagnostic, android-legacy-task-preview]
+      keyboard_cause_mode:
+        description: Apple keyboard diagnostic only; independent fresh OFF/ON first-show experiments
+        default: none
+        type: choice
+        options: [none, hardware-off, hardware-on]
       apple_operation:
         description: Apple diagnostic only (no release qualification or physical credit)
         default: both
@@ -36,7 +41,7 @@ permissions:
   actions: read
 # Different components and RPC runs never cancel or block one another.
 concurrency:
-  group: modular-ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.component || 'all' }}
+  group: modular-ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.component || 'all' }}-${{ inputs.keyboard_cause_mode || 'none' }}
   cancel-in-progress: false
 jobs:
   plan:
@@ -51,7 +56,17 @@ jobs:
       - id: components
         env:
           COMPONENT: ${{ inputs.component || 'all' }}
-        run: echo "matrix=$(python3 -B scripts/ci_component.py --matrix "$COMPONENT")" >> "$GITHUB_OUTPUT"
+          KEYBOARD_CAUSE_MODE: ${{ inputs.keyboard_cause_mode || 'none' }}
+          QUALIFICATION_SELECTION: ${{ inputs.qualification_selection }}
+        run: |
+          case "$KEYBOARD_CAUSE_MODE" in
+            none) ;;
+            hardware-off|hardware-on)
+              [[ "$COMPONENT" == apple-keyboard-diagnostic && -z "$QUALIFICATION_SELECTION" ]]
+              ;;
+            *) exit 125 ;;
+          esac
+          echo "matrix=$(python3 -B scripts/ci_component.py --matrix "$COMPONENT")" >> "$GITHUB_OUTPUT"
   component:
     if: ${{ inputs.component != 'android-legacy-task-preview' && inputs.component != 'apple-issue-diagnostic' && inputs.component != 'android-permission-diagnostic' && inputs.component != 'android-ui-diagnostic' && inputs.qualification_selection == '' }}
     needs: plan
@@ -65,6 +80,7 @@ jobs:
       runner: ${{ matrix.os }}
       minutes: ${{ matrix.minutes }}
       job_minutes: ${{ matrix.job_minutes }}
+      keyboard_cause_mode: ${{ inputs.keyboard_cause_mode || 'none' }}
   # Reusable issue workflows come from this exact caller commit, not the default
   # branch. They never run the component matrix or mint qualification evidence.
   apple-issue-diagnostic:

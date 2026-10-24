@@ -244,9 +244,19 @@ def record_tools(component):
     Path(target).write_text(json.dumps(result) + '\n')
 
 
+def admit_keyboard_cause(component, environment):
+    mode = environment.get('P2PKIT_KEYBOARD_CAUSE_MODE', '')
+    isolated = environment.get('P2PKIT_KEYBOARD_CAUSE_ISOLATED_HOST', '')
+    nested = environment.get('P2PKIT_KEYBOARD_CAUSE_BUILD', '')
+    if (mode or isolated or nested) and not (component == 'apple-keyboard-diagnostic' and
+            mode in ('hardware-off', 'hardware-on') and isolated == '1' and not nested):
+        raise ValueError('Controlled keyboard conditions require the isolated focused diagnostic')
+
+
 def execute(component):
     if component not in COMPONENTS and component not in DIAGNOSTICS:
         raise ValueError('Unknown component')
+    admit_keyboard_cause(component, os.environ)
     output = ROOT / 'build/reports/ci-component'
     output.mkdir(parents=True, exist_ok=True)
     tasks = []
