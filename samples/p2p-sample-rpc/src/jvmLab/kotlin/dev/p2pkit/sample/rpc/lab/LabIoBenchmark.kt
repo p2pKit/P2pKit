@@ -29,13 +29,15 @@ import kotlin.system.exitProcess
 /** The host publishes at 1Hz: a 5s driver delay alone can span only 4s of observed host samples. */
 internal suspend fun awaitIoIdleTelemetry(
     start: RpcCapacityHostTelemetry,
+    minimumMillis: Long = 5_000,
     sample: suspend () -> RpcCapacityHostTelemetry,
 ): RpcCapacityHostTelemetry {
+    require(minimumMillis in 5_000..30_000)
     while (true) {
         val current = sample()
         check(current.uptimeMillis >= start.uptimeMillis && current.processCpuNanos >= start.processCpuNanos)
         check(current.host.diagnostics.completedCalls == start.host.diagnostics.completedCalls)
-        if (current.uptimeMillis - start.uptimeMillis >= 5_000) return current
+        if (current.uptimeMillis - start.uptimeMillis >= minimumMillis) return current
         delay(100)
     }
 }
@@ -89,8 +91,16 @@ public fun runIoBenchmark(args: Array<String>) {
                 val idleStart = healthySample()
                 phase = "idle"
                 delay(5_000)
-                val idleEnd = withTimeout(5_000) { awaitIoIdleTelemetry(idleStart, ::healthySample) }
+                val idleEnd = withTimeout(5_000) { awaitIoIdleTelemetry(idleStart, sample = ::healthySample) }
                 check(idleEnd.host.diagnostics.completedCalls == idleStart.host.diagnostics.completedCalls)
+                // Keep the original cold/early idle observation, then measure three complete
+                // 10-second keepalive intervals separately after another 10 seconds of settling.
+                // Do not mistake startup JIT/GC, or one synchronized heartbeat burst, for steady idle.
+                phase = "steady-idle"
+                delay(10_000)
+                val steadyStart = healthySample()
+                delay(30_000)
+                val steadyEnd = withTimeout(5_000) { awaitIoIdleTelemetry(steadyStart, 30_000, ::healthySample) }
                 phase = "workload"
                 val start = System.nanoTime() + 200_000_000
                 withTimeout((seconds + 30L) * 1_000) {
@@ -125,8 +135,13 @@ public fun runIoBenchmark(args: Array<String>) {
                     "hostRssAfterBytes" to after.residentBytes,
                     "hostIdleWallMs" to idleEnd.uptimeMillis - idleStart.uptimeMillis,
                     "hostIdleCpuNs" to idleEnd.processCpuNanos - idleStart.processCpuNanos,
-                    "hostActiveCpuNs" to after.processCpuNanos - idleEnd.processCpuNanos,
-                    "hostActiveWallMs" to after.uptimeMillis - idleEnd.uptimeMillis,
+                    "hostSteadyIdleStartMs" to steadyStart.uptimeMillis,
+                    "hostSteadyIdleWallMs" to steadyEnd.uptimeMillis - steadyStart.uptimeMillis,
+                    "hostSteadyIdleCpuNs" to steadyEnd.processCpuNanos - steadyStart.processCpuNanos,
+                    "hostSteadyIdleThreads" to steadyEnd.liveThreads.toLong(),
+                    "hostSteadyIdleRssBytes" to steadyEnd.residentBytes,
+                    "hostActiveCpuNs" to after.processCpuNanos - steadyEnd.processCpuNanos,
+                    "hostActiveWallMs" to after.uptimeMillis - steadyEnd.uptimeMillis,
                     "hostRetainedRecords" to after.host.diagnostics.retainedRecords.toLong(),
                     "hostPayloadBytes" to after.host.diagnostics.retainedPayloadBytes,
                 )
@@ -152,7 +167,7 @@ public fun runIoBenchmark(args: Array<String>) {
                 }
             }
             println("RPC_IO_BENCHMARK_JSON:" + buildJsonObject {
-                put("schema", 1)
+                put("schema", 2)
                 put("source", environment.manifest.hostSourceSha)
                 put("hostArtifact", environment.manifest.hostArtifactSha256)
                 put("driverArtifact", environment.manifest.driverArtifactSha256)

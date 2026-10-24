@@ -138,12 +138,11 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
         optimization.consumerKeepRules.file("src/nativeInterop/androidSockets/consumer-rules.pro")
         withHostTest { }
-        // Opt-in real ART/Os.poll validation. It is not silently selected by portable check, and
-        // uses the platform Instrumentation class rather than a new third-party test dependency.
-        if (providers.gradleProperty("p2pkit.lan.readinessDeviceTest").orNull == "true") {
-            withDeviceTest {
-                instrumentationRunner = "dev.p2pkit.transport.lan.LanReadinessInstrumentation"
-            }
+        // Declare the compilation on every host so dependency maintenance sees its graph. Execution
+        // is still explicit, never a connected-device prerequisite of portable check. This uses the
+        // platform Instrumentation class rather than another third-party test dependency.
+        withDeviceTest {
+            instrumentationRunner = "dev.p2pkit.transport.lan.LanReadinessInstrumentation"
         }
     }
 
@@ -229,6 +228,11 @@ kotlin {
         }
     }
 }
+
+// Portable check does not assemble this opt-in device APK. The full maintained lock writer must,
+// otherwise its compile/runtime/plugin configuration memberships would never enter the lockfile.
+val readinessDeviceApkTaskPath = "$path:assembleAndroidDeviceTest"
+rootProject.tasks.named("resolveAndLockAll") { dependsOn(readinessDeviceApkTaskPath) }
 
 val embeddedJmdnsToolchains = extensions.getByType<JavaToolchainService>()
 compileEmbeddedJmdnsJava.configure {

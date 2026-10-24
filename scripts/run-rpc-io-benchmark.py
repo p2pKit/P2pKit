@@ -120,7 +120,7 @@ def validate_result(raw, source, clients, seconds):
     lines = [line[len(PREFIX):] for line in raw.splitlines() if line.startswith(PREFIX)]
     need(len(lines) == 1, "Exactly one completed RPC benchmark is required")
     result = json.loads(lines[0])
-    need(result.get("schema") == 1 and result.get("source") == source and result.get("cleanup") is True and
+    need(result.get("schema") == 2 and result.get("source") == source and result.get("cleanup") is True and
          result.get("scope") == "AUTHENTICATED_RPC_LAB_NOT_PHYSICAL_OR_MOBILE_QUALIFICATION", "Wrong benchmark scope")
     values = result["measurements"]
     need(values["clients"] == clients and values["seconds"] == seconds and
@@ -128,10 +128,13 @@ def validate_result(raw, source, clients, seconds):
     required = {"clients", "seconds", "responses", "activeWallNs", "late100msSlots",
                 "hostThreadsBeforeConnections", "hostThreadsIdle", "hostThreadsAfter",
                 "hostRssBeforeBytes", "hostRssIdleBytes", "hostRssAfterBytes", "hostIdleWallMs",
+                "hostSteadyIdleStartMs", "hostSteadyIdleWallMs", "hostSteadyIdleCpuNs",
+                "hostSteadyIdleThreads", "hostSteadyIdleRssBytes",
                 "hostIdleCpuNs", "hostActiveCpuNs", "hostActiveWallMs", "hostRetainedRecords", "hostPayloadBytes"}
     need(set(values) == required and all(type(value) is int and value >= 0 for value in values.values()),
          "Invalid/missing benchmark measurement")
-    need(values["activeWallNs"] > 0 and values["hostActiveWallMs"] > 0 and values["hostIdleWallMs"] >= 5_000,
+    need(values["activeWallNs"] > 0 and values["hostActiveWallMs"] > 0 and values["hostIdleWallMs"] >= 5_000 and
+         values["hostSteadyIdleStartMs"] > 0 and values["hostSteadyIdleWallMs"] >= 30_000,
          "Missing observed idle/active duration")
     latency = result["latencyUpperMs"]
     need(set(latency) == {"p50", "p95", "p99", "max"} and

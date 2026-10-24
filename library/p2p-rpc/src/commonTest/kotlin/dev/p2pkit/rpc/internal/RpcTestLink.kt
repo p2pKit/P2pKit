@@ -52,8 +52,15 @@ internal class RpcTestLink(index: Int = 0, override val admission: PeerAdmission
     }
 }
 
-internal fun testFingerprint(index: Int = 0): PeerFingerprint =
-    PeerFingerprint("p2f1-" + ('a'.code + index).toChar().toString().repeat(51) + "a")
+internal fun testFingerprint(index: Int = 0): PeerFingerprint {
+    require(index >= 0)
+    // Preserve the small fixtures' original pins; larger capacity fixtures need real canonical
+    // base32 digits too, not characters past 'z'. A distinct leading '7' separates both ranges.
+    if (index < 26) return PeerFingerprint("p2f1-" + ('a'.code + index).toChar().toString().repeat(51) + "a")
+    val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+    val digits = (6 downTo 0).map { alphabet[(index ushr (it * 5)) and 31] }.joinToString("")
+    return PeerFingerprint("p2f1-7" + digits + "a".repeat(44))
+}
 
 internal const val TEST_INCARNATION: String = "11111111111111111111111111111111"
 internal const val TEST_REQUEST: String = "22222222222222222222222222222222"

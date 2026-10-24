@@ -116,6 +116,9 @@ production `RpcHost`/`RpcClient`, secure-v2 TCP, unchanged topology guards, and
 phase-spaced 10 Hz/client 1 KiB echo calls. Setup connects in batches of two,
 preserving pre-handshake admission. It records host CPU, native threads, RSS,
 idle overhead, throughput and latency bucket bounds separately from the driver.
+Schema2 preserves the original early 5-second idle measurement and adds a separate
+30-second steady-idle window after another 10 seconds of settling. The latter
+includes three unchanged keepalive intervals rather than extrapolating one burst.
 Every response and final host counter is checked. Original clients/host must
 close, final process exits must be observed, and records/payload must return to
 zero beyond the unchanged 60-second retention window. The run is **120 seconds,
@@ -124,13 +127,18 @@ hidden; mechanical correctness alone is not a resource-efficiency verdict.
 
 `CI — modular qualification` has an independent `rpc-io` diagnostic selection;
 `rpc_io_part` selects all or one of `jvm-linux`, `jvm-windows`, `macos`,
-`macos-abi`, `android-24`, `android-35`. The additive Apple ABI candidate is
-generated independently from native socket tests, without editing its baseline.
+`macos-abi`, `android-24`, `android-35`. The additive Apple ABI was generated and
+reviewed independently from native socket tests; that part now compares the
+actual output against the maintained baseline, without rewriting it.
 Failures do not cancel another platform. Evidence uses
 the maintained source-bound collector and encryption, not new authorization or
 custody protocols. These focused checks do not mint release qualification.
 
-Android instrumentation is opt-in with `-Pp2pkit.lan.readinessDeviceTest=true`.
+Android instrumentation execution is explicitly selected with
+`scripts/run-android-readiness.py --api 24` or `--api 35` under the maintained CI
+supervisor. The compilation is always declared, and the full lock writer
+assembles its APK so the device-test dependency graph is not omitted. Portable
+`check` does not boot an emulator or select connected-device execution.
 It compiles the real production adapters into one test APK, then exercises both
 NIO and native accepted sockets at 128/256 over loopback on ART. It measures raw
 I/O resources and exact echoes, **not authenticated RPC, Network binding,
@@ -185,6 +193,22 @@ p95 upper buckets 12 / 10 ms and p99 27 / 73 ms. Post-load RSS was 379.1 / 650.4
 This is improved idle cost but **not yet low-overhead mobile-host qualification**;
 5-second idle windows also include JVM warm-up/GC effects. These figures precede
 wake coalescing. No physical mobile capacity or 512-client capability is claimed.
+
+The [coalescing retry](https://github.com/p2pKit/P2pKit/actions/runs/40126903355)
+at `4bf7a931` completed all 1,280 exact 128-peer JNI echoes without `ENOBUFS`, then
+exposed a test-lifecycle defect: `withTimeout` was waiting for its infinite reader
+children before an outer `finally` could close them. Cleanup now runs inside that
+scope. The unchanged 20-second limit remains; the failed run is not promoted to
+a pass or a 256-client result.
+
+The [API24 ART retry](https://github.com/p2pKit/P2pKit/actions/runs/40126907460)
+at `4bf7a931` verified the installed bytes through the binary shell stream and
+completed all four raw adapter/population cases, with observed emulator exit and
+outer descendant cleanup. Idle CPU was 4–7 ms over each 5-second window; 256-pair
+cases used 50–51 total ART threads. The 76,800 responses took 53.43 seconds (NIO)
+and 42.59 seconds (native accepted sockets), not the nominal 30 seconds. This
+establishes original-socket functionality and bounded idle resources on that
+emulator, **not sustained 2,560 responses/second or authenticated mobile hosting**.
 
 The old 128-raw-socket baseline observed 151 JVM threads (9 before connections).
 Initial new raw 128/256 tests observed 30 threads in both cases. Their short,

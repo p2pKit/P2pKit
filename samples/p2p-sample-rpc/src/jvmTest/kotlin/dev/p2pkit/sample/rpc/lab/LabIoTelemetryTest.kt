@@ -35,4 +35,17 @@ class LabIoTelemetryTest {
             assertFailsWith<IllegalStateException> { awaitIoIdleTelemetry(start) { invalid } }
         }
     }
+
+    @Test fun steadyIdleRequiresAllThirtyObservedSecondsNotJustTheEarlyWindow() = runTest {
+        val start = sample(40_000)
+        val fresh = sample(70_000)
+        var reads = 0
+        assertSame(fresh, withTimeout(5_000) {
+            awaitIoIdleTelemetry(start, 30_000) { if (reads++ < 3) sample(69_999) else fresh }
+        })
+        assertEquals(4, reads)
+        assertFailsWith<TimeoutCancellationException> {
+            withTimeout(5_000) { awaitIoIdleTelemetry(start, 30_000) { sample(69_999) } }
+        }
+    }
 }

@@ -124,7 +124,7 @@ def main():
     source, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
     need(not git("status", "--porcelain=v1"), "Clean exact source required")
     run([ROOT / "gradlew", ":p2p-transport-lan:assembleAndroidDeviceTest",
-         "-Pp2pkit.lan.readinessDeviceTest=true", "--dependency-verification=strict",
+         "--dependency-verification=strict",
          "--no-daemon", "--max-workers=2", "--console=plain"], timeout=1800)
     apks = list((ROOT / "library/p2p-transport-lan/build/outputs/apk").rglob("*.apk"))
     need(len(apks) == 1, "Exactly one source-built device-test APK required")

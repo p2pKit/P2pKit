@@ -92,8 +92,8 @@ class MacLanNativeIntegrationTest {
             val connections = mutableListOf<JvmRawConnection>()
             val jobs = mutableListOf<kotlinx.coroutines.Job>()
             val clients = mutableListOf<Pair<JvmRawConnection, Channel<ByteArray>>>()
-            try {
-                withTimeout(20_000) {
+            withTimeout(20_000) {
+                try {
                     listener.bind(InetSocketAddress(address, 0))
                     repeat(count) {
                         val socket = MacLanSocket(MacLanNative, errors, { index }).also { sockets += it }
@@ -125,22 +125,24 @@ class MacLanNativeIntegrationTest {
                     }
                     assertEquals(1, Thread.getAllStackTraces().keys.count { it.name == "p2pkit-macos-readiness" })
                     println("NATIVE_ASYNC clients=$count responses=${count * 10} readinessThreads=1")
-                }
-            } finally {
-                withContext(NonCancellable) {
-                    var failure: Throwable? = null
-                    for (owned in connections) try { owned.close() } catch (error: Throwable) {
-                        if (failure == null) failure = error else failure.addSuppressed(error)
+                } finally {
+                    // These readers are children of withTimeout. Retire them BEFORE its body
+                    // returns, not in an outer finally that cannot run while it awaits children.
+                    withContext(NonCancellable) {
+                        var failure: Throwable? = null
+                        for (owned in connections) try { owned.close() } catch (error: Throwable) {
+                            if (failure == null) failure = error else failure.addSuppressed(error)
+                        }
+                        for (socket in sockets) try { socket.close() } catch (error: Throwable) {
+                            if (failure == null) failure = error else failure.addSuppressed(error)
+                        }
+                        try { listener.close() } catch (error: Throwable) {
+                            if (failure == null) failure = error else failure.addSuppressed(error)
+                        }
+                        withTimeout(5_000) { jobs.forEach { it.cancelAndJoin() } }
+                        assertEquals(0, Thread.getAllStackTraces().keys.count { it.name == "p2pkit-macos-readiness" })
+                        failure?.let { throw it }
                     }
-                    for (socket in sockets) try { socket.close() } catch (error: Throwable) {
-                        if (failure == null) failure = error else failure.addSuppressed(error)
-                    }
-                    try { listener.close() } catch (error: Throwable) {
-                        if (failure == null) failure = error else failure.addSuppressed(error)
-                    }
-                    withTimeout(5_000) { jobs.forEach { it.cancelAndJoin() } }
-                    assertEquals(0, Thread.getAllStackTraces().keys.count { it.name == "p2pkit-macos-readiness" })
-                    failure?.let { throw it }
                 }
             }
         } } finally { JvmLanDiag.enabled = originalTrace }

@@ -19,7 +19,7 @@ case "${1:-}" in
       --tests 'dev.p2pkit.transport.lan.JvmRawCapacityTest' "${flags[@]}"
     ;;
   macos-abi)
-    # Produce proposed additive ABI outputs for review; do NOT rewrite or claim to check the baseline.
+    # The additive host256 baseline was generated on macOS and reviewed. Check it without rewriting.
     bash ./gradlew :p2p-rpc:internalDumpKotlinAbi :p2p-rpc:buildAndroidAbi "${flags[@]}"
     python3 - <<'PY'
 from pathlib import Path
@@ -31,6 +31,7 @@ for path in root.rglob('*.api'):
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(path, target)
 PY
+    bash ./gradlew :p2p-rpc:checkKotlinAbi :p2p-rpc:checkAndroidAbi "${flags[@]}"
     ;;
   android-24|android-35)
     python3 -B scripts/run-android-readiness.py --api "${1#android-}"

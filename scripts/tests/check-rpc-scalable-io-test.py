@@ -91,12 +91,14 @@ class ReceiptTest(unittest.TestCase):
                                              apk, root, failed_cat)
 
     def rpc_result(self, count):
-        return dict(schema=1, source="a" * 40, cleanup=True,
+        return dict(schema=2, source="a" * 40, cleanup=True,
                     scope="AUTHENTICATED_RPC_LAB_NOT_PHYSICAL_OR_MOBILE_QUALIFICATION",
                     measurements=dict(clients=count, seconds=120, responses=count * 120 * 10,
                         activeWallNs=120_000_000_000, late100msSlots=0, hostThreadsBeforeConnections=20,
                         hostThreadsIdle=30, hostThreadsAfter=30, hostRssBeforeBytes=100_000_000,
                         hostRssIdleBytes=110_000_000, hostRssAfterBytes=200_000_000, hostIdleWallMs=5_000,
+                        hostSteadyIdleStartMs=40_000, hostSteadyIdleWallMs=30_000, hostSteadyIdleCpuNs=50_000_000,
+                        hostSteadyIdleThreads=30, hostSteadyIdleRssBytes=110_000_000,
                         hostIdleCpuNs=1_000_000, hostActiveCpuNs=50_000_000_000, hostActiveWallMs=120_000,
                         hostRetainedRecords=count * 600, hostPayloadBytes=count * 600 * 1024),
                     latencyUpperMs=dict(p50=5, p95=10, p99=20, max=30))
@@ -136,6 +138,10 @@ class ReceiptTest(unittest.TestCase):
         for latency in ({}, dict(p50=1, p95=20, p99=10, max=30), dict(p50=1, p95=True, p99=20, max=30)):
             with self.subTest(latency=latency), self.assertRaises(RuntimeError):
                 rpc.validate_result(self.encode({**value, "latencyUpperMs": latency}), "a" * 40, 256, 120)
+        changed = copy.deepcopy(value)
+        changed["measurements"]["hostSteadyIdleWallMs"] = 29_999
+        with self.assertRaises(RuntimeError):
+            rpc.validate_result(self.encode(changed), "a" * 40, 256, 120)
 
     def android_result(self):
         measurements = [dict(backend=backend, clients=count, responses=count * 300, bytesPerResponse=1024,
