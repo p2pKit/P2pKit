@@ -49,3 +49,47 @@ hierarchy is later context, not an observation of a key before its deadline.
 
 The public Xcode repetition behavior is documented in Apple's
 [test-running guide](https://developer.apple.com/documentation/xcode/running-tests-and-interpreting-results#Run-testing-repeatedly-to-determine-reliability).
+
+## Completed bounded campaign: no recurrence, not a fix
+
+[40108197428/1](https://github.com/p2pKit/P2pKit/actions/runs/40108197428)
+tested commit `9a6d68cab9f318c9bbc5852a49d8784aab42df88`, tree
+`e9d145ae94dc5a3aceed0a5c1481cf57c316265c`, with Xcode 26.5 on hosted
+macOS arm64 / iOS 26.5 Simulator. Actual native help advertised the three
+options, and the retained invocation used one serial Xcode test command with
+the reviewed six-total-execution cap. All six executions of the **one original
+English method** passed:
+
+| Execution | XCTest case duration (seconds) | Result |
+| --- | ---: | --- |
+| 1 | 112.799 | PASS |
+| 2 | 63.652 | PASS |
+| 3 | 73.146 | PASS |
+| 4 | 70.773 | PASS |
+| 5 | 65.786 | PASS |
+| 6 | 65.559 | PASS |
+
+These are six executions, not six unique methods. Each retained nine Host,
+five Port and 37 pairing single-character input activities, three Done inputs,
+the original value/dismissal assertions, and normal Stop followed by app
+termination. All 36 cached introduction preflights were false; their
+non-atomic scope is unchanged. No readiness failure or failure-only snapshot
+was observed. The three probe switches were not enabled, and no passive
+collector ran. The unused DEBUG passive helper still exists in this
+investigative build; this is not historical binary identity.
+
+Artifact `12565709838` is 53,629 bytes, ZIP SHA-256
+`c4a0dc0f44a990cb3bffdaeb1aba51a02b70aeea580e57d9a59cc85c2c883509`.
+All four original reports (509,751 bytes) were authenticated and reviewed.
+The original component and final Gradle stop returned zero, with known cleanup
+and closed captures. Original stderr retains the same-device architecture
+selection warning and nonfatal LLDB version-metadata errors; neither is
+established as the cause of the earlier failure.
+
+**This campaign is finished at its original cap; #520 remains open.** Do not
+raise the cap, repeat it to accumulate green results, promote the earlier
+candidate waiter, or infer a causal repair. A genuine failure with its cached
+query facts and later accessibility context, or a deterministic trigger, is
+still missing. Existing main failure diagnostics remain available during
+necessary ordinary CI. No production change, full compatibility qualification,
+physical-device claim or new release follows from these six passes.
