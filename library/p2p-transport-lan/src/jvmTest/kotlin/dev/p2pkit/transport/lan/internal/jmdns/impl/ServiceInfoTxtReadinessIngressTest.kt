@@ -119,7 +119,7 @@ class ServiceInfoTxtReadinessIngressTest {
                 source.requestUnchangedResolution()
                 runCurrent()
                 assertEquals(listOf(true), rawValidTxt.toList(), "Fresh resolvers must retain raw deduplication")
-                assertEquals(listOf(found), events)
+                assertEquals<List<PeerEvent>>(listOf(found), events)
 
                 // Absence of TXT is not an empty TXT record. A received empty record must
                 // still reach validation and withdraw the now-invalid application identity.
