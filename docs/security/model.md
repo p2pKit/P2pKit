@@ -186,6 +186,8 @@ from `p2p-network-provisioning-desktop`, `android(applicationContext)` from
 `p2p-network-provisioning-android`, or `iosManualIp()` from Apple
 `p2p-transport-lan`. Without a factory, the default manager rejects manual
 registration. Manual peers do not consume the discovery budget.
+The locally registered LAN endpoint takes precedence over a cached iOS Bonjour
+endpoint claiming the same peer ID; the full pin is still checked at connection.
 This bypasses discovery registration, not
 network disruption or connection limits; it does not guarantee connectivity.
 Do not trust a discovered name/address as approval, disable pin checks, or
