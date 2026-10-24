@@ -95,6 +95,17 @@ class IosProjectGenerationTest(unittest.TestCase):
                 self.assertNotIn(target, {
                     entry.attrib["BlueprintName"] for entry in ordinary.findall(".//BuildableReference")})
 
+    def test_keyboard_query_comparison_is_excluded_from_acceptance(self):
+        target = "p2pkit-sample-keyboard-query-tests"
+        scheme = self.scheme("p2pkit-sample-keyboard-query")
+        testables = scheme.findall("TestAction/Testables/TestableReference")
+        self.assertEqual(1, len(testables))
+        self.assertEqual("NO", testables[0].attrib["skipped"])
+        self.assertEqual(target, testables[0].find("BuildableReference").attrib["BlueprintName"])
+        for name in ("p2pkit-sample", "p2pkit-sample-ui", "p2pkit-sample-jvm-transfer"):
+            self.assertNotIn(target, {entry.attrib["BlueprintName"]
+                for entry in self.scheme(name).findall(".//BuildableReference")})
+
     def test_real_jvm_peer_case_has_one_separate_explicit_target(self):
         scheme = self.scheme("p2pkit-sample-jvm-transfer")
         testables = scheme.findall("TestAction/Testables/TestableReference")
@@ -128,7 +139,7 @@ class IosProjectGenerationTest(unittest.TestCase):
             with self.subTest(source=name):
                 self.assertIn(name + " in Sources", project_text)
         self.assertEqual({"p2pkit-sample", "p2pkit-sample-ui", "p2pkit-sample-jvm-transfer",
-                          "p2pkit-sample-cancellation-probe"}, set(self.schemes))
+                          "p2pkit-sample-cancellation-probe", "p2pkit-sample-keyboard-query"}, set(self.schemes))
 
     def test_generation_preserves_provenance_and_local_network_declarations(self):
         project_text = (self.generated / "project.pbxproj").read_text()

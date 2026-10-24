@@ -13,7 +13,7 @@ RUN_DIR="${IOS_RUN_DIR:-}"
 action="${1:-}"
 case "$action" in
     "") [[ $# -eq 0 ]] ;;
-    run-keyboard-readiness)
+    run-keyboard-readiness|run-keyboard-query-cause)
         [[ $# -eq 1 ]] || {
             echo "[ios-run] Keyboard readiness diagnostic accepts no additional arguments." >&2
             exit 2
@@ -25,7 +25,7 @@ case "$action" in
             exit 2
         }
         ;;
-    *) echo "usage: $0 [run-keyboard-readiness|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
+    *) echo "usage: $0 [run-keyboard-readiness|run-keyboard-query-cause|prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
 esac
 if [[ "$action" == "run-cancellation-probe" && -z "$SIM_UDID" ]]; then
     echo "[ios-run] Cancellation investigation requires the outer owner's exact simulator UDID." >&2
@@ -77,7 +77,43 @@ if [[ "$action" != "run-jvm-transfer" && "$action" != "run-cancellation-probe" &
 fi
 boot_and_wait_for_simulator "$udid"
 
+keyboard_passive_flags=()
+if [[ "${GITHUB_ACTIONS:-}" == "true" &&
+  ( ( -z "$action" && "${COMPONENT:-}" == "compatibility" ) ||
+    ( "$action" == "run-keyboard-query-cause" && "${COMPONENT:-}" == "apple-keyboard-query-diagnostic" ) ) ]]; then
+    # Reuse the same post-return reader for ordinary passive observation and
+    # the explicit native-query comparison. No GUI or preference mutation.
+    keyboard_passive_flags=('OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE')
+    keyboard_command_status=UNOBSERVED
+    keyboard_signal_status=0
+    finish_keyboard_observation() {
+        local status="$1" capture_status=0
+        trap - EXIT
+        trap '' INT TERM
+        if [[ "$keyboard_command_status" == UNOBSERVED && "$keyboard_signal_status" -eq 0 ]]; then
+            keyboard_command_status="$status"
+        fi
+        # Register this foreground reader under the still-held launcher
+        # lock. The helper owns only its log child, never this borrowed device.
+        if python3 "$IOS_LAUNCH_HELPER" run "$IOS_LAUNCH_LOCK" "$$" \
+            python3 -B "$SCRIPT_DIR/ios_keyboard_passive_capture.py" \
+            "$udid" "$keyboard_command_status" "$status"; then
+            :
+        else
+            capture_status="$?"
+            echo "[ios-run] Passive keyboard capture failed; original command result is retained." >&2
+        fi
+        if [[ "$status" -eq 0 && "$capture_status" -ne 0 ]]; then status=125; fi
+        cleanup_ios_run "$status"
+    }
+    trap 'keyboard_signal_status=130; exit 130' INT
+    trap 'keyboard_signal_status=143; exit 143' TERM
+    trap 'finish_keyboard_observation "$?"' EXIT
+fi
+
 if [[ -z "$action" ]]; then
+    # Do not put this function in an if/||/! context: that disables Bash's
+    # existing errexit semantics inside the original launcher helpers.
     run_ios_xcodebuild \
         -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
         -scheme p2pkit-sample-ui \
@@ -86,7 +122,9 @@ if [[ -z "$action" ]]; then
         -destination "platform=iOS Simulator,id=$udid" \
         -derivedDataPath "$DERIVED_DATA" \
         -parallel-testing-enabled NO \
+        ${keyboard_passive_flags[@]+"${keyboard_passive_flags[@]}"} \
         test
+    keyboard_command_status=0
 
     echo "RESULT: PASS — iOS simulator launched the sample and completed start/stop UI automation"
 elif [[ "$action" == "run-keyboard-readiness" ]]; then
@@ -107,6 +145,23 @@ elif [[ "$action" == "run-keyboard-readiness" ]]; then
         -only-testing:p2pkit-sample-uitests/ContentViewPresentationUITests/testRenderedPortRoundTripsThroughManualInputInGermanLocale \
         SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
         test
+elif [[ "$action" == "run-keyboard-query-cause" ]]; then
+    # Actual native A/B comparison, not replacement/passage of a failed original.
+    # Each matrix cell owns a distinct app process on the selected simulator.
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-keyboard-query \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-keyboard-query-cause.xcresult" \
+        -parallel-testing-enabled NO \
+        -maximum-concurrent-test-simulator-destinations 1 \
+        'OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE -D P2PKIT_KEYBOARD_QUERY_PROBE' \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        test
+    keyboard_command_status=0
 elif [[ "$action" == "prepare-jvm-transfer" ]]; then
     run_ios_xcodebuild \
         -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \

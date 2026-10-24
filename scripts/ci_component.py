@@ -38,7 +38,8 @@ COMPONENTS = {
 DIAGNOSTICS = {'bundle-diagnostic': ('macos-26', 60), 'jmdns-diagnostic': ('macos-15-intel', 30),
                'published-consumers-diagnostic': ('macos-15-intel', 120),
                'consumers-pom-diagnostic': ('macos-15-intel', 60),
-               'apple-keyboard-diagnostic': ('macos-26', 60)}
+               'apple-keyboard-diagnostic': ('macos-26', 60),
+               'apple-keyboard-query-diagnostic': ('macos-26', 60)}
 
 FLAGS = ['--no-daemon', '--no-build-cache', '--no-configuration-cache',
          '--dependency-verification', 'strict', '--max-workers=2', '--no-parallel', '--console=plain']
@@ -181,6 +182,9 @@ def commands(component):
                  *bash, 'scripts/check-published-consumers.sh', '--latest-published'])]
     if component == 'consumers-pom-diagnostic':
         return [('published-pom-diagnostic', bash + ['scripts/check-published-consumers.sh', '--pom-diagnostic'])]
+    if component == 'apple-keyboard-query-diagnostic':
+        return [('keyboard-query-cause-diagnostic', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
+                 *bash, 'scripts/run-ios-ui-tests.sh', 'run-keyboard-query-cause'])]
     if component == 'apple-keyboard-diagnostic':
         return [('keyboard-readiness-diagnostic', ['env', 'SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5',
                  *bash, 'scripts/run-ios-ui-tests.sh', 'run-keyboard-readiness'])]

@@ -20,6 +20,9 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - P2pKitSampleApp.swift
+      - KeyboardCauseProbe.swift
+      - KeyboardQueryGate.swift
+      - KeyboardCauseProbeControls/Sources/KeyboardCauseProbeRecord/KeyboardCauseProbeRecord.swift
       - ContentView.swift
       - LocalPairingView.swift
       - IosLanDiagnosticsLease.swift
@@ -100,6 +103,20 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample.uitests
+        GENERATE_INFOPLIST_FILE: YES
+  # Delayed native-key query investigation, excluded from ordinary acceptance.
+  p2pkit-sample-keyboard-query-tests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - KeyboardQueryCauseUITests
+      - UITests/KeyboardReadiness.swift
+    dependencies:
+      - target: p2pkit-sample
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample.keyboardquery.tests
         GENERATE_INFOPLIST_FILE: YES
   # The real JVM peer is required only by this explicitly selected integration case.
   # Ordinary unit/UI suites never acquire an ambient fixture-dependent skip.
@@ -182,3 +199,11 @@ schemes:
     test:
       targets:
         - p2pkit-sample-cancellation-probe-tests
+  p2pkit-sample-keyboard-query:
+    build:
+      targets:
+        p2pkit-sample: all
+        p2pkit-sample-keyboard-query-tests: [test]
+    test:
+      targets:
+        - p2pkit-sample-keyboard-query-tests

@@ -45,6 +45,10 @@ class ModularPolicyTests < Minitest::Test
     altered('.github/workflows/ci.yml', ', apple-keyboard-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'apple-keyboard-diagnostic' && inputs.component", 'inputs.component')
   end
+  def test_keyboard_query_diagnostic_requires_choice_and_cannot_qualify
+    altered('.github/workflows/ci.yml', ', apple-keyboard-query-diagnostic,', ',')
+    altered('.github/workflows/ci.yml', "inputs.component != 'apple-keyboard-query-diagnostic' && inputs.component", 'inputs.component')
+  end
   def test_published_consumer_diagnostic_requires_choice_and_cannot_qualify
     altered('.github/workflows/ci.yml', ', published-consumers-diagnostic,', ',')
     altered('.github/workflows/ci.yml', "inputs.component != 'published-consumers-diagnostic' && inputs.component", 'inputs.component')

@@ -132,6 +132,119 @@ class LauncherLifecycleTest(unittest.TestCase):
         self.assertNotIn('xcodebuild', tools)
         self.assertFalse(self.lock.exists())
 
+    def passive_capture_fixture(self):
+        # Only the post-Xcode native log boundary is synthetic. Execute the real
+        # shell's errexit, status selection, lock and run-directory finalizers.
+        helper = self.repo / 'scripts/ios_keyboard_passive_capture.py'
+        helper.write_text('''import json, os, pathlib, sys
+root = pathlib.Path(os.environ["FAKE_IOS_ROOT"])
+build = root / "checkout with spaces/samples/iosApp/build"
+(root / "passive.json").write_text(json.dumps({"argv": sys.argv[1:],
+    "lockPresent": (build / ".ios-launch.lock").is_dir(),
+    "runsPresent": bool(list(build.glob("ios-ui-run.*")))}))
+with (root / "tools.log").open("a") as stream:
+    stream.write("passive-capture\\n")
+sys.exit(int(os.environ.get("FAKE_PASSIVE_EXIT", "0")))
+''')
+        self.env.update(COMPONENT='compatibility', GITHUB_ACTIONS='true')
+
+    def passive_record(self, command_status, launcher_status, *, expect_build=True):
+        record = json.loads((self.root / 'passive.json').read_text())
+        self.assertEqual([UDID, command_status, str(launcher_status)], record['argv'])
+        self.assertTrue(record['lockPresent'])
+        self.assertTrue(record['runsPresent'])
+        tools = (self.root / 'tools.log').read_text()
+        if expect_build:
+            self.assertLess(tools.index('xcodebuild '), tools.index('passive-capture'))
+        self.assertEqual(1, tools.count('passive-capture'))
+        self.assertFalse(self.lock.exists())
+        return tools
+
+    def test_passive_full_suite_keeps_original_target_command_and_cleanup(self):
+        self.passive_capture_fixture()
+        self.finish(self.start('run-ios-ui-tests.sh'))
+        tools = self.passive_record('0', 0)
+        build = next(line for line in tools.splitlines() if line.startswith('xcodebuild '))
+        self.assertIn('-scheme p2pkit-sample-ui ', build)
+        self.assertIn('-parallel-testing-enabled NO ', build)
+        self.assertIn('OTHER_SWIFT_FLAGS=$(inherited) -D P2PKIT_KEYBOARD_CAUSE_PROBE', build)
+        self.assertTrue(build.endswith(' test'))
+        for forbidden in ('only-testing', 'skip-testing', 'resultBundlePath', 'maximum-concurrent',
+                          'open ', 'simctl create', 'simctl delete', 'swift test', 'defaults '):
+            self.assertNotIn(forbidden, tools)
+        self.assertEqual([], list(self.build.glob('ios-ui-run.*')))
+
+    def test_passive_original_ui_failure_is_preserved_after_successful_capture(self):
+        self.passive_capture_fixture()
+        self.finish(self.start('run-ios-ui-tests.sh', FAKE_IOS_BUILD_FAILURE='1'), expected=42)
+        self.passive_record('42', 42)
+        self.assertEqual(1, len(list(self.build.glob('ios-ui-run.*'))))
+
+    def test_passive_capture_failure_cannot_erase_original_ui_failure(self):
+        self.passive_capture_fixture()
+        self.finish(self.start('run-ios-ui-tests.sh', FAKE_IOS_BUILD_FAILURE='1',
+                               FAKE_PASSIVE_EXIT='125'), expected=42)
+        self.passive_record('42', 42)
+
+    def test_passive_capture_failure_invalidates_only_otherwise_successful_run(self):
+        self.passive_capture_fixture()
+        self.finish(self.start('run-ios-ui-tests.sh', FAKE_PASSIVE_EXIT='125'), expected=125)
+        self.passive_record('0', 0)
+        self.assertEqual(1, len(list(self.build.glob('ios-ui-run.*'))))
+
+    def test_passive_capture_does_not_wrap_helper_in_errexit_ignoring_context(self):
+        self.passive_capture_fixture()
+        environment = pathlib.Path(self.env['BASH_ENV'])
+        with environment.open('a') as stream:
+            stream.write(r'''
+trap 'case "$BASH_COMMAND" in run_ios_xcodebuild\ *)
+    run_ios_xcodebuild() { false; echo ERREXIT_WAS_DISABLED; }
+    trap - DEBUG;; esac' DEBUG
+''')
+        output = self.finish(self.start('run-ios-ui-tests.sh'), expected=1)
+        self.assertNotIn('ERREXIT_WAS_DISABLED', output)
+        self.passive_record('1', 1, expect_build=False)
+
+    def test_query_diagnostic_keeps_shared_capture_status_and_cleanup(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure):
+                self.passive_capture_fixture()
+                before = (self.root / 'tools.log').read_text().splitlines() if (self.root / 'tools.log').exists() else []
+                self.finish(self.start('run-ios-ui-tests.sh', arguments=('run-keyboard-query-cause',),
+                    COMPONENT='apple-keyboard-query-diagnostic', FAKE_IOS_BUILD_FAILURE='1' if failure else '0'),
+                    expected=42 if failure else 0)
+                record = json.loads((self.root / 'passive.json').read_text())
+                self.assertEqual([UDID, '42' if failure else '0', '42' if failure else '0'], record['argv'])
+                self.assertTrue(record['lockPresent'])
+                calls = (self.root / 'tools.log').read_text().splitlines()[len(before):]
+                builds = [line for line in calls if line.startswith('xcodebuild ')]
+                self.assertEqual(1, len(builds))
+                self.assertIn('-scheme p2pkit-sample-keyboard-query ', builds[0])
+                self.assertIn('-parallel-testing-enabled NO ', builds[0])
+                self.assertIn('-maximum-concurrent-test-simulator-destinations 1 ', builds[0])
+                self.assertIn('P2PKIT_KEYBOARD_QUERY_PROBE', builds[0])
+                self.assertIn('SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test', builds[0])
+                self.assertEqual(1, calls.count('passive-capture'))
+                self.assertLess(calls.index(builds[0]), calls.index('passive-capture'))
+                self.assertFalse(self.lock.exists())
+                for forbidden in ('skip-testing', 'test-iterations', 'retry-tests', 'open ', 'simctl create', 'defaults '):
+                    self.assertFalse(any(forbidden in line for line in calls))
+
+    def test_passive_capture_is_not_added_to_focused_diagnostic(self):
+        self.passive_capture_fixture()
+        self.finish(self.start('run-ios-ui-tests.sh', arguments=('run-keyboard-readiness',)))
+        self.assertFalse((self.root / 'passive.json').exists())
+        self.assertNotIn('P2PKIT_KEYBOARD_CAUSE_PROBE', (self.root / 'tools.log').read_text())
+
+    def test_passive_signal_preserves_unknown_command_result_and_original_exit(self):
+        self.passive_capture_fixture()
+        process = self.start('run-ios-ui-tests.sh', FAKE_IOS_BLOCK='1')
+        self.wait_for_build(process)
+        os.kill(process.pid, signal.SIGTERM)
+        (self.root / 'release-build').touch()
+        self.finish(process, expected=143)
+        self.passive_record('UNOBSERVED', 143)
+
     def stop_processes(self):
         for process in self.processes:
             # Every child was started in its own session; never target a user's process group.
