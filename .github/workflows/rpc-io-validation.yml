@@ -10,7 +10,7 @@ on:
       part:
         type: choice
         default: all
-        options: [all, jvm-linux, jvm-windows, macos, android-24, android-35]
+        options: [all, jvm-linux, jvm-windows, macos, macos-abi, android-24, android-35]
 permissions:
   contents: read
   actions: read
@@ -31,7 +31,8 @@ jobs:
           import json, os
           choices = {
               'jvm-linux': 'ubuntu-24.04', 'jvm-windows': 'windows-2025',
-              'macos': 'macos-26', 'android-24': 'ubuntu-24.04', 'android-35': 'ubuntu-24.04',
+              'macos': 'macos-26', 'macos-abi': 'macos-26',
+              'android-24': 'ubuntu-24.04', 'android-35': 'ubuntu-24.04',
           }
           part = os.environ['PART']
           assert part == 'all' or part in choices

@@ -45,9 +45,22 @@ if backend cleanup fails; explicit close observes its original failure.
 Authentication, encryption, session admission, frame order, write deadlines,
 reconnect, notification priority/fairness and shared payload accounting remain
 above the byte adapter. Caller cancellation of a partially written frame closes
-that exact connection. Fresh selected-network/topology rechecks and the existing
-250 ms prohibited-path watchdog are **not** relaxed; their CPU cost is part of
-the authenticated benchmark, unlike a raw socket benchmark.
+that exact connection. Fresh before/after-I/O selected-network/topology checks
+are **not cached or relaxed**. Their CPU cost is part of the authenticated
+benchmark, unlike a raw socket benchmark.
+
+Profiling found repeated OS topology enumeration and selector-registration
+churn. The idle prohibited-path watchdog now selects the current socket cohort
+every 250 ms and then takes **one fresh** topology snapshot for that pass, rather
+than enumerating the same interfaces separately for every idle socket. Every
+original socket still gets its own address, native scope and Network-owner
+checks. The snapshot is discarded after the pass; it never authorizes admission,
+a later read/write, or a socket joining during that pass. A failed observation
+closes affected sockets. Removal fences old callbacks, and the next watcher
+epoch cannot overlap an unfinished old snapshot. There is no positive-result
+TTL, new polling thread, reduced detection frequency, or cached I/O authority.
+NIO likewise updates only changed key interests, instead of clearing and
+re-registering all idle peers whenever any other peer becomes ready.
 
 ## Policy changes, not preallocated memory
 
@@ -109,7 +122,9 @@ hidden; mechanical correctness alone is not a resource-efficiency verdict.
 
 `CI — modular qualification` has an independent `rpc-io` diagnostic selection;
 `rpc_io_part` selects all or one of `jvm-linux`, `jvm-windows`, `macos`,
-`android-24`, `android-35`. Failures do not cancel another platform. Evidence uses
+`macos-abi`, `android-24`, `android-35`. The additive Apple ABI candidate is
+generated independently from native socket tests, without editing its baseline.
+Failures do not cancel another platform. Evidence uses
 the maintained source-bound collector and encryption, not new authorization or
 custody protocols. These focused checks do not mint release qualification.
 
@@ -123,13 +138,35 @@ tests are not substituted if that environment is missing.
 
 ### Evidence status
 
-Initial local Linux regressions: Core 960, LAN JVM 386, LAN Android host 171,
-RPC JVM 83, RPC Android host 76 and sample JVM 634, all zero failures/errors/skips.
-These counts describe one checked report set, not additive repeated runs.
-Subsequent new harness tests/native/device changes require their own checks.
-Authenticated resource comparison, hosted Windows/macOS, native Apple ABI and
-Android ART results are pending at this implementation checkpoint. No physical
-mobile capacity or 512-client capability is claimed.
+The initial shared-readiness implementation at `f6dffa0a` completed a real
+authenticated Linux virtual-link comparison: 153,600 correct responses at 128
+clients and 307,200 at 256, over 120 seconds each. Both original processes exited
+zero; record/payload retention returned to zero after the unchanged retention
+window. Host threads after load were 76/78 (not 164/324), p95 upper buckets 7/24 ms,
+and p99 23/56 ms. Host idle CPU was still **19.69%/52.54% of one core** and active
+CPU 165.90%/351.12%; RSS after load was 519.3/609.8 MiB. Scheduling lateness was
+recorded, not hidden. The virtual-link JVMs dropped all capabilities but retained
+UID0: this is **not ordinary-user or physical qualification**. These measurements
+precede the cohort/selector optimization above and must not be reused to qualify it.
+
+[Hosted initial checks](https://github.com/p2pKit/P2pKit/actions/runs/40123111532)
+verified Linux and Windows XML (Core 960, LAN 386, RPC 83; sample 637 Linux / 614
+Windows), with zero failures/errors/skips. Raw 128/256 socket counts were 32/32
+JVM threads on Linux and 29/28 on Windows. Android35 ART completed all four raw
+backend/population cases, with low idle CPU and bounded threads; several nominal
+30-second workloads actually took 45–85 seconds. That is **mechanical completion,
+not sustained target throughput** and not authenticated mobile capacity.
+
+Earlier Android24 attempts failed before ART execution: its OS lacks
+`sha256sum`, then the replacement host-hash collector incorrectly rejected dotted
+package paths. The collector now hashes bytes pulled from the installed package
+and covers both old/new layouts; the failed attempts remain failures.
+[The next macOS attempt](https://github.com/p2pKit/P2pKit/actions/runs/40124417134)
+passed 25 actual C contract groups in both strict and ASan/UBSan builds, plus
+the existing JNI controls, but the new 128/256 async JNI integration failed.
+That failure and Apple ABI/mobile qualification remain open at this checkpoint.
+New optimization results require fresh, exact-source checks. No physical mobile
+capacity or 512-client capability is claimed.
 
 The old 128-raw-socket baseline observed 151 JVM threads (9 before connections).
 Initial new raw 128/256 tests observed 30 threads in both cases. Their short,

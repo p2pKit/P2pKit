@@ -93,10 +93,20 @@ internal class MacLanBinding(
 
     fun allows(socket: Socket): Boolean = socket.inetAddress?.let { allowsEndpoint(socket, it) } ?: false
 
-    private fun allowsEndpoint(socket: Socket, remote: InetAddress): Boolean = runCatching {
+    /** Only the idle watchdog shares a fresh cohort snapshot; each native scope is still read back. */
+    fun pathSnapshot(): JvmLanSocketSnapshot? = readSnapshot()
+    fun allows(socket: Socket, snapshot: JvmLanSocketSnapshot?): Boolean = socket.inetAddress?.let {
+        allowsEndpoint(socket, it) { snapshot }
+    } ?: false
+
+    private fun allowsEndpoint(
+        socket: Socket,
+        remote: InetAddress,
+        snapshotReader: () -> JvmLanSocketSnapshot? = readSnapshot,
+    ): Boolean = runCatching {
         if (!synchronized(ownershipGate) { active }) return@runCatching false
         val scoped = socket as? MacLanSocket ?: return@runCatching false
-        val snapshot = readSnapshot() ?: return@runCatching false
+        val snapshot = snapshotReader() ?: return@runCatching false
         val selected = target(snapshot) ?: return@runCatching false
         if (scoped.interfaceIndex != selected.second || !scoped.verifyScope() ||
             scoped.localAddress != selected.first.address || !policy.isLocal(scoped.localAddress.hostAddress.orEmpty())

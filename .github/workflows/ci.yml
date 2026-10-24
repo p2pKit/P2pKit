@@ -14,7 +14,7 @@ on:
         description: Scalable I/O implementation checks only (not release or physical qualification)
         default: all
         type: choice
-        options: [all, jvm-linux, jvm-windows, macos, android-24, android-35]
+        options: [all, jvm-linux, jvm-windows, macos, macos-abi, android-24, android-35]
       apple_operation:
         description: Apple diagnostic only (no release qualification or physical credit)
         default: both
@@ -41,7 +41,7 @@ permissions:
   actions: read
 # Different components and RPC runs never cancel or block one another.
 concurrency:
-  group: modular-ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.component || 'all' }}
+  group: modular-ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.component || 'all' }}-${{ inputs.component == 'rpc-io' && inputs.rpc_io_part || '' }}
   cancel-in-progress: false
 jobs:
   plan:

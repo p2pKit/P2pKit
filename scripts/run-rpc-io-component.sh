@@ -13,8 +13,12 @@ case "${1:-}" in
     bash ./gradlew :p2p-transport-lan:stageMacTcp :p2p-transport-lan:macTcpNativeTest "${flags[@]}"
     bash ./gradlew :p2p-transport-lan:jvmTest \
       --tests 'dev.p2pkit.transport.lan.SocketReadinessTest' \
+      --tests 'dev.p2pkit.transport.lan.SocketPathWatchdogTest' \
+      --tests 'dev.p2pkit.transport.lan.JvmRawConnectionPathWatchTest' \
       --tests 'dev.p2pkit.transport.lan.JvmNioConnectionTest' \
       --tests 'dev.p2pkit.transport.lan.JvmRawCapacityTest' "${flags[@]}"
+    ;;
+  macos-abi)
     # Produce proposed additive ABI outputs for review; do NOT rewrite or claim to check the baseline.
     bash ./gradlew :p2p-rpc:internalDumpKotlinAbi :p2p-rpc:buildAndroidAbi "${flags[@]}"
     python3 - <<'PY'

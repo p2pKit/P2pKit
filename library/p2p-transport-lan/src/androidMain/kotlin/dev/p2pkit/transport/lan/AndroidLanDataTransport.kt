@@ -10,8 +10,10 @@ import dev.p2pkit.core.transport.OutboundRoute
 import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -32,6 +34,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.Socket
@@ -80,6 +83,11 @@ internal class AndroidLanDataTransport(
     private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
     private val io = AndroidLanIo(policy != null)
+    private val pathWatchdog = policy?.let {
+        SocketPathWatchdog(CoroutineScope(SupervisorJob() + io.setup)) {
+            readAndroidSocketPathSnapshot(networkState)
+        }
+    }
     @Volatile private var restartPort: Int = policy?.listenPort ?: 0
     @Volatile private var hasStarted: Boolean = false
 
@@ -726,7 +734,15 @@ internal class AndroidLanDataTransport(
     ): AndroidRawConnection = AndroidRawConnection(
         socket, io = io, pathAllowed = policy?.let { selected ->
             { selected.allowsAndroidSocket(socket, networkState?.selectedRoute(), boundNetwork) }
-        }, outboundRoute = route
+        }, outboundRoute = route,
+        watchPath = pathWatchdog?.let { monitor -> { rejected ->
+            monitor.register({ snapshot ->
+                checkNotNull(policy).allowsAndroidSocket(socket, snapshot.route, boundNetwork) { remote ->
+                    snapshot.completeLocalAddresses?.contains(remote) ?:
+                        (NetworkInterface.getByInetAddress(remote) != null)
+                }
+            }, rejected)
+        } },
     )
 
     internal fun isInboundAddressAllowedForTest(

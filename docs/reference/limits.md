@@ -149,8 +149,8 @@ resources; it adds no queue residence-time deadline.
 This is **observable admission tightening in 0.8.0+**: JVM/Android
 previously inherited the coroutine default (normally 64). It is not an unchanged
 0.7 behavior promise or a new timeout, session limit, or whole-process fd bound.
-See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt#L427-L531)
-and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt#L476-L576).
+See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt#L434-L538)
+and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt#L484-L584).
 
 Subscribe to session `incoming` promptly and keep collectors fast. It has zero
 replay: with no subscriber, emitted messages are not saved for later. A slow
@@ -270,8 +270,8 @@ A write completing locally is still not remote processing acknowledgement.
 | `MAX_DIAL_CANDIDATES` | `8` endpoints | JVM/Android selected address fan-out per dial. Further candidates are not attempted in that operation. | [Lan.kt:183](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L183) |
 | `TCP_CANDIDATE_CONNECT_TIMEOUT_MS` | `1,500` ms (1.5 s) | JVM/Android maximum slice when multiple candidates exist, within the shared connect budget. A single candidate receives the full budget. | [Lan.kt:186](../../library/p2p-transport-lan/src/commonMain/kotlin/dev/p2pkit/transport/lan/Lan.kt#L186) |
 | `CONNECT_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple outbound NWConnection readiness wait. Timeout cancels the connection, invalidates the failed cached endpoint and throws ConnectionFailed. | [IosLanDataTransport.kt:1451](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosLanDataTransport.kt#L1451) |
-| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | JVM raw socket-write watchdog. Expiry closes the socket and fails the write; excludes time waiting for the write mutex. | [JvmRawConnection.kt:340](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmRawConnection.kt#L340) |
-| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Android raw socket-write watchdog, with the same close/fail behavior and mutex-wait exclusion. | [AndroidRawConnection.kt:334](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidRawConnection.kt#L334) |
+| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | JVM raw socket-write watchdog. Expiry closes the socket and fails the write; excludes time waiting for the write mutex. | [JvmRawConnection.kt:357](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmRawConnection.kt#L357) |
+| `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Android raw socket-write watchdog, with the same close/fail behavior and mutex-wait exclusion. | [AndroidRawConnection.kt:351](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidRawConnection.kt#L351) |
 | `WRITE_READY_TIMEOUT_MILLIS` | `10,000` ms (10 s) | Apple raw write awaiting a Connecting-to-ready transition. Expiry cancels the connection and fails that write. | [IosRawConnection.kt:459](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L459) |
 | `WRITE_TIMEOUT_MILLIS` | `30,000` ms (30 s) | Apple send-completion wait after readiness/write serialization. Expiry cancels the connection and fails the write; not a total send deadline. | [IosRawConnection.kt:471](../../library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/IosRawConnection.kt#L471) |
 | `OS_CALLBACK_TIMEOUT_MS` | `60,000` ms (60 s) | Android LOHS acquisition / Wi-Fi join approval wait. Expiry returns failed result/state: HotspotStopped for hosting, JoinFailed for joining; not permission to retain a late OS resource. | [AndroidNetworkProvisioningManager.kt:621](../../library/p2p-network-provisioning-android/src/androidMain/kotlin/dev/p2pkit/provisioning/android/AndroidNetworkProvisioningManager.kt#L621) |

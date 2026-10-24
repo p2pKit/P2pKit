@@ -53,7 +53,8 @@ internal class AndroidRawConnection(
     connectionScopeForTest: CoroutineScope? = null,
     private val io: AndroidLanIo = AndroidLanIo(false),
     private val pathAllowed: (() -> Boolean)? = null,
-    override val outboundRoute: OutboundRoute? = null
+    override val outboundRoute: OutboundRoute? = null,
+    watchPath: ((() -> Unit) -> SocketPathWatch)? = null,
 ) : OutboundRouteConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
@@ -66,6 +67,7 @@ internal class AndroidRawConnection(
         ?: socket.channel?.let(NioSocketIo::open)
     private val closeFinished = CountDownLatch(1)
     @Volatile private var closeFailure: Throwable? = null
+    @Volatile private var pathWatch: SocketPathWatch? = null
 
     /**
      * CAS gate so the socket fd is released exactly once no matter which path
@@ -93,7 +95,18 @@ internal class AndroidRawConnection(
 
     init {
         Log.d(TAG, "opened $label")
-        if (pathAllowed != null) connScope.launch {
+        if (watchPath != null) {
+            try {
+                val watch = watchPath { closeSocketOnce(); _state.value = ConnectionState.Closed }
+                pathWatch = watch
+                if (socketClosed.get()) watch.close() // Close can race the constructor's registration handoff.
+            } catch (failure: Throwable) {
+                closeSocketOnce()
+                closeFailure?.let { if (it !== failure) failure.addSuppressed(it) }
+                throw failure
+            }
+        } else if (pathAllowed != null) connScope.launch {
+            // Internal single-socket/test seam. Production restricted transports share a cohort monitor.
             while (currentCoroutineContext().isActive && !socketClosed.get()) {
                 delay(250)
                 try { withContext(io.setup) { requireAllowedPath() } }
@@ -107,15 +120,19 @@ internal class AndroidRawConnection(
     private fun closeSocketOnce() {
         if (socketClosed.compareAndSet(false, true)) {
             try {
-                try { asynchronous?.close() } catch (failure: Throwable) { closeFailure = failure }
-                try { socket.close() } catch (failure: Throwable) {
-                    if (closeFailure == null) closeFailure = failure else closeFailure?.addSuppressed(failure)
-                }
+                try { pathWatch?.close() } catch (failure: Throwable) { retainCloseFailure(failure) }
+                try { asynchronous?.close() } catch (failure: Throwable) { retainCloseFailure(failure) }
+                try { socket.close() } catch (failure: Throwable) { retainCloseFailure(failure) }
             } finally {
                 connScope.cancel()
                 closeFinished.countDown()
             }
         }
+    }
+
+    private fun retainCloseFailure(failure: Throwable) {
+        val original = closeFailure
+        if (original == null) closeFailure = failure else if (original !== failure) original.addSuppressed(failure)
     }
 
     override suspend fun write(bytes: ByteArray) {

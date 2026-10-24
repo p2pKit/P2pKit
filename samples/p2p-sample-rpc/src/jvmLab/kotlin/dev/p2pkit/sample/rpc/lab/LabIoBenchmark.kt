@@ -26,6 +26,20 @@ import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.system.exitProcess
 
+/** The host publishes at 1Hz: a 5s driver delay alone can span only 4s of observed host samples. */
+internal suspend fun awaitIoIdleTelemetry(
+    start: RpcCapacityHostTelemetry,
+    sample: suspend () -> RpcCapacityHostTelemetry,
+): RpcCapacityHostTelemetry {
+    while (true) {
+        val current = sample()
+        check(current.uptimeMillis >= start.uptimeMillis && current.processCpuNanos >= start.processCpuNanos)
+        check(current.host.diagnostics.completedCalls == start.host.diagnostics.completedCalls)
+        if (current.uptimeMillis - start.uptimeMillis >= 5_000) return current
+        delay(100)
+    }
+}
+
 /** Production RPC + authenticated secure-v2 on an explicitly provisioned lab LAN; not physical qualification. */
 @JvmName("main")
 public fun runIoBenchmark(args: Array<String>) {
@@ -75,7 +89,7 @@ public fun runIoBenchmark(args: Array<String>) {
                 val idleStart = healthySample()
                 phase = "idle"
                 delay(5_000)
-                val idleEnd = healthySample()
+                val idleEnd = withTimeout(5_000) { awaitIoIdleTelemetry(idleStart, ::healthySample) }
                 check(idleEnd.host.diagnostics.completedCalls == idleStart.host.diagnostics.completedCalls)
                 phase = "workload"
                 val start = System.nanoTime() + 200_000_000

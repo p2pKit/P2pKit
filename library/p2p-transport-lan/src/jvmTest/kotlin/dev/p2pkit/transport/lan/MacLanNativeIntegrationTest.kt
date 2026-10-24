@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -79,9 +80,13 @@ class MacLanNativeIntegrationTest {
 
     @Test fun realNativeAsyncBatchUsesOneWorkerAcross128And256Connections() = runBlocking(Dispatchers.Default) {
         val errors = load()
+        // Loopback-only diagnostics stay inside the ordinary encrypted test report. Preserve the
+        // original read error (including native errno) rather than only a downstream closed inbox.
+        val originalTrace = JvmLanDiag.enabled
+        JvmLanDiag.enabled = true
         val index = NetworkInterface.getByName("lo0").index
         val address = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
-        for (count in listOf(128, 256)) {
+        try { for (count in listOf(128, 256)) {
             val listener = MacLanServerSocket(MacLanNative, errors, { index })
             val sockets = mutableListOf<MacLanSocket>()
             val connections = mutableListOf<JvmRawConnection>()
@@ -138,6 +143,39 @@ class MacLanNativeIntegrationTest {
                     failure?.let { throw it }
                 }
             }
+        } } finally { JvmLanDiag.enabled = originalTrace }
+    }
+
+    @Test fun realAsyncAdapterReportsTheOriginalNativeFailureOrExactBytes() = runBlocking(Dispatchers.Default) {
+        val errors = load()
+        val index = NetworkInterface.getByName("lo0").index
+        val address = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
+        val listener = MacLanServerSocket(MacLanNative, errors, { index })
+        val client = MacLanSocket(MacLanNative, errors, { index })
+        var accepted: MacLanSocket? = null
+        try {
+            withTimeout(5_000) {
+                listener.bind(InetSocketAddress(address, 0))
+                client.bind(InetSocketAddress(address, 0))
+                client.connect(listener.localSocketAddress, 1500)
+                val child = listener.accept() as MacLanSocket
+                accepted = child
+                val input = checkNotNull(child.asynchronousIo())
+                val output = checkNotNull(client.asynchronousIo())
+                val receive = async(start = CoroutineStart.UNDISPATCHED) {
+                    val bytes = ByteArray(1)
+                    assertEquals(1, input.read(bytes))
+                    assertEquals(47, bytes[0].toInt())
+                }
+                output.write(byteArrayOf(47))
+                receive.await()
+            }
+        } finally {
+            var failure: Throwable? = null
+            for (socket in listOfNotNull(accepted, client, listener)) try { socket.close() } catch (error: Throwable) {
+                if (failure == null) failure = error else failure.addSuppressed(error)
+            }
+            failure?.let { throw it }
         }
     }
 }

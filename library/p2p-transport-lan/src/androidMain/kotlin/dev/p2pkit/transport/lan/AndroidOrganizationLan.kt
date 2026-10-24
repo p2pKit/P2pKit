@@ -68,9 +68,34 @@ internal fun OrganizationLan.allowsAndroidSocket(
     socket: Socket,
     route: AndroidLanDialRoute?,
     boundNetwork: Network? = null,
+    isAssignedLocally: (InetAddress) -> Boolean = { NetworkInterface.getByInetAddress(it) != null },
 ): Boolean = runCatching {
     route?.network != null && (if (boundNetwork == null) androidInboundRouteIsVerifiable()
     else route.network == boundNetwork) && isLocal(route.localAddress.hostAddress.orEmpty()) &&
         isLocal(socket.localAddress.hostAddress.orEmpty()) && allows(socket.inetAddress.hostAddress.orEmpty()) &&
-        NetworkInterface.getByInetAddress(socket.inetAddress) == null
+        !isAssignedLocally(socket.inetAddress)
 }.getOrDefault(false)
+
+/** Background pass only; no retained snapshot may authorize a later read/write or new connection. */
+internal data class AndroidSocketPathSnapshot(
+    val route: AndroidLanDialRoute?,
+    val completeLocalAddresses: Set<InetAddress>?,
+)
+
+@Suppress("DEPRECATION") // Never treat a filtered address inventory as complete.
+internal fun readAndroidSocketPathSnapshot(networkState: AndroidLanNetworkState?): AndroidSocketPathSnapshot {
+    val route = networkState?.selectedRoute()
+    val addresses = runCatching {
+        if (System.getSecurityManager() != null) return@runCatching null
+        val all = buildSet<InetAddress> {
+            fun collect(network: NetworkInterface) {
+                addAll(network.inetAddresses.toList())
+                network.subInterfaces.toList().forEach(::collect)
+            }
+            NetworkInterface.getNetworkInterfaces().toList().forEach(::collect)
+        }
+        all.takeIf { System.getSecurityManager() == null }
+    }.getOrNull()
+    // On uncertain completeness preserve the original OS lookup, not an empty permissive set.
+    return AndroidSocketPathSnapshot(route, addresses)
+}

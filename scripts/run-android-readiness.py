@@ -29,7 +29,8 @@ SCOPE = "RAW_ANDROID_IO_NOT_AUTHENTICATED_RPC_OR_PHYSICAL_QUALIFICATION"
 
 def verify_installed_apk(device, installed, source_apk, report, run):
     """Hash the actual installed bytes on the host; Android 24 has no sha256sum."""
-    need(re.fullmatch(r"package:/data/app/[-A-Za-z0-9_~+=/]+/base\.apk", installed),
+    need(re.fullmatch(r"package:/data/app/(?:[-A-Za-z0-9_.~+=]+/)+base\.apk", installed) and
+         all(part not in (".", "..") for part in installed.removeprefix("package:").split("/")),
          "Ambiguous installed APK")
     # A new private destination prevents adb from accidentally reusing an earlier observation.
     # Do not retain a second APK in the evidence bundle; preserve its bound digest instead.

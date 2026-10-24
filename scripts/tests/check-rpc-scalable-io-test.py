@@ -35,7 +35,7 @@ class ReceiptTest(unittest.TestCase):
 
             def pull(command, **kwargs):
                 self.assertEqual(command[:4], ["adb", "-s", "emulator-5556", "pull"])
-                self.assertEqual(command[4], "/data/app/~~fixture==/package_1-abc+/base.apk")
+                self.assertEqual(command[4], "/data/app/~~fixture==/dev.p2pkit.transport.lan.test-1/base.apk")
                 destination = command[5]
                 self.assertFalse(destination.exists())
                 self.assertNotEqual(destination, apk)
@@ -43,11 +43,18 @@ class ReceiptTest(unittest.TestCase):
                 destination.write_bytes(payload)
 
             actual = android.verify_installed_apk(["adb", "-s", "emulator-5556"],
-                "package:/data/app/~~fixture==/package_1-abc+/base.apk", apk, root, pull)
+                "package:/data/app/~~fixture==/dev.p2pkit.transport.lan.test-1/base.apk", apk, root, pull)
             self.assertEqual(actual, hashlib.sha256(payload).hexdigest())
             self.assertEqual(len(observed), 1)
             self.assertFalse(observed[0].exists())
             self.assertEqual(apk.read_bytes(), payload)
+
+            # API24 uses the dotted package directly beneath /data/app, without the newer random parent.
+            def old_layout_pull(command, **kwargs):
+                self.assertEqual(command[1:3], ["pull", "/data/app/dev.p2pkit.transport.lan.test-1/base.apk"])
+                command[-1].write_bytes(payload)
+            self.assertEqual(actual, android.verify_installed_apk(["adb"],
+                "package:/data/app/dev.p2pkit.transport.lan.test-1/base.apk", apk, root, old_layout_pull))
 
     def test_android_installed_digest_rejects_mismatch_incomplete_and_ambiguous_observations(self):
         with tempfile.TemporaryDirectory() as directory:

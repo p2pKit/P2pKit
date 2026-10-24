@@ -9,8 +9,10 @@ import dev.p2pkit.core.transport.OutboundRoute
 import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -84,6 +86,11 @@ internal class JvmLanDataTransport(
     private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
     private val io = JvmLanIo(policy != null)
+    private val pathWatchdog = policy?.let {
+        SocketPathWatchdog(CoroutineScope(SupervisorJob() + io.setup)) {
+            if (macBinding == null) readJvmLanSocketSnapshot() else macBinding.pathSnapshot()
+        }
+    }
 
     @Volatile private var restartPort: Int = policy?.listenPort ?: 0
     @Volatile private var hasStarted: Boolean = false
@@ -665,7 +672,13 @@ internal class JvmLanDataTransport(
 
     private fun wrapSocket(socket: Socket, route: OutboundRoute? = null): JvmRawConnection = JvmRawConnection(
         socket, io = io, pathAllowed = policy?.let { selected -> { allowsSocket(selected, socket) } },
-        outboundRoute = route
+        outboundRoute = route,
+        watchPath = pathWatchdog?.let { monitor -> { rejected ->
+            monitor.register({ snapshot ->
+                if (macBinding == null) checkNotNull(policy).allowsJvmSocket(socket, snapshot)
+                else macBinding.allows(socket, snapshot)
+            }, rejected)
+        } },
     )
 
     internal fun isInboundAddressAllowedForTest(
