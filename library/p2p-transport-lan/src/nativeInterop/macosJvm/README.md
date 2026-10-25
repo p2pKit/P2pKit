@@ -19,7 +19,11 @@ are not changed by this adapter.
   Stop seals allocation, closes outside its ownership lock, drains accept/I/O/close and
   prevents restart after failed cleanup. Failed native closes are quarantined, not retried
   against potentially recycled descriptor numbers. Core suppression cannot erase them.
-- Reads/writes remain at most 64 KiB per native call; polls are at most 100 ms. Existing
+- Reads/writes remain at most 64 KiB per native call. Private TCP ABI v2 adds a shared,
+  wake-driven batch poller: every token is leased through the wait, and two owned nonblocking
+  datagram sockets wake registration/cancellation/close. Its one-second failed-wake ceiling
+  is not a per-connection polling timer. Setup/accept still use the original 100 ms poll.
+  Last-owner close joins the readiness worker before releasing both wake sockets. Existing
   dial, candidate, write, invitation, authentication and approval deadlines are unchanged.
 
 ## Explicit producer and loader

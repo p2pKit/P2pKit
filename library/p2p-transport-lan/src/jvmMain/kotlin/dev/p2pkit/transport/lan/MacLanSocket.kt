@@ -103,8 +103,34 @@ internal class MacLanSocket(
     private val retainFailure: (Throwable) -> Unit = {},
     private val released: () -> Unit = {},
     private val beforeConnect: (MacLanSocket, InetAddress) -> Unit = { _, _ -> },
-) : Socket(), JvmSocketCleanupEvidence {
+) : Socket(), JvmSocketCleanupEvidence, ReadinessSocket {
     private val owned = MacLanHandle(api, initial, retainFailure, released)
+    private val ioGate = Any()
+    private var asynchronous: SuspendingSocketIo? = null
+
+    override fun asynchronousIo(): SuspendingSocketIo? = synchronized(ioGate) {
+        asynchronous ?: MacSocketPoller.forApi(api)?.let { readiness ->
+            if (!connected) throw SocketException("Scoped TCP socket is not connected")
+            ReadySocketIo(readiness.register(owned.value()),
+                readNow = { bytes ->
+                    val count = api.read(owned.value(), bytes, 0, minOf(bytes.size, 65536))
+                    when {
+                        count == 0 -> -1
+                        count in 1..minOf(bytes.size, 65536) -> count
+                        count < 0 && errors.retry(-count) -> null
+                        else -> throw macSocketError("nonblocking read", -count)
+                    }
+                },
+                writeNow = { bytes, offset, length ->
+                    val count = api.write(owned.value(), bytes, offset, length)
+                    if (count < 0) {
+                        if (!errors.retry(-count)) throw macSocketError("nonblocking write", -count)
+                        null
+                    } else count
+                },
+            ).also { asynchronous = it }
+        }
+    }
     @Volatile internal var interfaceIndex = initialIndex
         private set
     @Volatile private var local: InetSocketAddress? = null
@@ -257,7 +283,17 @@ internal class MacLanSocket(
     override fun isConnected(): Boolean = connected
     override fun isBound(): Boolean = local != null
     override fun isClosed(): Boolean = owned.isClosed
-    override fun close() = owned.close()
+    override fun close() {
+        var failure: Throwable? = null
+        try { synchronized(ioGate) { asynchronous?.close() } } catch (error: Throwable) {
+            failure = error
+            retainFailure(error)
+        }
+        try { owned.close() } catch (error: Throwable) {
+            if (failure == null) failure = error else if (failure !== error) failure.addSuppressed(error)
+        }
+        failure?.let { throw it }
+    }
     override fun requireReleased() = owned.requireReleased()
 }
 

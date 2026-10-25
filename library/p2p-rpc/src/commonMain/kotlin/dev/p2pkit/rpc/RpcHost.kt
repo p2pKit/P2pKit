@@ -74,7 +74,7 @@ public class RpcHost private constructor(
     public val requests: StateFlow<RpcHostRequests> = engine.requests
     public val permissions: P2pPermissionManager get() = kit.permissions
     public val fingerprint: PeerFingerprint get() = checkNotNull(kit.localFingerprint)
-    private val notificationBudget = PayloadBudget(1L * 1_048_576)
+    private val notificationBudget = engine.notificationBudget
     public val pairing: RpcPairing = RpcPairing(scope, trust, clock, gate, engine.incarnation,
         checkNotNull(kit.localPairingQr), ::endpoint, allowNearbyPairing)
 

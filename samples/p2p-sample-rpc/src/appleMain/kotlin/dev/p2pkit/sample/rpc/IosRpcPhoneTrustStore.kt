@@ -71,7 +71,7 @@ internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : Rp
     override suspend fun replace(appId: AppId, purpose: RpcTrustPurpose, fingerprints: Set<PeerFingerprint>) {
         mutex.withLock {
             val account = account(appId, purpose)
-            require(fingerprints.size <= 128)
+            require(fingerprints.size <= 256)
             decode(read(account)) // A corrupt/inaccessible record must not be silently erased.
             val bytes = fingerprints.map { it.value }.sorted().joinToString("\n").encodeToByteArray()
             withData(bytes) { data ->
@@ -101,9 +101,9 @@ internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : Rp
 
     private fun decode(bytes: ByteArray?): Set<PeerFingerprint> {
         if (bytes == null) return emptySet()
-        require(bytes.size <= 8192 && bytes.all { it == 10.toByte() || it.toInt() in 32..126 })
+        require(bytes.size <= 16384 && bytes.all { it == 10.toByte() || it.toInt() in 32..126 })
         val pins = bytes.decodeToString().split('\n').filter(String::isNotEmpty)
-        require(pins.size <= 128 && pins.toSet().size == pins.size)
+        require(pins.size <= 256 && pins.toSet().size == pins.size)
         return pins.map(PeerFingerprint::parse).toSet()
     }
 
@@ -124,7 +124,7 @@ internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : Rp
                     check(CFGetTypeID(value) == CFDataGetTypeID())
                     val data: CFDataRef = value.reinterpret()
                     val size = CFDataGetLength(data)
-                    check(size in 0L..8192L)
+                    check(size in 0L..16384L)
                     ByteArray(size.toInt()).also { bytes ->
                         if (bytes.isNotEmpty()) bytes.usePinned {
                             CFDataGetBytes(data, CFRangeMake(0, size), it.addressOf(0).reinterpret())

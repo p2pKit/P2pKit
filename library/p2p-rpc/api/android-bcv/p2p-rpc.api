@@ -330,6 +330,7 @@ public final class dev/p2pkit/rpc/RpcLimits {
 
 public final class dev/p2pkit/rpc/RpcLimits$Companion {
 	public final fun host128 ()Ldev/p2pkit/rpc/RpcLimits;
+	public final fun host256 ()Ldev/p2pkit/rpc/RpcLimits;
 }
 
 public final class dev/p2pkit/rpc/RpcNotification {

@@ -9,8 +9,10 @@ import dev.p2pkit.core.transport.OutboundRoute
 import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -36,13 +38,15 @@ import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 internal class JvmLanDataTransport(
     private val registration: LanServiceRegistration,
-    private val socketFactory: () -> Socket = ::Socket,
-    private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
+    private val socketFactory: () -> Socket = { SocketChannel.open().socket() },
+    private val serverSocketFactory: () -> ServerSocket = { ServerSocketChannel.open().socket() },
     private val selectedLanAddress: (() -> InetAddress?)? = null,
     private val beforeListenerResourceCheckForTest: (() -> Unit)? = null,
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
@@ -82,6 +86,11 @@ internal class JvmLanDataTransport(
     private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
     private val io = JvmLanIo(policy != null)
+    private val pathWatchdog = policy?.let {
+        SocketPathWatchdog(CoroutineScope(SupervisorJob() + io.setup)) {
+            if (macBinding == null) readJvmLanSocketSnapshot() else macBinding.pathSnapshot()
+        }
+    }
 
     @Volatile private var restartPort: Int = policy?.listenPort ?: 0
     @Volatile private var hasStarted: Boolean = false
@@ -663,7 +672,13 @@ internal class JvmLanDataTransport(
 
     private fun wrapSocket(socket: Socket, route: OutboundRoute? = null): JvmRawConnection = JvmRawConnection(
         socket, io = io, pathAllowed = policy?.let { selected -> { allowsSocket(selected, socket) } },
-        outboundRoute = route
+        outboundRoute = route,
+        watchPath = pathWatchdog?.let { monitor -> { rejected ->
+            monitor.register({ snapshot ->
+                if (macBinding == null) checkNotNull(policy).allowsJvmSocket(socket, snapshot)
+                else macBinding.allows(socket, snapshot)
+            }, rejected)
+        } },
     )
 
     internal fun isInboundAddressAllowedForTest(

@@ -11,10 +11,19 @@ import java.net.NetworkInterface
 import java.net.Socket
 
 internal class AndroidLanIo(restricted: Boolean) {
-    val read: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(164) else Dispatchers.IO
-    val write: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(16) else Dispatchers.IO
-    val setup: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(16) else Dispatchers.IO
+    val read: CoroutineDispatcher = if (restricted) readers else Dispatchers.IO
+    val write: CoroutineDispatcher = if (restricted) writers else Dispatchers.IO
+    val setup: CoroutineDispatcher = if (restricted) setups else Dispatchers.IO
+    // Accept remains one bounded blocking operation per listening transport (DialOnly creates none).
     val accept: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(1) else Dispatchers.IO
+
+    private companion object {
+        // Shared across all kits, not an elastic view for every connected client. Read/write are the
+        // legacy blocking test seam; production data waits suspend on readiness and use SocketIoWorkers.
+        val readers = Dispatchers.IO.limitedParallelism(16)
+        val writers = Dispatchers.IO.limitedParallelism(16)
+        val setups = Dispatchers.IO.limitedParallelism(16)
+    }
 }
 
 /** No hotspot/null-Network or process-default fallback for the strict profile. */
@@ -59,9 +68,34 @@ internal fun OrganizationLan.allowsAndroidSocket(
     socket: Socket,
     route: AndroidLanDialRoute?,
     boundNetwork: Network? = null,
+    isAssignedLocally: (InetAddress) -> Boolean = { NetworkInterface.getByInetAddress(it) != null },
 ): Boolean = runCatching {
     route?.network != null && (if (boundNetwork == null) androidInboundRouteIsVerifiable()
     else route.network == boundNetwork) && isLocal(route.localAddress.hostAddress.orEmpty()) &&
         isLocal(socket.localAddress.hostAddress.orEmpty()) && allows(socket.inetAddress.hostAddress.orEmpty()) &&
-        NetworkInterface.getByInetAddress(socket.inetAddress) == null
+        !isAssignedLocally(socket.inetAddress)
 }.getOrDefault(false)
+
+/** Background pass only; no retained snapshot may authorize a later read/write or new connection. */
+internal data class AndroidSocketPathSnapshot(
+    val route: AndroidLanDialRoute?,
+    val completeLocalAddresses: Set<InetAddress>?,
+)
+
+@Suppress("DEPRECATION") // Never treat a filtered address inventory as complete.
+internal fun readAndroidSocketPathSnapshot(networkState: AndroidLanNetworkState?): AndroidSocketPathSnapshot {
+    val route = networkState?.selectedRoute()
+    val addresses = runCatching {
+        if (System.getSecurityManager() != null) return@runCatching null
+        val all = buildSet<InetAddress> {
+            fun collect(network: NetworkInterface) {
+                addAll(network.inetAddresses.toList())
+                network.subInterfaces.toList().forEach(::collect)
+            }
+            NetworkInterface.getNetworkInterfaces().toList().forEach(::collect)
+        }
+        all.takeIf { System.getSecurityManager() == null }
+    }.getOrNull()
+    // On uncertain completeness preserve the original OS lookup, not an empty permissive set.
+    return AndroidSocketPathSnapshot(route, addresses)
+}

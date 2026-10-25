@@ -2,6 +2,7 @@
 """Offline negative controls for supplemental Android result admission, not Android runtime tests."""
 import importlib.util
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -19,6 +20,16 @@ import rpc_mobile_shell_fixture as shell_fixture
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_control_names_match_current_runtime_producer_and_do_not_admit_old_pin_bound(self):
+        source = (path.parents[1] / "samples/p2p-sample-android/src/androidTest/java/"
+                  "dev/p2pkit/sample/android/rpclab/RpcLabRuntimeInstrumentation.kt").read_text()
+        self.assertEqual(tuple(re.findall(r'passed\("([^"\n]+)"\)', source)), module.CONTROL_NAMES)
+        values = self.result()
+        self.assertEqual(values["rpcControl2"], "namespaces-and-128-256-pin-bounds")
+        values["rpcControl2"] = "namespaces-and-128-pin-bound"
+        with self.assertRaises(RuntimeError):
+            module.assess_instrumentation(self.encode(values), "a" * 32)
+
     def test_avd_sizes_only_new_userdata_and_selects_the_existing_image(self):
         original = "hw.ramSize=1536\nimage.sysdir.1=old/\ndisk.dataPartition.size=10G\nhw.cpu.ncore=1\n"
         image = Path("/owned-sdk/system-images/android-24/default/x86_64")

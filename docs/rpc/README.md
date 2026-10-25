@@ -148,6 +148,12 @@ if (host.permissions.hasRequiredPermissions()) host.start()
 val endpoint = host.endpoint()
 ```
 
+The development source adds the opt-in `RpcLimits.host256()` profile (not present
+in the published `0.8.0-rc7` artifacts). It raises host-wide policy bounds without
+changing `host128()` or defaults. It does **not** reserve 324 blocking-reader
+threads. See [shared readiness I/O, resource trade-offs, and the precise validation
+scope](scalable-io.md); policy bounds alone do not establish 256-client capacity on a device.
+
 Authorization defaults to **deny** if omitted. The authenticated
 `RpcCallContext.peer` identifies the caller; do not trust a body-supplied user
 or device identity. Authorization callbacks must be fast/cooperative.

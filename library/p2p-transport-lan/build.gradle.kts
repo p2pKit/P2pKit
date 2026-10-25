@@ -138,6 +138,12 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
         optimization.consumerKeepRules.file("src/nativeInterop/androidSockets/consumer-rules.pro")
         withHostTest { }
+        // Declare the compilation on every host so dependency maintenance sees its graph. Execution
+        // is still explicit, never a connected-device prerequisite of portable check. This uses the
+        // platform Instrumentation class rather than another third-party test dependency.
+        withDeviceTest {
+            instrumentationRunner = "dev.p2pkit.transport.lan.LanReadinessInstrumentation"
+        }
     }
 
     // iOS LAN/TCP via Bonjour + Network.framework. Same public API as
@@ -185,7 +191,14 @@ kotlin {
         }
     }
 
+    applyDefaultHierarchyTemplate()
     sourceSets {
+        // Public Java NIO and readiness ownership are identical on JVM17 and Android API24+.
+        // One real intermediate source set: adding the same files to two leaf roots makes Dokka
+        // reject ambiguous source ownership. Native scoped adapters remain platform-specific.
+        val jvmAndroidMain = create("jvmAndroidMain") { dependsOn(commonMain.get()) }
+        jvmMain { dependsOn(jvmAndroidMain) }
+        androidMain { dependsOn(jvmAndroidMain) }
         commonMain.dependencies {
             // `api` rather than `implementation`: the iOS framework's
             // `export(project(":p2p-core"))` above requires the dependency to
@@ -218,6 +231,11 @@ kotlin {
         }
     }
 }
+
+// Portable check does not assemble this opt-in device APK. The full maintained lock writer must,
+// otherwise its compile/runtime/plugin configuration memberships would never enter the lockfile.
+val readinessDeviceApkTaskPath = "$path:assembleAndroidDeviceTest"
+rootProject.tasks.named("resolveAndLockAll") { dependsOn(readinessDeviceApkTaskPath) }
 
 val embeddedJmdnsToolchains = extensions.getByType<JavaToolchainService>()
 compileEmbeddedJmdnsJava.configure {

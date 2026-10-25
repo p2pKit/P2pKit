@@ -34,7 +34,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** In-memory admission/accounting tests, not a claim about 128 real LAN connections. */
+/** In-memory admission/accounting tests, not a claim about real LAN capacity. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RestrictedSessionTest {
     private class Fixture(val session: P2pSessionImpl, val pair: FakeConnectionPair) {
@@ -75,11 +75,18 @@ class RestrictedSessionTest {
     }
 
     @Test
-    fun exactly128TrustedAndFourQuarantinedSessionsCountBothDirections() = runTest {
-        val budget = PayloadBudget(64L * 1_048_576)
+    fun exactly128TrustedAndFourQuarantinedSessionsCountBothDirections() = runTest { countSessions(128) }
+
+    @Test
+    fun exactly256TrustedStillAllowsOnlyFourQuarantinedSessionsAndCountsBothDirections() = runTest {
+        countSessions(256)
+    }
+
+    private suspend fun TestScope.countSessions(capacity: Int) {
+        val budget = PayloadBudget(capacity * 512L * 1024)
         val admissions = mutableMapOf<PeerFingerprint, PeerAdmission>()
         val profile = P2pSessionProfile(
-            { admissions[it.fingerprint] ?: PeerAdmission.Rejected }, budget, maxTrustedSessions = 128,
+            { admissions[it.fingerprint] ?: PeerAdmission.Rejected }, budget, maxTrustedSessions = capacity,
         )
         val store = SessionStore(P2pLogger.NoOp, strictInvariants = true, profile = profile)
         val owned = mutableListOf<Fixture>()
@@ -90,15 +97,19 @@ class RestrictedSessionTest {
             return store.tryRegister(fixture.session.peer.id, fixture.session, incoming, "local")
         }
         try {
-            repeat(128) { assertIs<RegisterOutcome.Accepted>(register(it, PeerAdmission.Trusted, it % 2 == 0)) }
-            assertIs<RegisterOutcome.RefusedAtCapacity>(register(128, PeerAdmission.Trusted, incoming = false))
-            assertIs<RegisterOutcome.RefusedAtCapacity>(register(129, PeerAdmission.Trusted, incoming = true))
+            repeat(capacity) { assertIs<RegisterOutcome.Accepted>(register(it, PeerAdmission.Trusted, it % 2 == 0)) }
+            assertIs<RegisterOutcome.RefusedAtCapacity>(register(capacity, PeerAdmission.Trusted, incoming = false))
+            assertIs<RegisterOutcome.RefusedAtCapacity>(register(capacity + 1, PeerAdmission.Trusted, incoming = true))
             repeat(4) {
-                assertIs<RegisterOutcome.Accepted>(register(130 + it, PeerAdmission.EnrollmentOnly, incoming = true))
+                assertIs<RegisterOutcome.Accepted>(
+                    register(capacity + 2 + it, PeerAdmission.EnrollmentOnly, incoming = true),
+                )
             }
-            assertIs<RegisterOutcome.RefusedAtCapacity>(register(134, PeerAdmission.EnrollmentOnly, incoming = false))
-            assertEquals(132, store.sessions.value.size)
-            assertEquals(132, store.drainForShutdown().sessions.size)
+            assertIs<RegisterOutcome.RefusedAtCapacity>(
+                register(capacity + 6, PeerAdmission.EnrollmentOnly, incoming = false),
+            )
+            assertEquals(capacity + 4, store.sessions.value.size)
+            assertEquals(capacity + 4, store.drainForShutdown().sessions.size)
             assertEquals(0, store.sessions.value.size)
         } finally { owned.forEach { it.close() } }
         assertEquals(0L, budget.retainedBytes.value)

@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
@@ -34,8 +35,9 @@ import kotlin.coroutines.resumeWithException
 /**
  * JVM/Android [RawConnection] backed by a [java.net.Socket].
  *
- * Reads and writes are scheduled on [Dispatchers.IO] — blocking socket I/O
- * lives there, never on the caller's dispatcher.
+ * Connected production channels/native sockets suspend on a shared readiness backend. Short
+ * nonblocking syscalls run on bounded workers, never on the readiness thread or UI dispatcher.
+ * Blocking compatibility remains only for internal legacy Socket test seams.
  */
 internal class JvmRawConnection(
     private val socket: Socket,
@@ -51,13 +53,21 @@ internal class JvmRawConnection(
     connectionScopeForTest: CoroutineScope? = null,
     private val io: JvmLanIo = JvmLanIo(false),
     private val pathAllowed: (() -> Boolean)? = null,
-    override val outboundRoute: OutboundRoute? = null
+    override val outboundRoute: OutboundRoute? = null,
+    watchPath: ((() -> Unit) -> SocketPathWatch)? = null,
 ) : OutboundRouteConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
     private val writeLock = Mutex()
+    // Production sockets use readiness. Injected legacy/fake Socket implementations retain their
+    // blocking regression path; no readiness backend may wrap an unowned descriptor by reflection.
+    private val asynchronous = (socket as? ReadinessSocket)?.asynchronousIo()
+        ?: socket.channel?.let(NioSocketIo::open)
+    private val closeFinished = CountDownLatch(1)
+    @Volatile private var closeFailure: Throwable? = null
+    @Volatile private var pathWatch: SocketPathWatch? = null
 
     /**
      * CAS gate so the socket fd is released exactly once no matter which path
@@ -85,7 +95,18 @@ internal class JvmRawConnection(
 
     init {
         JvmLanDiag.log("conn", "opened $label")
-        if (pathAllowed != null) connScope.launch {
+        if (watchPath != null) {
+            try {
+                val watch = watchPath { closeSocketOnce(); _state.value = ConnectionState.Closed }
+                pathWatch = watch
+                if (socketClosed.get()) watch.close() // Close can race the constructor's registration handoff.
+            } catch (failure: Throwable) {
+                closeSocketOnce()
+                closeFailure?.let { if (it !== failure) failure.addSuppressed(it) }
+                throw failure
+            }
+        } else if (pathAllowed != null) connScope.launch {
+            // Internal single-socket/test seam. Production restricted transports share a cohort monitor.
             while (currentCoroutineContext().isActive && !socketClosed.get()) {
                 delay(250)
                 try { withContext(io.setup) { requireAllowedPath() } }
@@ -98,8 +119,20 @@ internal class JvmRawConnection(
     /** The single place the fd is released; idempotent and safe from any thread. */
     private fun closeSocketOnce() {
         if (socketClosed.compareAndSet(false, true)) {
-            runCatching { socket.close() }
+            try {
+                try { pathWatch?.close() } catch (failure: Throwable) { retainCloseFailure(failure) }
+                try { asynchronous?.close() } catch (failure: Throwable) { retainCloseFailure(failure) }
+                try { socket.close() } catch (failure: Throwable) { retainCloseFailure(failure) }
+            } finally {
+                connScope.cancel()
+                closeFinished.countDown()
+            }
         }
+    }
+
+    private fun retainCloseFailure(failure: Throwable) {
+        val original = closeFailure
+        if (original == null) closeFailure = failure else if (original !== failure) original.addSuppressed(failure)
     }
 
     override suspend fun write(bytes: ByteArray) {
@@ -137,13 +170,20 @@ internal class JvmRawConnection(
             }
             try {
                 try {
-                    withContext(io.write) {
+                    withContext(if (asynchronous == null) io.write else SocketIoWorkers.write) {
                         requireAllowedPath()
                         JvmLanDiag.frame("write", "$label ${bytes.size}B")
-                        val out = socket.getOutputStream()
-                        out.write(bytes)
-                        out.flush()
+                        if (asynchronous != null) asynchronous.write(bytes) else {
+                            val out = socket.getOutputStream()
+                            out.write(bytes)
+                            out.flush()
+                        }
                     }
+                } catch (cancelled: CancellationException) {
+                    // A cancelled partial stream write is not a completed frame. Retire its exact socket.
+                    closeSocketOnce()
+                    _state.value = ConnectionState.Closed
+                    throw cancelled
                 } catch (e: IOException) {
                     if (!writeState.compareAndSet(WRITE_INFLIGHT, WRITE_DONE)) {
                         // The watchdog won: this IOException is its
@@ -189,12 +229,13 @@ internal class JvmRawConnection(
         // production reader-cancellation site tears the connection down
         // anyway, so releasing here is the correct semantic.
         try {
-            val input = socket.getInputStream()
+            val input = if (asynchronous == null) socket.getInputStream() else null
             val buffer = ByteArray(BUFFER_SIZE)
             while (currentCoroutineContext().isActive) {
                 requireAllowedPath()
                 val n = try {
-                    suspendCancellableCoroutine<Int> { continuation ->
+                    if (asynchronous != null) withContext(SocketIoWorkers.read) { asynchronous.read(buffer) }
+                    else suspendCancellableCoroutine<Int> { continuation ->
                         if (socketClosed.get()) {
                             continuation.resume(-1)
                             return@suspendCancellableCoroutine
@@ -204,7 +245,7 @@ internal class JvmRawConnection(
                             start = CoroutineStart.ATOMIC
                         ) {
                             try {
-                                val read = input.read(buffer)
+                                val read = checkNotNull(input).read(buffer)
                                 if (continuation.isActive) {
                                     continuation.resume(read)
                                 } else if (read > 0) {
@@ -281,6 +322,12 @@ internal class JvmRawConnection(
         // close() can no longer be preempted by cancellation.
         closeSocketOnce()
         connScope.cancel()
+        var interrupted = false
+        while (true) {
+            try { closeFinished.await(); break } catch (_: InterruptedException) { interrupted = true }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+        closeFailure?.let { throw it }
         (socket as? JvmSocketCleanupEvidence)?.requireReleased()
     }
 

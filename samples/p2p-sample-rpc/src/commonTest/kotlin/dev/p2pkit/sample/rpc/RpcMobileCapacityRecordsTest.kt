@@ -38,6 +38,17 @@ class RpcMobileCapacityRecordsTest {
     }
 
     @Test
+    fun optIn256ManualPinsDoNotWidenTheExistingUsb128Campaign() {
+        val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+        val pins = List(256) { "p2f1-${alphabet[it / 32]}${alphabet[it % 32]}" + "a".repeat(50) }
+        assertEquals(256, RpcPhoneLab.parseCapacityPins(pins.joinToString("\n")).size)
+        for (platform in listOf("Android", "Ios")) {
+            val record = encodeMobileRecord(fixture(platform).apply { put("clientPins", pins.joinToString(",")) })
+            assertFailsWith<IllegalArgumentException> { RpcMobileCapacityConfig.parse(record) }
+        }
+    }
+
+    @Test
     fun wrongPlatformUnsafeInterfaceBroadSubnetAndMalformedBindingsRemainRejected() {
         val changes = listOf(
             "hostPlatform" to "Jvm", "hostPlatform" to "ios", "hostInterface" to "utun0",

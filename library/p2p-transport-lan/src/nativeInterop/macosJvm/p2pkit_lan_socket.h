@@ -3,14 +3,14 @@
 
 #include <stdint.h>
 
-/* Private IPv4 TCP ABI v1. Not a public library API or an admission-policy replacement.
+/* Private IPv4 TCP ABI v2. Not a public library API or an admission-policy replacement.
  * All results are 0 or a positive errno. Outputs are cleared before a fallible call.
  * Opaque generation-tagged handles never expose descriptors or native pointers.
  * Operations are nonblocking, except poll (0..100ms) and close (drains in-flight operations).
  * No borrowed buffer survives a call. read/write lengths are 1..65536 bytes.
  * The caller still owns numeric CIDR, local/remote/self, interface-identity and lifecycle checks.
  */
-#define P2P_LAN_SOCKET_ABI 1u
+#define P2P_LAN_SOCKET_ABI 2u
 #define P2P_LAN_SOCKET_MAX_BYTES 65536u
 #define P2P_LAN_SOCKET_MAX_HANDLES 1024u
 
@@ -34,6 +34,16 @@ int32_t p2p_lan_socket_read(uint64_t handle, uint8_t *bytes, uint32_t length, ui
 int32_t p2p_lan_socket_write(uint64_t handle, const uint8_t *bytes, uint32_t length, uint32_t *count);
 /* writable: 0 or 1. ready is 1 for requested readiness, error or hangup; read/connected reports details. */
 int32_t p2p_lan_socket_poll(uint64_t handle, int32_t writable, int32_t timeout_ms, int32_t *ready);
+/* Private wake pair: both outputs are owned even on setup error, just like open/accept.
+ * Batched polling retains every original token lease across poll; stale tokens signal their own
+ * waiter only. The wake datagram is sticky, nonblocking and contains no application data.
+ * operations/ready use 1=read, 2=write. The 1000ms ceiling is failed-wakeup containment, not a timer
+ * per connection or an extension of any call deadline. Close both wake handles only after poll exits.
+ */
+int32_t p2p_lan_socket_wake_open(uint64_t handles[2]);
+int32_t p2p_lan_socket_wake(uint64_t handle);
+int32_t p2p_lan_socket_poll_many(uint64_t wake, const uint64_t *handles, const int32_t *operations,
+    uint32_t count, int32_t *ready);
 /* Close gates new leases and drains existing ones before releasing the descriptor exactly once.
  * A failed OS close is quarantined: no retry against a potentially recycled descriptor number.
  * Concurrent/repeated close and all stale-handle operations fail with EBADF, not a second close.

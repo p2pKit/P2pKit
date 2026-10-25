@@ -532,6 +532,7 @@ final class dev.p2pkit.rpc/RpcLimits { // dev.p2pkit.rpc/RpcLimits|null[0]
 
     final object Companion { // dev.p2pkit.rpc/RpcLimits.Companion|null[0]
         final fun host128(): dev.p2pkit.rpc/RpcLimits // dev.p2pkit.rpc/RpcLimits.Companion.host128|host128(){}[0]
+        final fun host256(): dev.p2pkit.rpc/RpcLimits // dev.p2pkit.rpc/RpcLimits.Companion.host256|host256(){}[0]
     }
 }
 

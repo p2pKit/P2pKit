@@ -23,7 +23,7 @@ import time
 import uuid
 
 CONTROL_NAMES = (
-    "keystore-round-trip-nonexportable", "namespaces-and-128-pin-bound",
+    "keystore-round-trip-nonexportable", "namespaces-and-128-256-pin-bounds",
     "tamper-fails-closed-without-erasing-approval", "authenticated-purpose-isolation",
     "real-rpc-client-identity-persistence-not-sent-and-close", "phone-input-fails-closed",
     "actual-foreground-debug-activity-and-destruction",

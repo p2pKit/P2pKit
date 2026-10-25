@@ -286,7 +286,8 @@ struct RpcPhoneView: View {
                 }
                 field("Fixed host port", $model.port, limit: 5, id: "rpc.port").disabled(!model.canStart)
                 DisclosureGroup("Capacity-test provisioning") {
-                    field("Exactly 128 public synthetic client pins", $model.capacityPins, limit: 8192, id: "rpc.pins")
+                    field("Exactly 128 or 256 public synthetic client pins", $model.capacityPins,
+                          limit: 16_384, id: "rpc.pins")
                     Toggle("I approve replacing this test host's client pins", isOn: $model.approveImport)
                 }.disabled(!model.canStart)
                 DisclosureGroup("USB capacity session") {

@@ -10,8 +10,10 @@ import dev.p2pkit.core.transport.OutboundRoute
 import dev.p2pkit.core.transport.OutboundRouteUnavailable
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -32,10 +34,13 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import dev.p2pkit.transport.lan.AndroidLanDiag as Log
@@ -47,10 +52,8 @@ import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 internal class AndroidLanDataTransport(
     private val registration: LanServiceRegistration,
     private val networkState: AndroidLanNetworkState? = null,
-    private val socketFactory: (Network?) -> Socket = { network ->
-        network?.socketFactory?.createSocket() ?: Socket()
-    },
-    private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
+    private val socketFactory: (Network?) -> Socket = { SocketChannel.open().socket() },
+    private val serverSocketFactory: () -> ServerSocket = { ServerSocketChannel.open().socket() },
     private val beforeListenerResourceCheckForTest: (() -> Unit)? = null,
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
     private val afterListenerDetachForTest: (() -> Unit)? = null,
@@ -80,6 +83,11 @@ internal class AndroidLanDataTransport(
     private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
     private val io = AndroidLanIo(policy != null)
+    private val pathWatchdog = policy?.let {
+        SocketPathWatchdog(CoroutineScope(SupervisorJob() + io.setup)) {
+            readAndroidSocketPathSnapshot(networkState)
+        }
+    }
     @Volatile private var restartPort: Int = policy?.listenPort ?: 0
     @Volatile private var hasStarted: Boolean = false
 
@@ -225,6 +233,9 @@ internal class AndroidLanDataTransport(
             val socket = try {
                 socketFactory(selectedRoute?.network).also { candidate ->
                     createdSocket = candidate
+                    // Public Network.bindSocket(Socket) binds this original unconnected channel.
+                    // Retain it above first, so a binding failure stays under existing cleanup ownership.
+                    if (candidate.channel != null) selectedRoute?.network?.bindSocket(candidate)
                     // Hotspot/AP host mode is often absent from
                     // ConnectivityManager, so the discovery selector exposes
                     // an explicit Java-interface address with network=null.
@@ -393,6 +404,7 @@ internal class AndroidLanDataTransport(
                     throw LanRouteRejected("Android LAN outbound route context changed")
                 }
                 route.context?.let { context ->
+                    if (socket.channel != null) context.network?.bindSocket(socket)
                     if (context.network == null || policy != null) {
                         socket.bind(InetSocketAddress(context.localAddress.inetAddress(), 0))
                     }
@@ -722,7 +734,15 @@ internal class AndroidLanDataTransport(
     ): AndroidRawConnection = AndroidRawConnection(
         socket, io = io, pathAllowed = policy?.let { selected ->
             { selected.allowsAndroidSocket(socket, networkState?.selectedRoute(), boundNetwork) }
-        }, outboundRoute = route
+        }, outboundRoute = route,
+        watchPath = pathWatchdog?.let { monitor -> { rejected ->
+            monitor.register({ snapshot ->
+                checkNotNull(policy).allowsAndroidSocket(socket, snapshot.route, boundNetwork) { remote ->
+                    snapshot.completeLocalAddresses?.contains(remote) ?:
+                        (NetworkInterface.getByInetAddress(remote) != null)
+                }
+            }, rejected)
+        } },
     )
 
     internal fun isInboundAddressAllowedForTest(

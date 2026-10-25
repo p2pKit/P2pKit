@@ -9,6 +9,8 @@ import kotlin.concurrent.write
 
 /** The operations are nonblocking. Null means retry after readiness, not EOF or successful completion. */
 internal interface AndroidSocketOps {
+    // Null is only the legacy deterministic host-test seam. Production always provides batch readiness.
+    fun readiness(): SocketReadiness<AndroidSocketHandle>? = null
     fun open(ipv6: Boolean): FileDescriptor
     fun configureAccepted(fd: FileDescriptor)
     fun bind(fd: FileDescriptor, address: InetSocketAddress)
@@ -38,6 +40,17 @@ internal class AndroidSocketHandle(private val fd: FileDescriptor, private val o
     fun <T> use(action: (FileDescriptor) -> T): T = gate.read {
         if (closing) throw SocketException("Socket closed")
         action(fd)
+    }
+
+    /** A batch poll pins the original owner, not a borrowed descriptor number. Same-thread release. */
+    fun leaseForPoll(): PollLease? {
+        gate.readLock().lock()
+        if (closing) { gate.readLock().unlock(); return null }
+        return PollLease(fd) { gate.readLock().unlock() }
+    }
+
+    class PollLease(val descriptor: FileDescriptor, private val release: () -> Unit) : AutoCloseable {
+        override fun close() = release()
     }
 
     fun <T : Any> await(writable: Boolean = false, action: (FileDescriptor) -> T?): T {

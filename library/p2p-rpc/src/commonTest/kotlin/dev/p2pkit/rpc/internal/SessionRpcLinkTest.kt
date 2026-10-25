@@ -13,6 +13,7 @@ import dev.p2pkit.core.SessionConnectionInfo
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
+import dev.p2pkit.rpc.RpcLimits
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -28,10 +29,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-private class LinkTestSession : P2pSession {
-    override val id = "rpc-test-session"
-    override val peer = Peer(PeerId("rpc-peer"), "fixture", Platform.UNKNOWN, setOf(TransportKind.LAN))
-    override val peerIdentity = PeerIdentity(peer.id, testFingerprint())
+private class LinkTestSession(index: Int = 0) : P2pSession {
+    override val id = "rpc-test-session-$index"
+    override val peer = Peer(PeerId("rpc-peer-$index"), "fixture", Platform.UNKNOWN, setOf(TransportKind.LAN))
+    override val peerIdentity = PeerIdentity(peer.id, testFingerprint(index))
     override val state = MutableStateFlow(ConnectionState.Connected)
     override val connectionInfo = MutableStateFlow(SessionConnectionInfo(1))
     override val incoming = MutableSharedFlow<P2pMessage>()
@@ -115,6 +116,39 @@ class SessionRpcLinkTest {
         message.release()
         assertEquals(0L, notifications.retainedBytes.value)
         assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun profileNotificationBudgetsSpanEveryClientAndDoNotBlockPriorityOrSurviveClose() = runTest {
+        for (limits in listOf(RpcLimits.host128(), RpcLimits.host256())) {
+            val budget = PayloadBudget(limits.payloadBytes)
+            val host = RpcHostEngine(backgroundScope, emptyMap(), limits, budget,
+                RpcClock { testScheduler.currentTime }, { true }, TEST_INCARNATION)
+            assertEquals(limits.trustedClients * 8192L, host.notificationBudget.capacityBytes)
+            val links = List(limits.trustedClients) { index ->
+                SessionRpcLink(LinkTestSession(index), backgroundScope, budget, host.notificationBudget, RpcClock { 0 })
+            }
+            val message = WireMessage(WireKind.Notify, TEST_REQUEST, TEST_INCARNATION, "changed", 1,
+                body = testBody("\"" + "n".repeat(3998) + "\"", budget))
+            val bytes = checkNotNull(message.body).size + message.name.length + RpcWire.HEADER_BYTES
+            val maximum = (host.notificationBudget.capacityBytes / bytes).toInt()
+            try {
+                assertTrue(maximum >= links.size, "All peers receive an admission opportunity in this fixture")
+                repeat(maximum) { index ->
+                    assertNotNull(links[index % links.size].offer(message, 10_000, notification = true))
+                }
+                assertEquals(maximum * bytes.toLong(), host.notificationBudget.retainedBytes.value)
+                assertNull(links[maximum % links.size].offer(message, 10_000, notification = true))
+                // Host-wide best-effort saturation cannot consume the response/control lane.
+                assertNotNull(links[maximum % links.size].offer(WireMessage(WireKind.Hello, TEST_SECOND), 10_000))
+            } finally {
+                links.forEach { it.close() }
+                message.release()
+                host.close()
+            }
+            assertEquals(0L, host.notificationBudget.retainedBytes.value)
+            assertEquals(0L, budget.retainedBytes.value)
+        }
     }
 
     @Test

@@ -19,6 +19,7 @@ import kotlinx.serialization.builtins.serializer
 /** Requirements for future measurement, NOT capabilities demonstrated by this source. */
 public object RpcCapacityContract {
     public const val CLIENTS: Int = 128
+    public const val HOST_256_CLIENTS: Int = 256
     public const val CALLS_PER_SECOND_PER_CLIENT: Int = 10
     public const val STEADY_SECONDS: Int = 30 * 60
     public const val ENCODED_BYTES: Int = 1024
@@ -66,13 +67,15 @@ public class RpcCapacityHost private constructor(private val host: RpcHost) {
             platform: RpcPlatform, scope: CoroutineScope, lan: OrganizationLan,
             localDurableTrustStore: RpcTrustStore, approvedClients: Set<PeerFingerprint>,
         ): RpcCapacityHost {
-            require(approvedClients.size == RpcCapacityContract.CLIENTS)
+            require(approvedClients.size in setOf(RpcCapacityContract.CLIENTS, RpcCapacityContract.HOST_256_CLIENTS))
             val pins = approvedClients.toSet()
             val host = RpcHost.create(platform, scope) {
                 appId = RpcCapacityContract.appId
                 this.lan = lan
                 trustStore = localDurableTrustStore
-                limits = RpcLimits.host128()
+                limits = if (pins.size == RpcCapacityContract.HOST_256_CLIENTS) {
+                    RpcLimits.host256()
+                } else RpcLimits.host128()
                 advertise = false // Numeric pinned fallback; no discovery dependency in the load experiment.
                 register(RpcCapacityContract.echo, authorize = { it.fingerprint in pins }) { _, value ->
                     if (value == RpcCapacityContract.payload) RpcReply.Success(value)
@@ -84,7 +87,7 @@ public class RpcCapacityHost private constructor(private val host: RpcHost) {
             }
             if (host.trust.fingerprints().toSet() != pins) {
                 host.close()
-                error("Qualification host requires exactly the 128 durably approved fixture identities")
+                error("Qualification host requires exactly the requested durably approved fixture identities")
             }
             return RpcCapacityHost(host)
         }

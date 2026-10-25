@@ -28,7 +28,7 @@ public fun main(args: Array<String>) {
             val directory = config.directory
             val pinLines = LabFiles.read(directory.resolve("client-pins.txt")).toString(Charsets.US_ASCII)
                 .split('\n').filter { it.isNotEmpty() }
-            require(pinLines.size == 128 && pinLines.toSet().size == 128)
+            require(pinLines.size == config.clientCount && pinLines.toSet().size == config.clientCount)
             val pins = pinLines.map(PeerFingerprint::parse).toSet()
             val digest = artifactDigest(directory)
             val vault = LabVault(LabFiles.newDirectory(directory, "host-vault"))

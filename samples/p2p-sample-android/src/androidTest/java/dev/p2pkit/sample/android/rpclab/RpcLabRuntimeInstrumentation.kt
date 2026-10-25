@@ -160,12 +160,22 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         check(store.load(appId, hostPurpose) == setOf(pinA) && store.load(appId, clientPurpose) == setOf(pinB))
         check(runCatching { store.load(AppId("not.the.synthetic.app"), hostPurpose) }.isFailure)
         val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
-        val tooMany = (0..128).map {
+        val tooMany = (0..256).map {
             PeerFingerprint.parse("p2f1-${alphabet[it / 32]}${alphabet[it % 32]}" + "a".repeat(50))
         }.toSet()
+        check(tooMany.size == 257)
+        for (count in listOf(128, 256)) {
+            val approved = tooMany.take(count).toSet()
+            store.replace(appId, hostPurpose, approved)
+            check(AndroidRpcLabTrustStore(targetContext, token).load(appId, hostPurpose) == approved)
+            check(store.load(appId, clientPurpose) == setOf(pinB))
+        }
         check(runCatching { store.replace(appId, hostPurpose, tooMany) }.isFailure)
+        check(store.load(appId, hostPurpose) == tooMany.take(256).toSet())
+        // Following corruption/isolation controls deliberately use their original single-pin fixture.
+        store.replace(appId, hostPurpose, setOf(pinA))
         check(store.load(appId, hostPurpose) == setOf(pinA))
-        passed("namespaces-and-128-pin-bound")
+        passed("namespaces-and-128-256-pin-bounds")
 
         stage = "tampered-ciphertext"
         val hostFile = File(root, "${hostPurpose.name}.aesgcm")

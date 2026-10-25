@@ -132,3 +132,38 @@ JNIEXPORT jint JNICALL JNI(poll)(JNIEnv *env, jobject self, jlong handle, jint w
 JNIEXPORT jint JNICALL JNI(close)(JNIEnv *env, jobject self, jlong handle) {
     (void)env; IGNORE_SELF; return p2p_lan_socket_close((uint64_t)handle);
 }
+
+JNIEXPORT jint JNICALL JNI(wakeOpen)(JNIEnv *env, jobject self, jlongArray output) {
+    IGNORE_SELF;
+    if (!valid_array(env, output, 2)) return EINVAL;
+    jlong values[2] = {0};
+    (*env)->SetLongArrayRegion(env, output, 0, 2, values);
+    if ((*env)->ExceptionCheck(env)) return EINVAL;
+    uint64_t owned[2] = {0};
+    int32_t result = p2p_lan_socket_wake_open(owned);
+    values[0] = (jlong)owned[0]; values[1] = (jlong)owned[1];
+    (*env)->SetLongArrayRegion(env, output, 0, 2, values);
+    return result;
+}
+JNIEXPORT jint JNICALL JNI(wake)(JNIEnv *env, jobject self, jlong handle) {
+    (void)env; IGNORE_SELF; return p2p_lan_socket_wake((uint64_t)handle);
+}
+JNIEXPORT jint JNICALL JNI(pollMany)(JNIEnv *env, jobject self, jlong wake, jlongArray handles,
+    jintArray operations, jintArray output) {
+    IGNORE_SELF;
+    if (handles == NULL) return EINVAL;
+    jsize count = (*env)->GetArrayLength(env, handles);
+    if (count > (jsize)P2P_LAN_SOCKET_MAX_HANDLES || !valid_array(env, operations, count) ||
+        !valid_array(env, output, count)) return EINVAL;
+    jlong input[P2P_LAN_SOCKET_MAX_HANDLES];
+    uint64_t tokens[P2P_LAN_SOCKET_MAX_HANDLES];
+    jint ops[P2P_LAN_SOCKET_MAX_HANDLES];
+    int32_t ready[P2P_LAN_SOCKET_MAX_HANDLES] = {0};
+    (*env)->GetLongArrayRegion(env, handles, 0, count, input);
+    if (!(*env)->ExceptionCheck(env)) (*env)->GetIntArrayRegion(env, operations, 0, count, ops);
+    if ((*env)->ExceptionCheck(env)) return EINVAL;
+    for (jsize i = 0; i < count; ++i) tokens[i] = (uint64_t)input[i];
+    int32_t result = p2p_lan_socket_poll_many((uint64_t)wake, tokens, ops, (uint32_t)count, ready);
+    (*env)->SetIntArrayRegion(env, output, 0, count, ready);
+    return result;
+}

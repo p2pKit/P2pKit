@@ -7,12 +7,21 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.Socket
 
-/** Elastic IO views do not share the blocking-read quota with writes/setup or change global IO settings. */
+/** Blocking compatibility/setup lanes; production nonblocking data uses [SocketIoWorkers]. */
 internal class JvmLanIo(restricted: Boolean) {
-    val read: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(164) else Dispatchers.IO
-    val write: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(16) else Dispatchers.IO
-    val setup: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(16) else Dispatchers.IO
+    val read: CoroutineDispatcher = if (restricted) readers else Dispatchers.IO
+    val write: CoroutineDispatcher = if (restricted) writers else Dispatchers.IO
+    val setup: CoroutineDispatcher = if (restricted) setups else Dispatchers.IO
+    // Accept remains one bounded blocking operation per listening transport (DialOnly creates none).
     val accept: CoroutineDispatcher = if (restricted) Dispatchers.IO.limitedParallelism(1) else Dispatchers.IO
+
+    private companion object {
+        // Shared across all kits, not an elastic view for every connected client. Read/write are the
+        // legacy blocking test seam; production data waits suspend on readiness and use SocketIoWorkers.
+        val readers = Dispatchers.IO.limitedParallelism(16)
+        val writers = Dispatchers.IO.limitedParallelism(16)
+        val setups = Dispatchers.IO.limitedParallelism(16)
+    }
 }
 
 internal fun organizationJvmTarget(
@@ -81,7 +90,7 @@ private fun strictJvmLanInterfaces(networks: List<NetworkInterface>): List<JvmLa
         )
     }
 
-/** One fresh OS enumeration, never retained between path checks or shared between connections. */
+/** One fresh OS enumeration. Never cached for admission or I/O; an idle watchdog may inspect a cohort. */
 internal data class JvmLanSocketSnapshot(
     val interfaces: List<JvmLanInterfaceSnapshot>,
     // Null means address visibility could be filtered: preserve the native self-address lookup.
@@ -119,6 +128,11 @@ internal fun OrganizationLan.jvmNumeric(address: String): InetAddress {
 
 internal fun OrganizationLan.allowsJvmSocket(socket: Socket): Boolean = runCatching {
     allowsJvmSocketPath(socket.localAddress, socket.inetAddress)
+}.getOrDefault(false)
+
+/** A single background pass only. Before/after-I/O callers use the fresh overload above. */
+internal fun OrganizationLan.allowsJvmSocket(socket: Socket, snapshot: JvmLanSocketSnapshot?): Boolean = runCatching {
+    allowsJvmSocketPath(socket.localAddress, socket.inetAddress, readSnapshot = { snapshot })
 }.getOrDefault(false)
 
 /** Internal seam for deterministic topology/race controls; production always uses the fresh OS reader. */

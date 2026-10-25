@@ -99,9 +99,11 @@ Key: authenticated client fingerprint plus logical request ID, within one host
 incarnation. Running records are never evicted to admit more calls.
 
 - Completed records/tombstones live 60 seconds with no pressure eviction.
-- At most 1,024 records per client and 131,072 per host; a full table refuses
+- At most 1,024 records per client and 131,072 per default/`host128()` host
+  (262,144 with explicit `host256()`); a full table refuses
   new work before execution.
-- Response bodies live at most 30 seconds and share a 32 MiB cache. Receipt,
+- Response bodies live at most 30 seconds and share a 32 MiB default cache
+  (64 MiB with `host256()`). Receipt,
   cache pressure, or payload-budget pressure may reclaim bodies sooner, retaining
   the tombstone. Even a just-completed result might not remain recoverable.
 - Host restart loses all records and changes the incarnation. The process does
@@ -129,7 +131,13 @@ business key, coordinate transactions, or make a non-idempotent handler safe.
 | Notifications | 16 KiB body; 16 entries/128 KiB per peer, 1 MiB aggregate |
 | Link priority queue | 32 entries/4 MiB per peer; aggregate payload budget still applies |
 
-Limits may be lowered but not raised beyond the approved profile. Not every
+An explicit `RpcLimits.host256()` selects 256 trusted clients, 256 running/512
+queued calls, 128 MiB shared payload, 64 MiB cache **inside** that payload budget,
+262,144 total records, and 2 MiB host-wide notification admission. `host128()` and
+all defaults above remain unchanged. Per-client, parser, wire, handshake, retry
+and deadline protections do not grow. See [scalable I/O and validation scope](scalable-io.md).
+
+Limits may be lowered but not raised beyond the `host256()` ceiling. Not every
 combination of these maxima can be admitted simultaneously. Encoding/decoding
 reserve scratch allowances before execution, so body limits alone do not
 guarantee admission. Pressure can cause typed overload before execution, or

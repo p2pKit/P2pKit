@@ -1,0 +1,122 @@
+name: RPC scalable I/O implementation checks
+on:
+  workflow_call:
+    inputs:
+      part:
+        type: string
+        default: all
+  workflow_dispatch:
+    inputs:
+      part:
+        type: choice
+        default: all
+        options: [all, jvm-linux, jvm-windows, macos, macos-abi, ios-phone, android-24, android-35]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: rpc-io-${{ github.ref }}-${{ inputs.part }}
+  cancel-in-progress: false
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      parts: ${{ steps.select.outputs.parts }}
+    steps:
+      - id: select
+        env:
+          PART: ${{ inputs.part }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          choices = {
+              'jvm-linux': 'ubuntu-24.04', 'jvm-windows': 'windows-2025',
+              'macos': 'macos-26', 'macos-abi': 'macos-26', 'ios-phone': 'macos-26',
+              'android-24': 'ubuntu-24.04', 'android-35': 'ubuntu-24.04',
+          }
+          part = os.environ['PART']
+          assert part == 'all' or part in choices
+          items = [{'part': key, 'runner': value} for key, value in choices.items() if part in ('all', key)]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('parts=' + json.dumps({'include': items}) + '\n')
+          PY
+  verify:
+    needs: matrix
+    name: ${{ matrix.part }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.parts) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
+      CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Select job-owned Gradle home
+        run: echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-home" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
+        with:
+          cache-read-only: true
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            caches/*/kotlin-dsl
+            caches/*/scripts
+            caches/*/groovy-dsl
+      - name: Install standard platform tools
+        env:
+          PART: ${{ matrix.part }}
+        run: bash scripts/setup-ci-component.sh "$PART"
+      - name: Prepare actual Android emulator
+        if: ${{ startsWith(matrix.part, 'android-') }}
+        id: kvm
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platform-tools' 'emulator' "system-images;${PART};google_apis;x86_64"
+          test -c /dev/kvm
+          getfacl -p /dev/kvm > "$RUNNER_TEMP/rpc-io-kvm-original.acl"
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Execute tests and preserve private source-bound evidence
+        id: tests
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          python -B scripts/ci_evidence.py --component "rpc-io-$PART" --timeout-seconds 4200 \
+            --output-dir "$RUNNER_TEMP/rpc-io-evidence" \
+            --report-glob '**/build/test-results/**/*.xml' --report-glob 'build/reports/**/*' -- \
+            bash scripts/run-rpc-io-component.sh "$PART"
+      - name: Restore hosted KVM access
+        if: ${{ always() && steps.kvm.outcome != 'skipped' }}
+        run: |
+          original="$RUNNER_TEMP/rpc-io-kvm-original.acl"
+          if test -f "$original"; then
+            sudo setfacl --restore="$original"
+            getfacl -p /dev/kvm > "$RUNNER_TEMP/rpc-io-kvm-final.acl"
+            cmp "$original" "$RUNNER_TEMP/rpc-io-kvm-final.acl"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
+        with:
+          name: rpc-io-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rpc-io-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

@@ -1,7 +1,7 @@
 package dev.p2pkit.transport.lan
 
 /** Private JNI ABI. Loading is explicit and verified by [MacLanNativeLoader], never by this class initializer. */
-internal object MacLanNative : MacLanCalls {
+internal object MacLanNative : MacLanCalls, MacLanAsyncCalls {
     external fun abi(): Int
     external fun source(): String
     external fun constants(): IntArray
@@ -18,6 +18,15 @@ internal object MacLanNative : MacLanCalls {
     override external fun write(handle: Long, bytes: ByteArray, offset: Int, length: Int): Int
     override external fun poll(handle: Long, writable: Int, timeout: Int): Int
     override external fun close(handle: Long): Int
+    override external fun wakeOpen(output: LongArray): Int
+    override external fun wake(handle: Long): Int
+    override external fun pollMany(wake: Long, handles: LongArray, operations: IntArray, output: IntArray): Int
+}
+
+internal interface MacLanAsyncCalls {
+    fun wakeOpen(output: LongArray): Int
+    fun wake(handle: Long): Int
+    fun pollMany(wake: Long, handles: LongArray, operations: IntArray, output: IntArray): Int
 }
 
 /** Deterministic internal test seam, never supplied by the public transport factory. */
