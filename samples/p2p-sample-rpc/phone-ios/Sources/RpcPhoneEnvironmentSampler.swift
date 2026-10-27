@@ -5,17 +5,26 @@ import UIKit
 /// Public iOS observations only. There is no public exact battery current, temperature or energy counter here.
 @MainActor
 final class RpcPhoneEnvironmentSampler {
-    private let monitoring: () -> Bool
-    private let setMonitoring: (Bool) -> Void
-    private let battery: () -> (Float, UIDevice.BatteryState)
-    private let thermal: () -> ProcessInfo.ThermalState
+    private let monitoring: @MainActor () -> Bool
+    private let setMonitoring: @MainActor (Bool) -> Void
+    private let battery: @MainActor () -> (Float, UIDevice.BatteryState)
+    private let thermal: @MainActor () -> ProcessInfo.ThermalState
     private var previousMonitoring: Bool?
 
-    init(monitoring: @escaping () -> Bool = { UIDevice.current.isBatteryMonitoringEnabled },
-         setMonitoring: @escaping (Bool) -> Void = { UIDevice.current.isBatteryMonitoringEnabled = $0 },
-         battery: @escaping () -> (Float, UIDevice.BatteryState) = {
-            (UIDevice.current.batteryLevel, UIDevice.current.batteryState)
-         }, thermal: @escaping () -> ProcessInfo.ThermalState = { ProcessInfo.processInfo.thermalState }) {
+    // Default argument expressions are evaluated outside the initializer's
+    // actor. Construct the UIKit callbacks inside this MainActor initializer
+    // instead, and retain the actor contract in the injected function types.
+    convenience init() {
+        self.init(monitoring: { UIDevice.current.isBatteryMonitoringEnabled },
+                  setMonitoring: { UIDevice.current.isBatteryMonitoringEnabled = $0 },
+                  battery: { (UIDevice.current.batteryLevel, UIDevice.current.batteryState) },
+                  thermal: { ProcessInfo.processInfo.thermalState })
+    }
+
+    init(monitoring: @escaping @MainActor () -> Bool,
+         setMonitoring: @escaping @MainActor (Bool) -> Void,
+         battery: @escaping @MainActor () -> (Float, UIDevice.BatteryState),
+         thermal: @escaping @MainActor () -> ProcessInfo.ThermalState) {
         self.monitoring = monitoring
         self.setMonitoring = setMonitoring
         self.battery = battery

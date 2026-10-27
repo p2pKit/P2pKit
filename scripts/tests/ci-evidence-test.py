@@ -27,6 +27,78 @@ PUBLIC_FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 
 
 class EvidenceTests(unittest.TestCase):
+    def swift_observation_fixture(self):
+        root = self.root / "swift-observations"
+        sources = {
+            "samples/iosApp/ContentView.swift": "import Foundation\nstruct ContentView {}\n",
+            "samples/iosApp/UITests/ScreenTests.swift": "final class ScreenTests: XCTestCase {\nfunc testStop() {}\n}\n",
+        }
+        for name, text in sources.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text.encode())
+        def git(*argv):
+            return subprocess.run(["git", "-C", str(root), *argv], check=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
+        git("init", "-q")
+        git("config", "core.autocrlf", "false")
+        git("add", "samples")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
+        source = git("rev-parse", "HEAD")
+        command = self.root / "swift-captures"
+        command.mkdir()
+        return root, command, source, sources
+
+    def test_swift_capture_projection_publishes_only_original_source_matched_failure_names_and_locations(self):
+        root, command, source, sources = self.swift_observation_fixture()
+        name = next(iter(sources))
+        (command / "stdout.log").write_text(str(root / name) + ":2:8: error: PRIVATE_COMPILER_MESSAGE\n" +
+            "Test Case '-[sample_tests.ScreenTests testStop]' failed (0.1 seconds). PRIVATE_MESSAGE\n" +
+            "Test case 'ScreenTests.testStop()' failed on 'PRIVATE_DEVICE' (0.1 seconds).\n")
+        actual = E.swift_sample_failure_observations(root, command, source)
+        self.assertEqual(actual, {"locations": [{"source": name, "line": 2, "kind": "ERROR"}],
+            "failedSourceTests": [{"source": "samples/iosApp/UITests/ScreenTests.swift", "test": "testStop", "status": "FAILED"}]})
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+        self.assertNotIn(str(root), json.dumps(actual))
+        result = E.failure_diagnostics(root, command, source)
+        self.assertEqual(result["swiftSample"], actual)
+        self.assertNotIn("outcome", result["swiftSample"])
+
+    def test_swift_capture_projection_ignores_private_unknown_and_success_cases(self):
+        root, command, source, sources = self.swift_observation_fixture()
+        name = next(iter(sources))
+        (command / "stdout.log").write_text(str(root / name) + ":999:1: error: PRIVATE\n" +
+            str(root / "private.swift") + ":1:1: error: PRIVATE\n" +
+            "PRIVATE_PREFIX " + str(root / name) + ":2:1: error: PRIVATE\n" +
+            "Test Case '-[ScreenTests testUnknownPRIVATE]' failed (0.1 seconds).\n" +
+            "Test Case '-[UnknownPRIVATE testStop]' failed (0.1 seconds).\n" +
+            "Test Case '-[ScreenTests testStop]' passed (0.1 seconds).\n")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (command / "stdout.log").write_text("Test Case '-[ScreenTests testStop]' skipped (0.1 seconds).\n")
+        actual = E.swift_sample_failure_observations(root, command, source)
+        self.assertEqual(actual["failedSourceTests"][0]["status"], "SKIPPED")
+
+    def test_swift_capture_projection_refuses_source_drift_linked_and_oversized_capture(self):
+        root, command, source, sources = self.swift_observation_fixture()
+        name = next(iter(sources))
+        (command / "stdout.log").write_text(str(root / name) + ":2:1: error: PRIVATE\n")
+        (root / name).write_text(sources[name] + "// PRIVATE_SOURCE_CHANGE\n")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (root / name).write_bytes(sources[name].encode())
+        (command / "stderr.log").symlink_to(command / "stdout.log")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (command / "stderr.log").unlink()
+        os.link(command / "stdout.log", command / "stderr.log")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (command / "stderr.log").unlink()
+        with mock.patch.object(E, "MAX_LOG_BYTES", 5):
+            self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+
+    def test_swift_capture_projection_does_not_read_source_or_reports_after_uncertain_cleanup(self):
+        with mock.patch.object(E, "swift_sample_failure_observations", side_effect=AssertionError("unsafe source/report read")):
+            actual = E.failure_diagnostics(self.root, self.root, include_reports=False)
+        self.assertNotIn("swiftSample", actual)
+
     def phone_observation_fixture(self):
         root = self.root / "phone-observations"
         prefix = "samples/p2p-sample-rpc/phone-ios/"
@@ -38,11 +110,12 @@ class EvidenceTests(unittest.TestCase):
         for name, text in sources.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
+            path.write_bytes(text.encode())
         def git(*argv):
             return subprocess.run(["git", "-C", str(root), *argv], check=True,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
         git("init", "-q")
+        git("config", "core.autocrlf", "false")
         git("add", "samples")
         git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
         source = git("rev-parse", "HEAD")

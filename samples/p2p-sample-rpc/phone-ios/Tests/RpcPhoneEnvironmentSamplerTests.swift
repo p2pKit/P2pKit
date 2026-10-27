@@ -5,6 +5,27 @@ import XCTest
 
 final class RpcPhoneEnvironmentSamplerTests: XCTestCase {
     @MainActor
+    func testPlatformDefaultsReadAndRestoreActualMainActorDeviceMonitoring() throws {
+        let device = UIDevice.current
+        let initiallyEnabled = device.isBatteryMonitoringEnabled
+        let sampler = RpcPhoneEnvironmentSampler()
+        defer {
+            sampler.retire()
+            XCTAssertEqual(device.isBatteryMonitoringEnabled, initiallyEnabled)
+        }
+        XCTAssertEqual(try sampler.sample().batteryState, "unavailable")
+        sampler.acquire()
+        XCTAssertTrue(device.isBatteryMonitoringEnabled)
+        let sample = try sampler.sample()
+        XCTAssertEqual(sample.batterySource, "ios-uidevice")
+        XCTAssertNil(sample.batteryCurrentMicroamps)
+        XCTAssertNil(sample.batteryTemperatureMilliC)
+        sampler.retire()
+        XCTAssertEqual(device.isBatteryMonitoringEnabled, initiallyEnabled)
+        XCTAssertEqual(try sampler.sample().batteryState, "unavailable")
+    }
+
+    @MainActor
     func testAcquiringAndRetiringBatteryMonitoringIsIdempotentAndRestoresItsPriorSetting() throws {
         for initiallyEnabled in [false, true] {
             var enabled = initiallyEnabled

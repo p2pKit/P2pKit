@@ -26,7 +26,7 @@ TARGETS = {
     "p2pkit-rpc-phone-tests": (
         # Original77 owner/lifecycle methods plus2 sealed-input/used-slot regressions.
         ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 79),
-        ("Tests/RpcPhoneEnvironmentSamplerTests.swift", "RpcPhoneEnvironmentSamplerTests", 3),
+        ("Tests/RpcPhoneEnvironmentSamplerTests.swift", "RpcPhoneEnvironmentSamplerTests", 4),
         ("Tests/RpcPhoneUsbDeveloperCommandTests.swift", "RpcPhoneUsbDeveloperCommandTests", 6),
     ),
     "p2pkit-rpc-phone-uitests": (

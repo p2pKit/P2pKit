@@ -47,6 +47,11 @@ use the pinned development source below, not that Maven release's binaries.
 3. Install native JDK17 **and JDK21**, Python3.12+, Git, Bash and the maintained
    XcodeGen. The wrapper uses the repository's daemon/toolchain criteria;
    declaring `JAVA_HOME` alone is not a substitute for installing JDK21.
+   For autonomous GitHub issue updates, pushes, PRs and Actions, install the
+   GitHub CLI and verify the Mac's own repository access with `gh auth status`.
+   If not already authenticated, use its normal local login once. Never migrate
+   the VPS's authentication files or credentials; Maven credentials are not
+   needed for this development campaign.
 4. Install [the canonical Android SDK inputs](../testing/local.md#android-sdk-setup):
    platforms36 and37.0, platform-tools and **NDK29.0.14206865**. Accept the normal
    SDK licenses. Do not rename SDK directories or edit dependency locks.

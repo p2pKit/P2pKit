@@ -1078,6 +1078,67 @@ def rpc_package_path_mismatch(value):
             **{key: list(value[key]) for key in lists}}
 
 
+def swift_sample_failure_observations(root, command_directory, source_commit="HEAD"):
+    """Source-matched failure locations/names only; never a Swift success gate."""
+    def bounded(path, limit):
+        require(not any(p.is_symlink() for p in (path, *path.parents)))
+        info = path.stat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= limit)
+        with path.open("rb") as stream:
+            raw = stream.read(limit + 1)
+        require(len(raw) == info.st_size)
+        return raw
+
+    try:
+        files, methods = {}, {}
+        prefix = "samples/iosApp/"
+        for record in git_value(root, "--no-replace-objects", "ls-tree", "-r", "-z", source_commit, prefix).split("\0"):
+            if not record:
+                continue
+            identity, name = record.split("\t", 1)
+            mode, kind, blob = identity.split()
+            if (mode != "100644" or kind != "blob" or re.fullmatch(re.escape(prefix) +
+                    r"(?:[A-Za-z][A-Za-z0-9_]*/)*[A-Za-z][A-Za-z0-9_]*\.swift", name) is None):
+                continue
+            raw = bounded(root / name, 512 * 1024)
+            require(hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() == blob)
+            text = raw.decode("utf-8")
+            files[name] = len(text.splitlines())
+            require(len(files) <= 64)
+            owners = re.findall(r"\bclass (\w+): XCTestCase", text)
+            if len(owners) == 1:
+                for method in re.findall(r"\bfunc (test\w+)\(", text):
+                    key = (owners[0], method)
+                    require(key not in methods)
+                    methods[key] = name
+                    require(len(methods) <= 1024)
+        locations, failures = [], []
+        for name in ("stdout.log", "stderr.log"):
+            path = Path(command_directory) / name
+            if not path.exists():
+                continue
+            for line in bounded(path, MAX_LOG_BYTES).decode("utf-8", errors="replace").split("\n"):
+                if len(line) > 4096:
+                    continue
+                location = re.match(re.escape(str(root) + "/") + r"([^:\n]+):(\d{1,5})(?::(\d{1,4}))?: (error|warning):", line)
+                if location:
+                    relative = Path(os.path.normpath(location[1])).as_posix()
+                    if relative in files and 0 < int(location[2]) <= files[relative]:
+                        row = {"source": relative, "line": int(location[2]), "kind": location[4].upper()}
+                        if row not in locations and len(locations) < 32:
+                            locations.append(row)
+                case = re.match(r"Test Case '-\[(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_]\w*) (test\w+)\]' (failed|skipped) \(", line)
+                if case is None:
+                    case = re.match(r"Test case '(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_]\w*)\.(test\w+)\(\)' (failed|skipped) on ", line)
+                if case and (case[1], case[2]) in methods:
+                    row = {"source": methods[(case[1], case[2])], "test": case[2], "status": case[3].upper()}
+                    if row not in failures and len(failures) < 32:
+                        failures.append(row)
+        return {"locations": locations, "failedSourceTests": failures} if locations or failures else None
+    except (OSError, ValueError, UnicodeError, TypeError, EvidenceError, subprocess.SubprocessError):
+        return None
+
+
 def rpc_ios_phone_observations(root, source_commit="HEAD"):
     """Finite observations from closed original Xcode captures, not a new gate.
 
@@ -1460,6 +1521,9 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
     phone_observations = rpc_ios_phone_observations(root, source_commit)
     if phone_observations is not None:
         inventory_fields["rpcIosPhone"] = phone_observations
+    swift_observations = swift_sample_failure_observations(root, command_directory, source_commit)
+    if swift_observations is not None:
+        inventory_fields["swiftSample"] = swift_observations
     return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32],
             "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
             "platformTests": platform_reports[:8], "failedSourceTests": junit_failures(root, source_commit), **dependency_fields, **inventory_fields}
