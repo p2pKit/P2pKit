@@ -43,7 +43,8 @@ public fun main(args: Array<String>) {
                     LabRpcChecks.host(RpcPlatform.jvm(vault), this, config.lan, trust, pins)
                 } else {
                     LabRunningHost.capacity(
-                        RpcCapacityHost.create(RpcPlatform.jvm(vault), this, config.lan, trust, pins),
+                        RpcCapacityHost.create(RpcPlatform.jvm(vault), this, config.lan, trust, pins,
+                            enableExercises = config.values.getValue("schema") == "2"),
                     )
                 }
                 host = running

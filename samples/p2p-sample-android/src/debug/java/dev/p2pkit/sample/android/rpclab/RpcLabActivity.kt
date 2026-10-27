@@ -80,10 +80,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
 
+private class RpcLabThermalStopException : Exception()
+
 /** Compatibility shortcut only: all UI and runtime ownership live in the maintained MainActivity section. */
 public class RpcLabActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val names = RpcLabUsbDeveloperCommand.EXTRA_NAMES
+        if (names.any(intent::hasExtra)) {
+            try {
+                val command = RpcLabUsbDeveloperCommand.parse(names.associateWith { name ->
+                    requireNotNull(intent.getStringExtra(name))
+                })
+                check(RpcLabUsbDeveloperCommands.queue.offer(command))
+            } catch (_: Exception) {
+                setResult(RESULT_CANCELED)
+                finish()
+                return
+            }
+        }
         startActivity(Intent(this, MainActivity::class.java).setAction(SAMPLE_OPEN_RPC_ACTION)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         finish()
@@ -176,7 +191,7 @@ internal class RpcLabController(
                 eventLog.record(RpcLabEventLog.Event.NetworkChanged)
                 runtimeOwner.snapshotFor(ownedToken)?.let { stop(it) }
                 status = "Wi-Fi changed. Start again when an eligible network is available."
-            })
+            }, runtimeRetired = { !closing && !runtimeOwner.occupied && runtimeOwner.failure == null })
         appSwitch = RpcLabAppSwitchWindow(SystemClock::elapsedRealtime, schedule = { delay, block ->
             val handler = Handler(Looper.getMainLooper())
             val task = Runnable(block)
@@ -212,6 +227,7 @@ internal class RpcLabController(
         networkSetup.setForeground(true)
         if (lab != null && !closing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         startLiveObservation()
+        consumeUsbDeveloperCommand()
     }
 
     override fun onPause(owner: LifecycleOwner) {
@@ -388,20 +404,84 @@ internal class RpcLabController(
     }
 
     /** Loading is not approval: the user reviews the exact network and pins, then explicitly presses Start host. */
-    private fun loadMobile() = doAction {
+    private fun loadMobile() = doAction { loadMobileInput() }
+
+    private suspend fun loadMobileInput(command: RpcLabUsbDeveloperCommand? = null) {
         check(lab == null && !runtimeOwner.occupied && mobileConfig == null)
-        val files = AndroidRpcCapacityFiles(applicationContext, usbRunLabel)
-        val config = RpcMobileCapacityConfig.parse(checkNotNull(files.read("inbox.txt")))
-        require(config.hostPlatform == "Android" && config.hostSourceSha == RpcPhoneLab.compiledSource &&
-            config.runLabel == usbRunLabel)
-        networkSetup.loadSession(config.settings)
+        val (files, config) = readMobileInput(usbRunLabel, command)
+        applyMobileInput(files, config)
+    }
+
+    private suspend fun readMobileInput(runLabel: String, command: RpcLabUsbDeveloperCommand? = null) =
+        withContext(Dispatchers.IO) {
+            val files = AndroidRpcCapacityFiles(applicationContext, runLabel)
+            files.requireUnusedRuntimeOutputs()
+            val inbox = checkNotNull(files.read("inbox.txt"))
+            val config = RpcMobileCapacityConfig.parse(inbox)
+            val artifact = androidRpcInstalledArtifact(applicationContext)
+            require(config.hostPlatform == "Android" && config.hostSourceSha == RpcPhoneLab.compiledSource &&
+                config.runLabel == runLabel && config.hostArtifactSha256 == artifact)
+            command?.verify(config, inbox, RpcPhoneLab.compiledSource, artifact)
+            files to config
+        }
+
+    private fun applyMobileInput(
+        files: AndroidRpcCapacityFiles, config: RpcMobileCapacityConfig, replaceRetired: Boolean = false,
+    ) {
+        if (replaceRetired) networkSetup.replaceRetiredSession(config.settings) else networkSetup.loadSession(config.settings)
         port = config.settings.port.toString()
         capacityPins = config.clientPins
         importApproved = false
         mobileConfig = config
         mobileFiles = files
-        status = "Review this USB run's network and 128 pins. " +
+        status = "Review this USB run's network and ${config.clientCount} pins. " +
             "Approval also allows its exact Stop request and pin cleanup."
+    }
+
+    /** Only a source/artifact/inbox-bound Debug command may automate the same visible load/approve/start path. */
+    private fun consumeUsbDeveloperCommand() {
+        val command = RpcLabUsbDeveloperCommands.queue.take() ?: return
+        val existingCleanup = cleanup
+        if (closing && mobileConfig != null && existingCleanup != null) {
+            ui.deferRpcLabUsbCommand(existingCleanup) { executeUsbDeveloperCommand(command) }
+        } else { executeUsbDeveloperCommand(command) }
+    }
+
+    private fun executeUsbDeveloperCommand(command: RpcLabUsbDeveloperCommand) {
+        if (!interactive || busy || closing || runtimeOwner.occupied || runtimeOwner.failure != null) {
+            presentStartProblem("USB start refused: stop and retire the existing role before selecting a new run.")
+            return
+        }
+        busy = true
+        action = ui.launch {
+            var verified = false
+            try {
+                val (files, config) = readMobileInput(command.runLabel, command)
+                val previous = mobileConfig
+                if (previous != null) {
+                    check(previous.runLabel != command.runLabel)
+                    val previousFiles = checkNotNull(mobileFiles)
+                    withContext(Dispatchers.IO) {
+                        previousFiles.requireNoFailureOutput()
+                        check(previous.matchesHealthyClosed(checkNotNull(previousFiles.read("closed.txt"))))
+                    }
+                }
+                check(interactive && !runtimeOwner.occupied)
+                if (previous != null) {
+                    mobileConfig = null
+                    mobileFiles = null
+                    capacityPins = ""
+                    importApproved = false
+                }
+                usbRunLabel = command.runLabel
+                applyMobileInput(files, config, replaceRetired = previous != null)
+                importApproved = true
+                verified = true
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { report(failure) }
+            finally { busy = closing }
+            if (verified && interactive && !closing) start(asHost = true)
+        }
     }
 
     private fun monitorMobile(token: RpcLabRuntimeOwner.Token, owned: RpcLabOwnedRuntime) {
@@ -409,12 +489,16 @@ internal class RpcLabController(
         val monitor = ui.launch(start = CoroutineStart.LAZY) {
             try {
                 withContext(Dispatchers.IO) {
+                    val environment = AndroidRpcPhoneEnvironment(applicationContext)
                     files.publish("ready.txt",
                         owned.lab.mobileReadyRecord(androidRpcInstalledArtifact(applicationContext)))
                     val started = TimeSource.Monotonic.markNow()
                     while (isActive) {
                         check(started.elapsedNow().inWholeSeconds < 2_400)
-                        files.publish("telemetry.txt", owned.lab.mobileTelemetry(androidRpcPhoneProcessStats()))
+                        val observation = environment.sample()
+                        files.publish("telemetry.txt", owned.lab.mobileTelemetry(androidRpcPhoneProcessStats(observation)))
+                        // Persist the actual unsafe thermal reading before retiring the exact owner. This run must fail.
+                        if (observation.requiresThermalStop) throw RpcLabThermalStopException()
                         val request = files.read("stop.txt", optional = true)
                         if (request != null) {
                             check(owned.lab.mobileStopMatches(request))
@@ -427,11 +511,12 @@ internal class RpcLabController(
                 if (lab === owned.lab) stop(runtimeOwner.snapshotFor(token))
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
                 owned.failMobile()
                 eventLog.record(RpcLabEventLog.Event.CapacityControlFailed)
                 // Fixed diagnostic only. The coordinator also rejects missing/stale telemetry or any missing receipt.
-                try { files.publish("failed.txt", "failed=true\nphase=mobile-control\n") }
+                val phase = if (failure is RpcLabThermalStopException) "thermal-stop" else "mobile-control"
+                try { files.publish("failed.txt", "failed=true\nphase=$phase\n") }
                 catch (_: Exception) { status = "USB evidence failed; capacity remains unqualified" }
                 if (lab === owned.lab) stop(runtimeOwner.snapshotFor(token))
             }

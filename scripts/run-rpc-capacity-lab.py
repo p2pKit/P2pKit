@@ -16,16 +16,20 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import selectors
 import stat
+import struct
 import subprocess
 import sys
 import time
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import rpc_capacity_cpu as cpu
+import rpc_capacity_evidence as evidence
 
 LIMIT = 262_144
 AUTHORIZATION = "synthetic-private-network-only"
@@ -147,7 +151,11 @@ def numeric_private(value):
 
 
 def configuration(values: dict[str, str], source: str):
-    need(values.keys() == FIELDS and values["schema"] == "1", "Exact configuration schema required")
+    schema = values.get("schema")
+    expected = FIELDS | ({"clientCount"} if schema == "2" else set())
+    need(values.keys() == expected and schema in ("1", "2"), "Exact configuration schema required")
+    if schema == "2":
+        need(values["clientCount"] in ("128", "256"), "Explicit128 or256 client profile required")
     need(values["role"] in ("host", "client") and values["sourceSha"] == source and
          re.fullmatch(r"[a-f0-9]{40}", source), "Wrong role/source")
     need(re.fullmatch(r"[a-z0-9-]{1,64}", values["runLabel"]), "Invalid non-secret run label")
@@ -179,27 +187,124 @@ def owned_context():
     return state, source
 
 
-def classpath(source: str) -> str:
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        need(key not in result, "Duplicate distribution field")
+        result[key] = value
+    return result
+
+
+def read_distribution_file(path, limit, *, private=False):
+    before = path.lstat()
+    need(stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and
+         0 < before.st_size <= limit and (not private or before.st_uid == os.getuid() and
+         before.st_nlink == 1 and not stat.S_IMODE(before.st_mode) & 0o077),
+         "Distribution entry must remain bounded, regular and retain its admitted owner")
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        need((opened.st_dev, opened.st_ino) == (before.st_dev, before.st_ino), "Distribution lifetime changed")
+        raw = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+    need(len(raw) == before.st_size and (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+         after.st_mode, after.st_uid, after.st_nlink) == (before.st_dev, before.st_ino, before.st_size,
+         before.st_mtime_ns, before.st_mode, before.st_uid, before.st_nlink) and
+         (path.lstat().st_dev, path.lstat().st_ino) == (before.st_dev, before.st_ino),
+         "Distribution changed during its bounded descriptor read")
+    return raw
+
+
+def distribution(source: str):
     directory = ROOT / "samples/p2p-sample-rpc/build/capacity-lab"
     need(directory.is_dir() and not directory.is_symlink(), "Run prepareRpcCapacityLab in the admitted candidate first")
     manifest_file = directory / "manifest.json"
     need(manifest_file.is_file() and not manifest_file.is_symlink() and manifest_file.stat().st_size <= LIMIT,
          "Missing bounded distribution provenance")
-    manifest = json.loads(manifest_file.read_bytes())
-    need(manifest["schema"] == 1 and manifest["sourceSha"] == source and
+    manifest = json.loads(read_distribution_file(manifest_file, LIMIT), object_pairs_hook=unique)
+    need(type(manifest) is dict and set(manifest) in (
+        {"schema", "sourceSha", "scope", "entries"}, {"schema", "sourceSha", "scope", "entries", "macosNative"}) and
+         type(manifest["schema"]) is int and manifest["schema"] == 1 and manifest["sourceSha"] == source and
          manifest["scope"] == "SYNTHETIC_LAB_NOT_PUBLICATION_OR_QUALIFICATION", "Wrong distribution source/scope")
     jars = sorted(path for path in directory.iterdir() if path != manifest_file)
     need(1 <= len(jars) <= 128 and all(path.suffix == ".jar" and path.is_file() and not path.is_symlink()
                                     for path in jars), "Unexpected prepared runtime entry")
-    need(sum(path.stat().st_size for path in jars) <= 256 * 1024 * 1024, "Runtime exceeds bounded distribution size")
-    actual = [{"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in jars]
+    actual, total = [], 0
+    for path in jars:
+        raw = read_distribution_file(path, 256 * 1024 * 1024 - total)
+        total += len(raw)
+        actual.append({"name": path.name, "sha256": hashlib.sha256(raw).hexdigest()})
     need(actual == manifest["entries"], "Prepared runtime bytes/order changed")
-    return os.pathsep.join(str(path) for path in jars)
+    return directory, manifest, os.pathsep.join(str(path) for path in jars)
 
 
-def workload_entrypoint(role, mode):
-    need(role in ("host", "client") and mode in ("steady", "large", "correctness"), "Unknown lab workload/role")
-    if mode == "correctness":
+MAC_MANIFEST_JAR = "p2pkit-macos-tcp-manifest.jar"
+MAC_NATIVE_FILES = ("libp2pkit_lan_socket.dylib", "macos-tcp.properties", MAC_MANIFEST_JAR, "producer.json")
+
+
+def macos_native_binding(source: str, directory, manifest):
+    """Preflight the original private native stage; Java independently verifies it before System.load.
+
+    Only the fixed current-source stage is admissible. No arbitrary native path,
+    extracted library, classpath fallback or guessed multi-interface exemption.
+    """
+    native = manifest.get("macosNative")
+    need(type(native) is dict and set(native) == {"directory", "entries"} and
+         native["directory"] == "library/p2p-transport-lan/build/macos-tcp/" + source,
+         "Mac capacity requires the source-matched scoped native stage")
+    stage = ROOT / native["directory"]
+    for parent in (stage, *stage.parents):
+        info = parent.lstat()
+        need(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and
+             info.st_uid in (0, os.getuid()) and not stat.S_IMODE(info.st_mode) & 0o022,
+             "Native stage ancestry must retain its original protected owner")
+    need({path.name for path in stage.iterdir()} == set(MAC_NATIVE_FILES), "Unexpected native stage entry")
+    snapshots = {}
+    bounds = dict(zip(MAC_NATIVE_FILES, (4_194_304, 4096, 65536, LIMIT)))
+    for name in MAC_NATIVE_FILES:
+        snapshots[name] = read_distribution_file(stage / name, bounds[name], private=True)
+    actual = [{"name": name, "sha256": hashlib.sha256(snapshots[name]).hexdigest()} for name in MAC_NATIVE_FILES]
+    need(actual == native["entries"], "Native stage bytes changed after distribution preparation")
+    properties = parse(snapshots["macos-tcp.properties"])
+    tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, timeout=10).decode().strip()
+    library = snapshots["libp2pkit_lan_socket.dylib"]
+    need(properties == dict(abi="1", platform="macos", arch="arm64", source=source, tree=tree,
+         file="libp2pkit_lan_socket.dylib", bytes=str(len(library)), sha256=actual[0]["sha256"]) and
+         len(library) >= 32 and struct.unpack("<II", library[:8]) == (0xFEEDFACF, 0x0100000C) and
+         struct.unpack("<I", library[12:16])[0] == 6, "Native source/tree/ABI/header differs from the prepared driver")
+    from io import BytesIO
+    with zipfile.ZipFile(BytesIO(snapshots[MAC_MANIFEST_JAR])) as jar:
+        entries = jar.infolist()
+        need(len(entries) == 1 and entries[0].filename == "META-INF/p2pkit/macos-tcp.properties" and
+             entries[0].file_size == len(snapshots["macos-tcp.properties"]) and
+             jar.read(entries[0]) == snapshots["macos-tcp.properties"], "Original classpath manifest is not exact")
+    copied = directory / MAC_MANIFEST_JAR
+    need(read_distribution_file(copied, bounds[MAC_MANIFEST_JAR]) == snapshots[MAC_MANIFEST_JAR],
+         "Copied native manifest JAR differs from its original owner")
+    return {"directory": str(stage), "sourceSha": source, "treeSha": tree, "entries": actual}
+
+
+def native_options(source: str):
+    directory, manifest, _ = distribution(source)
+    if platform.system() != "Darwin":
+        need("macosNative" not in manifest, "Do not mix a Mac native distribution with another platform")
+        return [], None
+    need(platform.machine() == "arm64", "Mac capacity requires the native ARM64 generator")
+    bound = macos_native_binding(source, directory, manifest)
+    return ["-Ddev.p2pkit.lan.macos.nativeDir=" + bound["directory"]], bound
+
+
+def classpath(source: str) -> str:
+    directory, manifest, value = distribution(source)
+    if "macosNative" in manifest or platform.system() == "Darwin":
+        native_options(source)
+    return value
+
+
+def workload_entrypoint(role, mode, schema_version=1):
+    need(role in ("host", "client") and mode in ("steady", "large", "correctness", "churn") and
+         type(schema_version) is int and schema_version in (1, 2), "Unknown lab workload/role/schema")
+    need(mode != "churn" or schema_version == 2, "Churn controls require explicit schema2 configuration")
+    if mode == "correctness" and schema_version == 1:
         return (("dev.p2pkit.sample.rpc.lab.LabHostKt", ["--owner-authorized-correctness-host"]) if role == "host" else
                 ("dev.p2pkit.sample.rpc.lab.LabRpcChecksKt", ["--owner-authorized-correctness-run"]))
     return (("dev.p2pkit.sample.rpc.lab.LabHostKt", ["--owner-authorized-capacity-host"]) if role == "host" else
@@ -216,8 +321,60 @@ def correctness_result(measurement):
             })
 
 
+def capture_capacity_record(report, line, schema_version, role, mode):
+    prefixes = ((b"RPC_CAPACITY_INITIALIZATION_JSON:", "initialization"),
+                (b"RPC_CAPACITY_IDLE_JSON:", "connectedIdle"),
+                (b"RPC_CAPACITY_RESULT_JSON:", "measurement"),
+                (b"RPC_CAPACITY_FINAL_JSON:", "cleanup"))
+    order = (["initialization"] if mode == "steady" else []) + (
+        ["connectedIdle"] if mode == "steady" and schema_version == 2 else []) + ["measurement", "cleanup"]
+    for prefix, field in prefixes:
+        if line.startswith(prefix):
+            need(role == "client" and field in order and field not in report and len(line) <= LIMIT,
+                 "Unexpected, duplicate or oversized capacity result record")
+            prior = [key for key in order if key in report]
+            need(not prior or order.index(field) > order.index(prior[-1]), "Capacity result records are out of order")
+            report[field] = json.loads(line[len(prefix):], object_pairs_hook=evidence.unique)
+            return
+
+
+def completed_client_results(report, values, mode):
+    """A zero JVM exit cannot replace completed source/profile-bound outcomes and owned retirement."""
+    schema, clients = int(values["schema"]), int(values.get("clientCount", "128"))
+    need(report.get("schema") == schema and type(report.get("schema")) is int and report.get("role") == "client" and
+         report.get("mode") == mode and report.get("sourceSha") == values["sourceSha"] and
+         report.get("runLabel") == values["runLabel"], "Launcher source, role or workload mismatch")
+    need((schema == 1 and "clientCount" not in report) or (schema == 2 and
+         type(report.get("clientCount")) is int and report["clientCount"] == clients), "Launcher cohort mismatch")
+    cleanup = report.get("cleanup", {})
+    if not (report.get("exitCode") == 0 and cleanup.get("cleanupVerified") is True and
+            cleanup.get("mechanicalChecksPassed") is True and
+            report.get("measurement", {}).get("status") == "PENDING_RESOURCE_AND_NETWORK_REVIEW"):
+        return False
+    evidence.record_profile(cleanup, {'schema', 'cleanupVerified', 'mechanicalChecksPassed', 'capacityQualified'}, clients)
+    need(cleanup["schema"] == schema and cleanup["capacityQualified"] is False, "Cleanup source profile mismatch")
+    if mode in ("steady", "large"):
+        evidence.measurement(report["measurement"], mode, client_count=clients)
+        need(report["measurement"]["schema"] == schema, "Measurement schema mismatch")
+        if mode == "steady":
+            initialized = evidence.initialization(report.get("initialization"), client_count=clients)
+            need(initialized["schema"] == schema and initialized["status"] == "INITIALIZED_NOT_CAPACITY",
+                 "Fixed initialization did not complete")
+            if schema == 2:
+                idle = evidence.connected_idle(report.get("connectedIdle"), client_count=clients)
+                need(idle["sourceSha"] == values["sourceSha"] and idle["runLabel"] == values["runLabel"],
+                     "Connected-idle source or run mismatch")
+                if idle["status"] != "OBSERVED_CONNECTED_IDLE_NOT_CAPACITY":
+                    return False
+    elif schema == 2:
+        evidence.exercise(report["measurement"], mode, client_count=clients)
+    else:
+        return mode == "correctness" and correctness_result(report.get("measurement"))
+    return True
+
+
 def profile_options(directory: Path, mode: str) -> list[str]:
-    need(mode in ("steady", "large", "correctness"), "Invalid profile workload")
+    need(mode in ("steady", "large", "correctness", "churn"), "Invalid profile workload")
     if mode != "steady":
         return []
     # A short CPU/wait sample inside the original full workload, NOT a shorter
@@ -237,18 +394,23 @@ def execute(directory: Path, role: str, mode: str, source: str, cpu_placement: s
     values = configuration(parse(read_private(directory / "config.txt")), source)
     need(values["role"] == role, "Role mismatch")
     java = Path(os.environ["JAVA_HOME"]) / "bin/java"
-    main, arguments = workload_entrypoint(role, mode)
+    main, arguments = workload_entrypoint(role, mode, int(values["schema"]))
+    scoped_options, scoped_binding = native_options(source)
     # Bounded GC/safepoint observations only: no GC, heap, priority or deadline tuning.
     # Raw runtime logs remain private and are never hosted-artifact inputs.
     trace = directory / "jvm-timing.log"
     need(not trace.exists(), "Fresh JVM timing evidence required")
     argv = [str(java), "-Xms128m", "-Xmx2048m",
             "-Xlog:gc*,safepoint:file=" + str(trace) + ":time,uptimenanos,level,tags:filecount=4,filesize=8M",
-            *profile_options(directory, mode), "-cp", classpath(source), main, *arguments]
+            *profile_options(directory, mode), *scoped_options, "-cp", classpath(source), main, *arguments]
     env = {**os.environ, "RPC_CAPACITY_LAB_CONFIG": str(directory / "config.txt")}
     report = {"schema": 1, "scope": "SYNTHETIC_CAPACITY_NOT_QUALIFICATION", "role": role, "mode": mode,
               "sourceSha": source, "runLabel": values["runLabel"], "status": "FAIL", "capacityQualified": False,
               "launcherSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    if scoped_binding is not None:
+        report["macosNative"] = scoped_binding
+    if values["schema"] == "2":
+        report.update(schema=2, clientCount=int(values["clientCount"]))
     started = time.monotonic()
     try:
         placement = cpu.begin(cpu_placement, role)
@@ -280,12 +442,7 @@ def execute(directory: Path, role: str, mode: str, source: str, cpu_placement: s
                         partial += block
                         while b"\n" in partial:
                             line, partial = partial.split(b"\n", 1)
-                            for prefix, field in ((b"RPC_CAPACITY_RESULT_JSON:", "measurement"),
-                                                  (b"RPC_CAPACITY_FINAL_JSON:", "cleanup"),
-                                                  (b"RPC_CAPACITY_INITIALIZATION_JSON:", "initialization")):
-                                if line.startswith(prefix):
-                                    need(field not in report and len(line) <= LIMIT, "Duplicate/oversized result record")
-                                    report[field] = json.loads(line[len(prefix):])
+                            capture_capacity_record(report, line, int(values["schema"]), role, mode)
                         need(len(partial) <= LIMIT, "Unbounded JVM output line")
                 report["exitCode"] = child.wait(timeout=10)
                 report["elapsedSeconds"] = round(time.monotonic() - started, 3)
@@ -308,12 +465,14 @@ def execute(directory: Path, role: str, mode: str, source: str, cpu_placement: s
                     complete = report["exitCode"] == 0 and parse(read_private(directory / "host-closed.txt")) == {
                         "closed": "true", "fixturesRemoved": "true"}
                 else:
-                    cleanup = report.get("cleanup", {})
-                    complete = (report["exitCode"] == 0 and cleanup.get("cleanupVerified") is True and
-                                cleanup.get("mechanicalChecksPassed") is True and
-                                report.get("measurement", {}).get("status") == "PENDING_RESOURCE_AND_NETWORK_REVIEW")
-                    if mode == "correctness":
-                        complete = complete and correctness_result(report.get("measurement"))
+                    complete = completed_client_results(report, values, mode)
+                    if complete and values["schema"] == "2" and mode == "steady":
+                        idle = report["connectedIdle"]
+                        ready = parse(read_private(directory / "host-ready.txt"))
+                        need(idle["driverArtifactSha256"] ==
+                             hashlib.sha256(read_private(directory / "artifact-manifest.txt")).hexdigest() and
+                             idle["hostArtifactSha256"] == ready.get("hostArtifactSha256", ready.get("artifactSha256")),
+                             "Connected-idle bytes differ from the prepared driver or admitted host artifact")
                 if complete:
                     report["status"] = "PENDING_RESOURCE_AND_NETWORK_REVIEW"
                 return 0 if complete else 1
@@ -331,7 +490,7 @@ def main():
     parser.add_argument("operation", choices=("prepare", "run", "import-control", "stop"))
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--role", choices=("host", "client"))
-    parser.add_argument("--mode", choices=("steady", "large", "correctness"), default="steady")
+    parser.add_argument("--mode", choices=("steady", "large", "correctness", "churn"), default="steady")
     parser.add_argument("--cpu-placement", choices=cpu.POLICIES, default=cpu.INHERITED,
                         help="Explicit same-host resource experiment; never a production dispatcher override")
     parser.add_argument("--settings", type=Path, help="Private control-format config for prepare; sourceSha must match")
@@ -358,9 +517,12 @@ def main():
     data = sys.stdin.buffer.read(LIMIT + 1)
     need(len(data) <= LIMIT, "Control transfer exceeds bound")
     if args.name == "client-pins.txt":
+        values = configuration(parse(read_private(directory / "config.txt")), source)
+        count = int(values.get("clientCount", "128"))
         pins = data.decode("ascii").splitlines()
-        need(len(pins) == len(set(pins)) == 128 and
-             all(re.fullmatch(r"p2f1-[a-z2-7]{52}", pin) for pin in pins), "Exactly 128 distinct public test pins required")
+        need(len(pins) == len(set(pins)) == count and
+             all(re.fullmatch(r"p2f1-[a-z2-7]{52}", pin) for pin in pins),
+             "Exactly the configured cohort of distinct public test pins is required")
     else:
         parse(data)
     write_private(directory / args.name, data, replace=args.name == "host-telemetry.txt")

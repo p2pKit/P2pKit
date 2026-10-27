@@ -19,9 +19,11 @@ internal const val INITIALIZATION_TIMEOUT_MILLIS = 120_000L
 internal suspend fun initializeCapacityPaths(
     call: suspend (Int) -> Unit,
     nowNanos: () -> Long = System::nanoTime,
+    clientCount: Int = RpcCapacityContract.CLIENTS,
 ) = withTimeout(INITIALIZATION_TIMEOUT_MILLIS) {
+    capacityProfileLimits(clientCount)
     coroutineScope {
-        repeat(RpcCapacityContract.CLIENTS) { index ->
+        repeat(clientCount) { index ->
             launch {
                 repeat(INITIALIZATION_CALLS_PER_CLIENT) {
                     val started = nowNanos()

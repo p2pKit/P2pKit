@@ -15,38 +15,85 @@ evidence = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(evidence)
 
 
-def measurement(mode='steady'):
+def measurement(mode='steady', clients=128, schema=1):
     fields = evidence.STEADY_FIELDS if mode == 'steady' else evidence.LARGE_FIELDS
     values = dict.fromkeys(fields, 0)
     if mode == 'steady':
-        values.update(clients=128, callsPerSecondPerClient=10, expected=2304000, dispatched=2304000,
-                      completed=2304000, encodedRequestBytes=1024, encodedResponseBytes=1024,
+        expected = clients * 18000
+        values.update(clients=clients, callsPerSecondPerClient=10, expected=expected, dispatched=expected,
+                      completed=expected, encodedRequestBytes=1024, encodedResponseBytes=1024,
                       requiredDurationNanos=1800000000000, actualSchedulingNanos=1800000000000,
-                      hostAcceptedDelta=2304000, hostCompletedDelta=2304000, hostSamples=1800)
+                      hostAcceptedDelta=expected, hostCompletedDelta=expected, hostSamples=1800)
     else:
         values.update(expected=20, dispatched=20, completed=20, concurrency=2, encodedRequestBytes=1048576,
                       encodedResponseBytes=1048576, actualDurationNanos=1000000000)
-    result = {'schema': 1, 'mode': mode, 'status': 'PENDING_RESOURCE_AND_NETWORK_REVIEW',
+    result = {'schema': schema, 'mode': mode, 'status': 'PENDING_RESOURCE_AND_NETWORK_REVIEW',
               'capacityQualified': False, 'measurements': values, 'cleanup': 'AWAIT_FINAL_RECORD',
-              'throughputResponsesPerSecond': 1280.0 if mode == 'steady' else 20.0,
+              'throughputResponsesPerSecond': clients * 10.0 if mode == 'steady' else 20.0,
               'latencyBucketUpperMs': {'p50': 2, 'p95': 5, 'p99': 8, 'max': 10},
               'latencyOverflowBucketMs': 30001, 'rpcFailuresByKind': dict.fromkeys(evidence.FAILURE_KINDS, 0)}
     if mode == 'steady':
         result['schedulingDelayBucketUpperMs'] = {'p50': 1, 'p95': 2, 'p99': 2, 'max': 10}
+    if schema == 2:
+        result['clientCount'] = clients
     return result
 
 
-def initialization():
+def initialization(clients=128, schema=1):
     m = dict.fromkeys(evidence.INITIALIZATION_FIELDS, 0)
-    m.update(clients=128, callsPerClient=600, minimumCallPeriodNanos=100000000, callPhaseTimeoutMillis=120000,
-             encodedRequestBytes=1024, encodedResponseBytes=1024, expected=76800, dispatched=76800,
-             completed=76800, actualDurationNanos=61000000000, driverCompilationMillisAfter=2000)
+    expected = clients * 600
+    m.update(clients=clients, callsPerClient=600, minimumCallPeriodNanos=100000000, callPhaseTimeoutMillis=120000,
+             encodedRequestBytes=1024, encodedResponseBytes=1024, expected=expected, dispatched=expected,
+             completed=expected, actualDurationNanos=61000000000, driverCompilationMillisAfter=2000)
     h = dict.fromkeys(evidence.INITIALIZATION_HOST_FIELDS, 0)
-    h.update(acceptedAfter=76800, completedAfter=76800, connectedAfter=128, uptimeMillisDelta=61000)
-    return dict(schema=1, scope='FIXED_RPC_PATH_INITIALIZATION_NOT_CAPACITY_OR_COLD_START_QUALIFICATION',
+    h.update(acceptedAfter=expected, completedAfter=expected, connectedAfter=clients, uptimeMillisDelta=61000)
+    result = dict(schema=schema, scope='FIXED_RPC_PATH_INITIALIZATION_NOT_CAPACITY_OR_COLD_START_QUALIFICATION',
                 status='INITIALIZED_NOT_CAPACITY', capacityQualified=False, measurements=m, hostObservation=h,
                 latencyBucketUpperMs={'p50': 5, 'p95': 20, 'p99': 200, 'max': 2000},
                 rpcFailuresByKind=dict.fromkeys(evidence.FAILURE_KINDS, 0))
+    if schema == 2:
+        result['clientCount'] = clients
+    return result
+
+
+def exercise(mode='correctness', clients=256):
+    cases = evidence.CORRECTNESS_CASES if mode == 'correctness' else evidence.CHURN_CASES
+    expected_echo = clients * 3 + 5 if mode == 'correctness' else clients * 5
+    values = dict.fromkeys(evidence.CONTROL_FIELDS, 0)
+    values.update(clients=clients, expectedEchoResponses=expected_echo, echoResponses=expected_echo,
+                  actualDurationNanos=20000000000, hostConnectionsBefore=clients, hostConnectionsAfter=clients)
+    if mode == 'correctness':
+        values.update(concurrentEchoResponses=clients * 2, applicationErrors=1, authorizationRefusals=1,
+            sentDeadlineFailures=1, sentCancellations=1, disconnectUnknownOutcomes=1, holdEntered=3, holdRetired=3,
+            slowHandlerResponses=16, fairnessEchoResponses=1, disconnects=1, reconnects=1)
+    else:
+        values.update(churnRounds=5, disconnects=clients * 5, reconnects=clients * 5)
+    return dict(schema=2, clientCount=clients, mode=mode, scope='REAL_AUTHENTICATED_RPC_CONTROLS_NOT_CAPACITY',
+                status='PENDING_RESOURCE_AND_NETWORK_REVIEW', capacityQualified=False,
+                expectedCases=list(cases), passedCases=list(cases), failureCase=None, measurements=values,
+                trueSlowConsumerQualified=False, cleanup='AWAIT_FINAL_RECORD')
+
+
+def connected_idle(clients=256):
+    rows = []
+    for index in range(7):
+        row = dict.fromkeys(evidence.IDLE_SAMPLE_FIELDS, 0)
+        row.update(uptimeMillis=10000 + index * 5000, cpuNanos=1000000 + index * 1000000,
+                   residentBytes=32 * 1048576, nativeThreads=24, connected=clients,
+                   accepted=clients * 600, completed=clients * 600, driverElapsedNanos=index * 5000000000,
+                   driverCpuNanos=2000000 + index * 500000)
+        rows.append(row)
+    m = dict.fromkeys(evidence.IDLE_FIELDS, 0)
+    m.update(clients=clients, sampleCount=7, actualDurationNanos=40000000000, actualSettleNanos=10000000000,
+             hostUptimeDeltaMillis=30000, hostCpuDeltaNanos=6000000, driverElapsedNanos=30000000000,
+             driverCpuDeltaNanos=3000000, sampledMinHostRssBytes=32 * 1048576,
+             sampledMaxHostRssBytes=32 * 1048576, sampledMinHostThreads=24, sampledMaxHostThreads=24,
+             hostConnectionsBefore=clients, hostConnectionsAfter=clients)
+    return dict(schema=2, clientCount=clients, sourceSha='a' * 40, runLabel='idle-control', hostPlatform='Ios',
+                hostArtifactSha256='b' * 64, driverArtifactSha256='c' * 64,
+                scope='CONNECTED_IDLE_RESOURCE_OBSERVATION_NOT_CAPACITY', status='OBSERVED_CONNECTED_IDLE_NOT_CAPACITY',
+                capacityQualified=False, settleMillis=10000, requiredHostIdleMillis=30000, failureStage=None,
+                measurements=m, samples=rows)
 
 
 def profile():
@@ -61,6 +108,199 @@ def profile():
 
 
 class EvidenceTest(unittest.TestCase):
+    def test_connected_idle_is_source_bound_and_separate_from_initialization_and_steady(self):
+        for clients in (128, 256):
+            value = connected_idle(clients)
+            self.assertEqual(value, evidence.connected_idle(value, client_count=clients))
+            self.assertFalse(value['capacityQualified'])
+            with self.assertRaises(ValueError):
+                evidence.initialization(value, client_count=clients)
+            with self.assertRaises(ValueError):
+                evidence.measurement(value, 'steady', client_count=clients)
+            with self.assertRaises(ValueError):
+                evidence.connected_idle(value, client_count=384 - clients)
+
+    def test_connected_idle_rejects_missing_binding_noncanonical_counts_and_private_fields(self):
+        for path, changed in ((('schema',), 1), (('clientCount',), True), (('clientCount',), '256'),
+                              (('capacityQualified',), True), (('scope',), 'CAPACITY'), (('private',), 'do-not-export'),
+                              (('hostPlatform',), 'iphone'), (('sourceSha',), 'current'), (('runLabel',), 'local user'),
+                              (('hostArtifactSha256',), 'b' * 63), (('driverArtifactSha256',), 'c' * 65),
+                              (('settleMillis',), 0), (('requiredHostIdleMillis',), 29000),
+                              (('measurements', 'hostCpuDeltaNanos'), True),
+                              (('measurements', 'private'), 0), (('measurements', 'sampleCount'), 6)):
+            value = connected_idle()
+            target = value
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = changed
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                evidence.connected_idle(value, client_count=256)
+        for field in ('sourceSha', 'hostArtifactSha256', 'driverArtifactSha256', 'samples'):
+            value = connected_idle()
+            del value[field]
+            with self.assertRaises(ValueError):
+                evidence.connected_idle(value, client_count=256)
+
+    def test_connected_idle_requires_full_cohort_and_no_intervening_work_or_state_change(self):
+        for field, changed in (('connected', 255), ('running', 1), ('queued', 1), ('accepted', 153601),
+                               ('completed', 153601), ('refused', 1), ('duplicates', 1), ('droppedNotifications', 1),
+                               ('protocolFailures', 1), ('connectionFailures', 1), ('nativeThreads', 0),
+                               ('residentBytes', 0), ('private', 0)):
+            value = connected_idle()
+            value['samples'][3][field] = changed
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                evidence.connected_idle(value, client_count=256)
+        for field in ('connectionChanges', 'invalidHostSamples'):
+            value = connected_idle()
+            value['measurements'][field] = 1
+            with self.assertRaises(ValueError):
+                evidence.connected_idle(value, client_count=256)
+
+    def test_idle_duration_cannot_be_fabricated_from_driver_time_or_uncrossbound_summaries(self):
+        for field, changed in (('hostUptimeDeltaMillis', 29999), ('hostCpuDeltaNanos', 6000001),
+                               ('driverCpuDeltaNanos', 2999999), ('sampledMaxHostRssBytes', 32 * 1048576 + 1),
+                               ('sampledMinHostThreads', 23), ('actualSettleNanos', 9999999999),
+                               ('actualDurationNanos', 39999999999), ('hostAcceptedDelta', 1)):
+            value = connected_idle()
+            value['measurements'][field] = changed
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                evidence.connected_idle(value, client_count=256)
+        value = connected_idle()
+        for index, row in enumerate(value['samples']):
+            row['uptimeMillis'] = 10000 + index * 4000
+        value['measurements']['hostUptimeDeltaMillis'] = 24000
+        with self.assertRaises(ValueError):
+            evidence.connected_idle(value, client_count=256)
+        value = connected_idle()
+        value['samples'] = [value['samples'][0], value['samples'][-1]]
+        value['samples'][1]['driverElapsedNanos'] = 5000000000
+        value['measurements'].update(sampleCount=2, driverElapsedNanos=5000000000, actualDurationNanos=15000000000)
+        with self.assertRaises(ValueError):
+            evidence.connected_idle(value, client_count=256)
+
+    def test_idle_counter_regression_remains_exportable_failed_evidence_not_zero_clamping(self):
+        value = connected_idle()
+        value.update(status='FAIL', failureStage='observe')
+        value['samples'] = value['samples'][:2]
+        value['samples'][1]['cpuNanos'] = 900000
+        value['measurements'].update(sampleCount=2, hostUptimeDeltaMillis=5000, hostCpuDeltaNanos=-100000,
+            driverElapsedNanos=5000000000, driverCpuDeltaNanos=500000, actualDurationNanos=15000000000,
+            invalidHostSamples=1)
+        self.assertEqual(value, evidence.connected_idle(value, client_count=256))
+        value.update(status='OBSERVED_CONNECTED_IDLE_NOT_CAPACITY', failureStage=None)
+        with self.assertRaises(ValueError):
+            evidence.connected_idle(value, client_count=256)
+
+    def test_host_thirty_seconds_with_only_twenty_five_seconds_of_registered_observation_cannot_pass(self):
+        value = connected_idle()
+        value['samples'] = value['samples'][:6]
+        for index, row in enumerate(value['samples']):
+            row['uptimeMillis'] = 10000 + index * 6000
+        value['measurements'].update(sampleCount=6, hostUptimeDeltaMillis=30000, driverElapsedNanos=25000000000,
+                                     actualDurationNanos=35000000000, hostCpuDeltaNanos=5000000,
+                                     driverCpuDeltaNanos=2500000)
+        with self.assertRaises(ValueError):
+            evidence.connected_idle(value, client_count=256)
+        # Retain the actual shorter record as failure; do not erase or pretend that observation took 30 seconds.
+        value.update(status='FAIL', failureStage='validation')
+        self.assertEqual(value, evidence.connected_idle(value, client_count=256))
+
+    def test_missing_idle_telemetry_stays_a_failed_empty_sample_set(self):
+        value = connected_idle()
+        value.update(status='FAIL', failureStage='baseline', samples=[])
+        value['measurements'] = dict.fromkeys(evidence.IDLE_FIELDS, 0)
+        value['measurements'].update(clients=256, actualSettleNanos=10000000000, actualDurationNanos=15000000000)
+        self.assertEqual(value, evidence.connected_idle(value, client_count=256))
+        value['failureStage'] = None
+        with self.assertRaises(ValueError):
+            evidence.connected_idle(value, client_count=256)
+
+    def test_real_control_rosters_and_exact_outcomes_remain_distinct_from_steady_capacity(self):
+        for clients in (128, 256):
+            for mode in ('correctness', 'churn'):
+                value = exercise(mode, clients)
+                self.assertEqual(value, evidence.exercise(value, mode, client_count=clients))
+                self.assertFalse(value['capacityQualified'])
+                self.assertFalse(value['trueSlowConsumerQualified'])
+                with self.assertRaises(ValueError):
+                    evidence.measurement(value, 'steady', client_count=clients)
+
+    def test_control_success_requires_full_cohort_and_every_exact_typed_outcome(self):
+        for mode in ('correctness', 'churn'):
+            original = exercise(mode)
+            checked = ('echoResponses', 'hostConnectionsBefore', 'hostConnectionsAfter')
+            if mode == 'correctness':
+                checked += ('concurrentEchoResponses', 'applicationErrors', 'authorizationRefusals',
+                    'sentDeadlineFailures', 'sentCancellations', 'disconnectUnknownOutcomes', 'holdEntered',
+                    'holdRetired', 'slowHandlerResponses', 'fairnessEchoResponses', 'disconnects', 'reconnects')
+            else:
+                checked += ('churnRounds', 'disconnects', 'reconnects')
+            for field in checked:
+                value = copy.deepcopy(original)
+                value['measurements'][field] -= 1
+                with self.subTest(mode=mode, field=field), self.assertRaises(ValueError):
+                    evidence.exercise(value, mode, client_count=256)
+            for changed in ({'passedCases': original['passedCases'][:-1]}, {'failureCase': original['expectedCases'][0]},
+                            {'expectedCases': original['expectedCases'][:-1]}, {'trueSlowConsumerQualified': True},
+                            {'capacityQualified': True}, {'clientCount': '256'}, {'private': 'do-not-export'}):
+                with self.assertRaises(ValueError):
+                    evidence.exercise(original | changed, mode, client_count=256)
+
+    def test_failed_controls_preserve_partial_records_without_fake_passes_or_reordered_case_lists(self):
+        value = exercise()
+        value.update(status='FAIL', passedCases=value['passedCases'][:4], failureCase='sent-deadline')
+        value['measurements'].update(sentDeadlineFailures=0, sentCancellations=0, disconnectUnknownOutcomes=0,
+            holdEntered=1, holdRetired=1, slowHandlerResponses=0, fairnessEchoResponses=0,
+            disconnects=0, reconnects=0, hostConnectionsAfter=0)
+        self.assertEqual(value, evidence.exercise(value, 'correctness', client_count=256))
+        for changed in ({'passedCases': ['sent-deadline']}, {'failureCase': 'raw-local-message'},
+                        {'schema': 1}, {'clientCount': True}):
+            with self.assertRaises(ValueError):
+                evidence.exercise(value | changed, 'correctness', client_count=256)
+
+    def test_schema2_requires_explicit_matching_integer_cohort_and_accounts_every_call(self):
+        for clients in (128, 256):
+            for mode in ('steady', 'large'):
+                value = measurement(mode, clients, schema=2)
+                self.assertEqual(value, evidence.measurement(value, mode, client_count=clients))
+                with self.assertRaises(ValueError):
+                    evidence.measurement(value, mode, client_count=384 - clients)
+            initial = initialization(clients, schema=2)
+            self.assertEqual(initial, evidence.initialization(initial, client_count=clients))
+            self.assertEqual(initial['measurements']['expected'], clients * 600)
+            self.assertEqual(measurement(clients=clients, schema=2)['measurements']['expected'], clients * 18000)
+
+    def test_legacy_schema_cannot_be_used_to_admit256_or_infer_a_new_profile(self):
+        for mode in ('steady', 'large'):
+            with self.assertRaises(ValueError):
+                evidence.measurement(measurement(mode, clients=256), mode, client_count=256)
+            with self.assertRaises(ValueError):
+                evidence.measurement(measurement(mode, clients=256, schema=2), mode)
+        with self.assertRaises(ValueError):
+            evidence.initialization(initialization(256), client_count=256)
+        with self.assertRaises(ValueError):
+            evidence.initialization(initialization(256, schema=2))
+
+    def test_schema2_profile_cannot_use_strings_boolean_counts_extra_fields_or_incomplete_workload(self):
+        for bad in ('256', True, 128, 512, 256.0):
+            value = measurement(clients=256, schema=2)
+            value['clientCount'] = bad
+            with self.assertRaises(ValueError):
+                evidence.measurement(value, 'steady', client_count=256)
+        for path, changed in ((('measurements', 'expected'), 2304000),
+                              (('measurements', 'clients'), 128), (('schema',), 1),
+                              (('private',), 'no-export'), (('schema',), True)):
+            value = measurement(clients=256, schema=2)
+            target = value
+            for part in path[:-1]:
+                target = target[part]
+            target[path[-1]] = changed
+            with self.assertRaises(ValueError):
+                evidence.measurement(value, 'steady', client_count=256)
+        for clients in (True, '256', 512, 127):
+            with self.assertRaises(ValueError):
+                evidence.initialization(initialization(256, schema=2), client_count=clients)
+
     def test_profile_counts_are_source_bound_and_cannot_be_substituted_for_capacity(self):
         value = profile()
         self.assertEqual(evidence.runtime_profile(value, 'client', 'a' * 40, 'b' * 64), value)

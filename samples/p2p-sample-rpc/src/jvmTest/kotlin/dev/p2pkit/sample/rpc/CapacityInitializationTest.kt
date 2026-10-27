@@ -24,6 +24,22 @@ class CapacityInitializationTest {
     }
 
     @Test
+    fun optIn256CompletesEveryCallAtTheSamePeriodAndDeadline() = runTest {
+        val calls = IntArray(256)
+        initializeCapacityPaths(clientCount = 256, call = { calls[it]++ },
+            nowNanos = { testScheduler.currentTime * 1_000_000 })
+        assertEquals(List(256) { 600 }, calls.toList())
+        assertEquals(153_600, calls.sum())
+        assertEquals(60_000L, testScheduler.currentTime)
+        assertEquals(120_000L, INITIALIZATION_TIMEOUT_MILLIS)
+        for (clients in listOf(0, 127, 129, 257, 512)) {
+            assertFailsWith<IllegalArgumentException> {
+                initializeCapacityPaths(clientCount = clients, call = { error("Must not admit a call") })
+            }
+        }
+    }
+
+    @Test
     fun slowInitializationCallsAreAwaitedWithoutDroppedSlotsOrOverlappingCallsPerClient() = runTest {
         val active = BooleanArray(128)
         val calls = IntArray(128)

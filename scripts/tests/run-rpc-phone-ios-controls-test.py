@@ -241,7 +241,7 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([77, 7], [len(methods) for methods in actual.values()])
+        self.assertEqual([88, 7], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
@@ -314,6 +314,64 @@ class PhoneResultControls(unittest.TestCase):
                       actual["p2pkit-rpc-phone-uitests"])
         self.assertIn("RpcPhonePresentationTests/testWifiRefreshShowsItsReasonWithoutConfirmingOrStartingARole()",
                       actual["p2pkit-rpc-phone-uitests"])
+
+    def test_reviewed_environment_commands_and_two_new_owner_controls_are_all_required(self):
+        expected = phone.inventory(ROOT)["p2pkit-rpc-phone-tests"]
+        owner = {name for name in expected if name.startswith("RpcPhoneRunOwnerTests/")}
+        self.assertEqual(len(owner), 79)
+        self.assertTrue({"RpcPhoneRunOwnerTests/" + name + "()" for name in (
+            "testUsedOrInterruptedRuntimeOutputsAreRefusedBeforeReusingAUsbRun",
+            "testDebugCampaignAndNextInputsRequireSealsAndCannotBeReplayedIntoANewFileOwner",
+        )} <= owner)
+        environment = {name for name in expected if name.startswith("RpcPhoneEnvironmentSamplerTests/")}
+        self.assertEqual(environment, {"RpcPhoneEnvironmentSamplerTests/" + name + "()" for name in (
+            "testAcquiringAndRetiringBatteryMonitoringIsIdempotentAndRestoresItsPriorSetting",
+            "testUnknownBatteryLevelNeverBecomesAnInventedZeroOrAnEnergyMeasurement",
+            "testSeriousAndCriticalThermalObservationsAbortTheCampaign",
+        )})
+        commands = {name for name in expected if name.startswith("RpcPhoneUsbDeveloperCommandTests/")}
+        self.assertEqual(commands, {"RpcPhoneUsbDeveloperCommandTests/" + name + "()" for name in (
+            "testInitialDeveloperPrepareRequiresTheExactSourceArtifactCountAndNewSafeLabel",
+            "testExact256SourceArtifactInboxBindingVerifiesWithoutCreatingAnOwnerOrTrustImport",
+            "testChangedSourceArtifactCapacityAndInboxCannotAuthorizeStart",
+            "testMalformedDuplicateUnexpectedNonAsciiAndUnsafeLabelsCannotBecomeCommands",
+            "testNextRunIsBoundToPreviousInboxAndCannotReuseTheSlotOrRequestUnsupportedCapacity",
+            "testNextRunRequiresCompleteMatchingHealthyStopReceiptRatherThanOnlyAnExistingFile",
+        )})
+
+    def test_each_new_class_missing_failed_skipped_or_duplicated_case_refuses_the_actual_result(self):
+        expected = phone.inventory(ROOT)
+        for prefix in ("RpcPhoneEnvironmentSamplerTests/", "RpcPhoneUsbDeveloperCommandTests/"):
+            for mutation in ("missing", "failed", "skipped", "duplicate"):
+                with self.subTest(prefix=prefix, mutation=mutation):
+                    objects = self.objects()
+                    methods = objects[0]["summaries"][0]["tests"]
+                    index = next(index for index, case in enumerate(methods)
+                                 if case["identifier"]["_value"].startswith(prefix))
+                    if mutation == "missing":
+                        methods.pop(index)
+                    elif mutation == "duplicate":
+                        methods.append(copy.deepcopy(methods[index]))
+                    else:
+                        methods[index]["testStatus"]["_value"] = "Failure" if mutation == "failed" else "Skipped"
+                    with self.assertRaisesRegex(RuntimeError, "Missing/duplicate/failed/skipped phone XCTest"):
+                        phone.assess_xctest(objects, expected)
+
+    def test_source_inventory_refuses_unreviewed_new_class_count_name_or_duplicate_methods(self):
+        original = Path.read_text
+        for relative, owner, _ in phone.TARGETS["p2pkit-rpc-phone-tests"][1:]:
+            path = ROOT / "samples/p2p-sample-rpc/phone-ios" / relative
+            source = original(path)
+            first = source[source.index("func test") + len("func "):].split("(", 1)[0]
+            for mutation in (source.replace(owner + ": XCTestCase", "Unreviewed: XCTestCase"),
+                             source.replace("func " + first, "func unreviewed"),
+                             source + "\nfunc " + first + "() {}\n",
+                             source + "\nfunc testUnreviewedAdded() {}\n"):
+                def read(item, *args, **kwargs):
+                    return mutation if item == path else original(item, *args, **kwargs)
+                with self.subTest(path=relative, mutation=mutation[:40]), patch.object(Path, "read_text", read):
+                    with self.assertRaises(RuntimeError):
+                        phone.inventory(ROOT)
 
     def test_framework_preparation_is_a_bounded_current_source_native_producer(self):
         receipt = Path("/synthetic/owned/framework.json")

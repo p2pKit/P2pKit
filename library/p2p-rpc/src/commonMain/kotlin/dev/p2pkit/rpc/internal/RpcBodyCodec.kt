@@ -38,34 +38,38 @@ internal object RpcBodyCodec {
     ): OwnedBytes {
         val lease = reservation ?: budget.tryReserve(encodingAllowance(limit))
             ?: throw RpcFailure(RpcFailureKind.Overloaded, RpcFailurePhase.Encoding)
-        val output = Buffer()
-        val raw = object : RawSink {
-            override fun write(source: Buffer, byteCount: Long) {
-                if (byteCount < 0 || byteCount > limit.toLong() - output.size) invalid(RpcFailurePhase.Encoding)
-                output.write(source, byteCount)
-            }
-            override fun flush() = Unit
-            override fun close() = Unit
-        }
-        val sink = raw.buffered()
+        var transferred = false
         return try {
-            json.encodeToSink(serializer, value, sink)
-            sink.flush()
-            val bytes = output.readByteArray()
-            JsonPreflight(bytes.decodeToString(throwOnInvalidSequence = true)).validate()
-            lease.shrinkTo(bytes.size.toLong() + 256)
-            OwnedBytes.take(bytes, lease)
+            val output = Buffer()
+            val raw = object : RawSink {
+                override fun write(source: Buffer, byteCount: Long) {
+                    if (byteCount < 0 || byteCount > limit.toLong() - output.size) invalid(RpcFailurePhase.Encoding)
+                    output.write(source, byteCount)
+                }
+                override fun flush() = Unit
+                override fun close() = Unit
+            }
+            val sink = raw.buffered()
+            try {
+                json.encodeToSink(serializer, value, sink)
+                sink.flush()
+                val bytes = output.readByteArray()
+                JsonPreflight(bytes.decodeToString(throwOnInvalidSequence = true)).validate()
+                lease.shrinkTo(bytes.size.toLong() + 256)
+                OwnedBytes.take(bytes, lease).also { transferred = true }
+            } finally {
+                // A failed serializer never gains a later chance to enqueue its partial output.
+                runCatching { sink.close() }
+                output.clear()
+            }
         } catch (cancelled: CancellationException) {
-            lease.release()
             throw cancelled
         } catch (failure: Exception) {
-            lease.release()
             if (failure is RpcFailure) throw RpcFailure(failure.kind, RpcFailurePhase.Encoding)
             invalid(RpcFailurePhase.Encoding)
         } finally {
-            // A failed serializer never gains a later chance to enqueue its partial output.
-            runCatching { sink.close() }
-            output.clear()
+            // Errors propagate unchanged too; only the successfully returned body owns this lease.
+            if (!transferred) lease.release()
         }
     }
 

@@ -19,9 +19,94 @@ spec = importlib.util.spec_from_file_location("capacity_lab", ROOT / "scripts/ru
 lab = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lab)
 SOURCE = "a" * 40
+fixture_spec = importlib.util.spec_from_file_location("capacity_numeric_fixtures",
+    ROOT / "scripts/tests/rpc-capacity-evidence-test.py")
+fixtures = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(fixtures)
 
 
 class LabControls(unittest.TestCase):
+    def result(self, mode='steady', schema=2, clients=256):
+        values = self.settings() | dict(schema=str(schema))
+        if schema == 2:
+            values['clientCount'] = str(clients)
+        report = dict(schema=schema, role='client', mode=mode, sourceSha=SOURCE, runLabel=values['runLabel'], exitCode=0)
+        if schema == 2:
+            report['clientCount'] = clients
+        if mode == 'steady':
+            report['initialization'] = fixtures.initialization(clients, schema)
+            if schema == 2:
+                report['connectedIdle'] = fixtures.connected_idle(clients) | dict(runLabel=values['runLabel'])
+        if mode in ('steady', 'large'):
+            report['measurement'] = fixtures.measurement(mode, clients, schema)
+        elif schema == 2:
+            report['measurement'] = fixtures.exercise(mode, clients)
+        else:
+            report['measurement'] = dict(schema=1, mode='correctness', scope='REAL_SOCKET_CORRECTNESS_NOT_CAPACITY',
+                status='PENDING_RESOURCE_AND_NETWORK_REVIEW', capacityQualified=False,
+                expectedCases=6, passedCases=list(lab.CORRECTNESS_CASES))
+        report['cleanup'] = dict(schema=schema, cleanupVerified=True, mechanicalChecksPassed=True, capacityQualified=False)
+        if schema == 2:
+            report['cleanup']['clientCount'] = clients
+        return report, values
+
+    def test_completed_workloads_require_exact_results_and_preserve_schema1(self):
+        for schema, clients, modes in ((1, 128, ('steady', 'large', 'correctness')),
+                                      (2, 128, ('steady', 'large', 'correctness', 'churn')),
+                                      (2, 256, ('steady', 'large', 'correctness', 'churn'))):
+            for mode in modes:
+                report, values = self.result(mode, schema, clients)
+                self.assertTrue(lab.completed_client_results(report, values, mode))
+                self.assertFalse(report['cleanup']['capacityQualified'])
+                report['exitCode'] = 1
+                self.assertFalse(lab.completed_client_results(report, values, mode))
+                report['exitCode'] = 0
+                report['cleanup']['cleanupVerified'] = False
+                self.assertFalse(lab.completed_client_results(report, values, mode))
+
+    def test_successful_steady_exit_does_not_replace_missing_failed_stale_or_partial_idle(self):
+        import copy
+        original, values = self.result()
+        for path, changed in ((('connectedIdle',), None), (('connectedIdle', 'sourceSha'), 'b' * 40),
+                              (('connectedIdle', 'runLabel'), 'another-run'), (('connectedIdle', 'clientCount'), 128),
+                              (('connectedIdle', 'measurements', 'connectionChanges'), 1),
+                              (('initialization',), None), (('initialization', 'status'), 'FAIL'),
+                              (('cleanup', 'clientCount'), 128), (('cleanup', 'capacityQualified'), True),
+                              (('sourceSha',), 'b' * 40), (('clientCount',), True)):
+            report = copy.deepcopy(original)
+            target = report
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = changed
+            with self.subTest(path=path), self.assertRaises((ValueError, RuntimeError)):
+                lab.completed_client_results(report, values, 'steady')
+        report = copy.deepcopy(original)
+        report['connectedIdle'].update(status='FAIL', failureStage='validation')
+        self.assertFalse(lab.completed_client_results(report, values, 'steady'))
+
+    def test_stream_capture_rejects_duplicate_private_keys_out_of_order_and_wrong_scope(self):
+        report = {}
+        for prefix in ('RPC_CAPACITY_INITIALIZATION_JSON:', 'RPC_CAPACITY_IDLE_JSON:',
+                       'RPC_CAPACITY_RESULT_JSON:', 'RPC_CAPACITY_FINAL_JSON:'):
+            lab.capture_capacity_record(report, (prefix + '{}').encode(), 2, 'client', 'steady')
+        self.assertEqual(list(report), ['initialization', 'connectedIdle', 'measurement', 'cleanup'])
+        with self.assertRaises(RuntimeError):
+            lab.capture_capacity_record(report, b'RPC_CAPACITY_FINAL_JSON:{}', 2, 'client', 'steady')
+        for body in (b'{"schema":2,"schema":1}', b'{"measurements":{"clients":256,"clients":128}}'):
+            with self.assertRaises(ValueError):
+                lab.capture_capacity_record({}, b'RPC_CAPACITY_RESULT_JSON:' + body, 2, 'client', 'steady')
+        out_of_order = {}
+        lab.capture_capacity_record(out_of_order, b'RPC_CAPACITY_RESULT_JSON:{}', 2, 'client', 'steady')
+        with self.assertRaises(RuntimeError):
+            lab.capture_capacity_record(out_of_order, b'RPC_CAPACITY_IDLE_JSON:{}', 2, 'client', 'steady')
+        for schema, role, mode in ((1, 'client', 'steady'), (2, 'host', 'steady'), (2, 'client', 'correctness')):
+            with self.assertRaises(RuntimeError):
+                lab.capture_capacity_record({}, b'RPC_CAPACITY_IDLE_JSON:{}', schema, role, mode)
+        # A failed early setup may honestly emit cleanup alone. It cannot become a completed experiment.
+        report = {}
+        lab.capture_capacity_record(report, b'RPC_CAPACITY_FINAL_JSON:{}', 2, 'client', 'steady')
+        self.assertEqual(list(report), ['cleanup'])
+
     def test_cpu_placement_is_explicit_and_cannot_change_the_workload_or_native_owner(self):
         import inspect
         self.assertEqual(inspect.signature(lab.execute).parameters['cpu_placement'].default, 'inherited')
@@ -89,6 +174,20 @@ class LabControls(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 lab.workload_entrypoint(role, mode)
 
+    def test_schema2_controls_use_capacity_host_and_driver_without_changing_legacy_correctness(self):
+        for mode in ('correctness', 'churn'):
+            self.assertEqual(('dev.p2pkit.sample.rpc.RpcCapacityMainKt',
+                              ['--owner-authorized-capacity-run', '--' + mode]),
+                             lab.workload_entrypoint('client', mode, schema_version=2))
+            self.assertEqual(('dev.p2pkit.sample.rpc.lab.LabHostKt', ['--owner-authorized-capacity-host']),
+                             lab.workload_entrypoint('host', mode, schema_version=2))
+            self.assertEqual([], lab.profile_options(self.root, mode))
+        with self.assertRaises(RuntimeError):
+            lab.workload_entrypoint('client', 'churn')
+        for schema in (True, '2', 3):
+            with self.assertRaises(RuntimeError):
+                lab.workload_entrypoint('client', 'correctness', schema_version=schema)
+
     def test_all_six_exact_real_socket_cases_are_required_not_just_exit_zero(self):
         result = dict(schema=1, mode='correctness', scope='REAL_SOCKET_CORRECTNESS_NOT_CAPACITY',
                       status='PENDING_RESOURCE_AND_NETWORK_REVIEW', capacityQualified=False,
@@ -119,6 +218,16 @@ class LabControls(unittest.TestCase):
         self.assertEqual(expected, lab.configuration(lab.parse(lab.encode(expected)), SOURCE))
         with self.assertRaises(RuntimeError):
             lab.configuration(expected, "b" * 40)
+
+    def test_explicit128_or256_configuration_preserves_legacy_exact_keys_and_refuses_inference(self):
+        for count in ("128", "256"):
+            configured = {**self.settings(), "schema": "2", "clientCount": count}
+            self.assertEqual(configured, lab.configuration(configured, SOURCE))
+        for changed in ({"clientCount": "256"}, {"schema": "2"}, {"schema": "3", "clientCount": "256"},
+                        {"schema": "2", "clientCount": "0256"}, {"schema": "2", "clientCount": "+256"},
+                        {"schema": "2", "clientCount": "512"}, {"schema": "2", "clientCount": "129"}):
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                lab.configuration({**self.settings(), **changed}, SOURCE)
 
     def test_refuse_public_loopback_dns_and_unapproved_destinations(self):
         for address in ("127.0.0.1", "8.8.8.8", "169.254.1.2", "example.test", "198.18.0.1", "10.26.0.2", "::1"):

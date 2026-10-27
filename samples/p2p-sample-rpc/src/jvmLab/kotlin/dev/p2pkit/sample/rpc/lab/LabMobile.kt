@@ -7,6 +7,8 @@ import dev.p2pkit.sample.rpc.RpcCapacityHostSnapshot
 import dev.p2pkit.sample.rpc.RpcCapacityHostTelemetry
 import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
 import dev.p2pkit.sample.rpc.RpcPhoneLab
+import dev.p2pkit.sample.rpc.RpcPhoneEnvironmentStats
+import dev.p2pkit.sample.rpc.capacityProfileLimits
 import dev.p2pkit.sample.rpc.encodeMobileRecord
 import dev.p2pkit.sample.rpc.mobileResources
 import java.nio.file.Files
@@ -19,13 +21,15 @@ internal class LabMobile(private val config: LabConfig, internal val values: Map
     val artifactSha256: String = values.getValue("hostArtifactSha256")
 
     init {
-        require(values.keys == RpcMobileCapacityConfig.BINDING_FIELDS + setOf("schema", "scope", "hostInterface"))
+        val schema = values.getValue("schema")
+        require(values.keys == RpcMobileCapacityConfig.bindingFields(schema) + setOf("schema", "scope", "hostInterface"))
         require(platform in setOf(RpcCapacityHostPlatform.Android, RpcCapacityHostPlatform.Ios))
         require(values.getValue("runLabel") == config.runLabel && values.getValue("hostSourceSha") == config.sourceSha)
         require(config.sourceSha == RpcPhoneLab.compiledSource)
         require(values.getValue("runNonce").matches(Regex("[a-f0-9]{64}")))
         require(artifactSha256.matches(Regex("[a-f0-9]{64}")))
-        require(values.getValue("schema") == "1" && values.getValue("scope") == "mobile-usb-capacity")
+        require(schema == config.values.getValue("schema") && values.getValue("scope") == "mobile-usb-capacity")
+        if (schema == "2") require(values.getValue("clientCount") == config.clientCount.toString())
     }
 
     fun prepare(pins: List<PeerFingerprint>) {
@@ -53,15 +57,22 @@ internal class LabMobile(private val config: LabConfig, internal val values: Map
 
     fun telemetry(values: Map<String, String>): RpcCapacityHostTelemetry {
         val resources = mobileResources(platform.name) + mapOf("clock" to "host-run-monotonic")
-        require(values.keys == binding.keys + resources.keys + NUMBERS)
+        val environmentFields = if (binding.getValue("schema") == "2") RpcPhoneEnvironmentStats.FIELDS else emptySet()
+        require(values.keys == binding.keys + resources.keys + NUMBERS + environmentFields)
         require(values.filterKeys { it in binding } == binding && values.filterKeys { it in resources } == resources)
+        if (environmentFields.isNotEmpty()) {
+            val environment = RpcPhoneEnvironmentStats.parse(values.filterKeys { it in environmentFields }, platform.name)
+            require(!environment.requiresThermalStop) { "Physical host requested a thermal stop" }
+        }
         fun long(name: String): Long = values.getValue(name).let {
             require(it.matches(Regex("0|[1-9][0-9]{0,18}")))
             it.toLong().also { number -> require(number >= 0) }
         }
         fun int(name: String): Int = long(name).also { require(it <= Int.MAX_VALUE) }.toInt()
-        require(long("sequence") in 0..2_999 && int("connected") in 0..128 && int("running") in 0..128)
-        require(int("queued") in 0..256 && int("records") in 0..131_072 && long("payloadBytes") <= 64L * 1_048_576)
+        val limits = capacityProfileLimits(config.clientCount)
+        require(long("sequence") in 0..2_999 && int("connected") in 0..config.clientCount)
+        require(int("running") in 0..limits.runningCalls && int("queued") in 0..limits.queuedCalls &&
+            int("records") in 0..limits.totalRecords && long("payloadBytes") <= limits.payloadBytes)
         require(long("cpuNanos") % resources.getValue("cpuResolutionNanos").toLong() == 0L)
         return RpcCapacityHostTelemetry(
             RpcCapacityHostSnapshot(int("connected"), RpcDiagnostics(

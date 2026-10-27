@@ -119,6 +119,13 @@ def commands(component):
                    'verify-rpc-windows-jdk21-test.py', 'check-rpc-windows-packaging-test.py',
                    'verify-rpc-windows-app-image-test.py', 'verify-rpc-windows-msi-payload-test.py',
                    'inspect-rpc-windows-package-test.py', 'check-rpc-windows-image-runtime-test.py'),
+            *tests('rpc-capacity-evidence-test.py', 'run-rpc-capacity-lab-test.py',
+                   'rpc-capacity-macos-stage-test.py', 'rpc-mobile-capacity-test.py',
+                   'rpc-mobile-commands-test.py', 'rpc-ios-usb-test.py',
+                   'run-rpc-mobile-capacity-test.py', 'rpc-mobile-mac-control-test.py',
+                   'rpc-darwin-capacity-test.py', 'run-rpc-mac-campaign-test.py',
+                   'run-rpc-phone-ios-controls-test.py', 'run-rpc-ios-handoff-test.py',
+                   'prepare-macos-rpc-desktop-test.py', 'package-rpc-preview-test.py'),
         ]
     if component == 'dependencies':
         return [('integrity-policy', bash + ['scripts/check-dependency-verification.sh']),

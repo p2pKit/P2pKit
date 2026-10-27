@@ -6,6 +6,7 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.system.StructStat
+import dev.p2pkit.sample.rpc.RpcPhoneEnvironmentStats
 import dev.p2pkit.sample.rpc.RpcPhoneProcessStats
 import java.io.File
 import java.io.FileInputStream
@@ -28,6 +29,27 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
         require(name in NAMES)
         privateDirectory(directory)
         return File(directory, name)
+    }
+
+    /** Reject a used or interrupted runtime before any factory or pin import, including orphan output markers. */
+    fun requireUnusedRuntimeOutputs() {
+        for (name in setOf("ready.txt", "telemetry.txt", "closed.txt", "failed.txt")) {
+            for (file in listOf(path(name), File(directory, ".complete-$name"))) {
+                val existing = try { Os.lstat(file.path) } catch (missing: ErrnoException) {
+                    if (missing.errno == OsConstants.ENOENT) null else throw missing
+                }
+                check(existing == null)
+            }
+        }
+    }
+
+    fun requireNoFailureOutput() {
+        for (file in listOf(path("failed.txt"), File(directory, ".complete-failed.txt"))) {
+            val existing = try { Os.lstat(file.path) } catch (missing: ErrnoException) {
+                if (missing.errno == OsConstants.ENOENT) null else throw missing
+            }
+            check(existing == null)
+        }
     }
 
     fun read(name: String, optional: Boolean = false): String? {
@@ -187,12 +209,12 @@ private fun readBounded(stream: FileInputStream, maximum: Int): ByteArray {
 }
 
 /** Self only; these are ART-process OS counters, not the JVM generator's statistics or estimates. */
-internal fun androidRpcPhoneProcessStats(): RpcPhoneProcessStats {
+internal fun androidRpcPhoneProcessStats(environment: RpcPhoneEnvironmentStats? = null): RpcPhoneProcessStats {
     val status = FileInputStream("/proc/self/status").use { readBounded(it, 65_536) }.toString(Charsets.US_ASCII)
     val rssKiB = checkNotNull(Regex("(?m)^VmRSS:\\s+([0-9]+) kB$").find(status)).groupValues[1].toLong()
     val threads = checkNotNull(Regex("(?m)^Threads:\\s+([0-9]+)$").find(status)).groupValues[1].toInt()
     return RpcPhoneProcessStats(Math.multiplyExact(Process.getElapsedCpuTime(), 1_000_000L),
-        Math.multiplyExact(rssKiB, 1024L), threads)
+        Math.multiplyExact(rssKiB, 1024L), threads, environment)
 }
 
 /** Hash our actual installed base APK, not a caller-supplied source stamp or a different device's package. */

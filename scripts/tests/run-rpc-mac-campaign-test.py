@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""Offline Mac preparation controls; never signed-installation or physical-device evidence."""
+from __future__ import annotations
+
+import copy
+import importlib.util
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location("mac_campaign_test", ROOT / "scripts/run-rpc-mac-campaign.py")
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+
+class Preparation(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.source = dict(commit="1" * 40, tree="2" * 40, status="", diffSha256="3" * 64)
+
+    def file(self, relative, content=b"OFFLINE_CONTROL_NOT_AN_APPLICATION"):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        path.chmod(0o600)
+        return path
+
+    def manifest(self):
+        apk = self.file("samples/p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk")
+        driver = self.file("samples/p2p-sample-rpc/build/capacity-lab/manifest.json")
+        return dict(schema=1, scope=m.SCOPE, source=self.source, iosApp=None,
+                    artifacts={"android-apk": m.artifact(apk), "jvm-manifest": m.artifact(driver)})
+
+    def test_hash_binds_actual_owned_file_and_detects_mutation(self):
+        path = self.file("owned.bin")
+        row = m.artifact(path)
+        self.assertEqual(row["bytes"], path.stat().st_size)
+        path.write_bytes(b"CHANGED")
+        self.assertNotEqual(row, m.artifact(path))
+
+    def test_links_hardlinks_fifo_and_writable_artifacts_are_not_admitted(self):
+        target = self.file("target")
+        link = self.root / "link"
+        link.symlink_to(target)
+        with self.assertRaises((ValueError, RuntimeError)):
+            m.artifact(link)
+        shared = self.root / "shared"
+        os.link(target, shared)
+        with self.assertRaises(ValueError):
+            m.artifact(target)
+        shared.unlink()
+        fifo = self.root / "fifo"
+        os.mkfifo(fifo)
+        with self.assertRaises(ValueError):
+            m.artifact(fifo)
+        target.chmod(0o666)
+        with self.assertRaises(ValueError):
+            m.artifact(target)
+
+    def test_manifest_rejects_stale_source_missing_wrong_producer_and_changed_bytes(self):
+        good = self.manifest()
+        with patch.object(m, "ROOT", self.root):
+            self.assertIs(m.verify_manifest(good, self.source), good)
+            for change in (dict(schema=True), dict(scope="QUALIFIED"), dict(source=self.source | {"commit": "4" * 40}),
+                           dict(artifacts={}), dict(iosApp="/UNTESTED/APP")):
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    m.verify_manifest(good | change, self.source)
+            wrong = copy.deepcopy(good)
+            wrong["artifacts"]["android-apk"] = m.artifact(self.file("other.apk"))
+            with self.assertRaises(ValueError):
+                m.verify_manifest(wrong, self.source)
+            Path(good["artifacts"]["android-apk"]["path"]).write_bytes(b"CHANGED")
+            with self.assertRaises(ValueError):
+                m.verify_manifest(good, self.source)
+
+    def test_template_has_exact_hashes_and_invalid_network_placeholders_for_each_profile(self):
+        manifest = self.manifest()
+        for count in (128, 256):
+            values = m.protocol.parse(m.settings_template(manifest, "android", count, Path("/SELECTED/adb")))
+            self.assertEqual(values["clientCount"], str(count))
+            self.assertEqual(values["hostArtifactSha256"], manifest["artifacts"]["android-apk"]["sha256"])
+            self.assertEqual(values["sourceSha"], self.source["commit"])
+            self.assertEqual(values["schema"], "2")
+            self.assertEqual(values["localAddress"], "SELECT_MAC_LAN_ADDRESS")
+        for count in (True, 127, 255, 257, 512):
+            with self.assertRaises(ValueError):
+                m.settings_template(manifest, "android", count, Path("/SELECTED/adb"))
+        with self.assertRaises(ValueError):
+            m.settings_template(manifest, "ios", 256, Path("/SELECTED/adb"))
+
+    def test_signed_app_inventory_cannot_gain_extra_or_linked_files(self):
+        manifest = self.manifest()
+        executable = self.file("session/ios-derived/Build/Products/Debug-iphoneos/p2pkit-rpc-phone.app/p2pkit-rpc-phone")
+        app = executable.parent
+        manifest["iosApp"] = str(app)
+        manifest["artifacts"]["ios-executable"] = m.artifact(executable)
+        with patch.object(m, "ROOT", self.root):
+            self.assertIs(m.verify_manifest(manifest, self.source, self.root / "session"), manifest)
+            extra = app / "added.bin"
+            extra.write_bytes(b"ADDED")
+            with self.assertRaises(ValueError):
+                m.verify_manifest(manifest, self.source, self.root / "session")
+            extra.unlink()
+            extra.symlink_to(executable)
+            with self.assertRaises(ValueError):
+                m.verify_manifest(manifest, self.source, self.root / "session")
+
+    def test_duplicate_json_and_overwriting_an_original_summary_are_refused(self):
+        with self.assertRaises(ValueError):
+            json.loads('{"schema":1,"schema":2}', object_pairs_hook=m.unique)
+        path = self.root / "summary.json"
+        m.new_json(path, dict(physicalQualified=False))
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        with self.assertRaises(FileExistsError):
+            m.new_json(path, dict(physicalQualified=True))
+
+    def test_create_only_record_syncs_file_and_parent_before_returning(self):
+        observed = []
+        original = os.fsync
+
+        def fsync(descriptor):
+            observed.append("directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file")
+            original(descriptor)
+
+        with patch.object(m.os, "fsync", side_effect=fsync):
+            m.new_json(self.root / "original-lease.json", dict(physicalQualified=False))
+        self.assertEqual(observed, ["file", "directory"])
+
+    def test_full_duration_private_json_uses_report_bound_not_small_control_record_bound(self):
+        path = self.root / "full-series.json"
+        value = dict(physicalQualified=False, samples=["x" * 1000] * 600)
+        m.new_json(path, value)
+        self.assertGreater(path.stat().st_size, 262_144)
+        self.assertEqual(m.private_json(path), value)
+        path.chmod(0o644)
+        with self.assertRaises(ValueError):
+            m.private_json(path)
+        path.chmod(0o600)
+        path.write_text('{"measurement":NaN}')
+        with self.assertRaises(ValueError):
+            m.private_json(path)
+
+
+class Toolchain(unittest.TestCase):
+    def test_doctor_requires_actual_native_17_and_21_reports(self):
+        for major in (17, 21):
+            good = ("Property settings:\n    java.specification.version = " + str(major) +
+                    "\n    os.arch = aarch64\n").encode()
+            m.verify_native_jdk(good, major)
+            for raw in (b"", good.replace(b"aarch64", b"x86_64"), good + good,
+                        good.replace(str(major).encode(), b"99"), good.decode()):
+                with self.subTest(major=major, raw=raw), self.assertRaises(ValueError):
+                    m.verify_native_jdk(raw, major)
+        for major in (True, "21", 8, 25):
+            with self.subTest(major=major), self.assertRaises(ValueError):
+                m.verify_native_jdk(b"java.specification.version = 21\nos.arch = aarch64\n", major)
+
+    def test_nested_provenance_is_bound_to_this_executor_without_modifying_owner_environment(self):
+        original = dict(PATH="/approved/tools", JAVA_HOME="/approved/jdk17", P2PKIT_AUDIT_JDK21="/approved/jdk21",
+                        P2PKIT_GRADLE_EXECUTOR="/different/source/executor", P2PKIT_PYTHON3="/different/python",
+                        GRADLE_USER_HOME="/owner/home", GH_TOKEN="OFFLINE_SENTINEL_NOT_A_CREDENTIAL",
+                        SIGNING_KEY="OFFLINE_SENTINEL_NOT_A_CREDENTIAL",
+                        MAVEN_CENTRAL_USERNAME="OFFLINE_SENTINEL_NOT_A_CREDENTIAL")
+        before = dict(original)
+        state = Path("/private/test-session")
+        value = m.campaign_environment(original, state)
+        self.assertEqual(original, before)
+        self.assertEqual(value["P2PKIT_GRADLE_EXECUTOR"], str(m.ROOT / "scripts/run-audit-command.py"))
+        self.assertEqual(value["P2PKIT_PYTHON3"], sys.executable)
+        self.assertEqual(value["GRADLE_USER_HOME"], str(state / "gradle-home"))
+        self.assertEqual(value["P2PKIT_AUDIT_STATE_DIR"], str(state))
+        self.assertEqual(value["JAVA_HOME"], before["JAVA_HOME"])
+        self.assertEqual(value["P2PKIT_AUDIT_JDK21"], before["P2PKIT_AUDIT_JDK21"])
+        self.assertTrue({"GH_TOKEN", "SIGNING_KEY", "MAVEN_CENTRAL_USERNAME"}.isdisjoint(value))
+        for key in ("JAVA_OPTS", "GRADLE_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                m.campaign_environment(original | {key: "-Dunreviewed=true"}, state)
+
+
+class Measurement(unittest.TestCase):
+    def record(self):
+        return dict(schema=2, clientCount=256, status="FAIL", mode="steady", errors=[dict(phase="thermal")],
+                    phoneSamples=[dict(uptimeMillis=1000, cpuNanos=0, residentBytes=100, nativeThreads=20,
+                                       batteryState="charging", thermalState="nominal"),
+                                  dict(uptimeMillis=2000, cpuNanos=2_000_000_000, residentBytes=200, nativeThreads=21,
+                                       batteryState="charging", thermalState="serious")],
+                    thermalAbort=dict(status="ABORTED"))
+
+    def test_cpu_uses_phone_clock_delta_and_may_exceed_one_core_without_faking_battery_drain(self):
+        value = m.result_summary(self.record())
+        self.assertEqual(value["peakObservedCpuPercentOfOneCore"], 200)
+        self.assertEqual(value["peakResidentBytes"], 200)
+        self.assertEqual(value["peakNativeThreads"], 21)
+        self.assertEqual(value["status"], "FAIL")
+        self.assertFalse(value["physicalQualified"])
+        self.assertFalse(value["batteryDrainQualified"])
+        self.assertEqual(value["observedBatteryStates"], ["charging"])
+        self.assertEqual(value["observedThermalStates"], ["nominal", "serious"])
+
+    def test_bad_profiles_or_regressed_clocks_cannot_be_combined(self):
+        good = self.record()
+        for change in (dict(schema=True), dict(schema=3), dict(clientCount=True), dict(clientCount=255),
+                       dict(status="PASS")):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                m.result_summary(good | change)
+        missing = {k: v for k, v in good.items() if k != "clientCount"}
+        with self.assertRaises(ValueError):
+            m.result_summary(missing)
+        for key, value in (("uptimeMillis", 1000), ("cpuNanos", -1)):
+            changed = copy.deepcopy(good)
+            changed["phoneSamples"][1][key] = value
+            with self.assertRaises(ValueError):
+                m.result_summary(changed)
+
+    def test_schema1_is_still_only_128_and_missing_sensors_are_not_invented(self):
+        record = self.record()
+        record["schema"] = 1
+        record.pop("clientCount")
+        record["phoneSamples"] = []
+        value = m.result_summary(record)
+        self.assertEqual(value["clientCount"], 128)
+        self.assertIsNone(value["peakObservedCpuPercentOfOneCore"])
+        self.assertEqual(value["observedThermalStates"], [])
+        with self.assertRaises(ValueError):
+            m.result_summary(record | dict(clientCount=256))
+
+    def test_idle_and_generator_observations_remain_distinct_from_phone_peaks(self):
+        idle = dict(status="PASS", physicalQualified=False)
+        generator = dict(cpuNanos=999999999, nativeThreads=999)
+        record = self.record() | dict(connectedIdle=idle, generatorAfter=generator)
+        result = m.result_summary(record)
+        self.assertEqual(result["connectedIdle"], idle)
+        self.assertEqual(result["generatorAfter"], generator)
+        self.assertEqual(result["peakNativeThreads"], 21)
+        self.assertFalse(result["physicalQualified"])
+
+
+class Recovery(unittest.TestCase):
+    def records(self, phone="ios"):
+        source = dict(commit="1" * 40, tree="2" * 40, status="", diffSha256="3" * 64)
+        attempt = dict(source=source, platform=phone, clients=256, mode="steady", runLabel="failed-01",
+                       hostArtifactSha256="4" * 64, deviceSha256="5" * 64, settingsSha256="6" * 64)
+        bound = dict(schema="2", scope=m.protocol.SCOPE, clientCount="256", runLabel="failed-01", runNonce="7" * 64,
+                     hostPlatform="Ios" if phone == "ios" else "Android", hostSourceSha=source["commit"],
+                     hostArtifactSha256=attempt["hostArtifactSha256"])
+        result = dict(schema=2, clientCount=256, mode="steady", source=source, harnessSource=source,
+                      settingsSha256=attempt["settingsSha256"], sourceUnchanged=True, harnessUnchanged=True,
+                      status="FAIL", errors=[dict(phase="execution", error="ValueError")], mobileBinding=bound,
+                      inboxSha256="8" * 64,
+                      phoneCleanup=dict(runtimeClosed=True, clientPinsRemoved=True, controlHealthy=True),
+                      usbCleanup=(dict(runtimeClosed=True, clientPinsRemoved=True, requiresOuterNativeFinalization=True)
+                                  if phone == "ios" else dict(privateServerExited=True, copiedHostKeysRetired=True)))
+        return attempt, result
+
+    def test_failed_but_actual_healthy_closed_attempt_grants_reuse_without_promoting_result(self):
+        for phone in ("android", "ios"):
+            attempt, result = self.records(phone)
+            original = copy.deepcopy(result)
+            authority = m.retired_attempt(attempt, result)
+            self.assertEqual(authority["originalStatus"], "FAIL")
+            self.assertEqual(authority["runLabel"], attempt["runLabel"])
+            self.assertEqual(authority["deviceSha256"], attempt["deviceSha256"])
+            self.assertFalse(authority["physicalQualified"])
+            self.assertEqual(result, original)
+
+    def test_uncertain_cleanup_thermal_or_foreign_attempt_cannot_authorize_reinstallation_or_next_slot(self):
+        attempt, result = self.records()
+        changes = [dict(schema=True), dict(clientCount=128), dict(mode="churn"), dict(source={}),
+                   dict(harnessSource={}), dict(settingsSha256="9" * 64), dict(sourceUnchanged=False),
+                   dict(harnessUnchanged=False), dict(status="PASS"), dict(phoneCleanup={}), dict(inboxSha256=""),
+                   dict(errors=[dict(phase="phone-retirement")]), dict(thermalAbort=dict(status="ABORTED")),
+                   dict(usbCleanup={}), dict(mobileBinding=result["mobileBinding"] | {"runLabel": "another-run"}),
+                   dict(mobileBinding=result["mobileBinding"] | {"hostArtifactSha256": "9" * 64})]
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                m.retired_attempt(attempt, result | change)
+        android_attempt, android_result = self.records("android")
+        for key in ("privateServerExited", "copiedHostKeysRetired"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                m.retired_attempt(android_attempt, android_result | {"usbCleanup": android_result["usbCleanup"] | {key: False}})
+
+    def test_pending_attempt_is_an_atomic_preinstallation_interlock_and_retains_original_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            state = root / "state"
+            (state / "private").mkdir(parents=True, mode=0o700)
+            original = dict(attempt=str(state / "private/attempt-ios-failed-01.json"), sha256="1" * 64)
+            m.new_json(state / "private/ios-pending.json", original)
+            session = object.__new__(m.Session)
+            session.state = state
+            session.source = dict(commit="1" * 40)
+            product = dict(artifacts={"ios-executable": dict(sha256="4" * 64)}, iosApp="/not/reinstalled.app")
+            settings = dict(schema="2", clientCount="256", sourceSha="1" * 40, hostArtifactSha256="4" * 64)
+            session.command = lambda *args, **kwargs: self.fail("Must not install, launch or execute another command")
+            files = SimpleNamespace(parse=lambda raw: settings, read_private=lambda path: b"synthetic")
+            original_module = m.module
+
+            def modules(name, path):
+                return files if name == "mac_campaign_settings" else original_module(name, path)
+
+            with patch.object(m, "verify_manifest", return_value=product), patch.object(m, "private_json", return_value={}), \
+                    patch.object(m, "module", side_effect=modules), self.assertRaisesRegex(ValueError, "remains unresolved"):
+                session.run(SimpleNamespace(platform="ios", clients=256, settings=root / "settings.txt",
+                                            run_label="new-02", mode="steady"))
+            self.assertEqual(json.loads((state / "private/ios-pending.json").read_text()), original)
+            with self.assertRaises(FileExistsError):
+                m.new_json(state / "private/ios-pending.json", dict(attempt="another"))
+
+    def session(self, root):
+        state = root / "state"
+        for name in ("private", "commands", "evidence"):
+            (state / name).mkdir(parents=True, mode=0o700)
+        attempt, result = self.records()
+        job, invocation = "a" * 32, "b" * 32
+        purpose = "campaign-ios-failed-01"
+        argv = [sys.executable, "OFFLINE_COORDINATOR_FIXTURE_NOT_DEVICE_EXECUTION"]
+        receipt_path = state / "commands" / (purpose + "-aabbccdd.json")
+        attempt |= dict(schema=1, purpose=purpose, argv=argv, receipt=str(receipt_path))
+        proof = dict(schema=1, id=invocation, jobId=job, purpose=purpose, cwd=str(m.ROOT),
+                     host="macos-arm64", kind="command", gradleHome=str(state / "gradle-home"),
+                     wrapper=str(m.ROOT / "gradlew"), requestedArgv=argv, productExitCode=1, finalExitCode=1,
+                     stopExitCode=0, sourceUnchanged=True, errors=[], ownedSurvivors=[],
+                     sourceBefore=attempt["source"], sourceAfter=attempt["source"])
+        (state / "evidence" / invocation).mkdir(mode=0o700)
+        m.new_json(state / "evidence" / invocation / "receipt.json", proof)
+        m.new_json(receipt_path, proof)
+        attempt_path = state / "private/attempt-ios-failed-01.json"
+        m.new_json(attempt_path, attempt)
+        m.new_json(state / "private/ios-pending.json",
+                   dict(attempt=str(attempt_path), sha256=m.artifact(attempt_path)["sha256"]))
+        session = object.__new__(m.Session)
+        session.state = state
+        session.source = attempt["source"]
+        session.runner = SimpleNamespace(read_json=lambda path: json.loads(path.read_text()),
+                                         context_at=lambda path: (state, {"id": job}))
+        session.checker = m.module("mac_recovery_receipt_test", "check-audit-receipt.py")
+        return session, attempt, result, proof
+
+    def test_recovery_releases_only_original_lease_after_native_receipt_and_phone_retirement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session, attempt, result, proof = self.session(Path(directory).resolve())
+            original_attempt = (session.state / "private/attempt-ios-failed-01.json").read_bytes()
+            original_receipt = Path(attempt["receipt"]).read_bytes()
+            with session.phone_lock("ios"):
+                session.retire_pending("ios", attempt, result, proof)
+            self.assertFalse((session.state / "private/ios-pending.json").exists())
+            latest = json.loads((session.state / "private/ios-latest.json").read_text())
+            self.assertEqual(latest["originalStatus"], "FAIL")
+            self.assertEqual(latest["inboxSha256"], result["inboxSha256"])
+            self.assertEqual((session.state / "private/attempt-ios-failed-01.json").read_bytes(), original_attempt)
+            self.assertEqual(Path(attempt["receipt"]).read_bytes(), original_receipt)
+
+    def test_failed_or_foreign_native_finalization_keeps_interlock_and_all_original_evidence(self):
+        for change in (dict(jobId="c" * 32), dict(host="linux-x64"), dict(kind="gradle"), dict(gradleHome="/another/home"),
+                       dict(errors=["unknown cleanup"]), dict(ownedSurvivors=[dict(pid=1)]),
+                       dict(stopExitCode=1), dict(requestedArgv=["another-command"]), dict(finalExitCode=125)):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                session, attempt, result, proof = self.session(Path(directory).resolve())
+                changed = proof | change
+                # Match both saved copies: acceptance must still depend on the
+                # original job, argv and genuine finalization, not copy equality.
+                Path(attempt["receipt"]).write_text(json.dumps(changed))
+                (session.state / "evidence" / proof["id"] / "receipt.json").write_text(json.dumps(changed))
+                with session.phone_lock("ios"), self.assertRaises(ValueError):
+                    session.retire_pending("ios", attempt, result, changed)
+                self.assertTrue((session.state / "private/ios-pending.json").exists())
+                self.assertFalse((session.state / "private/ios-latest.json").exists())
+
+    def test_run_and_recover_are_serialized_until_original_retirement_finishes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session, attempt, result, proof = self.session(Path(directory).resolve())
+            competitor = object.__new__(m.Session)
+            competitor.state = session.state
+            pending = session.state / "private/ios-pending.json"
+            original_artifact = m.artifact
+            observations = []
+
+            def artifact(path):
+                value = original_artifact(path)
+                if path == pending:
+                    observations.append(value)
+                    if len(observations) == 2:
+                        # The former hash-to-unlink window allowed a concurrent
+                        # recovery to remove this lease and a run to create a
+                        # new one, which the old recovery then deleted.
+                        with self.assertRaisesRegex(ValueError, "Another run/recover"):
+                            competitor.recover("ios")
+                        with self.assertRaisesRegex(ValueError, "Another run/recover"):
+                            competitor.run(SimpleNamespace(platform="ios"))
+                return value
+
+            with session.phone_lock("ios"), patch.object(m, "artifact", side_effect=artifact):
+                session.retire_pending("ios", attempt, result, proof)
+            self.assertEqual(len(observations), 2)
+            self.assertFalse(pending.exists())
+            with competitor.phone_lock("ios"):
+                m.new_json(pending, dict(attempt="NEW_OFFLINE_ATTEMPT"))
+            self.assertEqual(m.private_json(pending), dict(attempt="NEW_OFFLINE_ATTEMPT"))
+
+    def test_stable_phone_locks_are_independent_never_unlinked_and_release_on_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session, _, _, _ = self.session(Path(directory).resolve())
+            other = object.__new__(m.Session)
+            other.state = session.state
+            path = session.state / "private/ios-owner.lock"
+            with session.phone_lock("ios"):
+                original = path.lstat().st_ino
+                self.assertEqual(stat.S_IMODE(path.lstat().st_mode), 0o600)
+                with self.assertRaisesRegex(ValueError, "Another run/recover"):
+                    other.recover("ios")
+                with other.phone_lock("android"):
+                    self.assertTrue((session.state / "private/android-owner.lock").is_file())
+            with self.assertRaisesRegex(RuntimeError, "OFFLINE_FAILURE"), session.phone_lock("ios"):
+                raise RuntimeError("OFFLINE_FAILURE")
+            with other.phone_lock("ios"):
+                self.assertEqual(path.lstat().st_ino, original)
+            self.assertEqual(path.lstat().st_ino, original)
+
+    def test_linked_shared_or_nonprivate_lock_is_refused_before_any_operation(self):
+        for kind in ("symlink", "hardlink", "nonprivate"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                session, _, _, _ = self.session(Path(directory).resolve())
+                path = session.state / "private/ios-owner.lock"
+                target = session.state / "private/foreign.lock"
+                target.write_bytes(b"")
+                target.chmod(0o600)
+                if kind == "symlink":
+                    path.symlink_to(target)
+                elif kind == "hardlink":
+                    os.link(target, path)
+                else:
+                    path.write_bytes(b"")
+                    path.chmod(0o644)
+                with self.assertRaises((OSError, ValueError)), session.phone_lock("ios"):
+                    self.fail("An unsafe lock cannot admit run or recover")
+
+    def test_invalid_generated_settings_fail_before_attempt_lease_or_device_command(self):
+        for phone in ("android", "ios"):
+            with self.subTest(phone=phone), tempfile.TemporaryDirectory() as directory:
+                session, _, _, _ = self.session(Path(directory).resolve())
+                (session.state / "private/ios-pending.json").unlink()
+                product = dict(source=session.source, iosApp="/OFFLINE/NOT_INSTALLED.app", artifacts={
+                    "android-apk": dict(sha256="4" * 64), "ios-executable": dict(sha256="4" * 64)})
+                settings = session.state / "private/settings.txt"
+                settings.write_bytes(m.settings_template(product, phone, 256, Path("/OFFLINE/adb")))
+                settings.chmod(0o600)
+                session.command = lambda *args, **kwargs: self.fail("Invalid settings must not dispatch a device command")
+                with patch.object(m, "verify_manifest", return_value=product), \
+                        patch.object(m, "private_json", return_value={}), self.assertRaises(ValueError):
+                    session.run(SimpleNamespace(platform=phone, clients=256, settings=settings,
+                                                run_label="new-02", mode="steady"))
+                self.assertFalse((session.state / "private" / (phone + "-pending.json")).exists())
+                self.assertFalse((session.state / "private" / ("attempt-" + phone + "-new-02.json")).exists())
+
+    def test_both_original_attempt_and_lease_are_durable_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session, _, _, _ = self.session(Path(directory).resolve())
+            (session.state / "private/ios-pending.json").unlink()
+            product = dict(source=session.source, iosApp="/OFFLINE/NOT_INSTALLED.app",
+                           artifacts={"ios-executable": dict(sha256="4" * 64)})
+            settings = session.state / "private/settings.txt"
+            values = m.protocol.parse(m.settings_template(product, "ios", 256, Path("/OFFLINE/adb")))
+            values.update(endpointAddress="192.168.10.2", localAddress="192.168.10.1", subnets="192.168.10.0/24",
+                          interface="en0", hostInterface="en0", iosDeviceIdentifier="aabbccdd-1122-3344-5566-aabbccddeeff")
+            settings.write_bytes(m.protocol.encode(values))
+            settings.chmod(0o600)
+            m.new_json(session.state / "private/preparation.json", product)
+            observed = []
+            original_fsync = os.fsync
+
+            def fsync(descriptor):
+                observed.append("directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file")
+                original_fsync(descriptor)
+
+            def dispatch(*args, **kwargs):
+                self.assertEqual(observed[-4:], ["file", "directory", "file", "directory"])
+                self.assertTrue((session.state / "private/attempt-ios-new-02.json").is_file())
+                self.assertTrue((session.state / "private/ios-pending.json").is_file())
+                self.assertEqual(session._locked_phone, "ios")
+                raise RuntimeError("OFFLINE_STOP_BEFORE_DEVICE_EXECUTION")
+
+            session.command = dispatch
+            with patch.object(m, "verify_manifest", return_value=product), patch.object(m.os, "fsync", side_effect=fsync), \
+                    self.assertRaisesRegex(RuntimeError, "OFFLINE_STOP_BEFORE_DEVICE_EXECUTION"):
+                session.run(SimpleNamespace(platform="ios", clients=256, settings=settings,
+                                            run_label="new-02", mode="steady"))
+            self.assertTrue((session.state / "private/ios-pending.json").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

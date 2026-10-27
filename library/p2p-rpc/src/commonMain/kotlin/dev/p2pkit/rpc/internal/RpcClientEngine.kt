@@ -307,7 +307,7 @@ internal class RpcClientEngine(
         var terminalPhase: RpcFailurePhase? = null
         var callerCancelled = false
         try {
-            return withTimeout(timeout.inWholeMilliseconds) {
+            val details = withTimeout(timeout.inWholeMilliseconds) {
                 val (owner, initial) = lock.withLock {
                     val owner = attachment ?: throw RpcFailure(
                         RpcFailureKind.NotConnected, RpcFailurePhase.Admission)
@@ -410,8 +410,6 @@ internal class RpcClientEngine(
                                     )
                                 )
                                 businessError = outcome.kind == WireKind.ApplicationError
-                                completed = true
-                                stats.update { it.copy(completedCalls = it.completedCalls + 1) }
                                 sendControl(selected, active, checkNotNull(digest), WireKind.Receipt)
                                 return@withTimeout RpcCallDetails(
                                     active.id, reply, (clock.now() - started).coerceAtLeast(0),
@@ -458,6 +456,11 @@ internal class RpcClientEngine(
                     else -> RpcFailureKind.UnknownOutcome
                 })
             }
+            // The receipt offer and withTimeout's return boundary can still cancel a decoded reply.
+            // Count success only once that boundary has returned the result to this caller.
+            completed = true
+            stats.update { it.copy(completedCalls = it.completedCalls + 1) }
+            return details
         } catch (cancelled: TimeoutCancellationException) {
             call?.let(::retireSend)
             callerCancelled = !currentCoroutineContext().isActive

@@ -49,6 +49,24 @@ class RpcCapacityDriverTest {
     }
 
     @Test
+    fun explicit256SchedulePreservesTenHertzAndTheEntireThirtyMinuteDuration() {
+        val origin = 456_000_000_000L
+        val clients = 256
+        val ticks = 18_000
+        val phases = (0 until clients).map { capacityScheduledNanos(origin, 0, it, clients) }
+        assertEquals(256, phases.toSet().size)
+        assertEquals(phases.sorted(), phases)
+        repeat(clients) { client ->
+            assertEquals(100_000_000L,
+                capacityScheduledNanos(origin, 1, client, clients) - capacityScheduledNanos(origin, 0, client, clients))
+            val last = capacityScheduledNanos(origin, ticks - 1, client, clients)
+            assertTrue(last >= origin + 1_799_900_000_000 && last < origin + 1_800_000_000_000)
+        }
+        assertEquals(4_608_000, clients * ticks)
+        assertFailsWith<IllegalArgumentException> { capacityScheduledNanos(origin, 0, 0, 512) }
+    }
+
+    @Test
     fun finalTelemetryWaitsForActualCompletedCountersButRetainsItsDeadline() = runTest {
         fun sample(completed: Long) = RpcCapacityHostTelemetry(
             RpcCapacityHostSnapshot(128, RpcDiagnostics(completedCalls = completed)), 1, 1, 1, 1,
@@ -111,6 +129,24 @@ class RpcCapacityDriverTest {
         assertEquals("AWAIT_FINAL_RECORD", report.getValue("cleanup").jsonPrimitive.content)
         val failed = Json.parseToJsonElement(capacityResultJson("large", false, emptyMap(), histogram)).jsonObject
         assertEquals("FAIL", failed.getValue("status").jsonPrimitive.content)
+    }
+
+    @Test
+    fun explicitResultSchemaBindsSelectedClientCountAsAnInteger() {
+        val histogram = CapacityLatencyHistogram().also { it.record(1) }
+        for (clients in listOf(128, 256)) {
+            val report = Json.parseToJsonElement(capacityResultJson("steady", true,
+                mapOf("completed" to clients * 18_000L, "actualSchedulingNanos" to 1_800_000_000_000L),
+                histogram, clientCount = clients)).jsonObject
+            assertEquals("2", report.getValue("schema").jsonPrimitive.content)
+            assertEquals(clients.toString(), report.getValue("clientCount").jsonPrimitive.content)
+            assertEquals(false, report.getValue("clientCount").jsonPrimitive.isString)
+            assertEquals(clients * 10.0, report.getValue("throughputResponsesPerSecond").jsonPrimitive.double)
+            assertEquals(false, report.getValue("capacityQualified").jsonPrimitive.boolean)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            capacityResultJson("steady", true, emptyMap(), histogram, clientCount = 512)
+        }
     }
 
     @Test

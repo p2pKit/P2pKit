@@ -13,6 +13,8 @@ import subprocess
 import tarfile
 import zipfile
 
+NATIVE_MANIFEST_JAR = 'p2pkit-macos-tcp-manifest.jar'
+
 
 def digest(path):
     value = hashlib.sha256()
@@ -26,19 +28,27 @@ def run(argv, cwd=None):
     return subprocess.check_output([str(x) for x in argv], cwd=cwd, text=True).strip()
 
 
-def checked_entries(directory, source):
+def checked_entries(directory, source, native_manifest=None):
     manifest = json.loads((directory / 'manifest.json').read_text())
     if manifest['sourceSha'] != source or not 1 <= len(manifest['entries']) <= 128:
         raise ValueError('Wrong source or unbounded classpath')
-    names = set()
+    names, seen = [], set()
     for row in manifest['entries']:
         name = row['name']
-        if name in names or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.jar', name):
+        if name in seen or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.jar', name):
             raise ValueError('Unsafe/duplicate classpath entry')
-        names.add(name)
+        seen.add(name)
         file = directory / name
         if file.is_symlink() or not file.is_file() or digest(file) != row['sha256']:
             raise ValueError('Classpath integrity mismatch')
+        if name == NATIVE_MANIFEST_JAR and native_manifest is not None:
+            if native_manifest.name != name or native_manifest.is_symlink() or not native_manifest.is_file() or \
+                    digest(native_manifest) != row['sha256']:
+                raise ValueError('Copied native manifest differs from the original source-bound stage')
+            # The canonical native/ entry below is the sole loader resource. Do not copy the root duplicate
+            # into jpackage input: jpackage can recursively include JARs even when omitted from Class-Path.
+            continue
+        names.append(name)
     return sorted(names)
 
 
@@ -90,7 +100,8 @@ def package(root, jdk):
     inputs = work / 'input'
     inputs.mkdir()
     jars = root / 'samples/p2p-sample-rpc/build/capacity-lab'
-    names = checked_entries(jars, source)
+    native = root / 'library/p2p-transport-lan/build/macos-tcp' / source if system == 'Darwin' else None
+    names = checked_entries(jars, source, native / NATIVE_MANIFEST_JAR if native is not None else None)
     for name in names:
         shutil.copy2(jars / name, inputs / name)
     options = []

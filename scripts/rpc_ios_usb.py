@@ -9,7 +9,6 @@ native finalization still require an actual selected owner-authorized iPhone.
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -22,12 +21,12 @@ import time
 import rpc_mobile_capacity as protocol
 
 need = protocol.need
+MAX_COMMANDS = 20_000
 IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 DEVICECTL = Path('/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl')
 COREDEVICE_INFO = DEVICECTL.parents[1] / 'Info.plist'
-COREDEVICE_VERSION = '642.16'
-INPUTS = frozenset(('inbox.txt', 'stop.txt'))
-OUTPUTS = frozenset(('prepared.txt', 'ready.txt', 'telemetry.txt', 'closed.txt', 'failed.txt'))
+INPUTS = frozenset(('inbox.txt', 'campaign.txt', 'next.txt', 'stop.txt'))
+OUTPUTS = frozenset(('prepared.txt', 'next-ready.txt', 'ready.txt', 'telemetry.txt', 'closed.txt', 'failed.txt'))
 FILES = INPUTS | OUTPUTS | {prefix + name for prefix in ('.incoming-', '.sealed-') for name in INPUTS}
 ATOMIC_SCRATCH = r'\.capacity-[A-F0-9]{8}(?:-[A-F0-9]{4}){3}-[A-F0-9]{12}'
 INBOX_FIELDS = protocol.BINDINGS | {'hostAddress', 'hostPort', 'hostInterface', 'subnets', 'clientPins'}
@@ -76,26 +75,13 @@ def file_inventory(value):
 
 
 def inbox_record(raw, bound):
-    row = protocol.parse(raw)
-    need(set(row) == INBOX_FIELDS and {k: row[k] for k in protocol.BINDINGS} == protocol.binding(bound) and
-         bound['hostPlatform'] == 'Ios', 'Exact source/run/role/signed-executable binding required')
-    need(re.fullmatch('[A-Za-z0-9_.:-]{1,32}', row['hostInterface']) and
-         re.fullmatch('[1-9][0-9]{3,4}', row['hostPort']) and 1024 <= int(row['hostPort']) <= 65535)
-    address = ipaddress.IPv4Address(row['hostAddress'])
-    ranges = [ipaddress.IPv4Network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
-    subnets = row['subnets'].split(',')
-    need(1 <= len(subnets) <= 16 and len(set(subnets)) == len(subnets))
-    networks = [ipaddress.IPv4Network(n, strict=True) for n in subnets]
-    need(all(any(n.subnet_of(r) for r in ranges) for n in networks) and any(address in n for n in networks),
-         'Explicit private LAN only; actual production path policy and owner approval remain mandatory')
-    pins = row['clientPins'].split(',')
-    need(len(pins) == len(set(pins)) == 128 and all(re.fullmatch('p2f1-[a-z2-7]{52}', p) for p in pins),
-         'Exactly 128 distinct public synthetic pins required; native peer parsing is not bypassed')
+    row = protocol.inbox(raw, bound)
+    need(bound['hostPlatform'] == 'Ios', 'Exact iOS signed-executable binding required')
     return row
 
 
 class IosUsb:
-    """One source-bound session. No automatic app start, replay, installation, signing or pairing."""
+    """One source-bound session. Only sealed development activation; no replay, signing or pairing."""
     def __init__(self, backend, binding, *, owner_authorized=False, now=time.monotonic):
         need(owner_authorized is True, 'Explicit selected-device owner authorization required')
         self.binding = protocol.binding(binding)
@@ -103,6 +89,8 @@ class IosUsb:
         self.backend, self.now = backend, now
         self.started = self.authorized = self.provisioned = self.provision_attempted = False
         self.stop_attempted = self.runtime_closed = self.closed = False
+        self.activation_attempted = False
+        self.inbox_sha256 = None
         self.protocol = None
         self.last_sample = None
 
@@ -111,11 +99,22 @@ class IosUsb:
         self.started = True
         deadline = self.now() + 30
         self.backend.verify(deadline)
-        raw = self.backend.read('prepared.txt', deadline)
-        expected = dict(schema='1', scope='ios-usb-slot', runLabel=self.binding['runLabel'],
+        expected = dict(schema=self.binding['schema'], scope='ios-usb-slot', runLabel=self.binding['runLabel'],
                         sourceSha=self.binding['hostSourceSha'], artifactSha256=self.binding['hostArtifactSha256'])
-        need(raw is not None and protocol.parse(raw) == expected and self.now() < deadline,
-             'Owner must first prepare a NEW slot in the source-matched, signed, selected iPhone app')
+        if self.binding['schema'] == '2':
+            expected['clientCount'] = self.binding['clientCount']
+        while True:
+            need(self.now() < deadline, 'Selected development app did not prepare its new slot inside the setup bound')
+            present = getattr(self.backend, 'slot_present', None)
+            if present is not None and not present(deadline):
+                time.sleep(.1)
+                continue
+            raw = self.backend.read('prepared.txt', deadline)
+            if raw is not None:
+                need(protocol.parse(raw) == expected and self.now() < deadline,
+                     'Prepared slot differs from the selected source, signed executable, run or profile')
+                break
+            time.sleep(.1)
         self.authorized = True
 
     def provision(self, raw):
@@ -125,9 +124,23 @@ class IosUsb:
         # A failed return might follow publication. Preserve ownership and attempt
         # exact Stop on cleanup rather than incorrectly assuming the app never saw it.
         self.provision_attempted = self.provisioned = True
+        self.inbox_sha256 = hashlib.sha256(raw).hexdigest()
         deadline = self.now() + 30
         self.backend.publish('inbox.txt', raw, deadline)
         need(self.now() < deadline, 'USB provisioning exceeded its original command budget')
+
+    def activate(self, raw):
+        """Start only a DEBUG/development slot explicitly prepared for this campaign."""
+        need(self.provisioned and not self.closed and not self.activation_attempted)
+        inbox_record(raw, self.binding)
+        need(hashlib.sha256(raw).hexdigest() == self.inbox_sha256, 'Campaign must bind the exact published inbox')
+        command = dict(schema='1', scope='mobile-usb-start', runLabel=self.binding['runLabel'],
+                       hostSourceSha=self.binding['hostSourceSha'],
+                       hostArtifactSha256=self.binding['hostArtifactSha256'], inboxSha256=self.inbox_sha256)
+        self.activation_attempted = True
+        deadline = self.now() + 30
+        self.backend.publish('campaign.txt', protocol.encode(command), deadline)
+        need(self.now() < deadline, 'Campaign publication exceeded its original command budget')
 
     def read(self, name, timeout=4):
         need(self.provisioned and not self.closed and name in OUTPUTS - {'prepared.txt'} and
@@ -192,6 +205,7 @@ class DevicectlFiles:
         self.remote = 'Library/Application Support/rpc-capacity/' + run_label
         self.count = 0
         self.attempted = set()
+        self.tool_version = self.metadata_sha256 = None
         self.tool_sha256 = self.tool_binding()
 
     def tool_binding(self):
@@ -208,9 +222,16 @@ class DevicectlFiles:
         need(stat.S_ISREG(metadata_info.st_mode) and metadata_info.st_uid == 0 and metadata_info.st_nlink == 1 and
              not stat.S_IMODE(metadata_info.st_mode) & 0o022 and 0 < metadata_info.st_size <= 65536,
              'Bounded root-owned regular developer metadata required, never a device/FIFO')
-        metadata = plistlib.loads(COREDEVICE_INFO.read_bytes())
-        need(metadata.get('CFBundleIdentifier') == 'com.apple.CoreDevice' and
-             metadata.get('CFBundleVersion') == COREDEVICE_VERSION, 'Unreviewed installed CoreDevice version')
+        metadata_raw = COREDEVICE_INFO.read_bytes()
+        metadata = plistlib.loads(metadata_raw)
+        version = metadata.get('CFBundleVersion')
+        need(metadata.get('CFBundleIdentifier') == 'com.apple.CoreDevice' and type(version) is str and
+             re.fullmatch(r'[0-9]{1,6}(?:\.[0-9]{1,6}){0,3}', version), 'Invalid installed CoreDevice identity/version')
+        digest = hashlib.sha256(metadata_raw).hexdigest()
+        if getattr(self, 'tool_version', None) is not None:
+            need(version == self.tool_version and digest == self.metadata_sha256, 'Installed developer metadata changed')
+        else:
+            self.tool_version, self.metadata_sha256 = version, digest
         return hashlib.sha256(raw).hexdigest()
 
     def remaining(self, deadline):
@@ -239,10 +260,14 @@ class DevicectlFiles:
     def command(self, label, arguments, deadline):
         need(self.tool_binding() == self.tool_sha256, 'Installed developer tool changed')
         self.count += 1
-        need(self.count <= 15000)
+        need(self.count <= MAX_COMMANDS)
         output = self.directory / (f'{self.count:05d}-' + label + '.json')
         need(not output.exists() and not output.is_symlink())
-        self.commands.run('ios-' + label, [str(DEVICECTL), *arguments, '--json-output', str(output)],
+        arguments = list(arguments)
+        need(arguments.count('--') <= 1, 'Ambiguous application argument delimiter')
+        split = arguments.index('--') if '--' in arguments else len(arguments)
+        argv = [str(DEVICECTL), *arguments[:split], '--json-output', str(output), *arguments[split:]]
+        self.commands.run('ios-' + label, argv,
                           timeout=self.remaining(deadline))
         need(self.now() < deadline and self.tool_binding() == self.tool_sha256, 'Late or changed native tool observation')
         value = json.loads(self.read_owned(output, 262144), object_pairs_hook=unique)
@@ -255,10 +280,118 @@ class DevicectlFiles:
         value = self.command('selected-details', ['device', 'info', 'details', '--device', self.selected], deadline)
         selected_details(value, self.selected)
 
+    def install_app(self, app, bound, deadline):
+        """Install the selected signed development bundle; actual executable readback is still required at ready."""
+        checked = protocol.binding(bound)
+        need(checked['hostPlatform'] == 'Ios' and isinstance(app, Path) and app.is_absolute() and
+             app == app.resolve(strict=True) and app.suffix == '.app' and app.is_dir())
+        metadata = app / 'Info.plist'
+        need(not metadata.is_symlink())
+        info = metadata.lstat()
+        need(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and
+             0 < info.st_size <= 65536 and not stat.S_IMODE(info.st_mode) & 0o022)
+        values = plistlib.loads(metadata.read_bytes())
+        name = values.get('CFBundleExecutable')
+        need(values.get('CFBundleIdentifier') == IOS_PACKAGE and type(name) is str and
+             re.fullmatch('[A-Za-z0-9_-]{1,128}', name), 'Only the fixed development phone app may be installed')
+        executable = app / name
+        info = executable.lstat()
+        need(not executable.is_symlink() and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and
+             info.st_nlink == 1 and 0 < info.st_size <= 256 * 1024 * 1024 and not stat.S_IMODE(info.st_mode) & 0o022)
+        with os.fdopen(os.open(executable, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+            opened = os.fstat(stream.fileno())
+            need((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) ==
+                 (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns))
+            hasher, remaining = hashlib.sha256(), info.st_size
+            while remaining:
+                block = stream.read(min(1048576, remaining))
+                need(block, 'Executable ended before its declared size')
+                hasher.update(block)
+                remaining -= len(block)
+            need(not stream.read(1), 'Executable grew during verification')
+            digest = hasher.hexdigest()
+            after = os.fstat(stream.fileno())
+        need((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) ==
+             (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) and
+             digest == checked['hostArtifactSha256'], 'Selected executable differs from the bound signed artifact')
+        self.verify(deadline)
+        self.command('install-bound-app', ['device', 'install', 'app', '--device', self.selected, str(app)], deadline)
+        self.verify(deadline)
+        return dict(installerSucceeded=True, artifactSha256=digest, requiresInstalledReadyHash=True)
+
+    def launch_prepare(self, bound, deadline):
+        """Prepare one development slot in a stopped app; never terminate or relaunch an active runtime."""
+        checked = protocol.binding(bound)
+        need(checked['hostPlatform'] == 'Ios' and checked['schema'] == '2')
+        self.verify(deadline)
+        self.command('launch-bound-prepare', ['device', 'process', 'launch', '--device', self.selected, IOS_PACKAGE, '--',
+            '--rpc-usb-prepare', checked['runLabel'], '--rpc-usb-source-sha', checked['hostSourceSha'],
+            '--rpc-usb-artifact-sha256', checked['hostArtifactSha256'], '--rpc-usb-client-count', checked['clientCount']], deadline)
+        self.verify(deadline)
+
+    def prepare_next(self, bound, previous_label, previous_inbox_sha256, deadline):
+        """Request a new DEBUG slot only after the same installed app proves the prior exact run retired."""
+        checked = protocol.binding(bound)
+        need(checked['hostPlatform'] == 'Ios' and checked['schema'] == '2' and
+             re.fullmatch('[a-z0-9-]{1,64}', previous_label) and previous_label != checked['runLabel'] and
+             re.fullmatch('[a-f0-9]{64}', previous_inbox_sha256))
+        original = self.remote
+        self.remote = 'Library/Application Support/rpc-capacity/' + previous_label
+        try:
+            self.verify(deadline)
+            rows = self.inventory(deadline)
+            need({'inbox.txt', 'closed.txt'} <= set(rows), 'Prior iOS run must have actual inbox and healthy closure')
+            raw = self.download('inbox.txt', deadline)
+            need(hashlib.sha256(raw).hexdigest() == previous_inbox_sha256, 'Previous iOS inbox hash mismatch')
+            parsed = protocol.parse(raw)
+            old = protocol.binding({key: parsed[key] for key in protocol.binding_fields(parsed)})
+            protocol.inbox(raw, old)
+            need(old['schema'] == '2' and old['runLabel'] == previous_label and old['hostPlatform'] == 'Ios' and
+                 old['hostSourceSha'] == checked['hostSourceSha'] and
+                 old['hostArtifactSha256'] == checked['hostArtifactSha256'],
+                 'Cannot prepare a new slot from a different source, app, role or run')
+            closure = self.read('closed.txt', deadline)
+            need(closure is not None, 'Prior runtime closure is missing')
+            protocol.Protocol(old, parsed['hostAddress'], int(parsed['hostPort'])).closed(protocol.parse(closure))
+            request = dict(schema='1', scope='mobile-usb-prepare-next', runLabel=previous_label,
+                           nextRunLabel=checked['runLabel'], hostSourceSha=checked['hostSourceSha'],
+                           hostArtifactSha256=checked['hostArtifactSha256'], inboxSha256=previous_inbox_sha256,
+                           clientCount=checked['clientCount'])
+            self.publish('next.txt', protocol.encode(request), deadline)
+            expected = dict(schema='2', clientCount=checked['clientCount'], scope='ios-usb-slot',
+                runLabel=checked['runLabel'], sourceSha=checked['hostSourceSha'], artifactSha256=checked['hostArtifactSha256'])
+            while True:
+                self.remaining(deadline)
+                acknowledgement = self.read('next-ready.txt', deadline)
+                if acknowledgement is not None:
+                    need(protocol.parse(acknowledgement) == expected, 'Next iOS slot acknowledgement differs from the selected source/profile')
+                    break
+                time.sleep(min(.1, self.remaining(deadline)))
+        finally:
+            self.remote = original
+
     def inventory(self, deadline):
         value = self.command('slot-files', ['device', 'info', 'files', '--device', self.selected,
             '--domain-type', 'appDataContainer', '--domain-identifier', IOS_PACKAGE, '--subdirectory', self.remote], deadline)
         return file_inventory(value)
+
+    def slot_present(self, deadline):
+        """Observe named child directories from an existing Library; never infer missing-directory exit codes."""
+        parent = 'Library'
+        for name in ('Application Support', 'rpc-capacity', self.remote.rsplit('/', 1)[1]):
+            value = self.command('slot-parent', ['device', 'info', 'files', '--device', self.selected,
+                '--domain-type', 'appDataContainer', '--domain-identifier', IOS_PACKAGE, '--subdirectory', parent], deadline)
+            rows = value['result'].get('files')
+            need(type(rows) is list and len(rows) <= 4096 and
+                 all(type(row) is dict and type(row.get('name')) is str for row in rows),
+                 'Invalid selected app directory inventory')
+            matches = [row for row in rows if row['name'] == name]
+            if not matches:
+                return False
+            need(len(matches) == 1 and matches[0].get('isDirectory') is True and matches[0].get('isSymbolicLink') is False,
+                 'Selected app control directory is linked, ambiguous or not a directory')
+            parent += '/' + name
+        return True
 
     def copy(self, direction, local, name, deadline):
         need(name in FILES and direction in ('to', 'from') and local.parent == self.directory)

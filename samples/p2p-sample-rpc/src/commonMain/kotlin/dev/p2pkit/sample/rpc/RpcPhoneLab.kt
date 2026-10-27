@@ -512,7 +512,8 @@ public class RpcPhoneLab private constructor(
             require(actualPlatform in setOf("Android", "Ios") && config.hostPlatform == actualPlatform)
             require(trustStore.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients).isEmpty())
             try {
-                val lab = createHost(platform, config.settings, trustStore, config.clientPins)
+                val lab = createHostInternal(platform, config.settings, trustStore, config.clientPins, null,
+                    capacityExercises = config.schema == "2")
                 lab.mobileRun = PhoneMobileRun(config, trustStore)
                 // Return the owned runtime before performing fallible USB publication.
                 // mobileReadyRecord subsequently verifies its actual bound endpoint.
@@ -558,6 +559,7 @@ public class RpcPhoneLab private constructor(
         private suspend fun createHostInternal(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
             explicitlyApprovedCapacityPins: String, application: RpcApplicationSession?, nearby: Boolean = false,
+            capacityExercises: Boolean = false,
         ): RpcPhoneLab {
             val policy = settings.policy(host = true)
             val capacityPins = explicitlyApprovedCapacityPins.takeIf(String::isNotEmpty)?.let(::parseCapacityPins)
@@ -583,6 +585,7 @@ public class RpcPhoneLab private constructor(
                     register(RpcCapacityContract.largeEcho, authorize = { it.fingerprint != null }) { _, value ->
                         RpcReply.Success(value)
                     }
+                    if (capacityExercises) registerCapacityExercises(checkNotNull(capacityPins))
                 }.also { owner.resource = it }
                 host.start()
                 return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby }

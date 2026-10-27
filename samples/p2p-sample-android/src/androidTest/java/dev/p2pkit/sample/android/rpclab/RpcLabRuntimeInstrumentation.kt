@@ -250,6 +250,11 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         capacityFixture = capacityRoot
         Os.chmod(capacityRoot.path, 0x1c0)
         val files = AndroidRpcCapacityFiles(targetContext, capacityRoot.name)
+        files.requireUnusedRuntimeOutputs()
+        capacityMarker(capacityRoot, "failed.txt")
+        check(runCatching { files.requireUnusedRuntimeOutputs() }.isFailure) // Even an orphan output marker is used.
+        Os.remove(File(capacityRoot, ".complete-failed.txt").path)
+        files.requireUnusedRuntimeOutputs()
         val input = File(capacityRoot, "inbox.txt")
         FileOutputStream(input).use { it.write("schema=1\n".toByteArray()); it.fd.sync() }
         Os.chmod(input.path, 0x180)
@@ -258,6 +263,7 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         capacityMarker(capacityRoot, "inbox.txt")
         check(files.read("inbox.txt") == "schema=1\n" && files.read("stop.txt", optional = true) == null)
         files.publish("ready.txt", "ready=true\n")
+        check(runCatching { files.requireUnusedRuntimeOutputs() }.isFailure)
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.publish("ready.txt", "ready=false\n") }.isFailure)
         check(files.read("ready.txt") == "ready=true\n")
@@ -336,6 +342,11 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
             check(resources.cpuNanos % 1_000_000 == 0L) // Actual Android API precision, not a claimed nanosecond timer.
             previousCpu = resources.cpuNanos
         }
+        val environment = AndroidRpcPhoneEnvironment(targetContext).sample()
+        val withEnvironment = androidRpcPhoneProcessStats(environment)
+        check(withEnvironment.environment === environment)
+        if (Build.VERSION.SDK_INT < 29) check(environment.thermalState == "unavailable")
+        check(environment.batterySource in setOf("android-battery-manager", "unavailable"))
         passed("mobile-actual-self-process-cpu-rss-and-thread-counters")
 
         stage = "missing-keystore-key"

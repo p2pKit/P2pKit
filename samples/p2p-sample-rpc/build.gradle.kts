@@ -359,6 +359,11 @@ val capacityLabJar = tasks.register<Jar>("jvmCapacityLabJar") {
     from(mainCompilation.output.allOutputs, labCompilation.output.allOutputs)
     duplicatesStrategy = DuplicatesStrategy.FAIL
 }
+val capacityLabMacNative = System.getProperty("os.name") == "Mac OS X" &&
+    System.getProperty("os.arch") in setOf("aarch64", "arm64")
+val capacityLabMacDirectory = project(":p2p-transport-lan").layout.buildDirectory.dir(
+    phoneFrameworkCommit.map { "macos-tcp/$it" },
+)
 tasks.register<Sync>("prepareRpcCapacityLab") {
     group = "verification"
     description = "Prepare opt-in capacity tooling without starting a host or any clients."
@@ -366,6 +371,12 @@ tasks.register<Sync>("prepareRpcCapacityLab") {
     from(capacityLabJar)
     from(labCompilation.runtimeDependencyFiles.filter { it.extension == "jar" })
     duplicatesStrategy = DuplicatesStrategy.FAIL
+    inputs.property("macosScopedNative", capacityLabMacNative)
+    if (capacityLabMacNative) {
+        dependsOn(":p2p-transport-lan:stageMacTcp")
+        inputs.dir(capacityLabMacDirectory)
+        from(capacityLabMacDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
+    }
     val sourceCommit = providers.exec {
         workingDir(rootDir)
         commandLine("git", "rev-parse", "HEAD")
@@ -391,10 +402,26 @@ tasks.register<Sync>("prepareRpcCapacityLab") {
             mapOf("name" to file.name, "sha256" to digest.digest().joinToString("") { "%02x".format(it) })
         }
         check(entries.isNotEmpty())
-        directory.resolve("manifest.json").writeText(JsonOutput.toJson(mapOf(
+        val manifest = linkedMapOf<String, Any>(
             "schema" to 1, "sourceSha" to sourceCommit.get(), "entries" to entries,
             "scope" to "SYNTHETIC_LAB_NOT_PUBLICATION_OR_QUALIFICATION",
-        )) + "\n")
+        )
+        if (capacityLabMacNative) {
+            val native = capacityLabMacDirectory.get().asFile
+            val names = listOf("libp2pkit_lan_socket.dylib", "macos-tcp.properties",
+                "p2pkit-macos-tcp-manifest.jar", "producer.json")
+            check(native.listFiles()!!.map { it.name }.toSet() == names.toSet())
+            manifest["macosNative"] = mapOf(
+                "directory" to "library/p2p-transport-lan/build/macos-tcp/${sourceCommit.get()}",
+                "entries" to names.map { name ->
+                    val file = native.resolve(name)
+                    check(file.isFile && !Files.isSymbolicLink(file.toPath()))
+                    val digest = MessageDigest.getInstance("SHA-256").digest(file.readBytes())
+                    mapOf("name" to name, "sha256" to digest.joinToString("") { "%02x".format(it) })
+                },
+            )
+        }
+        directory.resolve("manifest.json").writeText(JsonOutput.toJson(manifest) + "\n")
     }
 }
 

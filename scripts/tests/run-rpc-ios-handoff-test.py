@@ -344,10 +344,11 @@ class HandoffControls(unittest.TestCase):
             (root / 'scripts/run-rpc-phone-ios-controls.py').write_bytes(b'offline-script')
             (root / 'gradle').mkdir()
             shutil.copyfile(ROOT / 'gradle/platform-test-policy.json', root / 'gradle/platform-test-policy.json')
-            for name, _, _ in phone.TARGETS.values():
-                destination = root / 'samples/p2p-sample-rpc/phone-ios' / name
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(ROOT / 'samples/p2p-sample-rpc/phone-ios' / name, destination)
+            for rosters in phone.TARGETS.values():
+                for name, _, _ in rosters:
+                    destination = root / 'samples/p2p-sample-rpc/phone-ios' / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / 'samples/p2p-sample-rpc/phone-ios' / name, destination)
             state = parent / 'state'
             work = state / 'work/phone-controls'
             for path in (state / 'private', work, state / 'tools/xcodegen/bin'): path.mkdir(parents=True, mode=0o700)

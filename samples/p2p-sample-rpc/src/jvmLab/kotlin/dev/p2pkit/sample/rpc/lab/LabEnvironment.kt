@@ -29,7 +29,8 @@ import java.time.Instant
 /** Loaded only by the separate lab compilation, with explicit owner-scoped configuration. */
 public class LabEnvironment : RpcCapacityEnvironment {
     private val config = LabConfig.load("client")
-    internal val clientCount: Int get() = config.clientCount
+    override val clientCount: Int get() = config.clientCount
+    override val schemaVersion: Int get() = config.values.getValue("schema").toInt()
     private val directory = config.directory
     private val mobile = LabMobile.load(config)
     private val identities = mutableListOf<LabVault>()

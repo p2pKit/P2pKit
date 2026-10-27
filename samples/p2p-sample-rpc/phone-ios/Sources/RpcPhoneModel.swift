@@ -48,6 +48,10 @@ final class RpcPhoneModel: ObservableObject {
     private var mobileMonitor: Task<Void, Never>?
     private var mobileFailed = false
     private var mobileStopRequested = false
+    #if DEBUG
+        private var usbDeveloperMonitor: Task<Void, Never>?
+        private var usbDeveloperGeneration: UUID?
+    #endif
     private let wifi: RpcPhoneWifiObserving
     private var wifiGeneration: UUID?
     private var approvedWifi: RpcPhoneWifiNetwork?
@@ -182,6 +186,10 @@ final class RpcPhoneModel: ObservableObject {
     func protectedDataUnavailable() { expireAppSwitch() }
 
     private func expireAppSwitch() {
+        #if DEBUG
+            usbDeveloperMonitor?.cancel()
+            if owner.hasOwner || actionBusy { mobileFailed = mobileConfig != nil }
+        #endif
         stopLiveObservation()
         shareWindow.cancel()
         wifiGeneration = nil
@@ -402,12 +410,19 @@ final class RpcPhoneModel: ObservableObject {
     func prepareMobile() {
         guard canStart, mobileConfig == nil else { return }
         do {
-            let files = try RpcPhoneCapacityFiles(runLabel: usbRunLabel, requireNew: true)
-            let artifact = try RpcPhoneProcessSampler.installedArtifact()
-            try files.publish("prepared.txt", "schema=1\nscope=ios-usb-slot\nrunLabel=\(usbRunLabel)\n" +
-                "sourceSha=\(compiledSource)\nartifactSha256=\(artifact)\n")
-            status = "New private USB slot prepared. Wait for the coordinator, then load and review; RPC is stopped."
+            _ = try prepareMobileSlot()
         } catch { report(error) }
+    }
+
+    private func prepareMobileSlot(clientCount: Int32? = nil) throws -> RpcPhoneCapacityFiles {
+        let files = try RpcPhoneCapacityFiles(runLabel: usbRunLabel, requireNew: true)
+        let artifact = try RpcPhoneProcessSampler.installedArtifact()
+        let schema = clientCount == nil ? "1" : "2"
+        let count = clientCount.map { "clientCount=\($0)\n" } ?? ""
+        try files.publish("prepared.txt", "schema=\(schema)\nscope=ios-usb-slot\nrunLabel=\(usbRunLabel)\n" +
+            "sourceSha=\(compiledSource)\nartifactSha256=\(artifact)\n" + count)
+        status = "New private USB slot prepared. Wait for the coordinator, then load and review; RPC is stopped."
+        return files
     }
 
     /// USB loading does not authorize trust or start a listener. Local approval of the visible values is still required.
@@ -415,39 +430,141 @@ final class RpcPhoneModel: ObservableObject {
         guard canStart, mobileConfig == nil else { return }
         do {
             let files = try RpcPhoneCapacityFiles(runLabel: usbRunLabel)
-            guard let input = try files.read("inbox.txt") else { throw RpcPhoneCapacityIOError.invalidRecord }
-            let config = try RpcPhoneIos.shared.parseCapacityConfig(text: input)
-            guard config.hostPlatform == "Ios", config.hostSourceSha == compiledSource,
-                  config.runLabel == usbRunLabel,
-                  config.hostArtifactSha256 == (try RpcPhoneProcessSampler.installedArtifact()) else {
-                throw RpcPhoneCapacityIOError.invalidRecord
-            }
-            setManualNetworkSetup(true)
-            subnets = config.settings.subnets
-            interfaceName = config.settings.interfaceName
-            localAddress = config.settings.localAddress
-            port = String(config.settings.port)
-            capacityPins = config.clientPins
-            approveImport = false
-            mobileFiles = files
-            mobileConfig = config
-            mobileFailed = false
-            mobileStopRequested = false
-            status = "Review this USB run's network and 128 pins. Approval includes its exact Stop request and pin cleanup."
+            _ = try loadMobileInput(files)
         } catch { report(error) }
+    }
+
+    private func loadMobileInput(_ files: RpcPhoneCapacityFiles,
+                                 validate: ((RpcMobileCapacityConfig, String, String) throws -> Void)? = nil) throws -> String {
+        guard canStart, mobileConfig == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
+        try files.requireUnusedRuntimeOutputs()
+        guard let input = try files.read("inbox.txt") else { throw RpcPhoneCapacityIOError.invalidRecord }
+        let config = try RpcPhoneIos.shared.parseCapacityConfig(text: input)
+        let artifact = try RpcPhoneProcessSampler.installedArtifact()
+        guard config.hostPlatform == "Ios", config.hostSourceSha == compiledSource,
+              config.runLabel == usbRunLabel, config.hostArtifactSha256 == artifact else {
+            throw RpcPhoneCapacityIOError.invalidRecord
+        }
+        try validate?(config, input, artifact)
+        setManualNetworkSetup(true)
+        subnets = config.settings.subnets
+        interfaceName = config.settings.interfaceName
+        localAddress = config.settings.localAddress
+        port = String(config.settings.port)
+        capacityPins = config.clientPins
+        approveImport = false
+        mobileFiles = files
+        mobileConfig = config
+        mobileFailed = false
+        mobileStopRequested = false
+        status = "Review this USB run's network and \(config.clientCount) pins. Approval includes its exact Stop request and pin cleanup."
+        return input
     }
 
     func clearMobile() {
         guard canStart else { return }
+        #if DEBUG
+            usbDeveloperMonitor?.cancel()
+        #endif
+        clearMobileSettings()
+    }
+
+    private func clearMobileSettings() {
         mobileConfig = nil
         mobileFiles = nil
         capacityPins = ""
         approveImport = false
     }
 
+    #if DEBUG
+        /// An explicit developer launch creates one private slot; only sealed, exact-source commands may start it.
+        func beginUsbDeveloperCampaign(arguments: [String]) {
+            guard arguments.contains("--rpc-usb-prepare"), usbDeveloperMonitor == nil else { return }
+            do {
+                guard canStart, mobileConfig == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
+                let request = try RpcPhoneUsbDeveloperPrepare(arguments: arguments)
+                try request.verify(compiledSource: compiledSource, installedArtifact: RpcPhoneProcessSampler.installedArtifact())
+                usbRunLabel = request.runLabel
+                let count = request.clientCount
+                let firstFiles = try prepareMobileSlot(clientCount: count)
+                let token = UUID()
+                usbDeveloperGeneration = token
+                usbDeveloperMonitor = Task { @MainActor in
+                    defer {
+                        if self.usbDeveloperGeneration == token {
+                            self.usbDeveloperMonitor = nil
+                            self.usbDeveloperGeneration = nil
+                        }
+                    }
+                    var files = firstFiles
+                    var selectedCount = count
+                    do {
+                        while !Task.isCancelled {
+                            let text = try await self.waitForUsbCommand("campaign.txt", files: files)
+                            guard self.canStart, self.mobileConfig == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
+                            let command = try RpcPhoneUsbDeveloperStart(record: text)
+                            let inbox = try self.loadMobileInput(files) { config, input, artifact in
+                                guard config.schema == "2", config.clientCount == selectedCount else {
+                                    throw RpcPhoneCapacityIOError.invalidRecord
+                                }
+                                try command.verify(config: config, inbox: input, compiledSource: self.compiledSource,
+                                                   installedArtifact: artifact)
+                            }
+                            self.approveImport = true
+                            self.start(host: true)
+                            while self.owner.hasOwner || self.actionBusy || self.retirement != nil {
+                                if self.owner.phase == .cleanupPending { throw RpcPhoneCapacityIOError.resourceRetirement }
+                                try await Task.sleep(nanoseconds: 200_000_000)
+                            }
+                            guard self.mobileStopRequested, !self.mobileFailed,
+                                  let closed = try files.read("closed.txt", optional: true) else {
+                                throw RpcPhoneCapacityIOError.invalidRecord
+                            }
+                            try RpcPhoneUsbDeveloperStart.verifyHealthyClosed(closed, inbox: inbox)
+                            let nextText = try await self.waitForUsbCommand("next.txt", files: files)
+                            let next = try RpcPhoneUsbDeveloperNext(record: nextText)
+                            try next.verify(previous: command, compiledSource: self.compiledSource,
+                                            installedArtifact: RpcPhoneProcessSampler.installedArtifact())
+                            guard self.canStart else { throw RpcPhoneCapacityIOError.resourceRetirement }
+                            self.clearMobileSettings()
+                            self.usbRunLabel = next.nextRunLabel
+                            selectedCount = next.clientCount
+                            let nextFiles = try self.prepareMobileSlot(clientCount: selectedCount)
+                            guard let prepared = try nextFiles.read("prepared.txt") else {
+                                throw RpcPhoneCapacityIOError.invalidRecord
+                            }
+                            // The old slot is already addressable over USB. Signal only after the new slot is committed.
+                            try files.publish("next-ready.txt", prepared)
+                            files = nextFiles
+                        }
+                    } catch is CancellationError {
+                        // Foreground/lifecycle Stop owns the active runtime; do not invent a successful receipt.
+                    } catch {
+                        self.mobileFailed = true
+                        do { try files.publish("failed.txt", "failed=true\nphase=mobile-start\n") }
+                        catch { self.status = "USB start failed; no capacity qualification." }
+                        if self.owner.hasOwner || self.actionBusy { self.stop() }
+                    }
+                }
+            } catch { report(error) }
+        }
+
+        private func waitForUsbCommand(_ name: String, files: RpcPhoneCapacityFiles) async throws -> String {
+            while !Task.isCancelled {
+                guard foreground else { throw CancellationError() }
+                if let record = try files.read(name, optional: true) { return record }
+                try await Task.sleep(nanoseconds: 500_000_000)
+            }
+            throw CancellationError()
+        }
+    #endif
+
     private func monitorMobile(_ lab: RpcPhoneLab, files: RpcPhoneCapacityFiles) {
         guard mobileMonitor == nil else { mobileFailed = true; stop(); return }
         mobileMonitor = Task { @MainActor in
+            let environment = RpcPhoneEnvironmentSampler()
+            environment.acquire()
+            defer { environment.retire() }
             do {
                 try files.publish("ready.txt", try await lab.mobileReadyRecord(
                     observedArtifactSha256: RpcPhoneProcessSampler.installedArtifact()
@@ -457,7 +574,11 @@ final class RpcPhoneModel: ObservableObject {
                     guard ProcessInfo.processInfo.systemUptime - started < 2_400 else {
                         throw RpcPhoneCapacityIOError.resourceObservation
                     }
-                    try files.publish("telemetry.txt", lab.mobileTelemetry(resources: RpcPhoneProcessSampler.sample()))
+                    let observation = try environment.sample()
+                    try files.publish("telemetry.txt", lab.mobileTelemetry(
+                        resources: RpcPhoneProcessSampler.sample(environment: observation)))
+                    // Retain the observed thermal state before the owned Stop; this attempt stays failed.
+                    if observation.requiresThermalStop { throw RpcPhoneCapacityIOError.thermalStop }
                     if let input = try files.read("stop.txt", optional: true) {
                         guard try lab.mobileStopMatches(record: input) else { throw RpcPhoneCapacityIOError.invalidRecord }
                         self.mobileStopRequested = true
@@ -470,7 +591,8 @@ final class RpcPhoneModel: ObservableObject {
                 // The retained Stop task below awaits this task and the actual Kotlin close.
             } catch {
                 self.mobileFailed = true
-                do { try files.publish("failed.txt", "failed=true\nphase=mobile-control\n") }
+                let phase = (error as? RpcPhoneCapacityIOError) == .thermalStop ? "thermal-stop" : "mobile-control"
+                do { try files.publish("failed.txt", "failed=true\nphase=\(phase)\n") }
                 catch { self.status = "USB evidence failed; capacity remains unqualified." }
                 if self.owner.accepts(lab) { self.stop() }
             }

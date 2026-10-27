@@ -343,6 +343,7 @@ internal class RpcHostEngine(
         val job = scope.launch(start = CoroutineStart.ATOMIC) {
             var terminal: WireMessage? = null
             var encoded: EncodedReply? = null
+            var escaped: Throwable? = null
             try {
                 currentCoroutineContext().ensureActive()
                 if (record.cancelRequested.value) throw CancellationException("RPC cancellation requested")
@@ -376,14 +377,25 @@ internal class RpcHostEngine(
                 terminal = response(record, WireKind.Failure, code = if (record.executionBegan.value) {
                     WireFailure.HandlerFailed.code
                 } else WireFailure.InvalidPayload.code)
+            } catch (failure: Throwable) {
+                escaped = failure
+                throw failure
             } finally {
                 // Prompt cancellation may discard a successfully encoded return value at withTimeout's boundary.
                 encoded?.takeIf { terminal?.body !== it.body }?.body?.release()
                 // Non-cooperative handlers keep their slot until this finally REALLY runs.
-                withContext(NonCancellable) {
-                    finish(
-                        record, terminal ?: response(record, WireKind.Failure, code = WireFailure.HandlerFailed.code),
-                    )
+                try {
+                    withContext(NonCancellable) {
+                        finish(
+                            record,
+                            terminal ?: response(record, WireKind.Failure, code = WireFailure.HandlerFailed.code),
+                        )
+                    }
+                } catch (failure: Throwable) {
+                    val original = escaped
+                    if (original == null) throw failure
+                    // A result-authorizer Error must not replace the handler's original Error.
+                    if (failure !== original) original.addSuppressed(failure)
                 }
             }
         }
@@ -394,52 +406,63 @@ internal class RpcHostEngine(
     private suspend fun finish(record: Record, terminal: WireMessage, authorizeResult: Boolean = true) {
         var next: Record? = null
         var target: RpcLink? = null
-        // Returning cached or new results requires current application authorization, not only transport trust.
-        val candidate = lock.withLock {
-            links[record.key.peer]?.takeIf { it in ready && it.admission == PeerAdmission.Trusted }
-        }
-        val authorized = candidate != null && try {
-            if (authorizeResult) allowed(record.procedure, candidate) else trusted(record.key.peer)
-        } catch (_: CancellationException) { false }
-        lock.withLock {
-            if (record.stage == Stage.Complete) { terminal.release(); return }
-            if (record.stage == Stage.Running) running--
-            if (record.stage == Stage.Queued) pending.remove(record)
-            activePerPeer.computeCount(record.key.peer, -1)
-            record.stage = Stage.Complete
-            record.completedAt = clock.now()
-            record.request.release()
-            record.decodeAllowance.release()
-            if (terminal.body == null) record.resultAllowance.release()
-            if (!closed) {
-                record.result = terminal.retained()
-                completed[record.key] = record
-                if (terminal.body != null) {
-                    cachedBodies[record.key] = record
-                    cachedBytes += terminal.body.size
-                    trimCache()
-                }
-                if (authorized && trusted(record.key.peer)) target = candidate
-            } else {
-                records.remove(record.key)
-                recordsPerPeer.computeCount(record.key.peer, -1)
-            }
-            if (!closed && running < limits.runningCalls && pending.isNotEmpty()) {
-                next = pending.removeFirst().also {
-                    it.stage = Stage.Running
-                    running++
-                    requestRecorder.running(it.key.id, it.key.peer.value, clock.now() - it.admittedAt)
-                }
-            }
-            stats.update { it.copy(completedCalls = it.completedCalls + 1) }
-            requestRecorder.finish(record.key.id, record.key.peer.value, terminal.kind, terminal.code,
-                record.completedAt - record.admittedAt)
-            publishLocked()
-        }
+        var authorizationFailure: Throwable? = null
         try {
+            // Returning cached or new results requires current application authorization, not only transport trust.
+            val candidate = lock.withLock {
+                links[record.key.peer]?.takeIf { it in ready && it.admission == PeerAdmission.Trusted }
+            }
+            val authorized = candidate != null && try {
+                if (authorizeResult) allowed(record.procedure, candidate) else trusted(record.key.peer)
+            } catch (_: CancellationException) {
+                false
+            } catch (failure: Throwable) {
+                // Deny delivery, but finish the owned execution before propagating the original Error.
+                authorizationFailure = failure
+                false
+            }
+            lock.withLock {
+                if (record.stage == Stage.Complete) return
+                if (record.stage == Stage.Running) running--
+                if (record.stage == Stage.Queued) pending.remove(record)
+                activePerPeer.computeCount(record.key.peer, -1)
+                record.stage = Stage.Complete
+                record.completedAt = clock.now()
+                record.request.release()
+                record.decodeAllowance.release()
+                if (terminal.body == null) record.resultAllowance.release()
+                if (!closed) {
+                    record.result = terminal.retained()
+                    completed[record.key] = record
+                    if (terminal.body != null) {
+                        cachedBodies[record.key] = record
+                        cachedBytes += terminal.body.size
+                        trimCache()
+                    }
+                    if (authorized && trusted(record.key.peer)) target = candidate
+                } else {
+                    records.remove(record.key)
+                    recordsPerPeer.computeCount(record.key.peer, -1)
+                }
+                if (!closed && running < limits.runningCalls && pending.isNotEmpty()) {
+                    next = pending.removeFirst().also {
+                        it.stage = Stage.Running
+                        running++
+                        requestRecorder.running(it.key.id, it.key.peer.value, clock.now() - it.admittedAt)
+                    }
+                }
+                stats.update { it.copy(completedCalls = it.completedCalls + 1) }
+                requestRecorder.finish(record.key.id, record.key.peer.value, terminal.kind, terminal.code,
+                    record.completedAt - record.admittedAt)
+                publishLocked()
+            }
             next?.let(::launchRecord)
             target?.let { send(it, terminal) }
-        } finally { terminal.release() }
+            authorizationFailure?.let { throw it }
+        } finally {
+            terminal.release()
+            stats.update { it.copy(retainedPayloadBytes = budget.retainedBytes.value) }
+        }
     }
 
     private suspend fun completeQueued(record: Record, reason: WireFailure) {

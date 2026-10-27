@@ -199,6 +199,31 @@ class RpcLabNetworkSetupTest {
     }
 
     @Test
+    fun verifiedUsbReplacementKeepsSettingsLockedAndRequiresActualRuntimeRetirement() {
+        val wifi = Wifi(available())
+        var retired = false
+        val setup = RpcLabNetworkSetup(wifi, idle = { false }, invalidated = {}, runtimeRetired = { retired })
+        setup.setForeground(true)
+        val original = RpcPhoneSettings(first.subnet, first.interfaceName, first.localAddress, 48123)
+        val replacement = RpcPhoneSettings(second.subnet, second.interfaceName, second.localAddress, 48123)
+        setup.loadSession(original)
+        val before = setup.state.value
+        assertFailsWith<IllegalStateException> { setup.replaceRetiredSession(replacement) }
+        assertEquals(before, setup.state.value)
+        retired = true
+        setup.replaceRetiredSession(replacement)
+        assertTrue(setup.state.value.sessionLocked)
+        assertTrue(setup.state.value.manual)
+        assertFalse(setup.canConfigure) // Serialized preparation is busy; no transient user-editable state.
+        assertNull(setup.state.value.approved)
+        assertEquals(second.localAddress, setup.settingsForStart("48123").localAddress)
+        setup.setForeground(false)
+        val background = setup.state.value
+        assertFailsWith<IllegalStateException> { setup.replaceRetiredSession(original) }
+        assertEquals(background, setup.state.value)
+    }
+
+    @Test
     fun missingInvalidManualFieldsAndInvalidPortsHaveActionableFixedErrors() {
         val f = Fixture()
         f.setup.setManual(true)

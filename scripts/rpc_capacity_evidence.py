@@ -23,6 +23,15 @@ LARGE_FIELDS = ('expected', 'concurrency', 'encodedRequestBytes', 'encodedRespon
 FAILURE_KINDS = ('NotConnected', 'Closed', 'PermissionMissing', 'Overloaded', 'DeadlineExceeded', 'Unauthorized',
                  'Authentication', 'Protocol', 'IncompatibleVersion', 'UnknownProcedure', 'InvalidPayload',
                  'HandlerFailed', 'ResultUnavailable', 'UnknownOutcome', 'HostRestarted', 'RemoteCancelled', 'TrustStorage')
+CORRECTNESS_CASES = ('full-authenticated-cohort', 'concurrent-correlation', 'application-error',
+    'procedure-authorization', 'sent-deadline', 'sent-cancellation', 'slow-handler-fairness',
+    'disconnect-during-call', 'full-authenticated-cohort-after')
+CHURN_CASES = ('full-authenticated-cohort', 'five-round-original-identity-reconnect', 'full-authenticated-cohort-after')
+CONTROL_FIELDS = ('clients', 'expectedEchoResponses', 'echoResponses', 'concurrentEchoResponses', 'applicationErrors',
+    'authorizationRefusals', 'sentDeadlineFailures', 'sentCancellations', 'disconnectUnknownOutcomes',
+    'holdEntered', 'holdRetired', 'slowHandlerResponses', 'fairnessEchoResponses', 'churnRounds',
+    'disconnects', 'reconnects', 'actualDurationNanos', 'hostConnectionsBefore', 'hostConnectionsAfter',
+    'hostRunningAfter', 'hostQueuedAfter')
 INITIALIZATION_FIELDS = ('clients', 'callsPerClient', 'minimumCallPeriodNanos', 'callPhaseTimeoutMillis',
                          'encodedRequestBytes', 'encodedResponseBytes', 'expected', 'dispatched', 'completed', 'failed',
                          'actualDurationNanos', 'driverCpuDeltaNanos', 'driverCompilationMillisBefore',
@@ -30,6 +39,18 @@ INITIALIZATION_FIELDS = ('clients', 'callsPerClient', 'minimumCallPeriodNanos', 
 INITIALIZATION_HOST_FIELDS = ('acceptedBefore', 'completedBefore', 'acceptedAfter', 'completedAfter',
                              'runningAfter', 'queuedAfter', 'connectedAfter', 'refusedDelta', 'protocolFailuresDelta',
                              'connectionFailuresDelta', 'cpuNanosDelta', 'uptimeMillisDelta')
+IDLE_SAMPLE_FIELDS = ('uptimeMillis', 'cpuNanos', 'residentBytes', 'nativeThreads', 'connected', 'accepted', 'completed',
+    'refused', 'duplicates', 'droppedNotifications', 'protocolFailures', 'connectionFailures', 'running', 'queued',
+    'records', 'payloadBytes', 'driverElapsedNanos', 'driverCpuNanos')
+IDLE_FIELDS = ('clients', 'sampleCount', 'actualDurationNanos', 'actualSettleNanos', 'hostUptimeDeltaMillis',
+    'hostCpuDeltaNanos', 'driverElapsedNanos', 'driverCpuDeltaNanos', 'connectionChanges', 'invalidHostSamples',
+    'sampledMinHostRssBytes', 'sampledMaxHostRssBytes', 'sampledMinHostThreads', 'sampledMaxHostThreads',
+    'hostConnectionsBefore', 'hostConnectionsAfter', 'hostAcceptedDelta', 'hostCompletedDelta',
+    'hostRunningAfter', 'hostQueuedAfter')
+IDLE_SIGNED_DELTAS = frozenset(('hostUptimeDeltaMillis', 'hostCpuDeltaNanos', 'driverCpuDeltaNanos',
+                              'hostAcceptedDelta', 'hostCompletedDelta'))
+IDLE_UNCHANGED_COUNTERS = ('accepted', 'completed', 'refused', 'duplicates', 'droppedNotifications',
+                           'protocolFailures', 'connectionFailures')
 PROFILE_CATEGORIES = frozenset(('LanInterfaceEnumeration', 'LanPathValidation', 'SocketRead', 'SocketWrite',
     'SocketPoll', 'Crypto', 'PayloadHash', 'JsonCodec', 'RpcHost', 'RpcClient', 'RpcLink', 'CoreSession',
     'CoroutineScheduler', 'CoroutineFlow', 'Other'))
@@ -117,13 +138,25 @@ def runtime_profile(value, role, source, recording_sha256):
     return json.loads(json.dumps(value, allow_nan=False))
 
 
-def measurement(value, mode):
+def record_profile(value, fields, client_count):
+    """An explicit caller-selected cohort, never inferred from a possibly stale report."""
+    need(type(client_count) is int and client_count in (128, 256))
+    need(type(value) is dict and type(value.get('schema')) is int and value['schema'] in (1, 2))
+    expected = set(fields) | ({'clientCount'} if value['schema'] == 2 else set())
+    need(set(value) == expected)
+    if value['schema'] == 1:
+        need(client_count == 128)
+    else:
+        need(type(value['clientCount']) is int and value['clientCount'] == client_count)
+
+
+def measurement(value, mode, client_count=128):
     need(mode in ('steady', 'large'))
     keys = {'schema', 'mode', 'status', 'capacityQualified', 'measurements', 'throughputResponsesPerSecond',
             'latencyBucketUpperMs', 'latencyOverflowBucketMs', 'rpcFailuresByKind', 'cleanup'}
     if mode == 'steady':
         keys.add('schedulingDelayBucketUpperMs')
-    need(type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 1)
+    record_profile(value, keys, client_count)
     need(value['mode'] == mode and value['status'] in ('FAIL', 'PENDING_RESOURCE_AND_NETWORK_REVIEW') and
          value['capacityQualified'] is False and value['cleanup'] == 'AWAIT_FINAL_RECORD')
     m = numbers(value['measurements'], STEADY_FIELDS if mode == 'steady' else LARGE_FIELDS)
@@ -139,7 +172,8 @@ def measurement(value, mode):
         # Even a missed slot records its scheduling delay; no empty histogram
         # sentinel may stand in for a complete 30-minute scheduling observation.
         histogram(value['schedulingDelayBucketUpperMs'], m['expected'])
-        need(m['clients'] == 128 and m['callsPerSecondPerClient'] == 10 and m['expected'] == 2304000 and
+        need(m['clients'] == client_count and m['callsPerSecondPerClient'] == 10 and
+             m['expected'] == client_count * 18000 and
              m['encodedRequestBytes'] == m['encodedResponseBytes'] == 1024 and
              m['requiredDurationNanos'] == 1800000000000 and m['actualSchedulingNanos'] >= m['requiredDurationNanos'])
         need(m['dispatched'] + m['missedDispatches'] == m['expected'] and
@@ -158,17 +192,17 @@ def measurement(value, mode):
     return json.loads(json.dumps(value, allow_nan=False))
 
 
-def initialization(value):
-    """Additional fully accounted preparation, never part of the 2,304,000 measured responses."""
-    need(type(value) is dict and set(value) == {'schema', 'scope', 'status', 'capacityQualified', 'measurements',
-         'hostObservation', 'latencyBucketUpperMs', 'rpcFailuresByKind'} and
-         type(value['schema']) is int and value['schema'] == 1 and value['scope'] ==
+def initialization(value, client_count=128):
+    """Additional fully accounted preparation, never part of the selected steady-state responses."""
+    record_profile(value, {'schema', 'scope', 'status', 'capacityQualified', 'measurements',
+         'hostObservation', 'latencyBucketUpperMs', 'rpcFailuresByKind'}, client_count)
+    need(value['scope'] ==
          'FIXED_RPC_PATH_INITIALIZATION_NOT_CAPACITY_OR_COLD_START_QUALIFICATION' and
          value['capacityQualified'] is False and value['status'] in ('FAIL', 'INITIALIZED_NOT_CAPACITY'))
     m = numbers(value['measurements'], INITIALIZATION_FIELDS)
     errors = numbers(value['rpcFailuresByKind'], FAILURE_KINDS)
     histogram(value['latencyBucketUpperMs'], m['dispatched'])
-    need(m['clients'] == 128 and m['callsPerClient'] == 600 and m['expected'] == 76800 and
+    need(m['clients'] == client_count and m['callsPerClient'] == 600 and m['expected'] == client_count * 600 and
          m['minimumCallPeriodNanos'] == 100000000 and m['callPhaseTimeoutMillis'] == 120000 and
          m['encodedRequestBytes'] == m['encodedResponseBytes'] == 1024 and m['actualDurationNanos'] > 0 and
          m['dispatched'] == m['completed'] + m['failed'] and m['dispatched'] <= m['expected'] and
@@ -180,7 +214,7 @@ def initialization(value):
     if value['status'] == 'INITIALIZED_NOT_CAPACITY':
         need(m['dispatched'] == m['completed'] == m['expected'] and m['failed'] == 0 and
              60000000000 <= m['actualDurationNanos'] < 130000000000 and all(v == 0 for v in errors.values()) and
-             h is not None and h['connectedAfter'] == 128 and
+             h is not None and h['connectedAfter'] == client_count and
              h['acceptedAfter'] - h['acceptedBefore'] == h['completedAfter'] - h['completedBefore'] == m['expected'] and
              h['acceptedBefore'] == h['completedBefore'] and h['acceptedAfter'] == h['completedAfter'] and
              all(h[k] == 0 for k in ('runningAfter', 'queuedAfter', 'refusedDelta', 'protocolFailuresDelta',
@@ -188,14 +222,121 @@ def initialization(value):
     return json.loads(json.dumps(value, allow_nan=False))
 
 
-def host_series(rows):
+def exercise(value, mode, client_count=128):
+    """Finite real RPC controls. Handler delay never proves socket backpressure or physical capacity."""
+    need(mode in ('correctness', 'churn'))
+    fields = {'schema', 'mode', 'scope', 'status', 'capacityQualified', 'expectedCases', 'passedCases',
+              'failureCase', 'measurements', 'trueSlowConsumerQualified', 'cleanup'}
+    record_profile(value, fields, client_count)
+    need(value['schema'] == 2 and value['mode'] == mode and value['scope'] ==
+         'REAL_AUTHENTICATED_RPC_CONTROLS_NOT_CAPACITY' and value['capacityQualified'] is False and
+         value['trueSlowConsumerQualified'] is False and value['cleanup'] == 'AWAIT_FINAL_RECORD' and
+         value['status'] in ('FAIL', 'PENDING_RESOURCE_AND_NETWORK_REVIEW'))
+    expected_cases = list(CORRECTNESS_CASES if mode == 'correctness' else CHURN_CASES)
+    need(type(value['expectedCases']) is list and value['expectedCases'] == expected_cases and
+         type(value['passedCases']) is list and value['passedCases'] == expected_cases[:len(value['passedCases'])])
+    m = numbers(value['measurements'], CONTROL_FIELDS)
+    expected_echo = client_count * 3 + 5 if mode == 'correctness' else client_count * 5
+    need(m['clients'] == client_count and m['expectedEchoResponses'] == expected_echo and
+         m['actualDurationNanos'] > 0 and m['echoResponses'] <= expected_echo and
+         m['hostConnectionsBefore'] in (0, client_count) and m['hostConnectionsAfter'] in (0, client_count) and
+         m['holdRetired'] <= m['holdEntered'] <= 3 and m['slowHandlerResponses'] <= 16 and
+         m['concurrentEchoResponses'] <= client_count * 2 and m['churnRounds'] <= 5 and
+         m['disconnects'] <= client_count * 5 and m['reconnects'] <= m['disconnects'])
+    singleton = ('applicationErrors', 'authorizationRefusals', 'sentDeadlineFailures', 'sentCancellations',
+                 'disconnectUnknownOutcomes', 'fairnessEchoResponses')
+    need(all(m[name] <= 1 for name in singleton))
+    if value['status'] == 'PENDING_RESOURCE_AND_NETWORK_REVIEW':
+        need(value['passedCases'] == expected_cases and value['failureCase'] is None and
+             m['echoResponses'] == expected_echo and m['hostConnectionsBefore'] == m['hostConnectionsAfter'] ==
+             client_count and m['hostRunningAfter'] == m['hostQueuedAfter'] == 0)
+        if mode == 'correctness':
+            need(m['concurrentEchoResponses'] == client_count * 2 and all(m[name] == 1 for name in singleton) and
+                 m['holdEntered'] == m['holdRetired'] == 3 and m['slowHandlerResponses'] == 16 and
+                 m['churnRounds'] == 0 and m['disconnects'] == m['reconnects'] == 1)
+        else:
+            need(all(m[name] == 0 for name in singleton) and m['concurrentEchoResponses'] ==
+                 m['holdEntered'] == m['holdRetired'] == m['slowHandlerResponses'] == 0 and m['churnRounds'] == 5 and
+                 m['disconnects'] == m['reconnects'] == client_count * 5)
+    else:
+        need(value['failureCase'] in expected_cases)
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def connected_idle(value, client_count=128):
+    """Separate real-host monotonic idle samples; neither initialization nor steady capacity evidence."""
+    record_profile(value, {'schema', 'sourceSha', 'runLabel', 'hostPlatform', 'hostArtifactSha256',
+        'driverArtifactSha256', 'scope', 'status', 'capacityQualified', 'settleMillis', 'requiredHostIdleMillis',
+        'failureStage', 'measurements', 'samples'}, client_count)
+    need(value['schema'] == 2 and value['scope'] == 'CONNECTED_IDLE_RESOURCE_OBSERVATION_NOT_CAPACITY' and
+         value['capacityQualified'] is False and value['status'] in ('FAIL', 'OBSERVED_CONNECTED_IDLE_NOT_CAPACITY') and
+         value['hostPlatform'] in ('Jvm', 'Android', 'Ios'))
+    need(type(value['sourceSha']) is str and re.fullmatch('[a-f0-9]{40}', value['sourceSha']) and
+         type(value['runLabel']) is str and re.fullmatch('[a-z0-9-]{1,64}', value['runLabel']) and
+         all(type(value[field]) is str and re.fullmatch('[a-f0-9]{64}', value[field])
+             for field in ('hostArtifactSha256', 'driverArtifactSha256')))
+    need(type(value['settleMillis']) is int and value['settleMillis'] == 10000 and
+         type(value['requiredHostIdleMillis']) is int and value['requiredHostIdleMillis'] == 30000)
+    m = value['measurements']
+    need(type(m) is dict and set(m) == set(IDLE_FIELDS))
+    for field, count in m.items():
+        need(type(count) is int and (-(2**63) if field in IDLE_SIGNED_DELTAS else 0) <= count < 2**63)
+    rows = value['samples']
+    need(type(rows) is list and 0 <= len(rows) <= 10 and m['clients'] == client_count and
+         m['sampleCount'] == len(rows) and m['invalidHostSamples'] <= len(rows))
+    for row in rows:
+        numbers(row, IDLE_SAMPLE_FIELDS)
+        need(row['residentBytes'] > 0 and row['nativeThreads'] > 0 and row['connected'] <= client_count and
+             row['running'] <= client_count and row['queued'] <= client_count * 2 and
+             row['records'] <= client_count * 1024 and
+             row['payloadBytes'] <= (64 if client_count == 128 else 128) * 1048576)
+
+    def first(field):
+        return rows[0][field] if rows else 0
+
+    def last(field):
+        return rows[-1][field] if rows else 0
+
+    need(m['hostUptimeDeltaMillis'] == last('uptimeMillis') - first('uptimeMillis') and
+         m['hostCpuDeltaNanos'] == last('cpuNanos') - first('cpuNanos') and
+         m['driverElapsedNanos'] == last('driverElapsedNanos') and
+         m['driverCpuDeltaNanos'] == last('driverCpuNanos') - first('driverCpuNanos') and
+         m['hostConnectionsBefore'] == first('connected') and m['hostConnectionsAfter'] == last('connected') and
+         m['hostAcceptedDelta'] == last('accepted') - first('accepted') and
+         m['hostCompletedDelta'] == last('completed') - first('completed') and
+         m['hostRunningAfter'] == last('running') and m['hostQueuedAfter'] == last('queued'))
+    for field, suffix in (('residentBytes', 'HostRssBytes'), ('nativeThreads', 'HostThreads')):
+        need(m['sampledMin' + suffix] == min((r[field] for r in rows), default=0) and
+             m['sampledMax' + suffix] == max((r[field] for r in rows), default=0))
+    need(m['actualDurationNanos'] >= m['actualSettleNanos'] + m['driverElapsedNanos'] and
+         (not rows or rows[0]['driverElapsedNanos'] == 0))
+    if value['status'] == 'OBSERVED_CONNECTED_IDLE_NOT_CAPACITY':
+        need(value['failureStage'] is None and len(rows) >= 2 and m['actualSettleNanos'] >= 10000000000 and
+             m['hostUptimeDeltaMillis'] >= 30000 and m['driverElapsedNanos'] >= 30000000000 and
+             m['connectionChanges'] == m['invalidHostSamples'] == 0 and
+             abs(m['hostUptimeDeltaMillis'] - m['driverElapsedNanos'] // 1000000) <= 5000)
+        need(all(r['connected'] == client_count and r['running'] == r['queued'] == 0 and
+                 r['accepted'] == r['completed'] for r in rows))
+        for a, b in zip(rows, rows[1:]):
+            need(a['uptimeMillis'] < b['uptimeMillis'] and a['cpuNanos'] <= b['cpuNanos'] and
+                 a['driverCpuNanos'] <= b['driverCpuNanos'] and
+                 b['driverElapsedNanos'] >= a['driverElapsedNanos'] + 5000000000 and
+                 all(a[field] == b[field] for field in IDLE_UNCHANGED_COUNTERS))
+    else:
+        need(value['failureStage'] in ('settle', 'baseline', 'observe', 'validation'))
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def host_series(rows, client_count=128):
+    need(type(client_count) is int and client_count in (128, 256))
     need(type(rows) is list and 2 <= len(rows) <= 3000)
     for row in rows:
         numbers(row, HOST_FIELDS)
         need(row['residentBytes'] > 0 and row['nativeThreads'] > 0 and row['jvmThreads'] > 0)
         # The existing LabTelemetry/RpcLimits bounds, not new capacity thresholds.
-        need(row['connected'] <= 128 and row['running'] <= 128 and row['queued'] <= 256 and
-             row['records'] <= 131072 and row['payloadBytes'] <= 64 * 1048576)
+        need(row['connected'] <= client_count and row['running'] <= client_count and
+             row['queued'] <= client_count * 2 and row['records'] <= client_count * 1024 and
+             row['payloadBytes'] <= (64 if client_count == 128 else 128) * 1048576)
     for a, b in zip(rows, rows[1:]):
         need(a['sequence'] < b['sequence'] and a['uptimeMillis'] < b['uptimeMillis'] and a['cpuNanos'] <= b['cpuNanos'])
         need(all(a[k] <= b[k] for k in ('accepted', 'completed', 'refused', 'duplicates', 'droppedNotifications',

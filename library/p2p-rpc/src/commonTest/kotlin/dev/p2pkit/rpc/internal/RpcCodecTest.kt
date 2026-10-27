@@ -3,13 +3,16 @@ package dev.p2pkit.rpc.internal
 import dev.p2pkit.core.PayloadBudget
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcFailureKind
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.encoding.Encoder
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RpcCodecTest {
@@ -22,6 +25,30 @@ class RpcCodecTest {
         assertEquals("stock", RpcBodyCodec.decode(String.serializer(), body, 32, budget))
         body.release()
         assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun serializerErrorReleasesEveryOwnedEncodingReservationAndPreservesTheError() {
+        val marker = AssertionError("Serializer fixture failure")
+        val serializer = object : KSerializer<String> by String.serializer() {
+            override fun serialize(encoder: Encoder, value: String) {
+                encoder.encodeString(value)
+                throw marker
+            }
+        }
+        for (preReserved in listOf(false, true)) {
+            val budget = PayloadBudget(1_048_576)
+            val reservation = if (preReserved) budget.tryReserve(RpcBodyCodec.encodingAllowance(64)) else null
+            if (preReserved) assertNotNull(reservation)
+            assertSame(marker, assertFailsWith<AssertionError> {
+                RpcBodyCodec.encode(serializer, "fixture", 64, budget, reservation)
+            })
+            assertEquals(0L, budget.retainedBytes.value)
+            val body = RpcBodyCodec.encode(String.serializer(), "next", 64, budget)
+            assertEquals("next", RpcBodyCodec.decode(String.serializer(), body, 64, budget))
+            body.release()
+            assertEquals(0L, budget.retainedBytes.value)
+        }
     }
 
     @Test

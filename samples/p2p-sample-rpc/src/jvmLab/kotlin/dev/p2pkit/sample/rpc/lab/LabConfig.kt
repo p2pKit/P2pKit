@@ -24,6 +24,7 @@ internal class LabConfig(val directory: Path, val values: Map<String, String>) {
             "interface", "localAddress",
         ))
         require(values.getValue("schema") in setOf("1", "2") && role in setOf("host", "client"))
+        if (values.getValue("schema") == "2") require(values.getValue("clientCount") in setOf("128", "256"))
         require(clientCount in setOf(128, 256))
         require(runLabel.matches(Regex("[a-z0-9-]{1,64}")) && sourceSha.matches(Regex("[a-f0-9]{40}")))
         require(port in 1024..65535 && lan.allows(endpointAddress))

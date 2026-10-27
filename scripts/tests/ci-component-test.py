@@ -79,6 +79,25 @@ class ComponentTests(unittest.TestCase):
     def test_source_runs_scalable_io_receipt_controls(self):
         self.assertEqual(dict(C.commands('source'))['check-rpc-scalable-io-test.py'],
                          [C.sys.executable, '-B', 'scripts/tests/check-rpc-scalable-io-test.py', '-v'])
+
+    def test_mobile_mac_preparation_controls_are_once_source_routed_and_evidence_admitted(self):
+        names = ('rpc-capacity-evidence-test.py', 'run-rpc-capacity-lab-test.py',
+                 'rpc-capacity-macos-stage-test.py', 'rpc-mobile-capacity-test.py',
+                 'rpc-mobile-commands-test.py', 'rpc-ios-usb-test.py',
+                 'run-rpc-mobile-capacity-test.py', 'rpc-mobile-mac-control-test.py',
+                 'rpc-darwin-capacity-test.py', 'run-rpc-mac-campaign-test.py',
+                 'run-rpc-phone-ios-controls-test.py', 'run-rpc-ios-handoff-test.py',
+                 'prepare-macos-rpc-desktop-test.py', 'package-rpc-preview-test.py')
+        commands = C.commands('source')
+        evidence_spec = importlib.util.spec_from_file_location('mobile_mac_ci_evidence', ROOT / 'scripts/ci_evidence.py')
+        evidence = importlib.util.module_from_spec(evidence_spec)
+        with patch.object(C.sys, 'path', [str(ROOT / 'scripts'), *C.sys.path]):
+            evidence_spec.loader.exec_module(evidence)
+        for name in names:
+            self.assertEqual([argv for task, argv in commands if task == name],
+                             [[C.sys.executable, '-B', 'scripts/tests/' + name, '-v']])
+            self.assertTrue((ROOT / 'scripts/tests' / name).is_file())
+            self.assertIn(name, evidence.TASK_NAMES)
     def test_retained_publication_security_controls_are_in_source_component(self):
         expected = {
             'release-tag-controls': 'check-release-tag',

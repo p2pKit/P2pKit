@@ -39,9 +39,13 @@ public class RpcCapacityHostTelemetry(
  * Test-driver integration, not an injectable RPC transport. Supply exactly one reviewed local
  * ServiceLoader provider on the driver's classpath. There is deliberately no provider, key material,
  * in-memory trust fallback, secret CLI argument, hosted executor, or automatic pairing in this sample.
- * Provision 128 different protected identities and durably approve them on the selected host first.
+ * Provision the selected 128 or 256 different protected identities and durably approve them on the host first.
  */
 public interface RpcCapacityEnvironment {
+    /** The original provider profile stays at128 unless a source-bound configuration explicitly selects256. */
+    public val clientCount: Int get() = RpcCapacityContract.CLIENTS
+    /** Schema1 remains the historical128-client experiment; schema2 binds the selected clientCount. */
+    public val schemaVersion: Int get() = 1
     public val manifest: RpcCapacityManifest
     public val lan: OrganizationLan
     public val selectedHost: RpcSelectedHost

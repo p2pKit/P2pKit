@@ -3,14 +3,18 @@ import CryptoKit
 import Foundation
 import P2pKitRpcExample
 
-enum RpcPhoneCapacityIOError: Error { case invalidRecord, filePolicy, io, resourceObservation, resourceRetirement }
+enum RpcPhoneCapacityIOError: Error {
+    case invalidRecord, filePolicy, io, resourceObservation, resourceRetirement, thermalStop
+}
 
 /// Private app-container files transferred by an explicitly trusted USB developer connection, not an RPC service.
 final class RpcPhoneCapacityFiles {
     private let directory: URL
     private var imported: Set<String> = []
-    private static let names: Set<String> = ["prepared.txt", "inbox.txt", "stop.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"]
-    private static let stagingNames: Set<String> = [".incoming-inbox.txt", ".sealed-inbox.txt", ".incoming-stop.txt", ".sealed-stop.txt"]
+    private static let names: Set<String> = ["prepared.txt", "next-ready.txt", "inbox.txt", "stop.txt", "campaign.txt", "next.txt",
+                                             "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"]
+    private static let inputs: Set<String> = ["inbox.txt", "stop.txt", "campaign.txt", "next.txt"]
+    private static let stagingNames = Set(inputs.flatMap { [".incoming-" + $0, ".sealed-" + $0] })
 
     init(runLabel: String, requireNew: Bool = false) throws {
         guard let validLabel = runLabel.range(of: "^[a-z0-9-]{1,64}$", options: .regularExpression),
@@ -72,9 +76,16 @@ final class RpcPhoneCapacityFiles {
         return directory.appendingPathComponent(name).path
     }
 
+    /// A used or interrupted runtime is refused before either a factory or a pin import.
+    func requireUnusedRuntimeOutputs() throws {
+        for name in ["ready.txt", "telemetry.txt", "closed.txt", "failed.txt"] {
+            guard try Self.info(path(name), optional: true) == nil else { throw RpcPhoneCapacityIOError.filePolicy }
+        }
+    }
+
     func read(_ name: String, optional: Bool = false) throws -> String? {
         guard Self.names.contains(name) else { throw RpcPhoneCapacityIOError.filePolicy }
-        if name == "inbox.txt" || name == "stop.txt" {
+        if Self.inputs.contains(name) {
             if !imported.contains(name) {
                 // Never consume an old, copied-directly or partially committed canonical input.
                 guard try Self.info(path(name), optional: true) == nil else { throw RpcPhoneCapacityIOError.filePolicy }
@@ -84,7 +95,7 @@ final class RpcPhoneCapacityFiles {
                 }
                 // A copied seal itself may be partial. No admission until its complete
                 // fixed grammar is present; the coordinator's original deadline still applies.
-                guard seal.range(of: "^schema=1\nname=(inbox|stop)\\.txt\nbytes=[1-9][0-9]{0,4}\nsha256=[a-f0-9]{64}\n$",
+                guard seal.range(of: "^schema=1\nname=(inbox|stop|campaign|next)\\.txt\nbytes=[1-9][0-9]{0,4}\nsha256=[a-f0-9]{64}\n$",
                                  options: .regularExpression) != nil else {
                     if optional { return nil }
                     throw RpcPhoneCapacityIOError.invalidRecord
@@ -152,7 +163,7 @@ final class RpcPhoneCapacityFiles {
 
     /// Only the rotating telemetry slot may replace a file. Other evidence is atomically create-only.
     func publish(_ name: String, _ text: String) throws {
-        guard ["prepared.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"].contains(name) else {
+        guard ["prepared.txt", "next-ready.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"].contains(name) else {
             throw RpcPhoneCapacityIOError.invalidRecord
         }
         try writeAtomic(name, text)
@@ -252,7 +263,7 @@ enum RpcPhoneProcessSampler {
         return sum
     }
 
-    static func sample() throws -> RpcPhoneProcessStats {
+    static func sample(environment: RpcPhoneEnvironmentStats? = nil) throws -> RpcPhoneProcessStats {
         var usage = rusage()
         guard getrusage(RUSAGE_SELF, &usage) == 0 else { throw RpcPhoneCapacityIOError.resourceObservation }
         let (cpu, overflow) = try nanos(usage.ru_utime).addingReportingOverflow(nanos(usage.ru_stime))
@@ -282,6 +293,7 @@ enum RpcPhoneProcessSampler {
         if vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threads)), bytes) != KERN_SUCCESS { retired = false }
         guard retired else { throw RpcPhoneCapacityIOError.resourceRetirement }
         guard count > 0, count <= 65_535 else { throw RpcPhoneCapacityIOError.resourceObservation }
-        return try RpcPhoneProcessStats(cpuNanos: cpu, residentBytes: Int64(basic.resident_size), nativeThreads: Int32(count))
+        return try RpcPhoneProcessStats(cpuNanos: cpu, residentBytes: Int64(basic.resident_size),
+                                       nativeThreads: Int32(count), environment: environment)
     }
 }
