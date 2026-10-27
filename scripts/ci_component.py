@@ -131,7 +131,7 @@ def commands(component):
         return [('integrity-policy', bash + ['scripts/check-dependency-verification.sh']),
                 ('lock-coverage', bash + ['scripts/tests/check-osv-lockfile-coverage.sh']),
                 ('lock-writer-policy', bash + ['scripts/tests/check-lock-write-policy-test.sh']),
-                *tests('check-freemarker-floor-test.py', 'check-jackson-floor-test.py'),
+                *tests('check-freemarker-floor-test.py', 'check-jackson-floor-test.py', 'check-guava-floor-test.py'),
                 ('build-plugin-floors', gradle + [':verifyBuildPluginSecurityFloors', ':checkPublicConstantAbiPolicy'])]
     if component.startswith('jvm-'):
         tasks = [':p2p-core:jvmTest', ':p2p-transport-lan:jvmTest', ':p2p-network-provisioning-desktop:test']

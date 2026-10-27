@@ -151,7 +151,7 @@ TASK_NAMES = frozenset({
     "run-rpc-phone-ios-controls-test.py", "run-rpc-ios-handoff-test.py",
     "prepare-macos-rpc-desktop-test.py", "package-rpc-preview-test.py",
     "run-platform-tests-test.py", "audit-process-drain-deadline-test.py", "verify-rpc-windows-jdk21-test.py", "check-rpc-windows-packaging-test.py", "integrity-policy",
-    "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py",
+    "lock-coverage", "lock-writer-policy", "check-freemarker-floor-test.py", "check-jackson-floor-test.py", "check-guava-floor-test.py",
     "build-plugin-floors", "jvm-tests", "jmdns-close-tests", "supervisor-controls", "android-tests-and-apk", "desktop-tests-and-installer",
     "native-platform-tests", "shared-platform-tests", "abi-graph", "api-abi", "documentation", "sbom", "publication-shape",
     "isolated-consumers", "published-pom-diagnostic", "published-consumers-diagnostic", "xcframework", "minimum-apple-os", "swift-ui", "osv-lock-coverage", "osv-scan",

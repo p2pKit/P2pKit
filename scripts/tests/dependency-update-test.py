@@ -413,7 +413,7 @@ class DependencyCIPolicyTests(unittest.TestCase):
             ("lock-coverage", ["bash", "scripts/tests/check-osv-lockfile-coverage.sh"]),
             ("lock-writer-policy", ["bash", "scripts/tests/check-lock-write-policy-test.sh"]),
             *[(name, [sys.executable, "-B", "scripts/tests/" + name, "-v"])
-              for name in ("check-freemarker-floor-test.py", "check-jackson-floor-test.py")],
+              for name in ("check-freemarker-floor-test.py", "check-jackson-floor-test.py", "check-guava-floor-test.py")],
             ("build-plugin-floors", [str(c.ROOT / "gradlew.bat") if os.name == "nt" else "./gradlew",
                 "--no-daemon", "--no-build-cache", "--no-configuration-cache",
                 "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain",
