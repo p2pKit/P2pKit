@@ -1078,6 +1078,126 @@ def rpc_package_path_mismatch(value):
             **{key: list(value[key]) for key in lists}}
 
 
+def rpc_ios_phone_observations(root, source_commit="HEAD"):
+    """Finite observations from closed original Xcode captures, not a new gate.
+
+    Publish only fixed command labels/exits and source-blob-matched Swift
+    locations/test identifiers. Compiler/assertion messages, device identities,
+    command arguments and paths outside the tracked phone source stay private.
+    Call only after the enclosing process domain is known retired.
+    """
+    report = root / "build/reports/rpc-io-phone"
+    if not report.is_dir():
+        return None
+
+    def bounded(path, limit):
+        require(not any(p.is_symlink() for p in (path, *path.parents)))
+        info = path.stat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= limit)
+        with path.open("rb") as stream:
+            raw = stream.read(limit + 1)
+        require(len(raw) == info.st_size)
+        return raw
+
+    def walk(value):
+        pending, visited = [value], 0
+        while pending:
+            item = pending.pop()
+            visited += 1
+            require(visited <= 50000)
+            if type(item) is dict:
+                yield item
+                pending.extend(item.values())
+            elif type(item) is list:
+                pending.extend(item)
+
+    def exit_code(value):
+        return value is None or type(value) is int and -(2**31) <= value < 2**32
+
+    try:
+        commands = json.loads(bounded(report / "commands.json", 64 * 1024))
+        labels = {"source-before", "tree-before", "status-before", "xcode-version", "runtimes", "framework",
+                  "project", "project-inspection", "create-simulator", "boot", "boot-ready", "xctest", "test-actions",
+                  "shutdown", "delete", "retired", "source-after", "status-after", "tree-after"}
+        labels.update("test-summary-" + str(index) for index in range(8))
+        require(type(commands) is list and 0 < len(commands) <= len(labels))
+        require(all(type(row) is dict and row.get("label") in labels and "exitCode" in row and
+                    exit_code(row["exitCode"]) and exit_code(row.get("observedExitCode")) for row in commands))
+        require(len({row["label"] for row in commands}) == len(commands))
+        observed = [{"label": row["label"], "exitCode": row["exitCode"],
+                     "observedExitCode": row.get("observedExitCode")} for row in commands]
+        files, expected = {}, {"p2pkit-rpc-phone-tests": {}, "p2pkit-rpc-phone-uitests": {}}
+        prefix = "samples/p2p-sample-rpc/phone-ios/"
+        for record in git_value(root, "--no-replace-objects", "ls-tree", "-r", "-z", source_commit, prefix).split("\0"):
+            if not record:
+                continue
+            identity, name = record.split("\t", 1)
+            mode, kind, blob = identity.split()
+            if (mode != "100644" or kind != "blob" or
+                    re.fullmatch(re.escape(prefix) + r"(?:Sources|Tests|UITests)/[A-Za-z][A-Za-z0-9_]*\.swift", name) is None):
+                continue
+            raw = bounded(root / name, 512 * 1024)
+            require(hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() == blob)
+            text = raw.decode("utf-8")
+            files[name] = len(text.splitlines())
+            require(len(files) <= 64)
+            target = ("p2pkit-rpc-phone-uitests" if name.startswith(prefix + "UITests/") else
+                      "p2pkit-rpc-phone-tests" if name.startswith(prefix + "Tests/") else None)
+            if target is not None:
+                owners = re.findall(r"final class (\w+): XCTestCase", text)
+                require(len(owners) == 1)
+                for method in re.findall(r"\bfunc (test\w+)\(", text):
+                    identifier = owners[0] + "/" + method + "()"
+                    require(identifier not in expected[target])
+                    expected[target][identifier] = {"source": name, "test": method}
+        require(files and all(0 < len(methods) <= 256 for methods in expected.values()))
+        locations = []
+        for name in ("xctest.stdout", "xctest.stderr"):
+            path = report / name
+            if not path.exists():
+                continue
+            for line in bounded(path, MAX_LOG_BYTES).decode("utf-8", errors="replace").split("\n"):
+                if len(line) > 4096:
+                    continue
+                match = re.match(re.escape(str(root) + "/") + r"([^:\n]+):(\d{1,5}):(\d{1,4}): (error|warning):", line)
+                if match and match[1] in files and 0 < int(match[2]) <= files[match[1]] and int(match[3]) > 0:
+                    row = {"source": match[1], "line": int(match[2]), "column": int(match[3]), "kind": match[4].upper()}
+                    if row not in locations and len(locations) < 32:
+                        locations.append(row)
+        cases, unexpected_targets = {target: [] for target in expected}, 0
+        for command in commands:
+            if not command["label"].startswith("test-summary-") or command["exitCode"] != 0:
+                continue
+            document = json.loads(bounded(report / (command["label"] + ".stdout"), MAX_JSON_BYTES))
+            for entry in walk(document):
+                if entry.get("_type", {}).get("_name") != "ActionTestableSummary":
+                    continue
+                target = entry.get("targetName", {}).get("_value")
+                if target not in expected:
+                    unexpected_targets += 1
+                    continue
+                for case in walk(entry.get("tests", {})):
+                    if case.get("_type", {}).get("_name") == "ActionTestMetadata":
+                        identifier, status = (case.get(key, {}).get("_value") for key in ("identifier", "testStatus"))
+                        require(type(identifier) is str and type(status) is str)
+                        cases[target].append((identifier, status))
+                        require(sum(len(rows) for rows in cases.values()) <= 512)
+        tests = []
+        for target, methods in expected.items():
+            actual = cases[target]
+            matched = len(actual) == len(methods) and {name for name, _ in actual} == set(methods)
+            source_cases = [{**methods[name], "status": status if status in {"Success", "Failure", "Skipped", "Expected Failure"}
+                            else "UNKNOWN"} for name, status in actual if name in methods]
+            tests.append({"target": target, "expected": len(methods), "observed": len(actual),
+                          "inventoryMatched": matched, "allSuccessful": matched and all(status == "Success" for _, status in actual),
+                          "sourceCases": sorted(source_cases, key=lambda row: (row["source"], row["test"], row["status"]))})
+        return {"scope": "SOURCE_MATCHED_IOS_EXECUTION_OBSERVATIONS_NOT_PHYSICAL_QUALIFICATION",
+                "commands": observed, "compilerLocations": locations, "tests": tests,
+                "unexpectedTargets": unexpected_targets}
+    except (OSError, ValueError, UnicodeError, TypeError, AttributeError, RecursionError, EvidenceError, subprocess.SubprocessError):
+        return None
+
+
 def failure_diagnostics(root, command_directory, source_commit="HEAD", *, include_reports=True):
     """Public error identifiers only; logs/payloads/paths remain encrypted.
 
@@ -1337,6 +1457,9 @@ def failure_diagnostics(root, command_directory, source_commit="HEAD", *, includ
                                      "tests": sorted(tests, key=lambda row: row["task"])[:64]})
         except (OSError, ValueError, TypeError):
             continue
+    phone_observations = rpc_ios_phone_observations(root, source_commit)
+    if phone_observations is not None:
+        inventory_fields["rpcIosPhone"] = phone_observations
     return {"categories": sorted(categories), "failedGradleTasks": sorted(tasks), "simulatorPhases": phases[:32],
             "embeddedPublicationCheckLines": publication_lines, "platformCheckLines": platform_lines,
             "platformTests": platform_reports[:8], "failedSourceTests": junit_failures(root, source_commit), **dependency_fields, **inventory_fields}
@@ -1547,6 +1670,10 @@ def main(argv=None):
             "taskResults": component_tasks(root, args.component),
             "failureDiagnostics": failure_diagnostics(root, private / "command", source["commit"]) if outcome["code"] != "PASS" else None,
             "reports": reports, "privateArchive": digest_file(archive), "ciphertext": ciphertext}
+        if args.component == "rpc-io-ios-phone" and outcome["code"] == "PASS":
+            phone_observations = rpc_ios_phone_observations(root, source["commit"])
+            if phone_observations is not None:
+                manifest["rpcIosPhone"] = phone_observations
         write_private(output / "manifest.json", encoded(manifest))
         print("CI_EVIDENCE " + ("PASS" if outcome["code"] == "PASS" else "FAIL") + " " + outcome["code"])
         return 0 if outcome["code"] == "PASS" else 1
