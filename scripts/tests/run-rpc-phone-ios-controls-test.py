@@ -241,7 +241,7 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([89, 7], [len(methods) for methods in actual.values()])
+        self.assertEqual([90, 7], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
@@ -326,6 +326,7 @@ class PhoneResultControls(unittest.TestCase):
         environment = {name for name in expected if name.startswith("RpcPhoneEnvironmentSamplerTests/")}
         self.assertEqual(environment, {"RpcPhoneEnvironmentSamplerTests/" + name + "()" for name in (
             "testPlatformDefaultsReadAndRestoreActualMainActorDeviceMonitoring",
+            "testUnavailableMonitoringAttemptsEnableOnceAndNeverReadsOrInventsBatteryValues",
             "testAcquiringAndRetiringBatteryMonitoringIsIdempotentAndRestoresItsPriorSetting",
             "testUnknownBatteryLevelNeverBecomesAnInventedZeroOrAnEnergyMeasurement",
             "testSeriousAndCriticalThermalObservationsAbortTheCampaign",

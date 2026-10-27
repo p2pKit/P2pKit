@@ -1212,7 +1212,7 @@ def rpc_ios_phone_observations(root, source_commit="HEAD"):
                     require(identifier not in expected[target])
                     expected[target][identifier] = {"source": name, "test": method}
         require(files and all(0 < len(methods) <= 256 for methods in expected.values()))
-        locations = []
+        locations, test_locations = [], []
         for name in ("xctest.stdout", "xctest.stderr"):
             path = report / name
             if not path.exists():
@@ -1225,6 +1225,19 @@ def rpc_ios_phone_observations(root, source_commit="HEAD"):
                     row = {"source": match[1], "line": int(match[2]), "column": int(match[3]), "kind": match[4].upper()}
                     if row not in locations and len(locations) < 32:
                         locations.append(row)
+                # XCTest assertions omit the compiler's column. Crossbind the
+                # actual source-known class/method to this exact tracked file;
+                # discard the assertion message and its potentially private values.
+                failure = re.match(re.escape(str(root) + "/") +
+                    r"([^:\n]+):(\d{1,5}): error: -\[(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*) (test\w+)\] :", line)
+                if failure and failure[1] in files and 0 < int(failure[2]) <= files[failure[1]]:
+                    identifier = failure[3] + "/" + failure[4] + "()"
+                    if any(methods.get(identifier) == {"source": failure[1], "test": failure[4]}
+                           for methods in expected.values()):
+                        row = {"source": failure[1], "line": int(failure[2]), "test": failure[4],
+                               "kind": "XCTEST_FAILURE"}
+                        if row not in test_locations and len(test_locations) < 32:
+                            test_locations.append(row)
         cases, unexpected_targets = {target: [] for target in expected}, 0
         for command in commands:
             if not command["label"].startswith("test-summary-") or command["exitCode"] != 0:
@@ -1253,7 +1266,7 @@ def rpc_ios_phone_observations(root, source_commit="HEAD"):
                           "inventoryMatched": matched, "allSuccessful": matched and all(status == "Success" for _, status in actual),
                           "sourceCases": sorted(source_cases, key=lambda row: (row["source"], row["test"], row["status"]))})
         return {"scope": "SOURCE_MATCHED_IOS_EXECUTION_OBSERVATIONS_NOT_PHYSICAL_QUALIFICATION",
-                "commands": observed, "compilerLocations": locations, "tests": tests,
+                "commands": observed, "compilerLocations": locations, "testFailureLocations": test_locations, "tests": tests,
                 "unexpectedTargets": unexpected_targets}
     except (OSError, ValueError, UnicodeError, TypeError, AttributeError, RecursionError, EvidenceError, subprocess.SubprocessError):
         return None

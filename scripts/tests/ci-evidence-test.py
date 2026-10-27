@@ -188,6 +188,38 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(actual["tests"][0]["inventoryMatched"])
         self.assertNotIn("PRIVATE", json.dumps(actual))
 
+    def test_phone_assertion_locations_require_the_source_known_method_in_its_exact_file(self):
+        root, report, source, sources, _, _ = self.phone_observation_fixture()
+        prefix = "samples/p2p-sample-rpc/phone-ios/"
+        name = prefix + "Tests/PhoneTests.swift"
+        valid = str(root / name) + ":2: error: -[P2pKitRpcPhoneTests.PhoneTests testOwner] : PRIVATE_ACTUAL_VALUE\n"
+        (report / "xctest.stdout").write_text(valid + valid +
+            str(root / name) + ":500: error: -[PhoneTests testOwner] : PRIVATE_OUT_OF_SOURCE\n" +
+            str(root / name) + ":0: error: -[PhoneTests testOwner] : PRIVATE_ZERO_LINE\n" +
+            str(root / name) + ":2: error: -[PhoneTests testUnknown] : PRIVATE_UNKNOWN_TEST\n" +
+            str(root / name) + ":2: error: -[UnknownTests testOwner] : PRIVATE_UNKNOWN_CLASS\n" +
+            str(root / name) + ":2: error: -[PhoneUiTests testScreen] : PRIVATE_WRONG_FILE\n" +
+            str(root / next(iter(sources))) + ":2: error: -[PhoneTests testOwner] : PRIVATE_NOT_A_TEST_FILE\n" +
+            str(root / "private.swift") + ":2: error: -[PhoneTests testOwner] : PRIVATE_UNTRACKED\n" +
+            "PRIVATE_PREFIX " + valid)
+        (report / "xctest.stderr").write_text(valid)
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual(actual["testFailureLocations"],
+                         [{"source": name, "line": 2, "test": "testOwner", "kind": "XCTEST_FAILURE"}])
+        self.assertEqual(actual["commands"][0]["exitCode"], 65)
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+        self.assertNotIn(str(root), json.dumps(actual))
+        self.assertNotIn("outcome", actual)
+
+    def test_phone_assertion_locations_do_not_infer_an_assertion_from_an_arbitrary_test_file_error(self):
+        root, report, source, _, _, _ = self.phone_observation_fixture()
+        name = "samples/p2p-sample-rpc/phone-ios/Tests/PhoneTests.swift"
+        (report / "xctest.stdout").write_text(str(root / name) + ":2: error: PRIVATE_MESSAGE_WITHOUT_METHOD\n")
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual(actual["testFailureLocations"], [])
+        self.assertEqual(actual["compilerLocations"], [])
+        self.assertEqual(actual["commands"][0]["exitCode"], 65)
+
     def test_phone_observations_refuse_source_drift_linked_reports_and_unbounded_or_ambiguous_commands(self):
         root, report, source, sources, commands, _ = self.phone_observation_fixture()
         name = next(iter(sources))

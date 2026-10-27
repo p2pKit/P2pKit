@@ -15,14 +15,56 @@ final class RpcPhoneEnvironmentSamplerTests: XCTestCase {
         }
         XCTAssertEqual(try sampler.sample().batteryState, "unavailable")
         sampler.acquire()
-        XCTAssertTrue(device.isBatteryMonitoringEnabled)
+        // UIDevice monitoring is an observed capability, not a promised sensor.
+        // Keep the real platform constructor covered without inventing support
+        // when the OS refuses the requested setting (for example on a simulator).
+        let monitoringEnabled = device.isBatteryMonitoringEnabled
         let sample = try sampler.sample()
-        XCTAssertEqual(sample.batterySource, "ios-uidevice")
+        XCTAssertEqual(sample.batterySource, monitoringEnabled ? "ios-uidevice" : "unavailable")
+        if monitoringEnabled {
+            XCTAssertTrue(["unknown", "unplugged", "charging", "full"].contains(sample.batteryState))
+            if let percent = sample.batteryPercentMilli {
+                XCTAssertTrue((0...100_000).contains(percent.intValue))
+            }
+        } else {
+            XCTAssertEqual(sample.batteryState, "unavailable")
+            XCTAssertNil(sample.batteryPercentMilli)
+        }
         XCTAssertNil(sample.batteryCurrentMicroamps)
         XCTAssertNil(sample.batteryTemperatureMilliC)
         sampler.retire()
         XCTAssertEqual(device.isBatteryMonitoringEnabled, initiallyEnabled)
         XCTAssertEqual(try sampler.sample().batteryState, "unavailable")
+    }
+
+    @MainActor
+    func testUnavailableMonitoringAttemptsEnableOnceAndNeverReadsOrInventsBatteryValues() throws {
+        var changes: [Bool] = []
+        var batteryReads = 0
+        let sampler = RpcPhoneEnvironmentSampler(monitoring: { false }, setMonitoring: {
+            changes.append($0) // Model the OS refusing to enable this optional capability.
+        }, battery: {
+            batteryReads += 1
+            XCTFail("Unavailable monitoring must not read the battery callback")
+            return (0.55, .charging)
+        }, thermal: { .fair })
+        defer { sampler.retire() }
+        sampler.acquire()
+        sampler.acquire()
+        XCTAssertEqual(changes, [true])
+        let sample = try sampler.sample()
+        XCTAssertEqual(sample.batterySource, "unavailable")
+        XCTAssertEqual(sample.batteryState, "unavailable")
+        XCTAssertNil(sample.batteryPercentMilli)
+        XCTAssertNil(sample.batteryCurrentMicroamps)
+        XCTAssertNil(sample.batteryTemperatureMilliC)
+        XCTAssertEqual(sample.thermalState, "fair")
+        XCTAssertEqual(batteryReads, 0)
+        sampler.retire()
+        sampler.retire()
+        XCTAssertEqual(changes, [true])
+        XCTAssertEqual(try sampler.sample().batteryState, "unavailable")
+        XCTAssertEqual(batteryReads, 0)
     }
 
     @MainActor

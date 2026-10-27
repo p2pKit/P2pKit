@@ -159,7 +159,7 @@ The API24 part additionally installs the source-built sample and runs its existi
 ten real Keystore/lifecycle controls. The approval-store control round-trips both
 128 and 256 distinct pins, refuses 257 without replacing the prior set, and
 retains the original corruption/isolation checks. The independent `ios-phone`
-part requires all89 current app-hosted XCTest and seven UI methods, including the
+part requires all90 current app-hosted XCTest and seven UI methods, including the
 same expanded real Keychain control. It uses a newly owned simulator and the
 current-source XCFramework provenance phase; no retired handoff campaign is
 reactivated. These sample checks are **not authenticated mobile capacity tests**.
