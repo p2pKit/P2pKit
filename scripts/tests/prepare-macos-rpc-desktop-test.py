@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Offline launcher admission regressions; codesign/exec are mocked, never native load or Java launch."""
+"""Offline launcher admission and real JVM resource inventory; no native load, signing or RPC."""
 import hashlib
 import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 PRODUCER = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'prepare-macos-rpc-desktop.py'))
 SCOPE = 'LOCAL_APPLICATION_BUILD_NOT_NETWORK_OR_RELEASE_QUALIFICATION'
+PREVIEW = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'package-rpc-preview.py'))
 
 
 class LauncherAdmissionTests(unittest.TestCase):
@@ -89,6 +92,80 @@ class LauncherAdmissionTests(unittest.TestCase):
             (root / 'safe.jar').rename(root / 'original.jar')
             (root / 'safe.jar').symlink_to(root / 'original.jar')
         self.exercise(change)
+
+
+class ClasspathResources(unittest.TestCase):
+    def fixture(self, root):
+        jars, native = root / 'jars', root / 'native'
+        jars.mkdir(); native.mkdir()
+        with zipfile.ZipFile(jars / 'app.jar', 'w') as archive:
+            archive.writestr('META-INF/fixture.txt', b'SYNTHETIC APP; NEVER EXECUTED')
+        name = PRODUCER['NATIVE_MANIFEST_JAR']
+        with zipfile.ZipFile(native / name, 'w') as archive:
+            archive.writestr('META-INF/p2pkit/macos-tcp.properties', b'source=' + b'1' * 40 + b'\n')
+        shutil.copyfile(native / name, jars / name)
+        entries = [dict(name=path.name, sha256=PRODUCER['sha'](path)) for path in sorted(jars.iterdir())]
+        (jars / 'manifest.json').write_text(json.dumps(dict(sourceSha='1' * 40, entries=entries)))
+        return jars, native, entries
+
+    def resource_count(self, root, paths):
+        java = shutil.which('java')
+        self.assertIsNotNone(java, 'The standard JDK is required for the JVM classloader regression')
+        source = root / 'ManifestResourceCount.java'
+        source.write_text('''
+public class ManifestResourceCount {
+    public static void main(String[] args) throws Exception {
+        var resources = ClassLoader.getSystemClassLoader().getResources("META-INF/p2pkit/macos-tcp.properties");
+        int count = 0;
+        while (resources.hasMoreElements()) { resources.nextElement(); count++; }
+        System.out.println(count);
+    }
+}
+''')
+        result = subprocess.run([java, '-cp', os.pathsep.join(map(str, paths)), str(source)],
+                                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        return int(result.stdout.decode().strip())
+
+    def test_actual_classloader_has_two_resources_before_and_one_after_both_producer_filters(self):
+        with tempfile.TemporaryDirectory(prefix='p2pkit-manifest-inventory-') as directory:
+            root = Path(directory).resolve()
+            jars, native, entries = self.fixture(root)
+            metadata = native / PRODUCER['NATIVE_MANIFEST_JAR']
+            original = [jars / row['name'] for row in entries] + [metadata]
+            # Deterministically reproduce the old failure without loading a DLL, dylib or application.
+            self.assertEqual(self.resource_count(root, original), 2)
+            retained = PRODUCER['checked_classpath_entries'](jars, entries, native)
+            self.assertEqual([row['name'] for row in retained], ['app.jar'])
+            self.assertEqual(self.resource_count(root, [jars / row['name'] for row in retained] + [metadata]), 1)
+            packaged = PREVIEW['checked_entries'](jars, '1' * 40, metadata)
+            self.assertEqual(packaged, ['app.jar'])
+            self.assertEqual(self.resource_count(root, [jars / name for name in packaged] + [metadata]), 1)
+
+    def test_root_duplicate_is_verified_before_omission_and_old_distribution_remains_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jars, native, entries = self.fixture(Path(directory).resolve())
+            old = [row for row in entries if row['name'] == 'app.jar']
+            self.assertEqual(PRODUCER['checked_classpath_entries'](jars, old, native), old)
+            metadata = jars / PRODUCER['NATIVE_MANIFEST_JAR']
+            metadata.write_bytes(b'MODIFIED ROOT METADATA')
+            with self.assertRaises(AssertionError):
+                PRODUCER['checked_classpath_entries'](jars, entries, native)
+            changed = [row if row['name'] == 'app.jar' else dict(row, sha256=PRODUCER['sha'](metadata))
+                       for row in entries]
+            with self.assertRaises(AssertionError):
+                PRODUCER['checked_classpath_entries'](jars, changed, native)
+
+    def test_linked_native_authority_and_duplicate_rows_are_not_deduplicated_into_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jars, native, entries = self.fixture(Path(directory).resolve())
+            with self.assertRaises(AssertionError):
+                PRODUCER['checked_classpath_entries'](jars, entries + [entries[-1]], native)
+            metadata = native / PRODUCER['NATIVE_MANIFEST_JAR']
+            original = metadata.with_suffix('.original')
+            metadata.rename(original)
+            metadata.symlink_to(original)
+            with self.assertRaises(AssertionError):
+                PRODUCER['checked_classpath_entries'](jars, entries, native)
 
 
 if __name__ == '__main__':

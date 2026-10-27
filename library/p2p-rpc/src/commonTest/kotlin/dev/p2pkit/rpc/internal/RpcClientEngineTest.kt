@@ -14,9 +14,11 @@ import dev.p2pkit.rpc.RpcProcedure
 import dev.p2pkit.rpc.RpcReply
 import dev.p2pkit.rpc.RpcRetry
 import dev.p2pkit.rpc.RpcRetrySafety
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -94,6 +96,98 @@ class RpcClientEngineTest {
         assertEquals(2L, f.client.requestTotals.value.accepted)
         assertEquals(1L, f.client.requestTotals.value.succeeded)
         assertEquals(1L, f.client.requestTotals.value.businessErrors)
+        f.close()
+    }
+
+    @Test
+    fun deadlineDuringReceiptReportsTimeoutInsteadOfSuccess() = runTest {
+        assertReceiptDeadlineMatchesOutcome(businessError = false)
+    }
+
+    @Test
+    fun deadlineDuringReceiptReportsTimeoutInsteadOfBusinessError() = runTest {
+        assertReceiptDeadlineMatchesOutcome(businessError = true)
+    }
+
+    private suspend fun TestScope.assertReceiptDeadlineMatchesOutcome(businessError: Boolean) {
+        val f = fixture(registeredProcedure(procedure, { true }) { _, value ->
+            if (businessError) RpcReply.ApplicationError(value) else RpcReply.Success(value)
+        })
+        val receivingReceipt = CompletableDeferred<Unit>()
+        f.clientLink.onSend = {
+            if (it.kind == WireKind.Receipt) {
+                receivingReceipt.complete(Unit)
+                // offer() may suspend at the production link's queue mutex even for a best-effort receipt.
+                awaitCancellation()
+            } else f.host.onMessage(f.hostLink, it)
+        }
+        val observation = RpcCallObservation()
+        val result = async {
+            runCatching {
+                f.client.callWithDetails(procedure, "fixture", 1.seconds, RpcRetry.RecoverOnly(), observation)
+            }
+        }
+        runCurrent()
+        assertTrue(receivingReceipt.isCompleted)
+        assertFalse(result.isCompleted)
+        advanceTimeBy(1_000)
+        runCurrent()
+        val failure = assertIs<RpcFailure>(result.await().exceptionOrNull())
+        assertEquals(RpcFailureKind.DeadlineExceeded, failure.kind)
+        assertEquals(RpcFailurePhase.AwaitingResponse, failure.phase)
+        assertEquals(RpcExecutionEvidence.HandlerFinished, failure.executionEvidence)
+        assertEquals(RpcCallStage.TimedOut, observation.progress.value.stage)
+        assertEquals(RpcExecutionEvidence.HandlerFinished, observation.progress.value.executionEvidence)
+        assertEquals(RpcFailureKind.DeadlineExceeded, observation.progress.value.failureKind)
+        assertEquals(RpcFailurePhase.AwaitingResponse, observation.progress.value.failurePhase)
+        assertEquals(1L, f.client.requestTotals.value.accepted)
+        assertEquals(1L, f.client.requestTotals.value.timedOut)
+        assertEquals(0L, f.client.requestTotals.value.succeeded)
+        assertEquals(0L, f.client.requestTotals.value.businessErrors)
+        assertEquals(0L, f.client.requestTotals.value.cancelled)
+        assertEquals(0L, f.client.requestTotals.value.failed)
+        assertEquals(0L, f.client.diagnostics.value.completedCalls)
+        assertEquals(1L, f.host.diagnostics.value.completedCalls)
+        assertEquals(0, f.client.diagnostics.value.runningCalls)
+        assertEquals(0, f.client.diagnostics.value.queuedCalls)
+        assertEquals(1, f.clientLink.sent.count { it.kind == WireKind.Invoke })
+        assertEquals(0, f.clientLink.sent.count { it.kind == WireKind.Cancel })
+        f.close()
+    }
+
+    @Test
+    fun callerCancellationDuringReceiptReportsCancelledWithoutCountingSuccess() = runTest {
+        val f = fixture(registeredProcedure(procedure, { true }) { _, value -> RpcReply.Success(value) })
+        val receivingReceipt = CompletableDeferred<Unit>()
+        f.clientLink.onSend = {
+            if (it.kind == WireKind.Receipt) {
+                receivingReceipt.complete(Unit)
+                awaitCancellation()
+            } else f.host.onMessage(f.hostLink, it)
+        }
+        val observation = RpcCallObservation()
+        val result = async {
+            f.client.callWithDetails(procedure, "fixture", 10.seconds, RpcRetry.RecoverOnly(), observation)
+        }
+        runCurrent()
+        assertTrue(receivingReceipt.isCompleted)
+        result.cancel()
+        runCurrent()
+        result.join()
+        assertFailsWith<CancellationException> { result.await() }
+        assertEquals(RpcCallStage.Cancelled, observation.progress.value.stage)
+        assertEquals(RpcExecutionEvidence.HandlerFinished, observation.progress.value.executionEvidence)
+        assertNull(observation.progress.value.failureKind)
+        assertEquals(1L, f.client.requestTotals.value.accepted)
+        assertEquals(1L, f.client.requestTotals.value.cancelled)
+        assertEquals(0L, f.client.requestTotals.value.succeeded)
+        assertEquals(0L, f.client.requestTotals.value.businessErrors)
+        assertEquals(0L, f.client.requestTotals.value.timedOut)
+        assertEquals(0L, f.client.diagnostics.value.completedCalls)
+        assertEquals(1L, f.host.diagnostics.value.completedCalls)
+        assertEquals(0, f.client.diagnostics.value.runningCalls)
+        assertEquals(0, f.client.diagnostics.value.queuedCalls)
+        assertEquals(0, f.clientLink.sent.count { it.kind == WireKind.Cancel })
         f.close()
     }
 

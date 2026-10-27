@@ -253,7 +253,11 @@ simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
 retirement control, six private-file/sealed-input controls, and six UI controls.
-The current **77-unit/7-UI** inventory includes rejection of LF/CRLF-suffixed run
+The current **90-unit/7-UI** inventory retains the original77 owner/lifecycle
+methods, adds two used-slot/sealed-input regressions, and requires five phone
+environment methods (including real MainActor UIKit defaults, explicit unavailable
+monitoring and restoration)
+and six exact-inbox developer-command methods. It includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,

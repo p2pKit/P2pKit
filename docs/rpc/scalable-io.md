@@ -1,5 +1,10 @@
 # Shared readiness I/O and the opt-in 256-client profile
 
+For source-bound physical Android/iPhone preparation on the owner's Mac, use
+the [Mac/mobile continuation guide](mac-mobile-continuation.md). It adds explicit
+schema2 128/256 coordination while preserving the original schema1 campaign;
+physical resource/capacity qualification remains pending in #525.
+
 This work starts from `69fd925d932e544a1a2feefd247adbcf0a397509` (`0.8.0-rc7`
 source). It is not a change to previously published artifacts. The original
 128-client campaign and its historical failures remain intact. In particular,
@@ -154,7 +159,7 @@ The API24 part additionally installs the source-built sample and runs its existi
 ten real Keystore/lifecycle controls. The approval-store control round-trips both
 128 and 256 distinct pins, refuses 257 without replacing the prior set, and
 retains the original corruption/isolation checks. The independent `ios-phone`
-part runs the existing 77 app-hosted XCTest and seven UI methods, including the
+part requires all90 current app-hosted XCTest and seven UI methods, including the
 same expanded real Keychain control. It uses a newly owned simulator and the
 current-source XCFramework provenance phase; no retired handoff campaign is
 reactivated. These sample checks are **not authenticated mobile capacity tests**.

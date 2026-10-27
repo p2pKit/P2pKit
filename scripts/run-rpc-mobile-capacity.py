@@ -3,9 +3,10 @@
 
 Candidate tooling: physical USB/device execution is still required. This is not
 an emulator mode, a data tunnel, an iPhone coordinator or a qualification verdict.
-Run only inside the existing admitted native executor, on a clean Linux-x64
-checkout with its source-matched prepared capacity distribution. No build,
-installation, permission change, global ADB access or network reconfiguration.
+Run only inside the existing admitted native executor, on a clean Linux-x64 or Mac ARM64
+checkout with its source-matched prepared capacity distribution. A schema2
+campaign may explicitly install the bound development APK and activate its
+sealed run. No build, permission grant, global ADB access or network change.
 """
 from __future__ import annotations
 
@@ -30,11 +31,14 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_capacity_evidence as evidence
 import rpc_mobile_capacity as protocol
 import rpc_mobile_usb as usb
+import rpc_darwin_capacity as darwin
 
 SCOPE = 'ANDROID_USB_CONTROL_REAL_RPC_CANDIDATE_PENDING_PHYSICAL_NETWORK_AND_RESOURCE_REVIEW'
 SETTINGS = {'schema', 'sourceSha', 'hostArtifactSha256', 'endpointAddress', 'port', 'subnets',
             'interface', 'localAddress', 'hostInterface', 'androidUsbSerial', 'adb'}
 BOUNDS = {'mobile-native-controls': 1800, 'mobile-jdk17': 45, 'mobile-clock': 150, 'mobile-client': 2500}
+WORKLOAD_POLL_SECONDS = 1.0
+FRESH_SAMPLE_POLL_SECONDS = .25
 need = protocol.need
 
 
@@ -47,15 +51,26 @@ def module(name, filename):
 
 
 def settings(value, source, label, lab):
-    need(type(value) is dict and set(value) == SETTINGS and all(type(v) is str for v in value.values()))
-    need(value['schema'] == '1' and value['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
+    need(type(value) is dict and value.get('schema') in ('1', '2'))
+    fields = SETTINGS | ({'clientCount'} if value['schema'] == '2' else set())
+    if value['schema'] == '2' and 'adbCampaignKeys' in value:
+        fields |= {'adbCampaignKeys'}
+    need(set(value) == fields and all(type(v) is str for v in value.values()))
+    need(value['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', value['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
+    if value['schema'] == '2':
+        need(value['clientCount'] in ('128', '256'), 'Explicit 128/256 profile required')
     need(re.fullmatch('[A-Za-z0-9_.:-]{1,32}', value['hostInterface']) and
          re.fullmatch('[A-Za-z0-9_-]{1,128}', value['androidUsbSerial']) and
          not value['androidUsbSerial'].startswith('emulator-'))
     adb = Path(value['adb'])
     need(adb.is_absolute() and '..' not in adb.parts and adb.name == 'adb', 'Select the installed ADB explicitly')
+    if 'adbCampaignKeys' in value:
+        keys = Path(value['adbCampaignKeys'])
+        need(keys.is_absolute() and '..' not in keys.parts, 'Explicit task-private campaign key directory required')
     config = {k: value[k] for k in lab.FIELDS - {'role', 'runLabel'}} | dict(role='client', runLabel=label)
+    if value['schema'] == '2':
+        config['clientCount'] = value['clientCount']
     lab.configuration(config, source)  # The real library still performs all of its own interface/path admission.
     return config
 
@@ -85,9 +100,9 @@ def safe_environment(original):
     return value
 
 
-def bind_sources(runner, context):
+def bind_sources(runner, context, native_host='linux-x64'):
     harness = runner.source_snapshot(HARNESS_ROOT)
-    need(context['host'] == 'linux-x64' and context['root'] == str(ROOT) and
+    need(native_host in ('linux-x64', 'macos-arm64') and context['host'] == native_host and context['root'] == str(ROOT) and
          context['source'] == runner.source_snapshot(ROOT) and
          context['source']['status'] == harness['status'] == '',
          'Both product and coordinator must be clean, independently source-bound checkouts')
@@ -100,28 +115,45 @@ class Run:
     scope = SCOPE
 
     def admit_environment(self, args):
-        need(args.owner_authorized_mobile and platform.system() == 'Linux' and platform.machine() == 'x86_64',
-             'Explicit owner-approved Linux-x64 generator and wired Android required; no alternate-platform claim')
+        from audit_processes import host_role
+        observed = host_role()
+        need(args.owner_authorized_mobile and observed in ('linux-x64', 'macos-arm64'),
+             'Explicit owner-approved native Linux-x64 or Mac ARM64 generator and wired Android required')
+        if observed == 'macos-arm64':
+            need(platform.system() == 'Darwin' and platform.machine() == 'arm64' and
+                 os.getuid() == os.geteuid() != 0, 'Unprivileged native Mac ARM64 execution required')
+        self.native_host = observed
 
     def bind_context(self):
-        return bind_sources(self.runner, self.context)
+        return bind_sources(self.runner, self.context, self.native_host)
 
     def configuration(self, source, label):
-        return settings(self.values, source, label, self.lab)
+        config = settings(self.values, source, label, self.lab)
+        if self.native_host == 'macos-arm64':
+            need(re.fullmatch('en[0-9]{1,3}', config['interface']), 'Selected native Mac LAN interface required')
+        return config
 
     def new_phone(self, label):
         self.runner.reject_symlinks(Path(self.values['adb']))
         need(Path(self.values['adb']).is_file() and os.access(self.values['adb'], os.X_OK))
         return usb.AndroidUsb(self.commands, self.control / 'usb', Path(self.values['adb']),
-                              self.values['androidUsbSerial'], label)
+                              self.values['androidUsbSerial'], label, binding=self.bound,
+                              campaign_keys=Path(self.values['adbCampaignKeys']) if 'adbCampaignKeys' in self.values else None)
 
     def generator_snapshot(self):
+        if self.native_host == 'macos-arm64':
+            need(self.result.get('nativeControlTests') == self.policy.control_inventory(self.native_host),
+                 'No page observer before complete native controls')
+            return darwin.snapshot(self.commands)
         return evidence.clock_snapshot()
 
     def initial_generator_snapshot(self):
+        if self.native_host == 'macos-arm64':
+            return None
         return self.generator_snapshot()
 
     def __init__(self, args):
+        self.args = args
         self.admit_environment(args)
         self.lab = module('mobile_lab', 'run-rpc-capacity-lab.py')
         self.runner = module('mobile_native', 'run-audit-command.py')
@@ -142,10 +174,16 @@ class Run:
         for name in ('usb', 'commands'):
             (self.control / name).mkdir(mode=0o700)
         self.mode = args.mode
-        self.bound = dict(schema='1', scope=protocol.SCOPE, runLabel=args.run_label,
+        need(self.mode in ('steady', 'large', 'correctness', 'churn') and
+             (self.values['schema'] == '2' or self.mode in ('steady', 'large')),
+             'Correctness/churn mobile controls require schema2 and an explicit profile')
+        self.bound = dict(schema=self.values['schema'], scope=protocol.SCOPE, runLabel=args.run_label,
             runNonce=os.urandom(32).hex(), hostPlatform=self.phone_platform, hostSourceSha=source,
             hostArtifactSha256=self.values['hostArtifactSha256'])
+        if self.bound['schema'] == '2':
+            self.bound['clientCount'] = self.values['clientCount']
         self.protocol = protocol.Protocol(self.bound, self.config['endpointAddress'], int(self.config['port']))
+        self.client_count = self.protocol.client_count
         self.env = safe_environment(os.environ)
         # This executable's environment only, before any child/native command;
         # never alter the owner's shell or carry publishing credentials to tools.
@@ -161,11 +199,18 @@ class Run:
         self.samples = []
         self.last_sample = None
         self.started = None
-        self.result = dict(schema=1, scope=self.scope, mode=self.mode, source=self.context['source'],
+        self.result = dict(schema=int(self.bound['schema']), scope=self.scope, mode=self.mode, source=self.context['source'],
             harnessSource=self.harness_source, harnessSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             settingsSha256=hashlib.sha256(raw).hexdigest(), status='FAIL', foundationStatus='NOT_READY',
             physicalLanQualified=False, mobileCapacityQualified=False, nativeCommands={}, errors=[],
             generatorBefore=self.initial_generator_snapshot())
+        if self.bound['schema'] == '2':
+            self.result['clientCount'] = self.client_count
+            self.result['mobileBinding'] = dict(self.bound)
+            self.result['controlPolling'] = dict(workloadMillis=1000, previousWorkloadMillis=250,
+                freshSampleRetryMillis=250, previousFreshSampleRetryMillis=100,
+                maximumCommands=usb.MAX_COMMANDS, previousMaximumCommands=15000,
+                observationBudgetMillis=4000, freshnessLimitMillis=4500)
 
     def check_receipt(self, purpose, argv, code):
         path = self.control / (purpose + '.json')
@@ -196,31 +241,51 @@ class Run:
     def output(self, proof, stream='stdout'):
         return evidence.bounded(self.state / 'evidence' / proof['id'] / ('product.' + stream + '.log'))
 
-    def prerequisites(self):
+    def generator_prerequisites(self):
         destination = self.state / 'evidence' / ('mobile-controls-' + self.config['runLabel'])
         proof = self.native('mobile-native-controls', [sys.executable, str(ROOT / 'scripts/tests/run-audit-command-test.py'),
-            '--expected-host', 'linux-x64', '--evidence-dir', str(destination)])
+            '--expected-host', self.native_host, '--evidence-dir', str(destination)])
         count = self.policy.unittest_count(self.output(proof, 'stderr').decode())
-        need(count == self.policy.control_inventory('linux-x64'), 'Complete native control inventory is required')
+        need(count == self.policy.control_inventory(self.native_host), 'Complete native control inventory is required')
         self.result['nativeControlTests'] = count
+        if self.native_host == 'macos-arm64':
+            self.result['generatorBefore'] = self.generator_snapshot()
         java = str(Path(os.environ['JAVA_HOME']).resolve(strict=True) / 'bin/java')
         proof = self.native('mobile-jdk17', [java, '-XshowSettings:properties', '-version'])
         properties = self.output(proof, 'stderr')
+        architectures = ([b'aarch64'],) if self.native_host == 'macos-arm64' else ([b'amd64'], [b'x86_64'])
         need(re.findall(rb'(?m)^\s*java\.specification\.version = ([0-9]+)\s*$', properties) == [b'17'] and
-             re.findall(rb'(?m)^\s*os\.arch = (\S+)\s*$', properties) in ([b'amd64'], [b'x86_64']),
-             'Actual native x64 JVM 17 required')
+             re.findall(rb'(?m)^\s*os\.arch = (\S+)\s*$', properties) in architectures,
+             'Actual native JVM17 architecture must match the admitted generator')
         # Keep the existing 125-second, <100ms-gap, >=6GiB, no-balloon preflight.
-        proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/run-rpc-capacity-qualification.py'), 'clock'])
-        clock = evidence.clock_evidence(json.loads(self.output(proof), object_pairs_hook=evidence.unique))
+        if self.native_host == 'macos-arm64':
+            proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
+                str(self.state / 'work' / ('mobile-clock-' + self.config['runLabel']))])
+            clock = darwin.assess_clock(json.loads(self.output(proof), object_pairs_hook=evidence.unique))
+        else:
+            proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/run-rpc-capacity-qualification.py'), 'clock'])
+            clock = evidence.clock_evidence(json.loads(self.output(proof), object_pairs_hook=evidence.unique))
         self.result['clockPreflight'] = clock
         need(clock['healthyForAttempt'], 'Generator is not healthy enough for an interpretable capacity attempt')
-        _, raw = self.commands.run('selected-direct-route', ['ip', '-j', '-4', 'route', 'get',
-            self.config['endpointAddress'], 'from', self.config['localAddress']], timeout=10)
-        self.result['routeObservation'] = direct_route(raw, self.config)
+        if self.native_host == 'macos-arm64':
+            _, route = self.commands.run('selected-mac-route', ['/sbin/route', '-n', 'get', '-inet',
+                self.config['endpointAddress']], timeout=10)
+            _, interface = self.commands.run('selected-mac-interface', ['/sbin/ifconfig', self.config['interface']], timeout=10)
+            self.result['routeObservation'] = darwin.direct_route(route, interface, self.config)
+        else:
+            _, raw = self.commands.run('selected-direct-route', ['ip', '-j', '-4', 'route', 'get',
+                self.config['endpointAddress'], 'from', self.config['localAddress']], timeout=10)
+            self.result['routeObservation'] = direct_route(raw, self.config)
+
+    def prerequisites(self):
+        self.generator_prerequisites()
         self.result['adbSha256'] = hashlib.sha256(evidence.bounded(Path(self.values['adb']), 64 * 1024 * 1024)).hexdigest()
         self.phone.start()
         print('Authorize the new private USB key on the selected test phone; no RPC readiness timer has started.', flush=True)
         self.phone.await_authorization()
+        apk = getattr(self.args, 'install_android_apk', None)
+        if apk is not None:
+            self.result['installationAccepted'] = self.phone.install_app(apk)
 
     def launch(self):
         self.lab.write_private(self.directory / 'config.txt', self.lab.encode(self.config))
@@ -239,9 +304,16 @@ class Run:
         while not (self.directory / 'mobile-inbox.txt').exists():
             self.live(120)
             time.sleep(.1)
-        self.phone.provision(self.lab.read_private(self.directory / 'mobile-inbox.txt'))
-        print('On the phone, import the explicitly selected run and approve its network/128 synthetic pins. '
-              'The original 120-second RPC readiness bound is unchanged.', flush=True)
+        inbox = self.lab.read_private(self.directory / 'mobile-inbox.txt')
+        self.result['inboxSha256'] = hashlib.sha256(inbox).hexdigest()
+        self.phone.provision(inbox)
+        if self.bound['schema'] == '2':
+            self.phone.activate(inbox)
+            print('The development phone campaign imports the selected network/' + str(self.client_count) + ' synthetic pins. '
+                  'The original 120-second RPC readiness bound is unchanged.', flush=True)
+        else:
+            print('On the phone, import the selected run and approve its network/128 synthetic pins. '
+                  'The original 120-second RPC readiness bound is unchanged.', flush=True)
         while True:
             self.live(120)
             need(self.phone.read('failed.txt') is None, 'Phone control failed before readiness')
@@ -277,6 +349,10 @@ class Run:
                 self.samples.append(observed)
                 self.last_sample = time.monotonic()
                 self.lab.write_private(self.directory / 'host-telemetry.txt', protocol.encode(row), replace=True)
+                if observed.get('thermalState') in ('serious', 'critical'):
+                    self.result['thermalAbort'] = dict(status='ABORTED', reason='phone-' + observed['thermalState'] + '-thermal-state',
+                        sequence=observed['sequence'], runtimeStopRequired=True)
+                    raise ValueError('Phone thermal stopping threshold; retire the exact client invocation and Stop the host')
                 return observed
         need(self.last_sample is None or time.monotonic() - self.last_sample < 4.5,
              'No new phone telemetry inside the original provider freshness bound')
@@ -289,7 +365,47 @@ class Run:
             need(time.monotonic() < deadline, 'Phone sample exceeded the original provider freshness bound')
             if value is not None:
                 return value
-            time.sleep(.1)
+            time.sleep(FRESH_SAMPLE_POLL_SECONDS)
+
+    def require_result_binding(self, value):
+        need(type(value) is dict and value.get('sourceSha') == self.context['source']['commit'] and
+             value.get('runLabel') == self.config['runLabel'] and value.get('role') == 'client' and
+             value.get('mode') == self.mode, 'Cannot attribute another source, run, role or mode\'s measurement')
+        if self.protocol.binding['schema'] == '2':
+            need(type(value.get('schema')) is int and value['schema'] == 2 and
+                 type(value.get('clientCount')) is int and value['clientCount'] == self.protocol.client_count,
+                 'Missing, stale or mismatched selected mobile client count')
+        else:
+            need(value.get('schema', 1) == 1 and 'clientCount' not in value, 'Schema1 is exactly128 clients')
+
+    def measurement(self, value):
+        if self.mode in ('correctness', 'churn'):
+            need(self.protocol.binding['schema'] == '2', 'Exercise controls require schema2')
+            return evidence.exercise(value, self.mode, client_count=self.protocol.client_count)
+        if self.protocol.binding['schema'] == '2':
+            return evidence.measurement(value, self.mode, client_count=self.protocol.client_count)
+        return evidence.measurement(value, self.mode)
+
+    def initialization(self, value):
+        if self.protocol.binding['schema'] == '2':
+            return evidence.initialization(value, client_count=self.protocol.client_count)
+        return evidence.initialization(value)
+
+    def connected_idle(self, value):
+        observed = evidence.connected_idle(value, client_count=self.protocol.client_count)
+        need(observed['sourceSha'] == self.context['source']['commit'] and
+             observed['runLabel'] == self.config['runLabel'] and
+             observed['hostArtifactSha256'] == self.protocol.binding['hostArtifactSha256'] and
+             observed['hostPlatform'] == self.protocol.binding['hostPlatform'],
+             'Connected-idle observation differs from the selected source, phone, artifact or run')
+        _, manifest, _ = self.lab.distribution(self.context['source']['commit'])
+        expected = {f'entry{index}file0': entry['name'] + ':' + entry['sha256']
+                    for index, entry in enumerate(manifest['entries'])}
+        raw = self.lab.read_private(self.directory / 'artifact-manifest.txt')
+        need(raw == self.lab.encode(expected) and
+             observed['driverArtifactSha256'] == hashlib.sha256(raw).hexdigest(),
+             'Connected-idle driver bytes differ from the verified prepared distribution')
+        return observed
 
     def workload(self):
         self.last_sample = time.monotonic()
@@ -300,18 +416,18 @@ class Run:
             need(time.monotonic() - self.started < 2400 and self.client_log.tell() <= 1048576,
                  'Generator exceeded its original bounded work phase')
             self.sample()
-            time.sleep(.25)
+            time.sleep(WORKLOAD_POLL_SECONDS)
         code = self.client.wait(timeout=1)
         self.client_proof = self.check_receipt('mobile-client', self.client_argv, code)
         raw = self.lab.read_private(self.directory / 'launcher-result.json')
         result = json.loads(raw, object_pairs_hook=evidence.unique)
-        need(type(result) is dict and result.get('sourceSha') == self.context['source']['commit'] and
-             result.get('runLabel') == self.config['runLabel'] and result.get('role') == 'client' and
-             result.get('mode') == self.mode, 'Cannot attribute another source, run or role\'s measurement')
-        measured = evidence.measurement(result.get('measurement'), self.mode)
+        self.require_result_binding(result)
+        measured = self.measurement(result.get('measurement'))
         self.result['measurement'] = measured  # Preserve a valid failed measurement before requiring a pass.
         if self.mode == 'steady':
-            self.result['initialization'] = evidence.initialization(result.get('initialization'))
+            self.result['initialization'] = self.initialization(result.get('initialization'))
+            if self.protocol.binding['schema'] == '2':
+                self.result['connectedIdle'] = self.connected_idle(result.get('connectedIdle'))
         need(code == 0 and result.get('status') == 'PENDING_RESOURCE_AND_NETWORK_REVIEW' and
              measured['status'] == 'PENDING_RESOURCE_AND_NETWORK_REVIEW' and
              result.get('cleanup', {}).get('cleanupVerified') is True and
@@ -363,15 +479,15 @@ class Run:
                 path = self.directory / 'launcher-result.json'
                 if path.exists():
                     value = json.loads(self.lab.read_private(path), object_pairs_hook=evidence.unique)
-                    need(type(value) is dict and value.get('sourceSha') == self.context['source']['commit'] and
-                         value.get('runLabel') == self.config['runLabel'] and value.get('mode') == self.mode and
-                         value.get('role') == 'client')
+                    self.require_result_binding(value)
                     if value.get('measurement') is not None:
-                        measured = evidence.measurement(value['measurement'], self.mode)
+                        measured = self.measurement(value['measurement'])
                         need(self.result.get('measurement', measured) == measured)
                         self.result['measurement'] = measured
                     if self.mode == 'steady' and value.get('initialization') is not None:
-                        self.result['initialization'] = evidence.initialization(value['initialization'])
+                        self.result['initialization'] = self.initialization(value['initialization'])
+                    if self.mode == 'steady' and self.protocol.binding['schema'] == '2' and value.get('connectedIdle') is not None:
+                        self.result['connectedIdle'] = self.connected_idle(value['connectedIdle'])
             except Exception as error:
                 errors.append(dict(phase='measurement-retention', error=type(error).__name__))
         try:
@@ -426,7 +542,9 @@ def main():
     parser.add_argument('--owner-authorized-mobile', action='store_true', required=True)
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--run-label', required=True)
-    parser.add_argument('--mode', choices=('steady', 'large'), required=True)
+    parser.add_argument('--mode', choices=('steady', 'large', 'correctness', 'churn'), required=True)
+    parser.add_argument('--install-android-apk', type=Path,
+                        help='First deployment only: exact checksum-bound development APK through the private USB server')
     parser.add_argument('--source', type=Path, default=HARNESS_ROOT,
                         help='Exact clean product source matching the installed app and prepared JVM distribution')
     args = parser.parse_args()

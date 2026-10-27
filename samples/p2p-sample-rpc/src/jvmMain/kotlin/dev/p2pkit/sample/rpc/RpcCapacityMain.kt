@@ -48,7 +48,8 @@ private const val PERIOD_NANOS = 100_000_000L
 
 /** Independent 10 Hz client clocks, phase-spaced inside each unchanged 100 ms period. */
 internal fun capacityScheduledNanos(start: Long, tick: Int, client: Int, clients: Int): Long {
-    require(clients in 1..RpcCapacityContract.CLIENTS && client in 0 until clients)
+    require(clients == RpcCapacityContract.CLIENTS || clients == RpcCapacityContract.HOST_256_CLIENTS)
+    require(client in 0 until clients)
     require(tick in 0 until RpcCapacityContract.STEADY_SECONDS * RpcCapacityContract.CALLS_PER_SECOND_PER_CLIENT)
     return start + tick * PERIOD_NANOS + client * PERIOD_NANOS / clients
 }
@@ -104,8 +105,11 @@ internal class CapacityLatencyHistogram {
 internal fun capacityResultJson(
     mode: String, mechanical: Boolean, numbers: Map<String, Long>, latency: CapacityLatencyHistogram,
     scheduling: CapacityLatencyHistogram? = null, failures: Map<String, Long> = emptyMap(),
+    clientCount: Int? = null,
 ): String = buildJsonObject {
-    put("schema", 1)
+    clientCount?.let(::capacityProfileLimits)
+    put("schema", if (clientCount == null) 1 else 2)
+    clientCount?.let { put("clientCount", it) }
     put("mode", mode)
     put("status", if (mechanical) "PENDING_RESOURCE_AND_NETWORK_REVIEW" else "FAIL")
     put("capacityQualified", false)
@@ -150,8 +154,10 @@ internal fun <T> instantiateSingleCapacityProvider(providers: Sequence<() -> T>)
 
 /** This acknowledgement is necessary but not sufficient: execution still requires separate owner authorization. */
 public fun main(args: Array<String>) {
-    if (args.size != 2 || args[0] != "--owner-authorized-capacity-run" || args[1] !in setOf("--steady", "--large")) {
-        System.err.println("Require separate owner authorization and: --owner-authorized-capacity-run --steady|--large")
+    if (args.size != 2 || args[0] != "--owner-authorized-capacity-run" ||
+        args[1] !in setOf("--steady", "--large", "--correctness", "--churn")) {
+        System.err.println("Require owner authorization: --owner-authorized-capacity-run " +
+            "--steady|--large|--correctness|--churn")
         exitProcess(2)
     }
     try {
@@ -160,7 +166,7 @@ public fun main(args: Array<String>) {
             val environment = providers.use { stream ->
                 instantiateSingleCapacityProvider(stream.iterator().asSequence().map { provider -> { provider.get() } })
             }
-            runExperiment(environment, large = args[1] == "--large")
+            runExperiment(environment, mode = args[1].removePrefix("--"))
         }
         if (!passedMechanicalChecks) exitProcess(1)
     } catch (failure: RpcFailure) {
@@ -173,15 +179,19 @@ public fun main(args: Array<String>) {
     }
 }
 
-private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Boolean): Boolean = supervisorScope {
+private suspend fun runExperiment(environment: RpcCapacityEnvironment, mode: String): Boolean = supervisorScope {
     val clients = mutableListOf<RpcClient>()
     var cleanupSucceeded = true
     var measured = false
     try {
         val manifest = environment.manifest
+        capacityProfileLimits(environment.clientCount)
+        require(environment.schemaVersion in setOf(1, 2))
+        require(environment.schemaVersion == 2 || environment.clientCount == RpcCapacityContract.CLIENTS)
+        require(mode in setOf("steady", "large") || environment.schemaVersion == 2)
         println("run=${manifest.runLabel},platform=${manifest.hostPlatform},source=${manifest.hostSourceSha}")
         println("hostArtifact=${manifest.hostArtifactSha256},driverArtifact=${manifest.driverArtifactSha256}")
-        val count = if (large) 1 else RpcCapacityContract.CLIENTS
+        val count = if (mode == "large") 1 else environment.clientCount
         repeat(count) { index ->
             val platform = RpcPlatform.jvm(environment.identityStore(index))
             val trust = environment.trustStore(index)
@@ -199,9 +209,21 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Bo
         }
         // The approved target is steady state, not a cold JVM/codec startup burst.
         // Account for initialization separately; never discard any measured slot
-        // or shorten the subsequent 1,800 seconds / 2,304,000 required responses.
-        if (!large) runInitialization(clients, environment)
-        measured = if (large) runLarge(clients.single()) else runSteady(clients, environment)
+        // or shorten the subsequent 1,800 seconds / selected profile's required responses.
+        if (mode == "steady") {
+            runInitialization(clients, environment)
+            if (environment.schemaVersion == 2) {
+                val idle = observeCapacityConnectedIdle(clients.map { it.state }, environment::sampleHost,
+                    ::driverCpuNanos)
+                println("RPC_CAPACITY_IDLE_JSON:" + idle.json(manifest))
+                check(idle.mechanical) { "The connected idle observation did not complete" }
+            }
+        }
+        measured = when (mode) {
+            "large" -> runLarge(clients.single(), environment)
+            "steady" -> runSteady(clients, environment)
+            else -> runCapacityControls(mode, clients, environment)
+        }
     } finally {
         withContext(NonCancellable) {
             for (batch in clients.chunked(16)) {
@@ -212,7 +234,8 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Bo
         }
         if (!cleanupSucceeded) println("FAIL: retained cleanup was not verified")
         println("RPC_CAPACITY_FINAL_JSON:" + buildJsonObject {
-            put("schema", 1)
+            put("schema", environment.schemaVersion)
+            if (environment.schemaVersion == 2) put("clientCount", environment.clientCount)
             put("mechanicalChecksPassed", measured)
             put("cleanupVerified", cleanupSucceeded)
             put("capacityQualified", false)
@@ -224,7 +247,7 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Bo
 private suspend fun connectedCapacityHost(environment: RpcCapacityEnvironment): RpcCapacityHostTelemetry =
     withTimeout(5_000) {
         var sample = environment.sampleHost()
-        while (sample.host.distinctAuthenticatedClients != RpcCapacityContract.CLIENTS) {
+        while (sample.host.distinctAuthenticatedClients != environment.clientCount) {
             delay(100)
             sample = environment.sampleHost()
         }
@@ -232,7 +255,7 @@ private suspend fun connectedCapacityHost(environment: RpcCapacityEnvironment): 
     }
 
 private suspend fun runInitialization(clients: List<RpcClient>, environment: RpcCapacityEnvironment) {
-    check(clients.size == RpcCapacityContract.CLIENTS)
+    check(clients.size == environment.clientCount)
     val counters = Counters()
     val compiler = checkNotNull(ManagementFactory.getCompilationMXBean())
     check(compiler.isCompilationTimeMonitoringSupported)
@@ -243,7 +266,7 @@ private suspend fun runInitialization(clients: List<RpcClient>, environment: Rpc
     var initialized = false
     try {
         val before = connectedCapacityHost(environment)
-        initializeCapacityPaths(call = { index ->
+        initializeCapacityPaths(clientCount = clients.size, call = { index ->
             val begin = System.nanoTime()
             var success = false
             counters.dispatched.incrementAndGet()
@@ -260,7 +283,7 @@ private suspend fun runInitialization(clients: List<RpcClient>, environment: Rpc
                 counters.latency.record(System.nanoTime() - begin)
             }
         })
-        val expected = RpcCapacityContract.CLIENTS.toLong() * INITIALIZATION_CALLS_PER_CLIENT
+        val expected = clients.size.toLong() * INITIALIZATION_CALLS_PER_CLIENT
         val after = withTimeout(5_000) {
             awaitCapacityCompletions(before.host.diagnostics.completedCalls + expected, environment::sampleHost)
         }
@@ -282,11 +305,12 @@ private suspend fun runInitialization(clients: List<RpcClient>, environment: Rpc
             last.completedCalls - first.completedCalls == expected && last.runningCalls == 0 &&
             last.queuedCalls == 0 && last.refusedCalls == first.refusedCalls &&
             last.protocolFailures == first.protocolFailures && last.connectionFailures == first.connectionFailures &&
-            after.host.distinctAuthenticatedClients == RpcCapacityContract.CLIENTS)
+            after.host.distinctAuthenticatedClients == clients.size)
         initialized = true
     } finally {
         println("RPC_CAPACITY_INITIALIZATION_JSON:" + buildJsonObject {
-            put("schema", 1)
+            put("schema", environment.schemaVersion)
+            if (environment.schemaVersion == 2) put("clientCount", environment.clientCount)
             put("scope", "FIXED_RPC_PATH_INITIALIZATION_NOT_CAPACITY_OR_COLD_START_QUALIFICATION")
             put("status", if (initialized) "INITIALIZED_NOT_CAPACITY" else "FAIL")
             put("capacityQualified", false)
@@ -336,7 +360,7 @@ private suspend fun runSteady(
     fun recordHost(sample: RpcCapacityHostTelemetry) {
         counters.hostSamples.incrementAndGet()
         val stats = sample.host.diagnostics
-        if (sample.host.distinctAuthenticatedClients != RpcCapacityContract.CLIENTS ||
+        if (sample.host.distinctAuthenticatedClients != clients.size ||
             sample.uptimeMillis < previous.uptimeMillis || sample.processCpuNanos < previous.processCpuNanos ||
             stats.acceptedCalls < previous.host.diagnostics.acceptedCalls ||
             stats.completedCalls < previous.host.diagnostics.completedCalls
@@ -510,6 +534,7 @@ private suspend fun runSteady(
                 "driverReportedGcMillisDelta" to driverGcMillis() - initialGcMillis,
             ), counters.latency, counters.scheduling,
             RpcFailureKind.entries.associate { it.name to counters.infrastructure.get(it.ordinal) },
+            clientCount = environment.clientCount.takeIf { environment.schemaVersion == 2 },
         ))
         println(if (mechanical) "PENDING_HOST_RESOURCE_REVIEW_AND_PHYSICAL_INTEROPERABILITY" else "FAIL")
         // Exit 0 is measurement completion, NOT capacity qualification or release readiness.
@@ -555,7 +580,7 @@ private suspend fun measureCall(
     }
 }
 
-private suspend fun runLarge(client: RpcClient): Boolean = supervisorScope {
+private suspend fun runLarge(client: RpcClient, environment: RpcCapacityEnvironment): Boolean = supervisorScope {
     val payload = "a".repeat(RpcCapacityContract.MAXIMUM_BODY_BYTES - 2)
     val counters = Counters()
     val start = System.nanoTime()
@@ -593,6 +618,7 @@ private suspend fun runLarge(client: RpcClient): Boolean = supervisorScope {
         ), counters.latency, failures = RpcFailureKind.entries.associate {
             it.name to counters.infrastructure.get(it.ordinal)
         },
+        clientCount = environment.clientCount.takeIf { environment.schemaVersion == 2 },
     ))
     println(if (passed) "LARGE_BODY_MEASUREMENT_COMPLETE: 20 replies; platform qualification remains separate"
         else "FAIL")

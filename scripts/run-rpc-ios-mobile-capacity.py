@@ -2,15 +2,16 @@
 """Opt-in native Mac generator / wired iPhone control / real organization-LAN RPC candidate.
 
 Uses the existing JVM workload, protected identities, receipts, original timing,
-retention and Stop barriers. It does not sign/install/start the app, fabricate KVM,
-pretend that Mac page counts are Linux counters, or claim a physical capacity pass.
+retention and Stop barriers. A schema2 campaign can explicitly install a bound,
+already signed development app, prepare its first slot and activate a sealed
+run. It never signs, terminates an active app, grants permissions, fabricates
+KVM/Linux observations or claims a physical capacity pass.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import importlib.util
-import json
 import os
 from pathlib import Path
 import re
@@ -31,13 +32,19 @@ SETTINGS = (base.SETTINGS - {'androidUsbSerial', 'adb'}) | {'iosDeviceIdentifier
 
 
 def settings(values, source, label, lab):
-    need(type(values) is dict and set(values) == SETTINGS and all(type(v) is str for v in values.values()) and
-         values['schema'] == '1' and values['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
+    need(type(values) is dict and values.get('schema') in ('1', '2'))
+    fields = SETTINGS | ({'clientCount'} if values['schema'] == '2' else set())
+    need(set(values) == fields and all(type(v) is str for v in values.values()) and
+         values['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', values['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
+    if values['schema'] == '2':
+        need(values['clientCount'] in ('128', '256'), 'Explicit128/256 profile required')
     need(re.fullmatch('[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}', values['iosDeviceIdentifier']) and
          re.fullmatch('en[0-9]{1,3}', values['interface']) and re.fullmatch('en[0-9]{1,3}', values['hostInterface']),
          'Explicit wired iPhone identity and selected LAN interfaces required')
     config = {k: values[k] for k in lab.FIELDS - {'role', 'runLabel'}} | dict(role='client', runLabel=label)
+    if values['schema'] == '2':
+        config['clientCount'] = values['clientCount']
     lab.configuration(config, source)  # Same production organization-LAN policy is applied again by the real JVM driver.
     return config
 
@@ -63,6 +70,11 @@ class Run(base.Run):
 
     def new_phone(self, label):
         backend = ios.DevicectlFiles(self.commands, self.control / 'usb', self.values['iosDeviceIdentifier'], label)
+        previous = getattr(self.args, 'previous_ios_run_label', None)
+        previous_hash = getattr(self.args, 'previous_ios_inbox_sha256', None)
+        need((previous is None) == (previous_hash is None), 'Previous iOS label and exact inbox hash must be supplied together')
+        if previous is not None:
+            self.previous_ios_prepare = (previous, previous_hash)
         return ios.IosUsb(backend, self.bound, owner_authorized=True)
 
     def generator_snapshot(self):
@@ -74,32 +86,30 @@ class Run(base.Run):
         return None  # No subprocess, USB or clock observation before the complete native inventory passes.
 
     def prerequisites(self):
-        destination = self.state / 'evidence' / ('mobile-controls-' + self.config['runLabel'])
-        proof = self.native('mobile-native-controls', [sys.executable, str(ROOT / 'scripts/tests/run-audit-command-test.py'),
-            '--expected-host', self.native_host, '--evidence-dir', str(destination)])
-        count = self.policy.unittest_count(self.output(proof, 'stderr').decode())
-        need(count == self.policy.control_inventory(self.native_host), 'Fresh complete native Mac controls required')
-        self.result['nativeControlTests'] = count
-        self.result['generatorBefore'] = self.generator_snapshot()
-        java = str(Path(os.environ['JAVA_HOME']).resolve(strict=True) / 'bin/java')
-        proof = self.native('mobile-jdk17', [java, '-XshowSettings:properties', '-version'])
-        properties = self.output(proof, 'stderr')
-        need(re.findall(rb'(?m)^\s*java\.specification\.version = ([0-9]+)\s*$', properties) == [b'17'] and
-             re.findall(rb'(?m)^\s*os\.arch = (\S+)\s*$', properties) == [b'aarch64'], 'Actual native ARM JVM17 required')
-        proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
-            str(self.state / 'work' / ('mobile-clock-' + self.config['runLabel']))])
-        clock = darwin.assess_clock(json.loads(self.output(proof), object_pairs_hook=ios.unique))
-        self.result['clockPreflight'] = clock
-        need(clock['healthyForAttempt'], 'Mac generator is not healthy for an interpretable capacity attempt')
-        _, route = self.commands.run('selected-mac-route', ['/sbin/route', '-n', 'get', '-inet', self.config['endpointAddress']], timeout=10)
-        _, interface = self.commands.run('selected-mac-interface', ['/sbin/ifconfig', self.config['interface']], timeout=10)
-        self.result['routeObservation'] = darwin.direct_route(route, interface, self.config)
+        self.generator_prerequisites()
+        import time
+        app = getattr(self.args, 'install_ios_app', None)
+        prepare = getattr(self.args, 'prepare_ios_slot', False)
+        need(not (getattr(self, 'previous_ios_prepare', None) is not None and (app is not None or prepare)),
+             'Later iOS slots must use observed prior closure, never reinstall or relaunch an active app')
+        if app is not None:
+            self.result['installationAccepted'] = self.phone.backend.install_app(app, self.bound, time.monotonic() + 120)
+        if prepare:
+            self.phone.backend.launch_prepare(self.bound, time.monotonic() + 30)
+            self.result['developmentSlotLaunchAccepted'] = True
         self.result['iosCoordinatorSha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.result['devicectlSha256'] = self.phone.backend.tool_sha256
+        self.result['coreDeviceVersion'] = self.phone.backend.tool_version
+        self.result['coreDeviceMetadataSha256'] = self.phone.backend.metadata_sha256
         self.result['rawCopyIsAtomicPublication'] = False
+        if getattr(self, 'previous_ios_prepare', None) is not None:
+            label, digest = self.previous_ios_prepare
+            self.phone.backend.prepare_next(self.bound, label, digest, time.monotonic() + 30)
+            self.result['previousIosSlotPrepared'] = dict(runLabel=label, previousInboxSha256=digest,
+                                                          priorRuntimeClosureVerified=True)
         print('Keep the selected signed app foreground/unlocked. Its NEW prepared USB slot must match this run; '
               'the RPC readiness timer has not started.', flush=True)
-        self.phone.start()  # Requires the owner's explicit on-phone preparation; never grants trust or starts a role.
+        self.phone.start()  # Validates the prepared development slot; never grants system trust or starts RPC.
 
 
 def main():
@@ -107,7 +117,13 @@ def main():
     parser.add_argument('--owner-authorized-mobile', required=True, action='store_true')
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--run-label', required=True)
-    parser.add_argument('--mode', choices=('steady', 'large'), required=True)
+    parser.add_argument('--mode', choices=('steady', 'large', 'correctness', 'churn'), required=True)
+    parser.add_argument('--previous-ios-run-label')
+    parser.add_argument('--previous-ios-inbox-sha256')
+    parser.add_argument('--install-ios-app', type=Path,
+                        help='First deployment only: exact signed development bundle through the selected native tool')
+    parser.add_argument('--prepare-ios-slot', action='store_true',
+                        help='Initial stopped development app only; prepares a slot without starting RPC')
     args = parser.parse_args()
     os.umask(0o077)
     # An explicit opt-in selects only synthetic test execution, not native/device

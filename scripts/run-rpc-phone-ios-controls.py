@@ -23,8 +23,15 @@ import xml.etree.ElementTree as ET
 
 SCOPE = "SUPPLEMENTAL_RPC_PHONE_APP_NOT_PHYSICAL_OR_CAPACITY_QUALIFICATION"
 TARGETS = {
-    "p2pkit-rpc-phone-tests": ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 77),
-    "p2pkit-rpc-phone-uitests": ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 7),
+    "p2pkit-rpc-phone-tests": (
+        # Original77 owner/lifecycle methods plus2 sealed-input/used-slot regressions.
+        ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 79),
+        ("Tests/RpcPhoneEnvironmentSamplerTests.swift", "RpcPhoneEnvironmentSamplerTests", 5),
+        ("Tests/RpcPhoneUsbDeveloperCommandTests.swift", "RpcPhoneUsbDeveloperCommandTests", 6),
+    ),
+    "p2pkit-rpc-phone-uitests": (
+        ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 7),
+    ),
 }
 LIMIT = 256 * 1024 * 1024
 FRAMEWORK_TASK = ":p2p-sample-rpc:verifyP2pKitRpcExampleDebugXCFrameworkProvenance"
@@ -92,12 +99,17 @@ def project_generation_argv(root, xcodegen, project_parent):
 
 def inventory(root):
     result = {}
-    for target, (name, owner, count) in TARGETS.items():
-        source = (root / "samples/p2p-sample-rpc/phone-ios" / name).read_text()
-        need(re.findall(r"final class (\w+): XCTestCase", source) == [owner], "Unexpected Swift test class")
-        methods = re.findall(r"\bfunc (test\w+)\(", source)
-        need(len(methods) == len(set(methods)) == count, "Changed or incomplete phone test inventory")
-        result[target] = {owner + "/" + name + "()" for name in methods}
+    for target, rosters in TARGETS.items():
+        methods_for_target = set()
+        for name, owner, count in rosters:
+            source = (root / "samples/p2p-sample-rpc/phone-ios" / name).read_text()
+            need(re.findall(r"final class (\w+): XCTestCase", source) == [owner], "Unexpected Swift test class")
+            methods = re.findall(r"\bfunc (test\w+)\(", source)
+            need(len(methods) == len(set(methods)) == count, "Changed or incomplete phone test inventory")
+            qualified = {owner + "/" + name + "()" for name in methods}
+            need(not methods_for_target & qualified, "Duplicate phone test class/method inventory")
+            methods_for_target.update(qualified)
+        result[target] = methods_for_target
     return result
 
 

@@ -27,6 +27,235 @@ PUBLIC_FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 
 
 class EvidenceTests(unittest.TestCase):
+    def swift_observation_fixture(self):
+        root = self.root / "swift-observations"
+        sources = {
+            "samples/iosApp/ContentView.swift": "import Foundation\nstruct ContentView {}\n",
+            "samples/iosApp/UITests/ScreenTests.swift": "final class ScreenTests: XCTestCase {\nfunc testStop() {}\n}\n",
+        }
+        for name, text in sources.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text.encode())
+        def git(*argv):
+            return subprocess.run(["git", "-C", str(root), *argv], check=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
+        git("init", "-q")
+        git("config", "core.autocrlf", "false")
+        git("add", "samples")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
+        source = git("rev-parse", "HEAD")
+        command = self.root / "swift-captures"
+        command.mkdir()
+        return root, command, source, sources
+
+    def test_swift_capture_projection_publishes_only_original_source_matched_failure_names_and_locations(self):
+        root, command, source, sources = self.swift_observation_fixture()
+        name = next(iter(sources))
+        (command / "stdout.log").write_text(str(root / name) + ":2:8: error: PRIVATE_COMPILER_MESSAGE\n" +
+            "Test Case '-[sample_tests.ScreenTests testStop]' failed (0.1 seconds). PRIVATE_MESSAGE\n" +
+            "Test case 'ScreenTests.testStop()' failed on 'PRIVATE_DEVICE' (0.1 seconds).\n")
+        actual = E.swift_sample_failure_observations(root, command, source)
+        self.assertEqual(actual, {"locations": [{"source": name, "line": 2, "kind": "ERROR"}],
+            "failedSourceTests": [{"source": "samples/iosApp/UITests/ScreenTests.swift", "test": "testStop", "status": "FAILED"}]})
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+        self.assertNotIn(str(root), json.dumps(actual))
+        result = E.failure_diagnostics(root, command, source)
+        self.assertEqual(result["swiftSample"], actual)
+        self.assertNotIn("outcome", result["swiftSample"])
+
+    def test_swift_capture_projection_ignores_private_unknown_and_success_cases(self):
+        root, command, source, sources = self.swift_observation_fixture()
+        name = next(iter(sources))
+        (command / "stdout.log").write_text(str(root / name) + ":999:1: error: PRIVATE\n" +
+            str(root / "private.swift") + ":1:1: error: PRIVATE\n" +
+            "PRIVATE_PREFIX " + str(root / name) + ":2:1: error: PRIVATE\n" +
+            "Test Case '-[ScreenTests testUnknownPRIVATE]' failed (0.1 seconds).\n" +
+            "Test Case '-[UnknownPRIVATE testStop]' failed (0.1 seconds).\n" +
+            "Test Case '-[ScreenTests testStop]' passed (0.1 seconds).\n")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (command / "stdout.log").write_text("Test Case '-[ScreenTests testStop]' skipped (0.1 seconds).\n")
+        actual = E.swift_sample_failure_observations(root, command, source)
+        self.assertEqual(actual["failedSourceTests"][0]["status"], "SKIPPED")
+
+    def test_swift_capture_projection_refuses_source_drift_linked_and_oversized_capture(self):
+        root, command, source, sources = self.swift_observation_fixture()
+        name = next(iter(sources))
+        (command / "stdout.log").write_text(str(root / name) + ":2:1: error: PRIVATE\n")
+        (root / name).write_text(sources[name] + "// PRIVATE_SOURCE_CHANGE\n")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (root / name).write_bytes(sources[name].encode())
+        (command / "stderr.log").symlink_to(command / "stdout.log")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (command / "stderr.log").unlink()
+        os.link(command / "stdout.log", command / "stderr.log")
+        self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+        (command / "stderr.log").unlink()
+        with mock.patch.object(E, "MAX_LOG_BYTES", 5):
+            self.assertIsNone(E.swift_sample_failure_observations(root, command, source))
+
+    def test_swift_capture_projection_does_not_read_source_or_reports_after_uncertain_cleanup(self):
+        with mock.patch.object(E, "swift_sample_failure_observations", side_effect=AssertionError("unsafe source/report read")):
+            actual = E.failure_diagnostics(self.root, self.root, include_reports=False)
+        self.assertNotIn("swiftSample", actual)
+
+    def phone_observation_fixture(self):
+        root = self.root / "phone-observations"
+        prefix = "samples/p2p-sample-rpc/phone-ios/"
+        sources = {
+            prefix + "Sources/Phone.swift": "import Foundation\nfinal class Phone {}\n",
+            prefix + "Tests/PhoneTests.swift": "final class PhoneTests: XCTestCase {\nfunc testOwner() {}\n}\n",
+            prefix + "UITests/PhoneUiTests.swift": "final class PhoneUiTests: XCTestCase {\nfunc testScreen() {}\n}\n",
+        }
+        for name, text in sources.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text.encode())
+        def git(*argv):
+            return subprocess.run(["git", "-C", str(root), *argv], check=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
+        git("init", "-q")
+        git("config", "core.autocrlf", "false")
+        git("add", "samples")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
+        source = git("rev-parse", "HEAD")
+        report = root / "build/reports/rpc-io-phone"
+        report.mkdir(parents=True)
+        commands = [{"label": label, "exitCode": code, "observedExitCode": code, "argv": ["PRIVATE_DEVICE"]}
+                    for label, code in (("xctest", 65), ("test-summary-0", 0), ("shutdown", 0), ("delete", 0), ("retired", 0))]
+        (report / "commands.json").write_text(json.dumps(commands))
+        summaries = {"summaries": [{"_type": {"_name": "ActionTestableSummary"}, "targetName": {"_value": target},
+            "tests": [{"_type": {"_name": "ActionTestMetadata"}, "identifier": {"_value": owner + "/" + method + "()"},
+                       "testStatus": {"_value": "Success"}}]}
+            for target, owner, method in (("p2pkit-rpc-phone-tests", "PhoneTests", "testOwner"),
+                                         ("p2pkit-rpc-phone-uitests", "PhoneUiTests", "testScreen"))]}
+        (report / "test-summary-0.stdout").write_text(json.dumps(summaries))
+        return root, report, source, sources, commands, summaries
+
+    def test_phone_observations_preserve_original_xcode_failure_with_successful_partial_summaries(self):
+        root, report, source, _, commands, _ = self.phone_observation_fixture()
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual(actual["commands"][0], {"label": "xctest", "exitCode": 65, "observedExitCode": 65})
+        self.assertTrue(all(row["allSuccessful"] for row in actual["tests"]))
+        self.assertNotIn("outcome", actual)  # Observed methods cannot turn a nonzero command into PASS.
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+        commands[0]["exitCode"] = commands[0]["observedExitCode"] = 0
+        (report / "commands.json").write_text(json.dumps(commands))
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual([(row["expected"], row["observed"], row["inventoryMatched"]) for row in actual["tests"]],
+                         [(1, 1, True), (1, 1, True)])
+        self.assertIn("NOT_PHYSICAL_QUALIFICATION", actual["scope"])
+
+    def test_phone_compiler_observations_expose_only_source_blob_matched_locations(self):
+        root, report, source, sources, _, _ = self.phone_observation_fixture()
+        name = next(iter(sources))
+        (report / "xctest.stdout").write_text(
+            str(root / name) + ":2:8: error: PRIVATE_INTEROP_MESSAGE\n" +
+            str(root / name) + ":2:8: error: DUPLICATE_PRIVATE_MESSAGE\n" +
+            str(root / name) + ":500:1: error: PRIVATE_OUT_OF_SOURCE\n" +
+            str(root / "private.swift") + ":1:1: error: PRIVATE_OUTSIDE_SOURCE\n" +
+            "PRIVATE_PREFIX " + str(root / name) + ":1:1: error: PRIVATE\n")
+        (report / "test-summary-0.stdout").write_text('{"summaries":[]}')
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual(actual["compilerLocations"], [{"source": name, "line": 2, "column": 8, "kind": "ERROR"}])
+        self.assertTrue(all(row["observed"] == 0 and not row["inventoryMatched"] and not row["allSuccessful"]
+                            for row in actual["tests"]))
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+        self.assertNotIn(str(root), json.dumps(actual))
+
+    def test_phone_observations_cannot_treat_missing_duplicate_failed_or_skipped_methods_as_complete(self):
+        root, report, source, _, _, summary = self.phone_observation_fixture()
+        import copy
+        for status in ("Failure", "Skipped", "Expected Failure", "PRIVATE_STATUS", "MISSING", "DUPLICATE"):
+            document = copy.deepcopy(summary)
+            target = document["summaries"][0]
+            if status == "MISSING":
+                target["tests"] = []
+            elif status == "DUPLICATE":
+                target["tests"] *= 2
+            else:
+                target["tests"][0]["testStatus"]["_value"] = status
+            (report / "test-summary-0.stdout").write_text(json.dumps(document))
+            actual = E.rpc_ios_phone_observations(root, source)
+            self.assertFalse(actual["tests"][0]["allSuccessful"])
+            self.assertNotIn("PRIVATE", json.dumps(actual))
+        summary["summaries"][0]["tests"][0]["identifier"]["_value"] = "PRIVATE_TEST/PAYLOAD()"
+        summary["summaries"].append({"_type": {"_name": "ActionTestableSummary"}, "targetName": {"_value": "PRIVATE_TARGET"}})
+        (report / "test-summary-0.stdout").write_text(json.dumps(summary))
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual(actual["unexpectedTargets"], 1)
+        self.assertEqual(actual["tests"][0]["sourceCases"], [])
+        self.assertFalse(actual["tests"][0]["inventoryMatched"])
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+
+    def test_phone_assertion_locations_require_the_source_known_method_in_its_exact_file(self):
+        root, report, source, sources, _, _ = self.phone_observation_fixture()
+        prefix = "samples/p2p-sample-rpc/phone-ios/"
+        name = prefix + "Tests/PhoneTests.swift"
+        valid = str(root / name) + ":2: error: -[P2pKitRpcPhoneTests.PhoneTests testOwner] : PRIVATE_ACTUAL_VALUE\n"
+        (report / "xctest.stdout").write_text(valid + valid +
+            str(root / name) + ":500: error: -[PhoneTests testOwner] : PRIVATE_OUT_OF_SOURCE\n" +
+            str(root / name) + ":0: error: -[PhoneTests testOwner] : PRIVATE_ZERO_LINE\n" +
+            str(root / name) + ":2: error: -[PhoneTests testUnknown] : PRIVATE_UNKNOWN_TEST\n" +
+            str(root / name) + ":2: error: -[UnknownTests testOwner] : PRIVATE_UNKNOWN_CLASS\n" +
+            str(root / name) + ":2: error: -[PhoneUiTests testScreen] : PRIVATE_WRONG_FILE\n" +
+            str(root / next(iter(sources))) + ":2: error: -[PhoneTests testOwner] : PRIVATE_NOT_A_TEST_FILE\n" +
+            str(root / "private.swift") + ":2: error: -[PhoneTests testOwner] : PRIVATE_UNTRACKED\n" +
+            "PRIVATE_PREFIX " + valid)
+        (report / "xctest.stderr").write_text(valid)
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual(actual["testFailureLocations"],
+                         [{"source": name, "line": 2, "test": "testOwner", "kind": "XCTEST_FAILURE"}])
+        self.assertEqual(actual["commands"][0]["exitCode"], 65)
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+        self.assertNotIn(str(root), json.dumps(actual))
+        self.assertNotIn("outcome", actual)
+
+    def test_phone_assertion_locations_do_not_infer_an_assertion_from_an_arbitrary_test_file_error(self):
+        root, report, source, _, _, _ = self.phone_observation_fixture()
+        name = "samples/p2p-sample-rpc/phone-ios/Tests/PhoneTests.swift"
+        (report / "xctest.stdout").write_text(str(root / name) + ":2: error: PRIVATE_MESSAGE_WITHOUT_METHOD\n")
+        actual = E.rpc_ios_phone_observations(root, source)
+        self.assertEqual(actual["testFailureLocations"], [])
+        self.assertEqual(actual["compilerLocations"], [])
+        self.assertEqual(actual["commands"][0]["exitCode"], 65)
+
+    def test_phone_observations_refuse_source_drift_linked_reports_and_unbounded_or_ambiguous_commands(self):
+        root, report, source, sources, commands, _ = self.phone_observation_fixture()
+        name = next(iter(sources))
+        (root / name).write_text(sources[name] + "// PRIVATE_MODIFICATION\n")
+        self.assertIsNone(E.rpc_ios_phone_observations(root, source))
+        (root / name).write_text(sources[name])
+        capture = report / "xctest.stdout"
+        capture.symlink_to(report / "test-summary-0.stdout")
+        self.assertIsNone(E.rpc_ios_phone_observations(root, source))
+        capture.unlink()
+        os.link(report / "test-summary-0.stdout", capture)
+        self.assertIsNone(E.rpc_ios_phone_observations(root, source))
+        capture.unlink()
+        for changed in ([*commands, commands[0]], [{"label": "PRIVATE", "exitCode": 0}],
+                        [{"label": "xctest", "exitCode": True}], [{"label": "xctest", "exitCode": 2**40}],
+                        commands * 100):
+            (report / "commands.json").write_text(json.dumps(changed))
+            self.assertIsNone(E.rpc_ios_phone_observations(root, source))
+        (report / "commands.json").write_bytes(b" " * (64 * 1024 + 1))
+        self.assertIsNone(E.rpc_ios_phone_observations(root, source))
+        (report / "commands.json").write_text("[" * 2000 + "0" + "]" * 2000)
+        self.assertIsNone(E.rpc_ios_phone_observations(root, source))
+
+    def test_phone_reports_are_not_read_when_cleanup_is_uncertain(self):
+        with mock.patch.object(E, "rpc_ios_phone_observations", side_effect=AssertionError("live report read")):
+            actual = E.failure_diagnostics(self.root, self.root, include_reports=False)
+        self.assertNotIn("rpcIosPhone", actual)
+
+    def test_phone_failure_diagnostics_retain_the_same_finite_original_observations(self):
+        root, _, source, _, _, _ = self.phone_observation_fixture()
+        observed = E.rpc_ios_phone_observations(root, source)
+        actual = E.failure_diagnostics(root, self.root, source)
+        self.assertEqual(actual["rpcIosPhone"], observed)
+        self.assertEqual(actual["rpcIosPhone"]["commands"][0]["exitCode"], 65)
+        self.assertNotIn("PRIVATE", json.dumps(actual))
+
     def test_rpc_msi_path_mismatch_projection_accepts_only_original_bounded_metadata(self):
         value = {"imageFiles": 50, "msiFiles": 45, "missingFiles": 35, "extraFiles": 30,
                  "caseFoldEqual": False,

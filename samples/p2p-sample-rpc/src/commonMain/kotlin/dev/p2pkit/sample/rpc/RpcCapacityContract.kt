@@ -36,6 +36,12 @@ public object RpcCapacityContract {
     )
 }
 
+internal fun capacityProfileLimits(clientCount: Int): RpcLimits = when (clientCount) {
+    RpcCapacityContract.CLIENTS -> RpcLimits.host128()
+    RpcCapacityContract.HOST_256_CLIENTS -> RpcLimits.host256()
+    else -> throw IllegalArgumentException("Capacity profile must explicitly select 128 or 256 clients")
+}
+
 public class RpcCapacityHostSnapshot internal constructor(
     public val distinctAuthenticatedClients: Int,
     public val diagnostics: RpcDiagnostics,
@@ -66,6 +72,7 @@ public class RpcCapacityHost private constructor(private val host: RpcHost) {
         public suspend fun create(
             platform: RpcPlatform, scope: CoroutineScope, lan: OrganizationLan,
             localDurableTrustStore: RpcTrustStore, approvedClients: Set<PeerFingerprint>,
+            enableExercises: Boolean = false,
         ): RpcCapacityHost {
             require(approvedClients.size in setOf(RpcCapacityContract.CLIENTS, RpcCapacityContract.HOST_256_CLIENTS))
             val pins = approvedClients.toSet()
@@ -84,6 +91,7 @@ public class RpcCapacityHost private constructor(private val host: RpcHost) {
                 register(RpcCapacityContract.largeEcho, authorize = { it.fingerprint in pins }) { _, value ->
                     RpcReply.Success(value)
                 }
+                if (enableExercises) registerCapacityExercises(pins)
             }
             if (host.trust.fingerprints().toSet() != pins) {
                 host.close()

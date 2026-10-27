@@ -2,11 +2,13 @@
 
 All subprocesses must remain inside the caller's admitted native ownership scope.
 No global ADB server, arbitrary remote shell, forwarding, pairing-store read or PID-based
-cleanup is used. Phone-local approval is still required before importing RPC pins.
+cleanup is used. Phone-local USB authorization is still required; schema2 can
+then explicitly activate a source/artifact-bound development campaign.
 """
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -20,6 +22,7 @@ import rpc_mobile_capacity as protocol
 ANDROID_PACKAGE = 'dev.p2pkit.sample.android'
 IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 need = protocol.need
+MAX_COMMANDS = 20_000
 ANDROID_SHELL_STAGES = (
     'entry', 'classpath', 'uid', 'home', 'base-create', 'directory-type', 'directory-owner', 'directory-mode',
     'run-create', 'absence', 'data-open', 'data-descriptor', 'data-input', 'data-close',
@@ -65,7 +68,7 @@ class Commands:
         self.count, self.unsafe, self.rows = 0, False, []
 
     def run(self, label, argv, timeout=30, data=None, allowed=(0,)):
-        need(not self.unsafe and re.fullmatch('[a-z0-9-]{1,64}', label) and self.count < 15000)
+        need(not self.unsafe and re.fullmatch('[a-z0-9-]{1,64}', label) and self.count < MAX_COMMANDS)
         need(type(timeout) in (int, float) and 0 < timeout <= 150 and
              (data is None or type(data) is bytes and len(data) <= protocol.RECORD_LIMIT))
         started = time.monotonic()
@@ -268,7 +271,7 @@ exec run-as {ANDROID_PACKAGE} sh -c {shlex.quote(android_script(run_label, opera
 
 
 class AndroidUsb:
-    def __init__(self, commands, directory, adb, selected, run_label):
+    def __init__(self, commands, directory, adb, selected, run_label, *, binding=None, campaign_keys=None):
         need(re.fullmatch('[A-Za-z0-9_-]{1,128}', selected) and not selected.startswith('emulator-'))
         self.commands, self.directory, self.adb = commands, directory, adb
         self.selected, self.run_label = selected, run_label
@@ -278,15 +281,78 @@ class AndroidUsb:
         self.closed = False
         self.authorized = False
         self.started = False
+        self.binding = protocol.binding(binding) if binding is not None else None
+        if self.binding is not None:
+            need(self.binding['hostPlatform'] == 'Android' and self.binding['runLabel'] == run_label)
+        self.stop_attempted = False
+        self.activation_attempted = False
+        self.inbox_sha256 = None
+        self.campaign_keys = campaign_keys
+        self.campaign_key_hashes = None
+        self.adb_tool_identity = None
+        if campaign_keys is not None:
+            need(self.binding is not None and self.binding['schema'] == '2', 'Campaign key reuse requires schema2')
         # ADB uses HOME/.android, not the SDK's ANDROID_USER_HOME alone.
         self.home = self.directory / 'adb-home/.android'
         self.socket = self.directory / 'adb.sock'
+
+    def campaign_material(self):
+        """Only an explicitly generated, source/tool-bound private campaign keypair; never global ADB keys."""
+        directory = self.campaign_keys
+        need(isinstance(directory, Path) and directory.is_absolute() and directory == directory.resolve(strict=True))
+        self.commands.files.private_directory(directory)
+        need(directory != Path.home() / '.android' and
+             {path.name for path in directory.iterdir()} == {'manifest.txt', 'adbkey', 'adbkey.pub'},
+             'Select the task-private campaign key directory, never an existing owner pairing store')
+        values = {}
+        for name, limit in (('manifest.txt', 2048), ('adbkey', 16384), ('adbkey.pub', 4096)):
+            path = directory / name
+            info = path.lstat()
+            need(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and
+                 stat.S_IMODE(info.st_mode) == 0o600 and 0 < info.st_size <= limit,
+                 'Campaign key files must be bounded owned0600 regular nonlinked files')
+            values[name] = self.commands.files.read_private(path)
+            need(len(values[name]) == info.st_size and len(values[name]) <= limit)
+        manifest = protocol.parse(values['manifest.txt'])
+        fields = {'schema', 'scope', 'sourceSha', 'adbSha256', 'privateKeySha256', 'publicKeySha256'}
+        need(set(manifest) == fields and manifest['schema'] == '1' and
+             manifest['scope'] == 'mobile-usb-campaign-adb-keys' and manifest['sourceSha'] == self.binding['hostSourceSha'])
+        for field in ('adbSha256', 'privateKeySha256', 'publicKeySha256'):
+            need(re.fullmatch('[a-f0-9]{64}', manifest[field]))
+        adb_info = self.adb.lstat()
+        need(stat.S_ISREG(adb_info.st_mode) and adb_info.st_nlink == 1 and
+             not adb_info.st_mode & (stat.S_ISUID | stat.S_ISGID) and not stat.S_IMODE(adb_info.st_mode) & 0o022 and
+             0 < adb_info.st_size <= 64 * 1024 * 1024 and not self.adb.is_symlink())
+        identity = (adb_info.st_dev, adb_info.st_ino, adb_info.st_size, adb_info.st_mtime_ns, adb_info.st_mode, adb_info.st_uid)
+        if self.adb_tool_identity is None:
+            descriptor = os.open(self.adb, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, 'rb') as stream:
+                opened = os.fstat(stream.fileno())
+                need((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_mode, opened.st_uid) == identity)
+                raw = stream.read(64 * 1024 * 1024 + 1)
+                after = os.fstat(stream.fileno())
+                need((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_mode, after.st_uid) == identity)
+            need(len(raw) == adb_info.st_size and hashlib.sha256(raw).hexdigest() == manifest['adbSha256'])
+            self.adb_tool_identity = identity
+        else:
+            need(identity == self.adb_tool_identity, 'Installed ADB lifetime changed')
+        need(hashlib.sha256(values['adbkey']).hexdigest() == manifest['privateKeySha256'] and
+             hashlib.sha256(values['adbkey.pub']).hexdigest() == manifest['publicKeySha256'],
+             'Campaign source, tool or keypair changed; do not adopt another pairing key')
+        hashes = {name: hashlib.sha256(raw).hexdigest() for name, raw in values.items()}
+        if self.campaign_key_hashes is not None:
+            need(hashes == self.campaign_key_hashes, 'Campaign key lifetime changed')
+        self.campaign_key_hashes = hashes
+        return {name: values[name] for name in ('adbkey', 'adbkey.pub')}
 
     def start(self):
         need(not self.started and not self.closed)
         self.started = True
         for name in ('adb-home', 'adb-home/.android'):
             (self.directory / name).mkdir(mode=0o700)
+        if self.campaign_keys is not None:
+            for name, raw in self.campaign_material().items():
+                self.commands.files.write_private(self.home / name, raw)
         need(len(os.fsencode(self.socket)) < 100, 'Private ADB Unix-socket path exceeds the portable bound')
         for name in ('ADB_VENDOR_KEYS', 'ADB_SERVER_PORT', 'ANDROID_ADB_SERVER_PORT', 'ANDROID_SDK_HOME'):
             self.commands.env.pop(name, None)
@@ -302,8 +368,9 @@ class AndroidUsb:
         info = self.socket.lstat()
         need(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid())
         self.socket_identity = info.st_dev, info.st_ino
-        # Only our new server's key metadata is observed; no existing/custodian
-        # key is opened, copied or reused. Auth on the phone is an explicit owner action.
+        # Only our new server's key metadata is observed. The optional selected
+        # campaign keys are separately verified above; no owner/global pairing
+        # store is opened. Phone authorization remains an explicit owner action.
         for path in self.home.iterdir():
             need(path.name in ('adbkey', 'adbkey.pub'), 'Unexpected file in the new private ADB key directory')
             info = path.lstat()
@@ -311,6 +378,10 @@ class AndroidUsb:
                  stat.S_IMODE(info.st_mode) & 0o077 == 0)
             self.key_identities[path] = info.st_dev, info.st_ino
         need({p.name for p in self.key_identities} == {'adbkey', 'adbkey.pub'}, 'New private ADB keys were not established')
+        if self.campaign_keys is not None:
+            material = self.campaign_material()
+            need(all(self.commands.files.read_private(self.home / name) == raw for name, raw in material.items()),
+                 'The fresh private ADB server did not retain the selected campaign keys')
 
     def await_authorization(self, timeout=120):
         """Owner approval of the fresh ADB key is BEFORE the RPC readiness window."""
@@ -334,6 +405,8 @@ class AndroidUsb:
         info = self.socket.lstat()
         need(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid() and
              (info.st_dev, info.st_ino) == self.socket_identity, 'The private ADB socket lifetime changed')
+        if self.campaign_keys is not None:
+            self.campaign_material()
 
     def adb_command(self, label, arguments, **options):
         self.alive()
@@ -353,14 +426,62 @@ class AndroidUsb:
         _, raw = self.adb_command('android-physical-device', ['-s', self.selected, 'shell', 'getprop', 'ro.kernel.qemu'], timeout=remaining())
         need(raw.strip() in (b'', b'0'), 'An emulator cannot supply physical phone evidence')
 
+    def install_app(self, apk):
+        """Install one checksum-bound development APK before provisioning this run; ready still checks installed bytes."""
+        need(self.authorized and not self.provisioned and not self.closed and self.binding is not None)
+        need(isinstance(apk, Path) and apk.is_absolute() and apk == apk.resolve(strict=True) and apk.suffix == '.apk')
+        info = apk.lstat()
+        need(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and
+             0 < info.st_size <= 256 * 1024 * 1024 and not stat.S_IMODE(info.st_mode) & 0o022)
+        with os.fdopen(os.open(apk, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+            opened = os.fstat(stream.fileno())
+            need((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) ==
+                 (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns))
+            hasher, remaining = hashlib.sha256(), info.st_size
+            while remaining:
+                block = stream.read(min(1048576, remaining))
+                need(block, 'APK ended before its declared size')
+                hasher.update(block)
+                remaining -= len(block)
+            need(not stream.read(1), 'APK grew during verification')
+            digest = hasher.hexdigest()
+            after = os.fstat(stream.fileno())
+        need((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) ==
+             (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) and
+             digest == self.binding['hostArtifactSha256'], 'Development APK differs from the source-bound selected artifact')
+        _, output = self.adb_command('android-install-bound-apk', ['-s', self.selected, 'install', '--no-streaming', '-r', str(apk)],
+                                     timeout=150)
+        need(re.findall(rb'(?m)^(Success)\s*$', output) == [b'Success'], 'APK installer did not report success')
+        return dict(installerSucceeded=True, artifactSha256=digest, requiresInstalledReadyHash=True)
+
     def provision(self, raw):
         need(self.authorized and not self.provisioned)
-        protocol.parse(raw)
+        if self.binding is not None:
+            protocol.inbox(raw, self.binding)
+        else:
+            protocol.parse(raw)
         # The sealed inbox may already be visible when the command reports a
         # failure. Retain the exact-run Stop obligation and forbid another
         # publication attempt; this flag is not a successful USB-copy receipt.
         self.provisioned = True
+        self.inbox_sha256 = hashlib.sha256(raw).hexdigest()
         self.adb_command('android-provision-private', ['-s', self.selected, *android_shell(self.run_label, 'prepare')], data=raw)
+
+    def activate(self, raw):
+        """Launch one explicit development activity, never a permission/trust bypass in released apps."""
+        need(self.binding is not None and self.provisioned and not self.closed and not self.activation_attempted)
+        protocol.inbox(raw, self.binding)
+        need(hashlib.sha256(raw).hexdigest() == self.inbox_sha256, 'Campaign must bind the exact published inbox')
+        extras = {'rpcUsbRunLabel': self.run_label, 'rpcUsbSourceSha': self.binding['hostSourceSha'],
+                  'rpcUsbArtifactSha256': self.binding['hostArtifactSha256'], 'rpcUsbInboxSha256': self.inbox_sha256}
+        arguments = ['-s', self.selected, 'shell', 'am', 'start', '-W', '-n',
+                     ANDROID_PACKAGE + '/dev.p2pkit.sample.android.rpclab.RpcLabActivity']
+        for name, value in extras.items():
+            arguments += ['--es', name, value]
+        self.activation_attempted = True
+        _, output = self.adb_command('android-start-bound-campaign', arguments, timeout=30)
+        need(re.findall(rb'(?m)^Status: (\S+)\s*$', output) == [b'ok'],
+             'Development activity launch did not report success; actual source-bound readiness is still required')
 
     def read(self, name, timeout=4):
         need(self.provisioned and name in protocol.FILES and type(timeout) in (int, float) and 0 < timeout <= 4)
@@ -382,8 +503,11 @@ class AndroidUsb:
         raise AssertionError('unreachable')
 
     def stop(self, raw):
-        need(self.provisioned)
-        protocol.parse(raw)
+        need(self.provisioned and not self.stop_attempted)
+        row = protocol.parse(raw)
+        if self.binding is not None:
+            need(row == self.binding | dict(action='stop'), 'Only this exact run may request Stop')
+        self.stop_attempted = True
         self.adb_command('android-stop-private', ['-s', self.selected, *android_shell(self.run_label, 'stop')], data=raw)
 
     def close(self):
@@ -405,7 +529,10 @@ class AndroidUsb:
             path.unlink()
         need(not self.home.exists() or not list(self.home.iterdir()), 'Unrecognized private ADB state remains')
         self.closed = True
-        return dict(privateServerExited=True, testHostKeysRetired=True,
+        if self.campaign_keys is not None:
+            self.campaign_material()
+        return dict(privateServerExited=True, testHostKeysRetired=self.campaign_keys is None,
+                    copiedHostKeysRetired=True, campaignKeysRetained=self.campaign_keys is not None,
                     deviceUsbAuthorizationRevoked=False)
 
 

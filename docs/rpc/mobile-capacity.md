@@ -1,5 +1,13 @@
 # Mobile-host capacity candidates
 
+> **Current Mac continuation:** use [the maintained Mac/mobile guide](mac-mobile-continuation.md)
+> for source-bound Android/iPhone schema2 128/256 preparation, independent phase
+> commands, test-only deployment controls and metrics. The original schema1
+> contract and historical emulator evidence below remain preserved; their
+> Linux-only/128/CoreDevice-build-specific instructions are not prerequisites
+> for the newer Mac candidate. Neither tooling generation constitutes physical
+> qualification. Track actual completion in [#525](https://github.com/p2pKit/P2pKit/issues/525).
+
 This is **offline-tested coordination tooling with verified emulator shell
 integration, not a completed physical USB, LAN or mobile-capacity run**. Use it
 only on an owner-approved physical test

@@ -1723,8 +1723,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         let result: Result<Void, Error>
         do { try body(files, directory); result = .success(()) } catch { result = .failure(error) }
         let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        let allowed = Set(["prepared.txt", "inbox.txt", "stop.txt", "ready.txt", "telemetry.txt", "linked.txt", "target.txt",
-                           ".incoming-inbox.txt", ".sealed-inbox.txt", ".incoming-stop.txt", ".sealed-stop.txt"])
+        let allowed = Set(["prepared.txt", "next-ready.txt", "inbox.txt", "stop.txt", "campaign.txt", "next.txt", "ready.txt", "telemetry.txt",
+                           "closed.txt", "failed.txt", "linked.txt", "target.txt", ".incoming-inbox.txt", ".sealed-inbox.txt",
+                           ".incoming-stop.txt", ".sealed-stop.txt", ".incoming-campaign.txt", ".sealed-campaign.txt",
+                           ".incoming-next.txt", ".sealed-next.txt"])
         for entry in entries {
             guard allowed.contains(entry.lastPathComponent), unlink(entry.path) == 0 else {
                 throw RpcPhoneCapacityIOError.resourceRetirement
@@ -1853,6 +1855,31 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
             XCTAssertThrowsError(try files.publish("prepared.txt", "schema=2\n"))
             XCTAssertNil(try files.read("ready.txt", optional: true))
             XCTAssertNil(try files.read("stop.txt", optional: true))
+        }
+    }
+
+    func testUsedOrInterruptedRuntimeOutputsAreRefusedBeforeReusingAUsbRun() throws {
+        for name in ["ready.txt", "telemetry.txt", "closed.txt", "failed.txt"] {
+            try withCapacityFiles { files, _ in
+                XCTAssertNoThrow(try files.requireUnusedRuntimeOutputs())
+                try files.publish(name, "observed=true\n")
+                XCTAssertThrowsError(try files.requireUnusedRuntimeOutputs())
+            }
+        }
+    }
+
+    func testDebugCampaignAndNextInputsRequireSealsAndCannotBeReplayedIntoANewFileOwner() throws {
+        for name in ["campaign.txt", "next.txt"] {
+            try withCapacityFiles { files, directory in
+                try Data("scope=mobile-usb-start\n".utf8).write(
+                    to: directory.appendingPathComponent(".incoming-" + name), options: .withoutOverwriting)
+                XCTAssertNil(try files.read(name, optional: true))
+                try seal(name, "scope=mobile-usb-start\n", directory)
+                XCTAssertEqual(try files.read(name), "scope=mobile-usb-start\n")
+                let other = try RpcPhoneCapacityFiles(runLabel: directory.lastPathComponent)
+                XCTAssertThrowsError(try other.read(name), "A new owner cannot replay a canonical input")
+                XCTAssertThrowsError(try files.publish(name, "scope=untrusted\n"))
+            }
         }
     }
 

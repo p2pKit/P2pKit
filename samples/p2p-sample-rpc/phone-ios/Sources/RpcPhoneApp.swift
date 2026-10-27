@@ -40,8 +40,20 @@ struct RpcPhoneApp: App {
                     Color(.systemBackground).ignoresSafeArea().overlay(Text("RPC lab is not active"))
                 }
             }
-            .onAppear { model.setForeground(scenePhase == .active) }
-            .onChange(of: scenePhase) { model.setForeground($0 == .active) }
+            .onAppear {
+                model.setForeground(scenePhase == .active)
+                #if DEBUG
+                    if scenePhase == .active {
+                        model.beginUsbDeveloperCampaign(arguments: ProcessInfo.processInfo.arguments)
+                    }
+                #endif
+            }
+            .onChange(of: scenePhase) {
+                model.setForeground($0 == .active)
+                #if DEBUG
+                    if $0 == .active { model.beginUsbDeveloperCampaign(arguments: ProcessInfo.processInfo.arguments) }
+                #endif
+            }
             .onReceive(
                 NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)
             ) { _ in

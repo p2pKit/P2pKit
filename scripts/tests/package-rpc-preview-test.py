@@ -6,6 +6,7 @@ from pathlib import Path
 import runpy
 import tempfile
 import unittest
+import zipfile
 
 API = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'package-rpc-preview.py'))
 SHA = 'a' * 40
@@ -55,6 +56,43 @@ class PackagingInputs(unittest.TestCase):
         for rows in ([], [self.row] * 129):
             self.write(rows)
             with self.assertRaises(ValueError): API['checked_entries'](self.root, SHA)
+
+    def native_copy(self):
+        name = API['NATIVE_MANIFEST_JAR']
+        native = self.root / 'native'
+        native.mkdir()
+        path = native / name
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('META-INF/p2pkit/macos-tcp.properties', b'SYNTHETIC NATIVE METADATA; NOT LOADED')
+        copied = self.root / name
+        copied.write_bytes(path.read_bytes())
+        row = dict(name=name, sha256=API['digest'](path))
+        self.write([self.row, row])
+        return path, copied, row
+
+    def test_mac_root_duplicate_is_verified_and_omitted_only_with_original_native_authority(self):
+        native, copied, row = self.native_copy()
+        self.assertEqual(API['checked_entries'](self.root, SHA, native), ['app.jar'])
+        # Non-Mac callers and the original manifest schema retain their unchanged classpath behavior.
+        self.assertEqual(API['checked_entries'](self.root, SHA), ['app.jar', copied.name])
+        self.write([self.row])
+        self.assertEqual(API['checked_entries'](self.root, SHA, native), ['app.jar'])
+
+    def test_native_metadata_mutation_cannot_be_hidden_by_omitting_the_root_copy(self):
+        native, copied, row = self.native_copy()
+        copied.write_bytes(b'MODIFIED ROOT COPY')
+        with self.assertRaises(ValueError): API['checked_entries'](self.root, SHA, native)
+        self.write([self.row, dict(row, sha256=API['digest'](copied))])
+        with self.assertRaises(ValueError): API['checked_entries'](self.root, SHA, native)
+
+    def test_linked_authority_and_duplicate_metadata_rows_remain_failures(self):
+        native, copied, row = self.native_copy()
+        self.write([self.row, row, row])
+        with self.assertRaises(ValueError): API['checked_entries'](self.root, SHA, native)
+        self.write([self.row, row])
+        native.unlink()
+        native.symlink_to(copied)
+        with self.assertRaises(ValueError): API['checked_entries'](self.root, SHA, native)
 
     def test_mac_metadata_preserves_identity_and_declares_only_used_privacy_services(self):
         original = dict(CFBundleIdentifier='dev.p2pkit.sample.rpc.desktop',

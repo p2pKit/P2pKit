@@ -245,7 +245,8 @@ internal class RpcDiscoveryCoordinator(
                     return
                 }
                 if (failure is RpcFailure && failure.kind in setOf(RpcFailureKind.TrustStorage,
-                        RpcFailureKind.Authentication, RpcFailureKind.Unauthorized, RpcFailureKind.Closed)
+                        RpcFailureKind.Authentication, RpcFailureKind.Unauthorized, RpcFailureKind.Closed,
+                        RpcFailureKind.Protocol, RpcFailureKind.IncompatibleVersion)
                 ) throw failure
                 val wait = BACKOFF[retryFailures.coerceAtMost(BACKOFF.lastIndex)]
                 retryFailures = (retryFailures + 1).coerceAtMost(BACKOFF.size)

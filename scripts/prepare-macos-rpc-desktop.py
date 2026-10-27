@@ -8,9 +8,30 @@ from pathlib import Path
 import shutil
 import subprocess
 
+NATIVE_MANIFEST_JAR = 'p2pkit-macos-tcp-manifest.jar'
+
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked_classpath_entries(directory, entries, native):
+    """Verify every distribution row; keep only the original native manifest at native/."""
+    assert isinstance(entries, list) and 1 <= len(entries) <= 128
+    retained, seen = [], set()
+    for entry in entries:
+        name = entry['name']
+        assert Path(name).name == name and name.endswith('.jar') and name not in seen
+        seen.add(name)
+        original = directory / name
+        assert original.is_file() and not original.is_symlink() and sha(original) == entry['sha256']
+        if name == NATIVE_MANIFEST_JAR:
+            authority = native / name
+            assert authority.is_file() and not authority.is_symlink() and sha(authority) == entry['sha256']
+            # MacLanNativeLoader requires one trusted resource, even if two copies have identical bytes.
+            continue
+        retained.append(entry)
+    return retained
 
 
 def launcher_source(manifest_digest, source, java, java_digest):
@@ -75,7 +96,7 @@ def main():
     args.output.mkdir(mode=0o700, parents=True)
     stage = args.output / 'native'; stage.mkdir(mode=0o700)
     entries = []
-    for entry in jars['entries']:
+    for entry in checked_classpath_entries(args.jars, jars['entries'], args.native):
         name = entry['name']; assert Path(name).name == name and name.endswith('.jar')
         original = args.jars / name
         assert not original.is_symlink() and sha(original) == entry['sha256']

@@ -33,6 +33,7 @@ internal class RpcLabNetworkSetup(
     private val wifi: RpcLabWifiObserving,
     private val idle: () -> Boolean,
     private val invalidated: () -> Unit,
+    private val runtimeRetired: () -> Boolean = idle,
 ) {
     private val mutable = MutableStateFlow(RpcLabNetworkState())
     val state = mutable.asStateFlow()
@@ -94,6 +95,16 @@ internal class RpcLabNetworkSetup(
     /** Called only by the Activity's serialized, source-verified USB loader; loading never approves or starts RPC. */
     fun loadSession(settings: RpcPhoneSettings) {
         check(state.value.foreground && !state.value.sessionLocked)
+        applySession(settings)
+    }
+
+    /** The serialized USB loader verified the old healthy Stop receipt; keep fields locked throughout replacement. */
+    fun replaceRetiredSession(settings: RpcPhoneSettings) {
+        check(state.value.foreground && state.value.sessionLocked && runtimeRetired())
+        applySession(settings)
+    }
+
+    private fun applySession(settings: RpcPhoneSettings) {
         mutable.value = state.value.copy(manual = true, sessionLocked = true, approved = null,
             fields = RpcLabNetworkFields(settings.subnets, settings.interfaceName, settings.localAddress))
     }

@@ -2,9 +2,12 @@ package dev.p2pkit.sample.rpc
 
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.rpc.RpcDiagnostics
+import dev.p2pkit.rpc.RpcLimits
 
 /** Private USB control records for the foreground test apps, never an RPC protocol or a public report. */
 public class RpcMobileCapacityConfig private constructor(internal val fields: Map<String, String>) {
+    public val schema: String get() = fields.getValue("schema")
+    public val clientCount: Int get() = fields["clientCount"]?.toInt() ?: RpcCapacityContract.CLIENTS
     public val runLabel: String get() = fields.getValue("runLabel")
     public val hostPlatform: String get() = fields.getValue("hostPlatform")
     public val hostSourceSha: String get() = fields.getValue("hostSourceSha")
@@ -16,22 +19,37 @@ public class RpcMobileCapacityConfig private constructor(internal val fields: Ma
     public val clientPins: String get() = fields.getValue("clientPins").replace(',', '\n')
     internal val pins: Set<PeerFingerprint> get() = RpcPhoneLab.parseCapacityPins(clientPins)
 
-    internal fun binding(): Map<String, String> = fields.filterKeys { it in BINDING_FIELDS } +
-        mapOf("schema" to "1", "scope" to "mobile-usb-capacity")
+    internal val limits: RpcLimits = capacityProfileLimits(clientCount)
+
+    internal fun binding(): Map<String, String> = fields.filterKeys { it in bindingFields(schema) } +
+        mapOf("schema" to schema, "scope" to "mobile-usb-capacity")
+
+    /** The platform may release its old control slot only after this exact run completed healthy retirement. */
+    @Throws(Exception::class)
+    public fun matchesHealthyClosed(record: String): Boolean = parseMobileRecord(record) == binding() + mapOf(
+        "runtimeClosed" to "true", "clientPinsRemoved" to "true", "controlHealthy" to "true",
+    )
 
     public companion object {
         internal val BINDING_FIELDS = setOf(
             "runLabel", "runNonce", "hostPlatform", "hostSourceSha", "hostArtifactSha256",
         )
 
+        internal fun bindingFields(schema: String): Set<String> {
+            require(schema in setOf("1", "2"))
+            return BINDING_FIELDS + if (schema == "2") setOf("clientCount") else emptySet()
+        }
+
         /** Parsing never authorizes an interface, host role, trust import or network operation. */
         @Throws(Exception::class)
         public fun parse(text: String): RpcMobileCapacityConfig {
             val fields = parseMobileRecord(text)
-            require(fields.keys == BINDING_FIELDS + setOf(
+            val schema = requireNotNull(fields["schema"])
+            require(fields.keys == bindingFields(schema) + setOf(
                 "schema", "scope", "subnets", "hostInterface", "hostAddress", "hostPort", "clientPins",
             ))
-            require(fields.getValue("schema") == "1" && fields.getValue("scope") == "mobile-usb-capacity")
+            require(fields.getValue("scope") == "mobile-usb-capacity")
+            if (schema == "2") require(fields.getValue("clientCount") in setOf("128", "256"))
             require(fields.getValue("runLabel").matches(Regex("[a-z0-9-]{1,64}")))
             require(fields.getValue("runNonce").matches(Regex("[a-f0-9]{64}")))
             require(fields.getValue("hostSourceSha").matches(Regex("[a-f0-9]{40}")))
@@ -40,7 +58,7 @@ public class RpcMobileCapacityConfig private constructor(internal val fields: Ma
             require(fields.getValue("hostPort").matches(Regex("[1-9][0-9]{3,4}")))
             return RpcMobileCapacityConfig(fields).also {
                 it.settings.policy(host = true) // The original organization policy, not a test whitelist.
-                require(it.pins.size == RpcCapacityContract.CLIENTS)
+                require(it.pins.size == it.clientCount)
             }
         }
     }
@@ -51,8 +69,76 @@ public class RpcPhoneProcessStats @Throws(Exception::class) constructor(
     public val cpuNanos: Long,
     public val residentBytes: Long,
     public val nativeThreads: Int,
+    public val environment: RpcPhoneEnvironmentStats? = null,
 ) {
     init { require(cpuNanos >= 0 && residentBytes > 0 && nativeThreads > 0) }
+}
+
+/** Optional OS observations. Missing measurements stay unavailable; charging is never treated as discharge. */
+public class RpcPhoneEnvironmentStats @Throws(Exception::class) constructor(
+    public val batteryPercentMilli: Int?,
+    public val batteryCurrentMicroamps: Long?,
+    public val batteryTemperatureMilliC: Int?,
+    public val batteryState: String,
+    public val batterySource: String,
+    public val thermalState: String,
+    public val thermalSource: String,
+) {
+    init {
+        require(batteryPercentMilli == null || batteryPercentMilli in 0..100_000)
+        require(batteryCurrentMicroamps == null || batteryCurrentMicroamps in -20_000_000L..20_000_000L)
+        require(batteryTemperatureMilliC == null || batteryTemperatureMilliC in -40_000..100_000)
+        require(batteryState in setOf("unavailable", "unknown", "unplugged", "charging", "full"))
+        require(batterySource in setOf("unavailable", "android-battery-manager", "ios-uidevice"))
+        require(thermalState in setOf("unavailable", "nominal", "fair", "serious", "critical"))
+        require(thermalSource in setOf("unavailable", "android-power-manager", "ios-process-info"))
+        if (batterySource == "unavailable") require(batteryPercentMilli == null &&
+            batteryCurrentMicroamps == null && batteryTemperatureMilliC == null && batteryState == "unavailable")
+        if (batterySource == "ios-uidevice") require(batteryCurrentMicroamps == null &&
+            batteryTemperatureMilliC == null)
+        require((thermalState == "unavailable") == (thermalSource == "unavailable"))
+    }
+
+    public val requiresThermalStop: Boolean get() = thermalState == "serious" || thermalState == "critical"
+
+    internal fun record(platform: String): Map<String, String> {
+        require(platform in setOf("Android", "Ios"))
+        require(batterySource == "unavailable" || batterySource == if (platform == "Android")
+            "android-battery-manager" else "ios-uidevice")
+        require(thermalSource == "unavailable" || thermalSource == if (platform == "Android")
+            "android-power-manager" else "ios-process-info")
+        return linkedMapOf(
+            "batteryPercentMilli" to (batteryPercentMilli?.toString() ?: "unavailable"),
+            "batteryCurrentMicroamps" to (batteryCurrentMicroamps?.toString() ?: "unavailable"),
+            "batteryTemperatureMilliC" to (batteryTemperatureMilliC?.toString() ?: "unavailable"),
+            "batteryState" to batteryState, "batterySource" to batterySource,
+            "thermalState" to thermalState, "thermalSource" to thermalSource,
+        )
+    }
+
+    internal companion object {
+        val FIELDS = setOf("batteryPercentMilli", "batteryCurrentMicroamps", "batteryTemperatureMilliC",
+            "batteryState", "batterySource", "thermalState", "thermalSource")
+        val UNAVAILABLE = RpcPhoneEnvironmentStats(null, null, null,
+            "unavailable", "unavailable", "unavailable", "unavailable")
+
+        fun parse(values: Map<String, String>, platform: String): RpcPhoneEnvironmentStats {
+            require(values.keys == FIELDS)
+            fun measured(name: String): Long? = values.getValue(name).let {
+                if (it == "unavailable") null else {
+                    require(it.matches(Regex("0|-?[1-9][0-9]{0,8}")))
+                    it.toLong()
+                }
+            }
+            fun measuredInt(name: String): Int? = measured(name)?.also {
+                require(it in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong())
+            }?.toInt()
+            return RpcPhoneEnvironmentStats(measuredInt("batteryPercentMilli"),
+                measured("batteryCurrentMicroamps"), measuredInt("batteryTemperatureMilliC"),
+                values.getValue("batteryState"), values.getValue("batterySource"),
+                values.getValue("thermalState"), values.getValue("thermalSource")).also { it.record(platform) }
+        }
+    }
 }
 
 internal fun parseMobileRecord(text: String): Map<String, String> {
@@ -85,9 +171,11 @@ internal fun mobileTelemetryRecord(
     config: RpcMobileCapacityConfig, sequence: Long, elapsedMillis: Long, connected: Int,
     diagnostics: RpcDiagnostics, resources: RpcPhoneProcessStats,
 ): String {
-    require(sequence >= 0 && elapsedMillis >= 0 && connected in 0..128)
-    require(diagnostics.runningCalls in 0..128 && diagnostics.queuedCalls in 0..256 &&
-        diagnostics.retainedRecords in 0..131_072 && diagnostics.retainedPayloadBytes in 0..64L * 1_048_576)
+    val limits = config.limits
+    require(sequence >= 0 && elapsedMillis >= 0 && connected in 0..config.clientCount)
+    require(diagnostics.runningCalls in 0..limits.runningCalls && diagnostics.queuedCalls in 0..limits.queuedCalls &&
+        diagnostics.retainedRecords in 0..limits.totalRecords &&
+        diagnostics.retainedPayloadBytes in 0..limits.payloadBytes)
     val values = linkedMapOf(
         "sequence" to sequence, "uptimeMillis" to elapsedMillis, "cpuNanos" to resources.cpuNanos,
         "residentBytes" to resources.residentBytes, "nativeThreads" to resources.nativeThreads.toLong(),
@@ -99,7 +187,10 @@ internal fun mobileTelemetryRecord(
         "records" to diagnostics.retainedRecords.toLong(), "payloadBytes" to diagnostics.retainedPayloadBytes,
     )
     require(values.values.all { it >= 0 })
-    return encodeMobileRecord(config.binding() + mobileResources(config.hostPlatform) +
+    val environment = if (config.schema == "2") {
+        (resources.environment ?: RpcPhoneEnvironmentStats.UNAVAILABLE).record(config.hostPlatform)
+    } else emptyMap()
+    return encodeMobileRecord(config.binding() + mobileResources(config.hostPlatform) + environment +
         mapOf("clock" to "host-run-monotonic") + values.mapValues { it.value.toString() })
 }
 

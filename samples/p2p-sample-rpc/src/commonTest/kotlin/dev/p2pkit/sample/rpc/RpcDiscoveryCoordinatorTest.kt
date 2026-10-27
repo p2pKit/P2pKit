@@ -173,6 +173,41 @@ class RpcDiscoveryCoordinatorTest {
     }
 
     @Test
+    fun protocolAndVersionFailuresStopAutomaticReconnectButPermitExplicitReselection() = runTest {
+        for (kind in listOf(RpcFailureKind.Protocol, RpcFailureKind.IncompatibleVersion)) {
+            val client = Client().apply {
+                hosts = listOf(host(a), host(b))
+                pins += setOf(a, b)
+                onConnect = { throw RpcFailure(kind, RpcFailurePhase.Negotiation) }
+            }
+            val store = Store().apply { selected = setOf(PeerFingerprint(a)) }
+            val coordinator = RpcDiscoveryCoordinator(backgroundScope, client, store)
+            coordinator.start()
+            runCurrent()
+            advanceTimeBy(120_000)
+            runCurrent()
+            assertEquals(listOf(a), client.dials)
+            assertEquals(0, client.approvals)
+            assertEquals(RpcDiscoveryConnectionState.Failed, coordinator.status.value.state)
+            assertEquals(a, coordinator.status.value.selectedFingerprint)
+            assertEquals(0L, coordinator.status.value.nextRetryMillis)
+            assertEquals("$kind/Negotiation/NotSent", coordinator.status.value.failure)
+            assertEquals(setOf(PeerFingerprint(a)), store.selected)
+            // The user can retry the same trusted host after a compatible host update.
+            client.onConnect = { client.connected = true }
+            coordinator.select(a, firstUseConfirmed = false)
+            runCurrent()
+            assertEquals(listOf(a, a), client.dials)
+            assertEquals(0, client.approvals)
+            assertEquals(RpcDiscoveryConnectionState.Ready, coordinator.status.value.state)
+            coordinator.close()
+            advanceTimeBy(60_000)
+            runCurrent()
+            assertEquals(listOf(a, a), client.dials)
+        }
+    }
+
+    @Test
     fun switchingSelectionJoinsOldApprovalBeforeStartingAnotherConnection() = runTest {
         var retired = false
         val client = Client().apply {
