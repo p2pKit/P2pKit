@@ -31,7 +31,10 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
   Deterministic regressions identify a real cause class for #516 without
   claiming the exact interleaving of its archived macOS timeout was observed.
 - Update the reviewed generated dependency graph to Guava 33.7.2 and retain
-  the unfiltered advisory policy. Keep iOS keyboard issue #520 unresolved and
+  the unfiltered advisory policy. Upgrade OpenTelemetry's Swift-export build
+  dependencies to the upstream 1.67.0 W3C tracestate parsing fix
+  (CVE-2026-118259); these dependencies are not added to the SDK runtime graph.
+  Keep iOS keyboard issue #520 unresolved and
   explicitly deferred rather than treating a successful retry as its repair.
 
 This selected candidate is not published until its exact-source release gates
