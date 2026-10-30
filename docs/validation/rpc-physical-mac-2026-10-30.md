@@ -1,5 +1,111 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
+## Latest continuation: source-matched preparation and generator preflight
+
+**Physical qualification remains incomplete; measured steady workload is zero.**
+The owner's explicit schema2 **1 GiB** generator admission is configured for
+both capacities on both phones. Main was fetched again and remains the requested
+`eb6ba5da6c06a440de852477cf485264b2ab3dd3`, tree
+`a11d94517d0a28e1045c880eeb3fbf21d34de81b`.
+
+The exact prepared and attempted source is
+`20563fd8c2e86be0f837fad63bb5c9476203cf54`, tree
+`b729731a0268188b1b45f795c29dae5ebce36e58`, on
+`codex/rpc-physical-qualification-20261030`, [PR #532](https://github.com/p2pKit/P2pKit/pull/532).
+The checkout remained clean and unchanged throughout preparation and the attempt.
+This revision corrects the native prerequisite inventory: the runner actually
+selects **241** controls on this Mac, whereas its former assessor expected159.
+It also permits exact, finalized prerequisite-only failures to release their
+original lease without creating an installed-app continuation or a phone Stop claim.
+
+Complete preparation and signature verification passed. These are the current
+source-matched products; historical hashes below belong to their stated sources.
+
+| Prepared product | SHA-256 |
+| --- | --- |
+| Android APK | `35a51c10551c7263fc8b909668cf1579081f1803664d9c523f16a365fba20e6f` |
+| Mac driver manifest | `8511b6da1812c9d551f159e6334004f43be2201c17d44a462382220f7d6f3457` |
+| Mac capacity driver JAR | `20dc5e3cff14231fb411ac8503d0ed13a42f9d11f329e4996fad9e3ba25d96e6` |
+| Mac scoped TCP library | `90bd40f449509d886df789c28653b5ffadfe24f7b77f71697edbb8c7cd07c7ae` |
+| Mac native manifest JAR | `388ef99b3e56fd60602584aa6c9068fc77d27a31088ae50337cb46fa41888778` |
+| iPhone ARM64 framework | `314d5ee6133530764c61422bc00dc3422a7270ad32e7426a2183566c0cbde899` |
+| Universal simulator framework | `c8d83e72e5507289c52a862d8ee94733b00ec318dcd3d7f2b0b9cef2606d891f` |
+| Signed iPhone executable | `8a915129c73338147e45d4d07280be6538c47e4a5ab77fed3df84cb41041c45f` |
+| Signed iPhone debug dylib | `b5649939b162028fd37f6877357a5630adf0c849f13f3c9278cf2cace3edfe29` |
+| Complete signed-app inventory, seven files | `7a58795652f12ad09ea942b8e94b55012db28eda5789155c32678fadc9281c44` |
+
+The complete private preparation manifest binds every driver dependency,
+framework file and signed application file. The signed-app inventory uses the
+canonical JSON procedure described below. A signed executable hash alone does
+not replace that inventory, especially for an Xcode development app with a debug dylib.
+
+The first corrected iPhone128 large gate passed all241 native prerequisites and
+the actual **125.004827792-second** clock/memory preflight. Its minimum available
+memory was **6,453,346,304 bytes (6.010 GiB)**, with a maximum scheduling gap of
+**69.980625 ms**, below the unchanged100ms limit. The selected minimum was
+1,073,741,824bytes. These are generator prerequisite observations, not phone
+capacity or measured RPC results.
+
+That attempt then **failed before installation**: the original selected-device
+CoreDevice response retained manual pairing and enabled Developer Mode, but
+reported an unavailable control channel and no current transport. The backend
+correctly refused wireless admission. No install, app launch, inbox publication
+or client workload was dispatched; no phone samples were collected. The three
+prerequisite receipts and enclosing native invocation finalized successfully,
+with Stop exit zero, unchanged source, no owned survivors and no unresolved
+ownership errors. An exact private recovery review reproduced the original
+verification rejection from the unchanged implementation, checked its sole
+device-details response, complete command captures and absence of app/client
+dispatch, and retired only the original pending lease. The original **FAIL**,
+receipts and evidence remain intact. It created neither an installed continuation
+nor a runtime-closure claim.
+
+The earlier52252edc first iPhone attempt passed241 controls but failed the obsolete
+159-count comparison before device contact; its finalized no-contact lease was
+separately reviewed and retired. Its51 unique prepared products were archived
+and hash-verified before preparing20563fd8. They were not reused under a new source label.
+
+| Phone Host | Capacity | Large | Correctness/churn | Measured steady | Phone and generator workload resources |
+| --- | --- | --- | --- | --- | --- |
+| Android |128| Blocked: device absent from current USB discovery | Not run |0s| Unavailable |
+| Android |256| Not run | Not run |0s| Unavailable |
+| iPhone |128| Failed wireless device verification before install/RPC | Not run |0s| Unavailable |
+| iPhone |256| Not run | Not run |0s| Unavailable |
+
+The owner was asked only to restore the physical device connections: unlock the
+iPhone and leave the stopped application foreground, and reconnect/unlock Android.
+iPhone control remains explicitly wireless; RPC remains restricted to the
+approved private LAN. The generator gate must precede each actual new attempt.
+
+An unplugged iPhone recording method was reviewed against this frozen source's
+sealed wireless telemetry, UIDevice battery state/level, ProcessInfo thermal
+categories, bounded retention and Stop path. The companion offline analyzer
+requires the original measured steady timeline, matching source/artifact/run,
+healthy closure, unplugged samples and observation gaps below4.5s. It excludes
+initialization, connected idle and post-Stop changes. Six refusal/interval tests
+passed at analyzer commit `b628214563abfc51295b698fa87632bcb79dc2f4`.
+This offline analyzer revision is separate from the frozen20563fd8 phone/driver
+products and has not been used to claim a measured discharge result.
+**No actual discharge recording has completed.** Wireless observation
+overhead is included; sampled public battery level is neither calibrated energy
+nor continuous hardware charging-state coverage. Serious/critical thermal states
+remain abort conditions. Mixed255-Mac-plus-phone clients, genuine socket slow
+consumers, long mixed faults and the application role matrix remain uncompleted.
+
+At20563fd8,211 relevant offline controls passed. The required
+[modular CI run41117472411](https://github.com/p2pKit/P2pKit/actions/runs/41117472411)
+completed with13 components passing; Apple x64 failed its bounded
+simulator-runtime inventory before product tests, so the complete gate failed.
+Its original artifact was reviewed and cleanup verified. A targeted retry of
+that failed component and its dependent gate was dispatched after workflow
+finalization; its result is pending. Dependency review and advisory scans passed. The earlier
+52252edc run passed14 components but its final gate refused the superseded PR
+head; this is not a current complete-gate pass. Checks for the later analyzer/report
+revision must complete independently. #525 remains open, with no new
+physical acceptance criterion marked complete. No tag or publication was created.
+
+## Earlier preparation checkpoint, retained history
+
 **No physical RPC qualification criterion has passed at this checkpoint.**
 Measured steady workload is **0 seconds**. This report records preparation
 failures and fixes for [#525](https://github.com/p2pKit/P2pKit/issues/525), using
