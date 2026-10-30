@@ -345,6 +345,11 @@ class Session:
         need(sdk.is_absolute() and all((sdk / item).exists() for item in
              ("platforms/android-36", "platforms/android-37.0", "ndk/29.0.14206865", "platform-tools/adb")),
              "Install both Android compile platforms, platform-tools and pinned NDK29.0.14206865")
+        # Every supervised command finalizes this session with the checked-in
+        # wrapper's --stop. In a new Gradle home that would otherwise download
+        # the distribution inside the unchanged 120-second cleanup deadline.
+        # Bootstrap as its own supervised product, before any tool command.
+        self.command("doctor-wrapper", ["--version"], 900, gradle=True)
         for major, key in ((17, "JAVA_HOME"), (21, "P2PKIT_AUDIT_JDK21")):
             java = self.command("doctor-jdk" + str(major), [Path(os.environ[key]) / "bin/java",
                                                            "-XshowSettings:properties", "-version"])

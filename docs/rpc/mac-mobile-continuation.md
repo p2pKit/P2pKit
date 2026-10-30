@@ -137,7 +137,11 @@ prepare a new session after signing is available to add the iPhone producer.
 Preparation runs independently supervised strict Gradle builds, stages the
 source-matched Mac native library and exactly its manifest JAR, verifies the
 XCFramework provenance, builds the signed development iPhone app and verifies
-its signature. `$STATE/private/preparation.json` binds source/tree, every
+its signature. Before the tool checks, it bootstraps the checked-in Gradle
+distribution with a separately supervised `--version` command in the new private
+Gradle home. Distribution download has its own preparation deadline; the
+unchanged 120-second wrapper Stop deadline remains a cleanup boundary.
+`$STATE/private/preparation.json` binds source/tree, every
 prepared JAR/native entry, APK, framework and complete signed app inventory.
 Changing/additionally inserting files makes reuse fail. Unsigned app ZIP hashes
 cannot stand in for the signed installed executable hash.

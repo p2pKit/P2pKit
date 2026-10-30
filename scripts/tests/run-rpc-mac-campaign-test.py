@@ -152,6 +152,62 @@ class Preparation(unittest.TestCase):
 
 
 class Toolchain(unittest.TestCase):
+    def doctor_fixture(self, root, *, download_fails=False):
+        sdk = root / "sdk"
+        for item in ("platforms/android-36", "platforms/android-37.0", "ndk/29.0.14206865", "platform-tools/adb"):
+            (sdk / item).mkdir(parents=True)
+        environment = {"ANDROID_HOME": str(sdk)}
+        for major, key in ((17, "JAVA_HOME"), (21, "P2PKIT_AUDIT_JDK21")):
+            home = root / ("jdk" + str(major))
+            (home / "bin").mkdir(parents=True)
+            for binary in ("java", "javac"):
+                (home / "bin" / binary).touch()
+            environment[key] = str(home)
+        session = object.__new__(m.Session)
+        session.state = root / "session"
+        calls = []
+        ready = False
+
+        def command(label, argv, timeout=120, *, gradle=False):
+            nonlocal ready
+            calls.append((label, list(argv), timeout, gradle))
+            if list(argv) == ["--version"] and gradle:
+                if download_fails:
+                    raise ValueError("OFFLINE_WRAPPER_DOWNLOAD_FAILURE")
+                ready = True
+            # Model the actual finalizer dependency: a cold wrapper cannot
+            # finalize a plain tool command within the Stop-only budget.
+            if not ready:
+                raise ValueError("OFFLINE_COLD_WRAPPER_STOP_FAILURE")
+            directory = session.state / "evidence" / label
+            directory.mkdir(parents=True)
+            major = label.removeprefix("doctor-jdk")
+            (directory / "product.stderr.log").write_text(
+                "    java.specification.version = " + major + "\n    os.arch = aarch64\n")
+            return {"id": label}
+
+        session.command = command
+        return session, environment, calls
+
+    def test_new_home_downloads_wrapper_before_plain_tools_need_its_finalizer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session, environment, calls = self.doctor_fixture(Path(temporary).resolve())
+            with patch.dict(m.os.environ, environment), patch.object(m.shutil, "which", return_value="/tools/xcodegen"):
+                session.doctor()
+            self.assertTrue(any(label == "doctor-jdk21" for label, *_ in calls))
+            self.assertEqual(calls[0][:2], ("doctor-wrapper", ["--version"]))
+            self.assertTrue(calls[0][3])
+            self.assertGreater(calls[0][2], 120)
+            self.assertTrue(all(timeout == 120 and not gradle for _, _, timeout, gradle in calls[1:]))
+
+    def test_failed_wrapper_download_does_not_dispatch_tool_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session, environment, calls = self.doctor_fixture(Path(temporary).resolve(), download_fails=True)
+            with patch.dict(m.os.environ, environment), patch.object(m.shutil, "which", return_value="/tools/xcodegen"):
+                with self.assertRaisesRegex(ValueError, "OFFLINE_WRAPPER_DOWNLOAD_FAILURE"):
+                    session.doctor()
+            self.assertEqual(len(calls), 1)
+
     def test_doctor_requires_actual_native_17_and_21_reports(self):
         for major in (17, 21):
             good = ("Property settings:\n    java.specification.version = " + str(major) +
