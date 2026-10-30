@@ -1630,6 +1630,9 @@ class ConsumerGateTest(unittest.TestCase):
                 # Immutable published rc7 producer, independent of the newer current-source repair.
                 boundary = boundary.replace("3.6.3-p2pkit.410.8", "3.6.3-p2pkit.410.7")
                 boundary = boundary.replace(KOTLIN_VERSION, "2.4.20")
+            elif version == "0.8.0-rc8":
+                # Rc8 producer metadata remains independent of a future consumer catalog.
+                boundary = boundary.replace(KOTLIN_VERSION, "2.4.20")
             path.write_text(boundary)
 
     def assert_complete_latest_published_contract(self, version):
@@ -1727,6 +1730,57 @@ class ConsumerGateTest(unittest.TestCase):
                                        "version": "99.0.0", "scope": "compile"}}
                 if artifact == "kotlinx-coroutines-core-jvm":
                     # Replace the existing dependency, rather than failing on a duplicate.
+                    mutation["name"] = artifact
+                result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                    "FAKE_LAN_POM_MUTATION": json.dumps(mutation)},
+                    arguments=("--latest-published",))
+                self.assert_rejected(result, "POM dependency version/scope mismatch")
+        self.assertFalse(self.calls("gradle"))
+        self.assertFalse(self.calls("xcrun"))
+
+    def test_latest_published_rc8_complete_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc8")
+
+    def test_latest_published_rc8_keeps_producer_versions_with_updated_catalog(self):
+        catalog = self.root / "gradle/libs.versions.toml"
+        catalog.write_text(catalog.read_text().replace(KOTLIN_VERSION, "98.0.0").replace(COROUTINES_VERSION, "99.0.0"))
+        self.assert_complete_latest_published_contract("0.8.0-rc8")
+        self.assertIn('kotlin("jvm") version "98.0.0" apply false',
+                      (self.work / "consumer/build.gradle.kts").read_text())
+
+    def assert_latest_published_rc8_private_version_refused(self, private_version):
+        script = self.root / "scripts/check-published-consumers.sh"
+        original = script.read_text()
+        prefix, block = original.split("        0.8.0-rc8)\n", 1)
+        contract, suffix = block.split("            ;;", 1)
+        self.assertIn('LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.8"', contract)
+        script.write_text(prefix + "        0.8.0-rc8)\n" + contract.replace(
+            'LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.8"',
+            f'LAN_PRIVATE_JMDNS_VERSION="{private_version}"') + "            ;;" + suffix)
+        self.select_latest_published_fixture("0.8.0-rc8")
+        result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
+                                "P2PKIT_CONSUMER_WORK_DIR": str(self.work)},
+                               arguments=("--latest-published",), home=self.work / "gradle-home")
+        self.assert_rejected(result, "wrong producer-private JmDNS expectation")
+        self.assertFalse(self.calls("xcrun"))
+        self.assertEqual(1, len(self.calls("gradle")))
+        self.assert_ancestor_bindings(self.calls("curl") + self.calls("gradle"))
+
+    def test_latest_published_rc8_rejects_rc6_private_version_substitution(self):
+        self.assert_latest_published_rc8_private_version_refused("3.6.3-p2pkit.410.6")
+
+    def test_latest_published_rc8_rejects_rc7_private_version_substitution(self):
+        self.assert_latest_published_rc8_private_version_refused("3.6.3-p2pkit.410.7")
+
+    def test_latest_published_rc8_rejects_relabelled_producer_metadata(self):
+        self.select_latest_published_fixture("0.8.0-rc8")
+        for group, artifact in (("org.jetbrains.kotlin", "kotlin-stdlib"),
+                                ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm")):
+            with self.subTest(artifact=artifact):
+                mutation = {"artifact": "p2p-transport-lan-jvm",
+                            "values": {"groupId": group, "artifactId": artifact,
+                                       "version": "99.0.0", "scope": "compile"}}
+                if artifact == "kotlinx-coroutines-core-jvm":
                     mutation["name"] = artifact
                 result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven",
                     "FAKE_LAN_POM_MUTATION": json.dumps(mutation)},
@@ -1892,7 +1946,8 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertFalse(self.calls("xcrun"))
 
     def test_latest_published_unknown_contract_fails_before_remote_or_gradle_boundary(self):
-        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc8", "0.8.0-rc20", "0.8.0-rc2-extra", "0.8.0-rc7-extra", "0.8.0", VERSION):
+        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc9", "0.8.0-rc20", "0.8.0-rc2-extra",
+                        "0.8.0-rc7-extra", "0.8.0-rc8-extra", "0.8.0", VERSION):
             with self.subTest(version=version):
                 self.select_latest_published_fixture(version)
                 result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},

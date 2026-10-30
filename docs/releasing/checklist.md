@@ -1,13 +1,34 @@
 # Release checklist
 
 This checklist applies to each future non-snapshot release. It does not authorize
-a tag or Maven Central publication. The latest completed release is
-[`0.8.0-rc7`](../releases/0.8.0-rc7.md). Its record binds the actual exact-source
-selection, including the failed original Intel job and successful replacement,
-and the verified public bytes. Later source requires its own qualification.
+a tag or Maven Central publication. The latest verified library publication is
+[`0.8.0-rc8`](../releases/0.8.0-rc8.md), from exact source
+`6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Maven
+[41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149)
+passed, including complete remote consumers and byte comparison of 242 remote
+files (121 original artifacts plus their signatures). Separate sample delivery
+[41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810)
+passed and published the [sample prerelease](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8)
+at the same source. Independent, complete anonymous downloads verified all seven
+public assets against the approved original application and supporting-file
+hashes, without rebuilding the four applications. This verifies delivery, not
+installed execution or physical-device qualification.
+
+The rc8 aggregate
+[41028216266/1](https://github.com/p2pKit/P2pKit/actions/runs/41028216266)
+passed all fourteen components and 125 commands, retaining all four original
+applications unchanged. Original source component
+[41023086404/1](https://github.com/p2pKit/P2pKit/actions/runs/41023086404)
+failed with `COMMAND/CLEANUP DRAIN_DEADLINE`; its cause is unknown. The aggregate
+selects the genuine same-source source-only replacement
+[41026343627/1](https://github.com/p2pKit/P2pKit/actions/runs/41026343627), not a
+reclassification of that failure. Later source requires its own qualification.
+
+The earlier [rc7 record](../releases/0.8.0-rc7.md) retains its failed original
+Intel job, successful same-source replacement and verified immutable public bytes.
 The earlier [rc6 record](../releases/0.8.0-rc6.md) retains its original Maven
 evidence-upload failure and successful separate recovery as rc6 history;
-that recovery is not inferred for rc7.
+that recovery is not inferred for rc7 or rc8.
 The incoming manual Windows/Android report remains a separate, limited result;
 publication does not extend its installed-application coverage.
 Retain the [Windows qualification limits](../rpc/windows-release-scope.md),

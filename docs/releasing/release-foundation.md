@@ -14,17 +14,43 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The latest published development release candidate is **`0.8.0-rc7`**; current
-source selects **`0.8.0-rc8`**, not yet published. The rc7
-[release record](../releases/0.8.0-rc7.md) binds the
+The latest verified library publication is **`0.8.0-rc8`**, from exact source
+`6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Its
+[release record](../releases/0.8.0-rc8.md) binds the original source and artifacts.
+Protected Maven
+[41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149)
+passed with complete remote-consumer verification, 242 byte-matching remote
+files (121 original artifacts plus their signatures), and an actual
+publication-build SBOM containing 88 components. Separately approved sample
+delivery [41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810)
+passed and published [sample prerelease 428864578](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8)
+on 2026-10-30 at `09:49:01Z`, with the sample tag at the same source. Independent
+complete anonymous downloads verified all seven assets (365,258,462 bytes)
+against the original approved four applications, notices, manifest and
+`SHA256SUMS`. No application was rebuilt or substituted. This proves public
+delivery and hash agreement, not installed execution or physical-device
+qualification.
+
+The rc8 aggregate
+[41028216266/1](https://github.com/p2pKit/P2pKit/actions/runs/41028216266)
+passed all fourteen components and 125 commands while retaining all four original
+applications unchanged. The original source component in
+[41023086404/1](https://github.com/p2pKit/P2pKit/actions/runs/41023086404)
+failed with `COMMAND/CLEANUP DRAIN_DEADLINE`; the cause remains unknown. Its genuine
+same-source source-only replacement
+[41026343627/1](https://github.com/p2pKit/P2pKit/actions/runs/41026343627)
+passed. This replacement does not change the original failure or claim its
+cause was fixed.
+
+The earlier [rc7 release record](../releases/0.8.0-rc7.md) retains the
 actual same-source main selection, separate protected approvals and immutable
-public library/application bytes. The failed original main run remains failed;
+public library/application bytes. Its failed original main run remains failed;
 the accepted aggregate selects thirteen successful siblings and the
 unchanged-source Intel replacement without rebuilding the four applications.
 The earlier [rc6 record](../releases/0.8.0-rc6.md) retains its original Maven
 final-upload failure and successful separate read-only recovery, without Maven
 republishing or application rebuilding. Those are rc6 facts, not an assumed
-rc7 publication outcome or recovery path.
+rc7 or rc8 publication outcome or recovery path.
 Later source requires its own exact-source gates; neither earlier release
 evidence nor subsequent bookkeeping results replace the published originals.
 

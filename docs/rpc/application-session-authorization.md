@@ -7,10 +7,10 @@ a handler that checks an employee only at handler entry does not protect later
 retained or queued replies. Private routes should use `registerScoped()` and
 `tryNotifyScoped()`.
 
-These APIs are new source functionality, not functionality supplied by the
-previously published `0.8.0-rc7`. Consume matching official Core/LAN/RPC versions
-that include this contract before deploying it; a source test is not publication
-or qualification of a consumer's employee boundary.
+These APIs are included in the verified [`0.8.0-rc8` release](../releases/0.8.0-rc8.md),
+not the immutable rc7 artifacts. Consume matching official Core/LAN/RPC versions
+before deploying this contract. Library qualification is not qualification of a
+consumer's credential verifier or employee boundary.
 
 ## Validate credentials and capture the original login
 
