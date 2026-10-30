@@ -161,6 +161,14 @@ fallback nor discovery creates a public relay or automatic host selection.
 
 ## Authorization, defensive processing and diagnostics
 
+For private employee data on a shared trusted device, use the opt-in
+[application-session authorization contract](application-session-authorization.md).
+Legacy peer-only authorization does not restore an employee login for retained results or queued output.
+The scoped API captures genuine application-validated credentials as an immutable original session/resource,
+then checks fresh policy on controls and every disclosure, including writer commitment. Await session
+revocation before publishing an employee transition; it cannot retract already committed data or business effects.
+
+
 Procedure registration is explicit and frozen at runtime creation; missing
 `authorize` callbacks deny access. Only registered name/version descriptors can
 run. There is no executable code, reflection target or class name in a request.

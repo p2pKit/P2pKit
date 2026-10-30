@@ -8,7 +8,7 @@ P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
 messaging, and durable file transfer over a reachable local network. It
 supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
-**Current source version:** `0.8.0-rc7` (development release candidate).
+**Current source version:** `0.8.0-rc8` (unpublished development release candidate).
 **Latest published version:** `0.8.0-rc7`.
 
 `0.8.0-rc7` is available from Maven Central under `io.github.apdelrahman1911`.
@@ -38,10 +38,14 @@ must not be described as evidence for the released binaries.
   presentation.
 
 P2pKit does not provide internet signaling, NAT traversal, relays, accounts,
-rooms, or application-level authorization. Both peers must already be mutually
+rooms, or built-in application authorization policies. Both peers must already be mutually
 reachable on the LAN. Guest/enterprise Wi-Fi may block multicast or peer TCP.
 
 ## Optional organization-LAN RPC
+
+Newer source adds [immutable application-session authorization](docs/rpc/application-session-authorization.md)
+for employee-private RPC on shared trusted devices. The opt-in APIs are not present in the published rc7;
+existing peer-only routes remain device-level. Use a matching official release containing the new contract.
 
 The new optional [`p2p-rpc`](docs/rpc/README.md) module adds one explicitly
 selected authenticated host, dial-only clients, registered typed procedures,

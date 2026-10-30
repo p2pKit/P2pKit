@@ -3,8 +3,20 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## Unreleased source
+## 0.8.0-rc8 — development release candidate (unpublished)
 
+- Add opt-in immutable application-session RPC authorization for shared trusted
+  devices (#528). Preserve the verified original login/resource through execution,
+  retained controls and queued success/error/notification disclosure; awaited
+  revocation fences new commitments without changing legacy device-only routes,
+  the wire, or existing capacity profiles. Applications still validate credentials
+  and own private presentation and durable business recovery.
+- Add the opt-in `host256()` profile and shared socket readiness I/O: idle
+  connections suspend without reserving a blocking reader per client. Preserve
+  `host128()`, ordinary defaults, original socket ownership, authentication,
+  encryption, backpressure and bounded cleanup. Prepare the source-bound Mac
+  Android/iPhone campaign; physical 256-client capacity, energy and 30-minute
+  stress qualification remain open in #525.
 - Add optional selected-outbound-route SPI and per-session protection status.
   Retain at most64 exact numeric routes for originally authorized secure
   outgoing sessions, outside the untrusted discovery budgets. Fence original
@@ -18,10 +30,17 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
   The current private producer is `.410.8`; published rc7 retains `.410.7`.
   Deterministic regressions identify a real cause class for #516 without
   claiming the exact interleaving of its archived macOS timeout was observed.
+- Update the reviewed generated dependency graph to Guava 33.7.2 and retain
+  the unfiltered advisory policy. Upgrade OpenTelemetry's Swift-export build
+  dependencies to the upstream 1.67.0 W3C tracestate parsing fix
+  (CVE-2026-118259); these dependencies are not added to the SDK runtime graph.
+  Keep iOS keyboard issue #520 unresolved and
+  explicitly deferred rather than treating a successful retry as its repair.
 
-No next release version is selected here. The records and artifact bindings
-below remain immutable; these source changes do not retrospectively qualify
-the original failed runs or complete physical/installed-application campaigns.
+This selected candidate is not published until its exact-source release gates
+complete. The records and artifact bindings below remain immutable; these
+source changes do not retrospectively qualify original failed runs or complete
+physical/installed-application campaigns. It is not stable/production READY.
 
 ## 0.8.0-rc7 — development release candidate (2026-10-23)
 

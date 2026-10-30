@@ -139,8 +139,9 @@ val advisoryMinimumVersions = mapOf(
     "com.fasterxml.jackson.core:jackson-core" to "2.22.3",
     "com.fasterxml.jackson.core:jackson-databind" to "2.22.3",
     "com.google.guava:guava" to "33.7.2-jre",
-    "io.opentelemetry:opentelemetry-api" to "1.62.0",
-    "io.opentelemetry:opentelemetry-context" to "1.62.0",
+    // CVE-2026-118259: the upstream W3C tracestate parser is patched in 1.67.0.
+    "io.opentelemetry:opentelemetry-api" to "1.67.0",
+    "io.opentelemetry:opentelemetry-context" to "1.67.0",
     "org.apache.commons:commons-lang3" to "3.18.0",
     "org.apache.httpcomponents:httpclient" to "4.5.13",
     "org.bitbucket.b_c:jose4j" to "0.9.6",

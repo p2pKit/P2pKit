@@ -1,4 +1,4 @@
-name: Prepare core API candidate
+name: Prepare module API candidate
 on:
   # Temporary discovery only, not generation on push or a broad branch pattern.
   push:
@@ -10,11 +10,16 @@ on:
         description: Exact reviewed workflow and source commit at this dispatch ref
         required: true
         type: string
+      module:
+        description: Only the chosen module's review-only API baselines; no dependency changes
+        type: choice
+        default: p2p-core
+        options: [p2p-core, p2p-rpc]
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: prepare-core-api-candidate
+  group: prepare-api-candidate-${{ github.ref }}-${{ inputs.module || 'p2p-core' }}
   cancel-in-progress: false
 jobs:
   register:
@@ -34,6 +39,8 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       API_CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha }}
+      API_CANDIDATE_MODULE: ${{ inputs.module || 'p2p-core' }}
+      API_CANDIDATE_PREFIX: ${{ inputs.module == 'p2p-rpc' && 'rpc' || 'core' }}
       CI_EVIDENCE_RECIPIENT_SHA256: ${{ vars.CI_EVIDENCE_RECIPIENT_SHA256 }}
       CI_EVIDENCE_RECIPIENT_FINGERPRINT: ${{ vars.CI_EVIDENCE_RECIPIENT_FINGERPRINT }}
     steps:
@@ -80,10 +87,10 @@ jobs:
             caches/*/groovy-dsl
       - name: Install the standard macOS 15 Intel and Xcode 26.3 platform tools
         run: bash scripts/setup-ci-component.sh consumers
-      - name: Generate only core API baselines and encrypt original logs
+      - name: Generate only the chosen module API baselines and encrypt original logs
         id: generation
         run: |
-          python3 -B scripts/ci_evidence.py --component api-candidate --timeout-seconds 5400 --output-dir "$RUNNER_TEMP/api-candidate-evidence" -- python3 -B scripts/prepare-api-candidate.py --source-sha "$API_CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/core-api-candidate"
+          python3 -B scripts/ci_evidence.py --component api-candidate --timeout-seconds 5400 --output-dir "$RUNNER_TEMP/api-candidate-evidence" -- python3 -B scripts/prepare-api-candidate.py --source-sha "$API_CANDIDATE_SOURCE_SHA" --module "$API_CANDIDATE_MODULE" --output "$RUNNER_TEMP/$API_CANDIDATE_PREFIX-api-candidate"
       - name: Retain encrypted diagnostics including failed generation
         if: ${{ always() && steps.generation.outcome != 'skipped' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -100,10 +107,10 @@ jobs:
         if: ${{ success() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: core-api-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ env.API_CANDIDATE_PREFIX }}-api-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/core-api-candidate/core-api-candidate.patch
-            ${{ runner.temp }}/core-api-candidate/core-api-candidate.json
+            ${{ runner.temp }}/${{ env.API_CANDIDATE_PREFIX }}-api-candidate/${{ env.API_CANDIDATE_PREFIX }}-api-candidate.patch
+            ${{ runner.temp }}/${{ env.API_CANDIDATE_PREFIX }}-api-candidate/${{ env.API_CANDIDATE_PREFIX }}-api-candidate.json
           if-no-files-found: error
           retention-days: 14
           overwrite: false

@@ -42,6 +42,7 @@ internal interface RpcLink {
         expiresAt: Long,
         notification: Boolean = false,
         onStart: () -> Unit = {},
+        authorization: RpcSendAuthorization? = null,
     ): SendTicket?
     suspend fun close()
 }
@@ -55,11 +56,15 @@ internal class SendTicket(
     private val allowance: PayloadLease? = null,
     private val onStart: () -> Unit = {},
     private val onRelease: () -> Unit = {},
+    private val authorization: RpcSendAuthorization? = null,
 ) {
     private val state = MutableStateFlow(0)
     val completion = CompletableDeferred<Boolean>()
     val started: Boolean get() = state.value in 1..2
     val bytes: Long = (message.body?.size ?: 0).toLong() + message.name.length + RpcWire.HEADER_BYTES
+
+    suspend fun beginAuthorized(transportReady: () -> Boolean): Boolean =
+        authorization?.begin(this, transportReady) ?: (transportReady() && begin())
 
     fun begin(): Boolean {
         if (!state.compareAndSet(0, 1)) return false
@@ -154,15 +159,14 @@ internal class SessionRpcLink(
                                 else -> null
                             }
                         } ?: break
-                        if (clock.now() >= item.expiresAt || session.state.value != ConnectionState.Connected ||
-                            session.connectionInfo.value.generation != item.generation || !isActive
-                        ) {
-                            item.cancelQueued()
-                            continue
-                        }
-                        if (!item.begin()) continue
                         var success = false
                         try {
+                            // Fresh policy may suspend. Recheck expiry/physical generation AFTER it,
+                            // in the same short session gate that orders revocation and ticket start.
+                            if (!item.beginAuthorized {
+                                clock.now() < item.expiresAt && session.state.value == ConnectionState.Connected &&
+                                    session.connectionInfo.value.generation == item.generation && isActive && !closed.value
+                            }) continue
                             val message = if (item.message.kind == WireKind.Invoke) item.message.copy(
                                 budgetMillis = minOf(item.message.budgetMillis.toLong(), item.expiresAt - clock.now())
                                     .coerceAtLeast(1).toInt()
@@ -176,7 +180,11 @@ internal class SessionRpcLink(
                             throw cancelled
                         } catch (_: Exception) {
                             // The existing session owns reconnection. RPC never launches another loop.
-                        } finally { item.finish(success) }
+                        } finally {
+                            // Also owns the dequeued-but-unstarted item when authorization denies,
+                            // throws or is cancelled. A callback Error propagates with no lost lease.
+                            item.finish(success)
+                        }
                     }
                 }
             } finally {
@@ -212,6 +220,7 @@ internal class SessionRpcLink(
         expiresAt: Long,
         notification: Boolean,
         onStart: () -> Unit,
+        authorization: RpcSendAuthorization?,
     ): SendTicket? = lock.withLock {
         if (closed.value || session.state.value != ConnectionState.Connected || expiresAt <= clock.now()) {
             return@withLock null
@@ -234,9 +243,18 @@ internal class SessionRpcLink(
                 return@withLock null
             }
         }
+        val authorizationAllowance = authorization?.let { budget.tryReserve(it.allowanceBytes) }
+        if (authorization != null && authorizationAllowance == null) {
+            peerAllowance?.release()
+            allowance?.release()
+            if (notification) notificationEntries.release()
+            return@withLock null
+        }
         val ticket = SendTicket(
             message.retained(), expiresAt, session.connectionInfo.value.generation, notification, allowance, onStart,
+            authorization = authorization,
             onRelease = {
+                authorizationAllowance?.release()
                 peerAllowance?.release()
                 if (notification) notificationEntries.release()
             },
