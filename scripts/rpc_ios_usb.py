@@ -1,9 +1,9 @@
-"""Candidate wired iPhone control plane, never an RPC data tunnel or device qualification.
+"""Candidate iPhone CoreDevice control plane, never an RPC data tunnel or device qualification.
 
 The application, NOT devicectl, performs create-only publication. Two copied
 staging files carry bounded data and its exact seal; only verified complete bytes
 can become the app's canonical inbox/Stop. Unknown CoreDevice schemas fail closed.
-Physical copy behavior, wired transport, 4-second observations, signing and outer
+Physical copy behavior, the explicitly selected transport, 4-second observations, signing and outer
 native finalization still require an actual selected owner-authorized iPhone.
 """
 from __future__ import annotations
@@ -44,10 +44,11 @@ def verify_input(name, raw, seal):
     return raw
 
 
-def selected_details(value, selected):
+def selected_details(value, selected, *, control_transport='wired'):
     need(type(value) is dict and type(value.get('result')) is dict)
     # Query ONE explicit device, never enumerate the owner's other devices.
-    protocol.ios_usb_details(dict(result=dict(devices=[value['result']])), selected)
+    protocol.ios_device_details(dict(result=dict(devices=[value['result']])), selected,
+                                control_transport=control_transport)
 
 
 def file_properties(row):
@@ -210,12 +211,14 @@ class DevicectlFiles:
     The Xcode shell launcher is forbidden: it can automatically run first-launch
     installation. Invoke only the already installed, version/hash-bound native tool.
     """
-    def __init__(self, commands, directory, selected, run_label, *, now=time.monotonic):
+    def __init__(self, commands, directory, selected, run_label, *, control_transport='wired', now=time.monotonic):
         need(platform.system() == 'Darwin' and os.getuid() == os.geteuid() != 0 and
              os.environ.get('P2PKIT_AUDIT_OWNERSHIP_CHAIN'), 'Admitted unprivileged native Mac owner required')
         need(re.fullmatch('[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}', selected) and
              re.fullmatch('[a-z0-9-]{1,64}', run_label), 'Explicit CoreDevice identifier and selected run required')
         self.commands, self.directory, self.selected, self.now = commands, directory, selected, now
+        need(control_transport in ('wired', 'wireless'), 'Unknown Apple device control transport')
+        self.control_transport = control_transport
         commands.files.private_directory(directory)
         self.remote = 'Library/Application Support/rpc-capacity/' + run_label
         self.count = 0
@@ -293,7 +296,7 @@ class DevicectlFiles:
 
     def verify(self, deadline):
         value = self.command('selected-details', ['device', 'info', 'details', '--device', self.selected], deadline)
-        selected_details(value, self.selected)
+        selected_details(value, self.selected, control_transport=getattr(self, 'control_transport', 'wired'))
 
     def install_app(self, app, bound, deadline):
         """Install the selected signed development bundle; actual executable readback is still required at ready."""

@@ -34,6 +34,9 @@ SETTINGS = (base.SETTINGS - {'androidUsbSerial', 'adb'}) | {'iosDeviceIdentifier
 def settings(values, source, label, lab):
     need(type(values) is dict and values.get('schema') in ('1', '2'))
     fields = SETTINGS | ({'clientCount'} if values['schema'] == '2' else set())
+    if values['schema'] == '2' and 'iosControlTransport' in values:
+        fields |= {'iosControlTransport'}
+        need(values['iosControlTransport'] in ('wired', 'wireless'), 'Explicit wired or wireless iPhone control required')
     need(set(values) == fields and all(type(v) is str for v in values.values()) and
          values['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', values['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
@@ -69,7 +72,11 @@ class Run(base.Run):
         return settings(self.values, source, label, self.lab)
 
     def new_phone(self, label):
-        backend = ios.DevicectlFiles(self.commands, self.control / 'usb', self.values['iosDeviceIdentifier'], label)
+        control_transport = self.values.get('iosControlTransport', 'wired')
+        if control_transport == 'wireless':
+            self.scope = 'IOS_WIRELESS_COREDEVICE_MAC_GENERATOR_REAL_RPC_CANDIDATE_PENDING_PHYSICAL_NETWORK_AND_RESOURCE_REVIEW'
+        backend = ios.DevicectlFiles(self.commands, self.control / 'usb', self.values['iosDeviceIdentifier'], label,
+                                    control_transport=control_transport)
         previous = getattr(self.args, 'previous_ios_run_label', None)
         previous_hash = getattr(self.args, 'previous_ios_inbox_sha256', None)
         need((previous is None) == (previous_hash is None), 'Previous iOS label and exact inbox hash must be supplied together')
@@ -86,6 +93,7 @@ class Run(base.Run):
         return None  # No subprocess, USB or clock observation before the complete native inventory passes.
 
     def prerequisites(self):
+        self.result['iosControlTransport'] = self.values.get('iosControlTransport', 'wired')
         self.generator_prerequisites()
         import time
         app = getattr(self.args, 'install_ios_app', None)

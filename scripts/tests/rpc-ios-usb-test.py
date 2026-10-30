@@ -98,6 +98,45 @@ class FileProtocol(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.selected_details(dict(result=dict(devices=[row])), 'SELECTED')
 
+    def test_wireless_control_requires_explicit_selection_and_observed_manual_pairing(self):
+        row = dict(identifier='SELECTED', hardwareProperties=dict(platform='iOS'),
+                   deviceProperties=dict(developerModeStatus='enabled'),
+                   connectionProperties=dict(transportType='localNetwork', pairingState='paired',
+                                             authenticationType='manualPairing', tunnelState='connected'))
+        m.selected_details(dict(result=row), 'SELECTED', control_transport='wireless')
+        with self.assertRaises(ValueError):
+            m.selected_details(dict(result=row), 'SELECTED')
+        with self.assertRaises(ValueError):
+            m.protocol.ios_usb_details(dict(result=dict(devices=[row])), 'SELECTED')
+        changes = [dict(identifier='OTHER'), dict(deviceProperties={}),
+                   dict(deviceProperties=dict(developerModeStatus='disabled')),
+                   dict(hardwareProperties=dict(platform='visionOS'))]
+        for name, value in (('transportType', 'wired'), ('transportType', 'wireless'),
+                            ('pairingState', 'unpaired'), ('authenticationType', 'automatic'),
+                            ('tunnelState', 'disconnected')):
+            changes.append(dict(connectionProperties=row['connectionProperties'] | {name: value}))
+        for name in ('authenticationType', 'tunnelState', 'pairingState', 'transportType'):
+            changes.append(dict(connectionProperties={k: v for k, v in row['connectionProperties'].items() if k != name}))
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                m.selected_details(dict(result=row | change), 'SELECTED', control_transport='wireless')
+        for transport in ('localNetwork', 'automatic', '', None):
+            with self.subTest(transport=transport), self.assertRaises(ValueError):
+                m.selected_details(dict(result=row), 'SELECTED', control_transport=transport)
+
+    def test_wireless_backend_rechecks_selected_transport_on_every_verification(self):
+        backend = object.__new__(m.DevicectlFiles)
+        backend.selected, backend.control_transport = 'SELECTED', 'wireless'
+        row = dict(identifier='SELECTED', hardwareProperties=dict(platform='iOS'),
+                   deviceProperties=dict(developerModeStatus='enabled'),
+                   connectionProperties=dict(transportType='localNetwork', pairingState='paired',
+                                             authenticationType='manualPairing', tunnelState='connected'))
+        backend.command = lambda *_: dict(result=row)
+        backend.verify(30)
+        row['connectionProperties']['transportType'] = 'wired'
+        with self.assertRaises(ValueError):
+            backend.verify(30)
+
     def test_missing_unknown_or_ambiguous_file_metadata_is_not_absence_or_a_regular_file(self):
         row = dict(name='prepared.txt', isDirectory=False, isSymbolicLink=False, fileSize=200)
         self.assertEqual(m.file_inventory(dict(result=dict(files=[row]))), {'prepared.txt': 200})

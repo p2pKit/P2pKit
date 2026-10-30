@@ -184,6 +184,27 @@ Fresh servers receive owned copies and retire them; the original campaign key
 stays private for later attempts. No user's `~/.android` material is opened or
 copied. Approve only the test key actually displayed on the selected phone.
 
+### Explicit wireless iPhone control
+
+When the owner selects wireless development control, schema2 iPhone settings
+may explicitly add `iosControlTransport=wireless`. First verify the selected
+physical CoreDevice UUID reports `transportType=localNetwork`, an existing
+manual pairing, a connected Apple control channel and enabled Developer Mode.
+The backend rechecks those observations on every device verification. It never
+infers wireless permission from a tunnel address, hostname or failed USB attempt;
+omitting this setting retains the existing wired requirement. Schema1 does not
+accept the option.
+
+The same installed native Apple tool performs source-bound installation and
+sealed app-container control over the approved local network. All RPC still
+uses the separately selected production private-LAN path. The existing record
+names and `usbCleanup` report field are legacy control-protocol labels; inspect
+`iosControlTransport` and the explicit wireless result scope to identify the
+actual control transport. File integrity, four-second observations, freshness,
+Stop, identity retirement and outer native finalization remain required. An
+unplugged phone's charging state and wireless observation overhead must be
+reported separately; wireless control alone is not a battery-discharge pass.
+
 ## Run independent phases and retry only the failed phase
 
 Run the small gate first. First deployment comes from the verified preparation

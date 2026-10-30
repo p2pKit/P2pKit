@@ -189,6 +189,21 @@ class MacAdmission(unittest.TestCase):
             with self.assertRaises((ValueError, RuntimeError)):
                 ios_coordinator.settings(values | changed, '2' * 40, 'offline-mac', lab)
 
+    def test_wireless_ios_control_is_an_explicit_schema2_option_without_changing_the_rpc_lan(self):
+        values = {key: val for key, val in self.settings().items() if key not in ('androidUsbSerial', 'adb')}
+        values |= dict(iosDeviceIdentifier='11111111-2222-3333-4444-555555555555', hostInterface='en0')
+        baseline = ios_coordinator.settings(values, '2' * 40, 'offline-mac', lab)
+        for transport in ('wired', 'wireless'):
+            self.assertEqual(ios_coordinator.settings(values | dict(iosControlTransport=transport),
+                                                     '2' * 40, 'offline-mac', lab), baseline)
+        for changed in (dict(iosControlTransport='localNetwork'), dict(iosControlTransport='auto'),
+                        dict(iosControlTransport=''), dict(iosControlTransport='wireless', endpointAddress='8.8.8.8')):
+            with self.subTest(change=changed), self.assertRaises((ValueError, RuntimeError)):
+                ios_coordinator.settings(values | changed, '2' * 40, 'offline-mac', lab)
+        legacy = {k: v for k, v in values.items() if k != 'clientCount'} | dict(schema='1')
+        with self.assertRaises((ValueError, RuntimeError)):
+            ios_coordinator.settings(legacy | dict(iosControlTransport='wireless'), '2' * 40, 'offline-mac', lab)
+
     def test_native_mac_admission_is_explicit_unprivileged_and_not_rosetta(self):
         run = coordinator.Run.__new__(coordinator.Run)
         with patch('audit_processes.host_role', return_value='macos-arm64'), \
