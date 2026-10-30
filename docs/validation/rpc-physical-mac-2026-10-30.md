@@ -16,9 +16,9 @@ The original checkout was pulled to verified main:
 - Separate campaign branch: `codex/rpc-physical-qualification-20261030`.
 - Fix PR: [#532](https://github.com/p2pKit/P2pKit/pull/532).
 
-The corrected preparation candidate is
-`ae3a76e95987618eace43e8ed3ee1a8273ba14c6`, tree
-`d83022b2a737d9c9a538cda0371d3f8e6d32299b`. Its fixes are:
+The current frozen preparation candidate is
+`52252edcf806023753f2aa55cdba108e1c6f5957`, tree
+`3286d8f711e1d3aa467b1c709d9ed468ed43ebc0`. Its fixes are:
 
 - `5af1d503b60d11210441125e2666872bb01427d1`: bootstrap the Gradle
   distribution under a separate preparation deadline before ordinary tool
@@ -28,11 +28,25 @@ The corrected preparation candidate is
 - `ae3a76e95987618eace43e8ed3ee1a8273ba14c6`: use the sample's exported
   `RpcApplicationSession_` Swift name, disambiguating it from the library's
   authorization-session class. The Swift consumer fixture covers construction.
+- `5787fae28f8898e030f02ebe6d51f7ec9c8807d3`: explicitly admit supported
+  paired iPhone wireless development control in schema2, preserving wired
+  defaults and every artifact, file, identity, freshness and Stop barrier.
+- `fe5a67517942592102b41004d4ed083fafa3ebab`: make Gradle's lab copies
+  owner-writable. Before replacing a historical read-only native manifest copy,
+  verify its owner, regular-file lifetime, single link, protected ancestry and
+  hashes against the original distribution and retained native producer. Retire
+  only that copy; do not change the protected original product's permissions.
+- `52252edcf806023753f2aa55cdba108e1c6f5957`: support the owner's explicit
+  schema2 Mac1GiB memory selection, recording it in native clock evidence and
+  independently checking it against the source-bound campaign settings. The
+  historical6GiB default,125-second observation and scheduling limits remain.
 
-Report-only commits after this candidate are not tested product source. There
-is no final preparation manifest or qualified signed iPhone installation yet.
-New preparation must bind every product to one exact source/tree before any
-physical workload; the partial products below are not admitted for that use.
+Report-only commits after this candidate are not tested product source.
+Preparation of `fe5a6751` completed, including a complete signed iPhone app
+and signature verification. That entire product set was archived and
+hash-verified before advancing source. Preparation of the explicit-memory
+candidate is now running. No signed installation or physical workload has been
+qualified; older products are not mixed into this candidate's execution.
 
 ## Observed environment and prerequisites
 
@@ -41,21 +55,32 @@ The Mac is native Apple Silicon (`Mac16,1`), with 16 GiB RAM, macOS 27.0
 Native JDK 17.0.17 and 21.0.11, Python 3.14.6, XcodeGen 2.45.4, Android
 platforms 36/37.0, platform-tools and NDK 29.0.14206865 were verified locally.
 Existing development signing and a profile covering the selected iPhone were
-found; the signed application build still needs to complete.
+found; the `fe5a6751` signed application build and strict signature verification
+completed without a further owner prompt.
 
 Selected physical devices are a Huawei AQM-LX1 (Android 10/API 29) and an
 iPhone 17 (iOS 27.0.1). Android USB debugging is authorized to the existing
 server; approval of the campaign's separate private ADB key remains pending.
-The iPhone is paired over USB with Developer Mode enabled. Installation and
+The iPhone's existing pairing supports wireless development control with
+Developer Mode enabled. The owner disconnected USB and selected wireless
+control. Native CoreDevice reports local-network transport, manual pairing and
+a connected control channel; no additional pairing was needed. Installation and
 Local Network permissions for the corrected products have not been exercised.
 Mac/Android private Wi-Fi interface/subnet observations are retained privately.
-The iPhone Wi-Fi address/interface still need an actual observation; its
-CoreDevice-advertised hostnames did not resolve to an IPv4 address.
+The owner observed the iPhone's Wi-Fi interface, IPv4 address and complete mask
+in the application's network details. Its approved subnet matches Android's;
+the selected Mac route uses the observed LAN interface. Values remain private.
 
-Available RAM was most recently 7.18 GiB using the maintained conservative
-free + inactive + speculative page calculation. That exceeds the instantaneous
-6 GiB prerequisite, but the actual 125-second generator preflight has not run.
-Available disk space was approximately 22 GiB after the first product build.
+Available RAM was most recently 4.58 GiB using the maintained conservative
+free + inactive + speculative page calculation. It must be rechecked after
+preparation; the actual125-second generator preflight has not run.
+Available disk space was approximately18GiB during renewed preparation.
+
+The owner subsequently selected a1GiB minimum for this campaign. The explicit
+schema2 option and threshold-bound native record passed103 relevant tests; existing
+defaults remain6GiB. Subsequent results must disclose the selected1GiB policy,
+actual available memory and generator utilization. This selection changes
+admission, not workload correctness, scheduling, thermal or cleanup requirements.
 
 Android battery observations progressed from 25% to 72% while USB charging.
 Reported battery temperature was 35 degrees Celsius. These are charging-state
@@ -69,12 +94,19 @@ battery/thermal workload series or calibrated energy measurement is available.
 | Initial verified main | First JDK check triggered a wrapper Stop that downloaded Gradle and timed out; final exit 125, Stop exit 143 | Zero owned survivors recorded; failure retained |
 | `5af1d503`, shared desktop session | Distribution bootstrap and Stop returned zero, but three newly observed background processes had unobserved parentage; final exit 125 | Ownership remained UNKNOWN; zero owned survivors is not cleanup certification |
 | `5af1d503`, isolated session | Eight tool/key checks and the Gradle product build passed; Xcode app build failed with exit 65 because Swift selected the authorization-session class | Each completed supervised command recorded Stop exit zero, unchanged source and zero owned survivors; no phone deployment occurred |
+| `ae3a76e9`, renewed isolated session | Eight tool/key checks passed; Gradle failed after 11m46s with dependency downloads reporting no route to host | Final exit 1, Stop exit zero, unchanged source and zero owned survivors; no deployment |
+| `5787fae2`, renewed isolated session | Gradle reached actual product tasks, then failed after 11m44s copying a new native manifest over the historical read-only lab copy | Final exit 1, Stop exit zero, no ownership discovery errors or unclassified lifetimes, unchanged source and zero owned survivors; no deployment |
+| `fe5a6751`, renewed isolated session | Complete preparation passed in28m03s; Gradle products took17m56s, then Xcode signed-app build and strict signature verification passed | Every finalized command recorded exit zero, Stop zero, unchanged source and zero owned survivors; no deployment |
+| `52252edc`, renewed isolated session | New preparation running for the owner-selected memory policy | Final preparation manifest and cleanup not yet available |
 
 The reviewed `scripts/with-darwin-audit-session.py` bootstrap preserved audit
 policy and permanently restored the invoking ordinary account before tools or
 products ran. The first isolated worker retired after the failed preparation.
-The corrected candidate's new worker is waiting on an expired macOS
-administrator authorization. No workload can proceed past that prompt.
+The owner completed renewed macOS authorization. The current ordinary-user
+worker accepts explicit clean source selections after finalized commands and
+checks for outstanding phone leases. Source-selection receipts bind each new
+preparation state; its original ready record is not the later source binding.
+No further administrator prompt is currently pending.
 
 ## Partial artifact hashes from the failed preparation
 
@@ -97,6 +129,28 @@ retained partial outputs and do not constitute a complete prepared campaign.
 
 ## Physical results and remaining scope
 
+The fully prepared, archived `fe5a67517942592102b41004d4ed083fafa3ebab`
+products bind tree `c76570de93adfe1f574fae7f0ec3a1f6950be74a`:
+
+| Prepared product (no physical execution) | SHA-256 |
+| --- | --- |
+| Android debug APK | `1a8c9a0de672a036011c459f5a83629181620b3e3f62c444600e25b2ec40514d` |
+| Mac driver manifest | `3b4d009c6ac9911cd254e3a9ddd80d543c1964ab5acd45332fe29663004a68ce` |
+| Mac capacity driver JAR | `c6e10b3d1367802dcea18ed401fa9435c62844c06b7d9f7fe16a2d03520a52f1` |
+| Mac scoped TCP library | `da521bb6e894718a44042837a4af716869ff4d4614395ce706b3d372221966b5` |
+| Mac native manifest JAR | `af82e4b2092bef3d38660272aee5196575bc3653017c688a749a48463529eedd` |
+| iPhone ARM64 framework | `ac95341d4d70ab160e57640b2346539567d3566b29beaf381256955b4e4f0e53` |
+| Universal simulator framework | `35bace6edd0873e195bbc9e31676b8f9c542707aa50ecd47926945e9e66617ff` |
+| Signed iPhone executable | `a70fd33adfc1838432a99decbeb23522742cd4945f05a51d819cb887f6cd8dcc` |
+| Complete signed-app inventory | `62e58a60328103318613970ffd249f93b1442de343f9626f172f8f23789ccd84` |
+
+The signed-app inventory hash is SHA-256 of UTF-8 canonical JSON followed by
+one LF: entries sorted by app-relative path, each with `path`, `bytes` and
+`sha256`, sorted object keys and compact separators. It includes every signed
+app file once. The private archive contains51 unique files (231,469,418 bytes),
+with copies independently hash-verified. This set is preparation evidence,
+not the later explicit-memory candidate's tested artifact set.
+
 | Phone host | Clients | Large/correctness/churn | Separate measured steady | Throughput, latency, schedules and resources |
 | --- | --- | --- | --- | --- |
 | Android | 128 | Not run | 0/1,800 seconds | Unavailable |
@@ -114,18 +168,27 @@ also pending physical execution.
 The current harness still needs reviewed extensions for the simultaneous
 255-Mac-plus-one-physical-phone client roster, a genuine socket slow consumer,
 long mixed-fault workloads and unplugged recording. A separate phone smoke
-test and a delayed handler cannot satisfy those requirements. Actual discharge
-will require an identified physical unplug/reconnect action or a supported
-charging-control method; simulated battery state is insufficient. Serious or
+test and a delayed handler cannot satisfy those requirements. The iPhone is
+already unplugged, but wireless control alone does not establish a discharge
+measurement. Android actual discharge still needs a reviewed recorder or
+supported control method and an identified physical unplug/reconnect action;
+simulated battery state is insufficient. Serious or
 critical thermal observations must stop the attempt with cleanup retained.
 
-Immediate blockers are the renewed Terminal administrator prompt, completion
-and verification of all corrected source-matched products, iPhone network
-observation, campaign-key consent and first-install/Local Network admission.
+Immediate prerequisites are completion and verification of all corrected
+source-matched products, the owner-selected memory policy, campaign-key consent and
+first-install/Local Network admission. The original permission failure is
+retained; the new preparation must verify the repair on the actual build path.
 No acceptance checkbox in #525 was changed. No publication, tag, 512-client
 claim, cancelled full audit or deferred #520 investigation was performed.
 
 ## Fix validation and hosted checks
+
+The wireless-control revision passed 150 targeted tests across iPhone
+file/control, Mac mobile control, Android controls, campaign and coordinator
+tests. The staging repair additionally passed eight warm/revision-change and
+refusal controls, ten native staging tests, 26 campaign tests, 97 CI component
+tests and 114 CI evidence tests (one existing skip). The skip is not a pass.
 
 - `TMPDIR=/private/tmp /opt/homebrew/bin/python3 scripts/tests/rpc-ios-usb-test.py`:
   26 passed.
@@ -152,3 +215,12 @@ The corrected candidate's required modular run
 is pending. Dependency review and advisory scans passed for that candidate.
 Neither a pending gate nor a physical phase that has not run is a qualification
 pass.
+
+The wireless revision's modular run
+[41102725474](https://github.com/p2pKit/P2pKit/actions/runs/41102725474)
+has passed Android, Apple ARM64, JVM and desktop components; its full gate
+remains pending. The staging revision's queued run was superseded after the
+owner-selected memory change. The explicit-memory revision's modular run
+[41109598520](https://github.com/p2pKit/P2pKit/actions/runs/41109598520)
+is pending; its dependency review and advisory scan passed. Original failures
+and superseded results remain retained rather than relabeled as passes.
