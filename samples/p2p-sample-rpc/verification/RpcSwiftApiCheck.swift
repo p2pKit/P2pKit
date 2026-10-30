@@ -5,6 +5,10 @@ import P2pKitRpcExample
 // Applications construct/configure the shared Kotlin facade and own permissions,
 // trust, authorization, foreground lifecycle and dispatch onto their UI actor.
 
+func createApplicationHistorySession() -> RpcApplicationSession_ {
+    RpcApplicationSession_()
+}
+
 func pairAndConnect(client: InventoryClient, trustedLocalQr: String) async throws -> RpcSelectedHost {
     let host = try await client.pairFromTrustedQr(qr: trustedLocalQr)
     try await client.connect(host: host)
