@@ -124,7 +124,7 @@ def commands(component):
                    'rpc-mobile-capacity-test.py',
                    'rpc-mobile-commands-test.py', 'rpc-ios-usb-test.py',
                    'run-rpc-mobile-capacity-test.py', 'rpc-mobile-mac-control-test.py',
-                   'rpc-darwin-capacity-test.py', 'run-rpc-mac-campaign-test.py',
+                   'rpc-darwin-capacity-test.py', 'run-rpc-mac-campaign-test.py', 'rpc-battery-observation-test.py',
                    'run-rpc-phone-ios-controls-test.py', 'run-rpc-ios-handoff-test.py',
                    'prepare-macos-rpc-desktop-test.py', 'package-rpc-preview-test.py'),
         ]

@@ -148,7 +148,7 @@ TASK_NAMES = frozenset({
     "prepare-rpc-capacity-copy-test.py",
     "rpc-mobile-capacity-test.py", "rpc-mobile-commands-test.py", "rpc-ios-usb-test.py",
     "run-rpc-mobile-capacity-test.py", "rpc-mobile-mac-control-test.py", "rpc-darwin-capacity-test.py",
-    "run-rpc-mac-campaign-test.py",
+    "run-rpc-mac-campaign-test.py", "rpc-battery-observation-test.py",
     "run-rpc-phone-ios-controls-test.py", "run-rpc-ios-handoff-test.py",
     "prepare-macos-rpc-desktop-test.py", "package-rpc-preview-test.py",
     "run-platform-tests-test.py", "audit-process-drain-deadline-test.py", "verify-rpc-windows-jdk21-test.py", "check-rpc-windows-packaging-test.py", "integrity-policy",
