@@ -1,4 +1,52 @@
+public final class dev/p2pkit/rpc/RpcApplicationSession {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getPeer-WOhdib4 ()Ljava/lang/String;
+	public final fun getPrincipal ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun isActive ()Z
+	public final fun revoke (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcAuthorizationContext {
+	public final fun getHostIncarnation ()Ljava/lang/String;
+	public final fun getOperation ()Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun getProcedureName ()Ljava/lang/String;
+	public final fun getProcedureVersion ()I
+	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
+	public final fun getScope ()Ldev/p2pkit/rpc/RpcAuthorizationScope;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcAuthorizationOperation : java/lang/Enum {
+	public static final field ApplicationError Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Cancel Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Duplicate Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Execute Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Failure Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Invoke Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Notification Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Receipt Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Running Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Status Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static final field Success Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+}
+
+public final class dev/p2pkit/rpc/RpcAuthorizationScope {
+	public fun <init> (Ldev/p2pkit/rpc/RpcApplicationSession;Ljava/lang/String;)V
+	public synthetic fun <init> (Ldev/p2pkit/rpc/RpcApplicationSession;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getResource ()Ljava/lang/String;
+	public final fun getSession ()Ldev/p2pkit/rpc/RpcApplicationSession;
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/p2pkit/rpc/RpcCallContext {
+	public final fun getAuthorizationScope ()Ldev/p2pkit/rpc/RpcAuthorizationScope;
 	public final fun getHostIncarnation ()Ljava/lang/String;
 	public final fun getHostObservationId ()Ljava/lang/Long;
 	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
@@ -232,8 +280,11 @@ public final class dev/p2pkit/rpc/RpcHost {
 	public final fun getRequests ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getTrust ()Ldev/p2pkit/rpc/RpcTrust;
+	public final fun revokeApplicationSession (Ldev/p2pkit/rpc/RpcApplicationSession;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun start (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun tryNotify-ALQvzA0 (Ljava/lang/String;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun tryNotifyScoped (Ldev/p2pkit/rpc/RpcAuthorizationScope;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun tryNotifyScoped$default (Ldev/p2pkit/rpc/RpcHost;Ldev/p2pkit/rpc/RpcAuthorizationScope;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class dev/p2pkit/rpc/RpcHost$Companion {
@@ -275,6 +326,8 @@ public final class dev/p2pkit/rpc/RpcHostConfiguration : dev/p2pkit/rpc/RpcConfi
 	public final fun getRequestHistoryCapacity ()I
 	public final fun register (Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;)V
 	public static synthetic fun register$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
+	public final fun registerScoped (Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;)V
+	public static synthetic fun registerScoped$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
 	public final fun setAdvertise (Z)V
 	public final fun setAllowNearbyPairing (Z)V
 	public final fun setRequestHistoryCapacity (I)V

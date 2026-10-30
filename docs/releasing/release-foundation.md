@@ -14,8 +14,9 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The latest published development release candidate and current source version
-are both **`0.8.0-rc7`**. Its [release record](../releases/0.8.0-rc7.md) binds the
+The latest published development release candidate is **`0.8.0-rc7`**; current
+source selects **`0.8.0-rc8`**, not yet published. The rc7
+[release record](../releases/0.8.0-rc7.md) binds the
 actual same-source main selection, separate protected approvals and immutable
 public library/application bytes. The failed original main run remains failed;
 the accepted aggregate selects thirteen successful siblings and the
