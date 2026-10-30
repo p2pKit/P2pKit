@@ -11,8 +11,18 @@ protected approval and the final pre-upload check revalidate its original
 identity and retention. See the [exact-source release procedure](release-foundation.md)
 for owner challenge comments, post-Maven application delivery and partial-failure
 boundaries. The latest completed publication is
-[`0.8.0-rc7`](../releases/0.8.0-rc7.md). Current source selects
-`0.8.0-rc8` as an unpublished development candidate; this is not publication.
+[`0.8.0-rc8`](../releases/0.8.0-rc8.md), from exact source
+`6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Protected Maven
+[41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149)
+passed with a PUBLISHED deployment, complete remote-consumer verification and
+242 byte-matching remote files (121 original artifacts plus their signatures).
+Its actual publication-build SBOM contains 88 components. Separate sample
+delivery [41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810)
+passed and published the [sample prerelease](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8)
+at the same source. All seven complete public downloads were independently
+verified anonymously against their original approved hashes; the four
+applications were not rebuilt. Public delivery does not establish installed
+execution or physical-device qualification.
 Later source needs its own qualification and protected publication; source
 controls alone do not establish readiness for a subsequent release.
 
@@ -141,9 +151,12 @@ ordinary exact-source complete consumer gate used during publication.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
-record. See [`0.8.0-rc7`](../releases/0.8.0-rc7.md) for the latest completed
-publication and [`0.7.0-rc3`](../releases/0.7.0-rc3.md) for immutable history.
+record. See [`0.8.0-rc8`](../releases/0.8.0-rc8.md) for the latest completed
+library publication, and the [rc7](../releases/0.8.0-rc7.md),
+[rc6](../releases/0.8.0-rc6.md) and [0.7 RC3](../releases/0.7.0-rc3.md) records
+for immutable history. The rc6 final evidence-upload failure and successful
+separate read-only recovery remain rc6 facts, not an inferred rc8 recovery.
 If an irreversible upload succeeds but verification fails, do not rerun the
-publisher. Follow the separately protected [read-only recovery procedure](release-foundation.md#read-only-recovery-after-an-original-published-deployment)
+publisher. Follow the separately protected [read-only recovery procedure](release-foundation.md#partial-failure-and-recovery)
 using the original signed quartet, deployment receipt and frozen applications.
 Missing or expired originals remain a HOLD; rebuilding is not recovery.

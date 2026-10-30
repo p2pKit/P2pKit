@@ -8,7 +8,11 @@ physical resource/capacity qualification remains pending in #525.
 This work starts from `69fd925d932e544a1a2feefd247adbcf0a397509` (`0.8.0-rc7`
 source). It is not a change to previously published artifacts. The original
 128-client campaign and its historical failures remain intact. In particular,
-this work does not resolve the deferred physical-iOS discovery issue #520.
+this work does not resolve the deferred intermittent iOS keyboard issue #520.
+
+The verified [`0.8.0-rc8` release](../releases/0.8.0-rc8.md) includes this
+implementation. Its hosted qualification and public artifacts do not establish
+physical Android/iPhone 256-client capacity, energy or thirty-minute stress results.
 
 ## Architecture decision
 

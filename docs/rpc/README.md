@@ -4,7 +4,7 @@ RPC is published under `io.github.apdelrahman1911:p2p-rpc`. Use
 [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) consistently for RPC, core
 and LAN; the [release records](../README.md#test-and-release) bind each immutable
 source, hosted qualification and published application set. The example below
-uses the verified rc7 publication, not source from a later bookkeeping commit.
+uses the verified rc8 publication, not source from a later bookkeeping commit.
 
 Windows sample Host/Client and productive profile loading are implemented.
 Complete installed-standard-user, protected-profile and physical-LAN qualification
@@ -69,12 +69,12 @@ disabled in the RPC-owned restricted session.
 
 ## Private application sessions
 
-Source after rc7 adds opt-in [application-session authorization](application-session-authorization.md)
+Release rc8 adds opt-in [application-session authorization](application-session-authorization.md)
 for employees sharing one trusted device. `registerScoped()` and `tryNotifyScoped()` preserve original
 verified login/resource facts through retained results, controls and queued output, with an awaited
 revocation-versus-commitment fence. Legacy registrations/notifications intentionally remain device-only.
 Credential validation, current employee/resource policy and durable business recovery remain the app's
-responsibility. The published rc7 artifacts do not include these new APIs.
+responsibility. These APIs are included in rc8; immutable rc7 artifacts do not include them.
 
 ## Dependency and source-workspace integration
 
@@ -82,7 +82,7 @@ Use the matching published core/LAN/RPC version from Maven Central:
 
 ```kotlin
 commonMain.dependencies {
-    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc7")
+    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc8")
 }
 ```
 
@@ -157,8 +157,8 @@ if (host.permissions.hasRequiredPermissions()) host.start()
 val endpoint = host.endpoint()
 ```
 
-The development source adds the opt-in `RpcLimits.host256()` profile (not present
-in the published `0.8.0-rc7` artifacts). It raises host-wide policy bounds without
+Release `0.8.0-rc8` includes the opt-in `RpcLimits.host256()` profile (absent
+from immutable rc7 artifacts). It raises host-wide policy bounds without
 changing `host128()` or defaults. It does **not** reserve 324 blocking-reader
 threads. See [shared readiness I/O, resource trade-offs, and the precise validation
 scope](scalable-io.md); policy bounds alone do not establish 256-client capacity on a device.

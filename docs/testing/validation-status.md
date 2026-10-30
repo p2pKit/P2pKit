@@ -4,7 +4,40 @@
 
 Use [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) and its immutable
 [release record](../README.md#test-and-release) for published evidence. The latest
-verified record is [`0.8.0-rc7`](../releases/0.8.0-rc7.md), release source
+verified record is [`0.8.0-rc8`](../releases/0.8.0-rc8.md), release source
+`6c85fdc2977386e572830c243f9aa8bb17d84ec3`, tree
+`87d0eac4969dccb978207fa9be85882f1d22339a`.
+Aggregate [41028216266/1](https://github.com/p2pKit/P2pKit/actions/runs/41028216266)
+selects all fourteen mandatory components: thirteen successful originals from
+main run `41023086404/1` and unchanged-source source replacement `41026343627/1`.
+The original source job remains failed with `COMMAND/CLEANUP`, `DRAIN_DEADLINE`
+and unknown cleanup; it receives **zero qualification credit**. The replacement
+is a genuine successful execution, not a confirmed cause or repair of that failure.
+The four original application artifacts were reused without rebuilding.
+
+Selected manifests record **125 genuine expected command outcomes**, all exit zero,
+complete captures and known cleanup; **2,993 hashed report entries** are not a
+count of unique or decrypted test events. Scoped-authorization report rosters
+are retained across seven task/platform lanes. No private rc8 testcase counts
+are inferred from older rc7 counts or public hashed rosters.
+
+Protected Maven [41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149)
+passed with 121 signed originals, 21 coordinates, 726 bundle members, the genuine
+242-file remote-byte PASS and complete isolated remote-consumer marker. Its
+original 88-component publication-build CycloneDX JSON/XML and final archive are
+retained. Inner consumer `command.log`/`result.json` were not uploaded; completion
+and cleanup are established by the actual successful step/marker under the
+unchanged source-enforced contract, not invented separate receipts.
+Separate sample publisher
+[41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810) delivered
+the exact frozen originals as `samples-v0.8.0-rc8` at `2026-10-30T09:49:01Z`.
+All seven complete anonymous public downloads matched their original hashes:
+**365,258,462 verified bytes**. The [rc8 record](../releases/0.8.0-rc8.md) retains
+the full roster and approval. These checks do not establish physical/installed qualification.
+
+### Historical rc7 publication boundary
+
+The historical verified record is [`0.8.0-rc7`](../releases/0.8.0-rc7.md), release source
 `bc3a28e8e381b49585fb697160cb954bc642ea29`, tree
 `1640bade9fd47504f2400ee1df44d4303697dd99`.
 Accepted aggregate `39879254089/1` selects thirteen successful components from
@@ -75,12 +108,14 @@ native ARM64/Intel simulator components retain their own source-bound reports.
 `complete-gate` requires their actual successful aggregation, including on
 ordinary documentation PRs. A focused component pass is not complete qualification.
 
-The recorded rc7 selection has actual same-source results for all fourteen
+The recorded rc8 selection has actual same-source results for all fourteen
 components, with the original/replacement identities above. They must not be
 reused as a pass for changed source. Deterministic callbacks, loopback TCP and
 hosted multicast still do not establish physical-network coverage.
-**The published rc7 source still contains the High discovery-admission limitation
-tracked in #120. Stable/production remains NOT_READY.**
+Release rc8 implements known-route protection for #120, not fair unknown-peer
+discovery or guaranteed connectivity. **Stable/production remains NOT_READY**;
+#525 physical mobile capacity/energy/stress, #462 formal installed Windows and
+independent/physical campaigns remain incomplete. #520 investigation is deferred.
 
 ## Kotlin target execution and structural gaps
 
@@ -90,7 +125,12 @@ profiles together retain the complete portable task inventory and non-test
 `check` dependencies. Cached XML, dry runs and cross-compilation are not native
 execution. See [platform execution evidence](local.md#platform-execution-evidence).
 
-| Target / suite | Verified release scope and remaining limitation |
+### Historical rc7 testcase inventory (not rc8 counts)
+
+These previously retained counts describe rc7 only. Current rc8 evidence is
+summarized above without decrypting or inventing private testcase counts.
+
+| Target / suite | Historical rc7 scope and remaining limitation |
 | --- | --- |
 | JVM | rc7 Linux: 1,975 PASS; Windows: 1,952 PASS. The distinct macOS shared gate has 3,212 PASS across its host-test inventory, not 3,212 additional unique library controls. |
 | Android | rc7 Android component: 933 PASS, plus original debug APK inspection. Host JVM/stub/Robolectric tests are not ART or physical-device execution. Earlier source-bound instrumentation/privacy witnesses retain their own source/run identities. |

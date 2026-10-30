@@ -3,7 +3,7 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc8 — development release candidate (unpublished)
+## 0.8.0-rc8 — development release candidate (2026-10-30)
 
 - Add opt-in immutable application-session RPC authorization for shared trusted
   devices (#528). Preserve the verified original login/resource through execution,
@@ -37,10 +37,13 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
   Keep iOS keyboard issue #520 unresolved and
   explicitly deferred rather than treating a successful retry as its repair.
 
-This selected candidate is not published until its exact-source release gates
-complete. The records and artifact bindings below remain immutable; these
-source changes do not retrospectively qualify original failed runs or complete
-physical/installed-application campaigns. It is not stable/production READY.
+Published and verified from immutable `v0.8.0-rc8`, with matching frozen
+APK/MSI/ARM64-DMG/DEB delivery; see the [release record](docs/releases/0.8.0-rc8.md).
+The main qualification retains the original source cleanup failure and selects
+a genuine unchanged-source replacement without rebuilding the four applications.
+The original cause remains unknown. These changes do not retrospectively
+qualify failed runs or complete physical/installed-application campaigns.
+This remains a prerelease, not stable/production READY.
 
 ## 0.8.0-rc7 — development release candidate (2026-10-23)
 

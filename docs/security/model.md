@@ -178,9 +178,9 @@ memory or evict legitimate peers.
 
 ### Protected routes for already-authorized peers
 
-Current source adds a separate, finite known-route path for
+Release [`0.8.0-rc8`](../releases/0.8.0-rc8.md) includes a separate, finite known-route path for
 [#120](https://github.com/p2pKit/P2pKit/issues/120). This is **not present in the
-immutable `0.8.0-rc7` binaries** and does not make unknown-peer discovery fair.
+immutable rc7 binaries** and does not make unknown-peer discovery fair.
 After a successful outbound Noise/HELLO handshake and session registration,
 the kit can retain the exact numeric route selected by the transport. Original
 local authorization is required: a full explicit application pin, `PinnedOnly`,

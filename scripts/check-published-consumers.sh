@@ -211,6 +211,13 @@ if [[ "${1:-}" == "--latest-published" ]]; then
             LAN_METADATA_COROUTINES_VERSION="1.11.0"
             LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.7"
             ;;
+        0.8.0-rc8)
+            CURRENT_SOURCE_CONSUMER=1
+            # Rc8's producer pins do not track future current-source catalog changes.
+            LAN_METADATA_KOTLIN_VERSION="2.4.20"
+            LAN_METADATA_COROUTINES_VERSION="1.11.0"
+            LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.8"
+            ;;
         *)
             echo "FAIL: unsupported latest-published consumer contract: $VERSION" >&2
             exit 2
