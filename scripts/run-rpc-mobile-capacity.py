@@ -55,6 +55,9 @@ def settings(value, source, label, lab):
     fields = SETTINGS | ({'clientCount'} if value['schema'] == '2' else set())
     if value['schema'] == '2' and 'adbCampaignKeys' in value:
         fields |= {'adbCampaignKeys'}
+    if value['schema'] == '2' and 'macGeneratorMinimumAvailableGiB' in value:
+        fields |= {'macGeneratorMinimumAvailableGiB'}
+        need(value['macGeneratorMinimumAvailableGiB'] in ('1', '6'), 'Explicit1GiB or6GiB Mac policy required')
     need(set(value) == fields and all(type(v) is str for v in value.values()))
     need(value['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', value['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
@@ -242,6 +245,8 @@ class Run:
         return evidence.bounded(self.state / 'evidence' / proof['id'] / ('product.' + stream + '.log'))
 
     def generator_prerequisites(self):
+        selected_gib = self.values.get('macGeneratorMinimumAvailableGiB')
+        need(selected_gib is None or self.native_host == 'macos-arm64', 'Mac memory policy is not a Linux override')
         destination = self.state / 'evidence' / ('mobile-controls-' + self.config['runLabel'])
         proof = self.native('mobile-native-controls', [sys.executable, str(ROOT / 'scripts/tests/run-audit-command-test.py'),
             '--expected-host', self.native_host, '--evidence-dir', str(destination)])
@@ -259,9 +264,17 @@ class Run:
              'Actual native JVM17 architecture must match the admitted generator')
         # Keep the existing 125-second, <100ms-gap, >=6GiB, no-balloon preflight.
         if self.native_host == 'macos-arm64':
-            proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
-                str(self.state / 'work' / ('mobile-clock-' + self.config['runLabel']))])
-            clock = darwin.assess_clock(json.loads(self.output(proof), object_pairs_hook=evidence.unique))
+            clock_argv = [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
+                          str(self.state / 'work' / ('mobile-clock-' + self.config['runLabel']))]
+            selected_bytes = None if selected_gib is None else int(selected_gib) * 1024 ** 3
+            if selected_gib is not None:
+                clock_argv += ['--minimum-available-gib', selected_gib]
+            proof = self.native('mobile-clock', clock_argv)
+            clock = darwin.assess_clock(json.loads(self.output(proof), object_pairs_hook=evidence.unique),
+                                       minimum_available_bytes=selected_bytes)
+            self.result['generatorMemoryAdmission'] = dict(requiredAvailableBytes=darwin.memory_requirement(selected_bytes),
+                explicitlySelected=selected_gib is not None, defaultRequiredAvailableBytes=darwin.MIN_MEMORY,
+                capacityEstablishedByThreshold=False)
         else:
             proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/run-rpc-capacity-qualification.py'), 'clock'])
             clock = evidence.clock_evidence(json.loads(self.output(proof), object_pairs_hook=evidence.unique))

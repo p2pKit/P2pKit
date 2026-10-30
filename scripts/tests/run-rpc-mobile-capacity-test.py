@@ -218,6 +218,7 @@ class Cleanup(unittest.TestCase):
 
     def test_partial_native_inventory_stops_before_jvm_clock_or_usb(self):
         run = fixture()
+        run.values = {}
         run.state = Path('/NOT_EXECUTED/state')
         run.config = dict(runLabel='test-run')
         run.native = Mock(return_value={})

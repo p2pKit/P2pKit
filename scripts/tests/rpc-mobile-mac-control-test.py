@@ -204,6 +204,23 @@ class MacAdmission(unittest.TestCase):
         with self.assertRaises((ValueError, RuntimeError)):
             ios_coordinator.settings(legacy | dict(iosControlTransport='wireless'), '2' * 40, 'offline-mac', lab)
 
+    def test_explicit_mac_memory_policy_is_schema2_and_does_not_change_rpc_configuration(self):
+        android = self.settings()
+        ios = {k: v for k, v in android.items() if k not in ('androidUsbSerial', 'adb')}
+        ios |= dict(iosDeviceIdentifier='11111111-2222-3333-4444-555555555555', hostInterface='en0')
+        for module, values in ((coordinator, android), (ios_coordinator, ios)):
+            baseline = module.settings(values, '2' * 40, 'offline-mac', lab)
+            for gib in ('1', '6'):
+                self.assertEqual(module.settings(values | dict(macGeneratorMinimumAvailableGiB=gib),
+                                                 '2' * 40, 'offline-mac', lab), baseline)
+            for invalid in ('0', '01', '2', 'auto', ''):
+                with self.subTest(invalid=invalid), self.assertRaises((ValueError, RuntimeError)):
+                    module.settings(values | dict(macGeneratorMinimumAvailableGiB=invalid),
+                                    '2' * 40, 'offline-mac', lab)
+            legacy = {k: v for k, v in values.items() if k != 'clientCount'} | dict(schema='1')
+            with self.assertRaises((ValueError, RuntimeError)):
+                module.settings(legacy | dict(macGeneratorMinimumAvailableGiB='1'), '2' * 40, 'offline-mac', lab)
+
     def test_native_mac_admission_is_explicit_unprivileged_and_not_rosetta(self):
         run = coordinator.Run.__new__(coordinator.Run)
         with patch('audit_processes.host_role', return_value='macos-arm64'), \

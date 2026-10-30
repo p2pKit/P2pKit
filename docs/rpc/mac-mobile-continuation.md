@@ -76,6 +76,16 @@ not a mixture of Maven binaries and newer test tooling.
    available memory is required during its actual preflight; allow substantial
    additional space for Xcode/NDK/Gradle and private reports.
 
+   An owner-selected schema2 campaign may explicitly set
+   `macGeneratorMinimumAvailableGiB=1` in each private settings file. Omission
+   retains6GiB; schema1 and Linux do not accept this override. The actual native
+   clock command records the selected threshold in schema2 evidence and the
+   coordinator independently checks it against the original settings. The
+   125-second observation, <100ms maximum scheduling gap and all workload,
+   thermal and cleanup checks remain unchanged. A lower memory admission
+   threshold is not evidence that the generator can sustain the workload;
+   inspect its utilization, GC, scheduling and observed available memory.
+
 Trust, Developer Mode, signing and OS permission prompts cannot legitimately
 be fabricated by automation. Reboot/reconnect/OEM prompts may recur. Apart from
 these physical/platform boundaries, the agent can build, deploy, run, collect

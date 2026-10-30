@@ -2,7 +2,8 @@
 
 No Linux counters are fabricated on Darwin. Use a real kqueue periodic timer,
 native sysctl hardware observations and bounded vm_stat page counts. The same
-125-second / <100ms-gap / >=6GiB thresholds apply; virtual/unknown hosts are refused.
+125-second / <100ms-gap / default >=6GiB thresholds apply; virtual/unknown hosts are refused.
+An explicit campaign selection may use1GiB, recorded separately and never inferred from low memory.
 """
 from __future__ import annotations
 
@@ -105,7 +106,14 @@ class Timer:
         self.queue.close()
 
 
-def clock(commands, *, now=time.monotonic_ns, timer=Timer, observe=snapshot):
+def memory_requirement(selected=None):
+    need(selected is None or type(selected) is int and selected in (1024 ** 3, MIN_MEMORY),
+         'Explicit1GiB or6GiB Mac admission selection required')
+    return MIN_MEMORY if selected is None else selected
+
+
+def clock(commands, *, now=time.monotonic_ns, timer=Timer, observe=snapshot, minimum_available_bytes=None):
+    required = memory_requirement(minimum_available_bytes)
     first = observe(commands)
     check_snapshot(first)
     samples = [dict(elapsedNanos=0, snapshot=first)]
@@ -138,15 +146,24 @@ def clock(commands, *, now=time.monotonic_ns, timer=Timer, observe=snapshot):
         kernelExpirations=expirations, userspaceReads=reads, coalescedExpirations=expirations - reads,
         maximumGapNanos=maximum_gap, minimumAvailableBytes=min(r['snapshot']['availableBytes'] for r in samples),
         samples=samples, healthyForAttempt=maximum_gap < 100_000_000 and
-        min(r['snapshot']['availableBytes'] for r in samples) >= MIN_MEMORY, capacityQualified=False)
-    return assess_clock(value)
+        min(r['snapshot']['availableBytes'] for r in samples) >= required, capacityQualified=False)
+    if minimum_available_bytes is not None:
+        value.update(schema=2, requiredAvailableBytes=required)
+    return assess_clock(value, minimum_available_bytes=minimum_available_bytes)
 
 
-def assess_clock(value):
+def assess_clock(value, *, minimum_available_bytes=None):
+    required = memory_requirement(minimum_available_bytes)
     expected = {'schema', 'scope', 'periodNanos', 'durationNanos', 'kernelExpirations', 'userspaceReads',
                 'coalescedExpirations', 'maximumGapNanos', 'minimumAvailableBytes', 'samples', 'healthyForAttempt', 'capacityQualified'}
-    need(type(value) is dict and set(value) == expected and type(value['schema']) is int and value['schema'] == 1 and
+    if minimum_available_bytes is not None:
+        expected |= {'requiredAvailableBytes'}
+    need(type(value) is dict and set(value) == expected and type(value['schema']) is int and
+         value['schema'] == (1 if minimum_available_bytes is None else 2) and
          value['scope'] == SCOPE and value['capacityQualified'] is False)
+    if minimum_available_bytes is not None:
+        need(type(value['requiredAvailableBytes']) is int and value['requiredAvailableBytes'] == required,
+             'Observed clock admission must match the explicitly selected campaign threshold')
     for key in expected - {'scope', 'samples', 'healthyForAttempt', 'capacityQualified'}:
         need(type(value[key]) is int and 0 <= value[key] < 2 ** 63)
     need(value['periodNanos'] == PERIOD and value['durationNanos'] >= DURATION and
@@ -164,7 +181,7 @@ def assess_clock(value):
              {k: rows[0]['snapshot'][k] for k in ('memoryBytes', 'pageBytes', 'logicalCpus')} for r in rows))
     minimum = min(r['snapshot']['availableBytes'] for r in rows)
     need(value['minimumAvailableBytes'] == minimum and value['healthyForAttempt'] is
-         (value['maximumGapNanos'] < 100_000_000 and minimum >= MIN_MEMORY))
+         (value['maximumGapNanos'] < 100_000_000 and minimum >= required))
     return value
 
 
@@ -193,6 +210,8 @@ def direct_route(raw, interface_raw, config):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, required=True)
+    parser.add_argument('--minimum-available-gib', type=int, choices=(1, 6),
+                        help='Explicit campaign memory policy; omitted retains the historical6GiB requirement')
     args = parser.parse_args()
     from audit_processes import host_role
     need(host_role() == 'macos-arm64' and os.environ.get('P2PKIT_AUDIT_OWNERSHIP_CHAIN'), 'Admitted native ARM command required')
@@ -203,7 +222,8 @@ def main():
     need(args.directory.parent == state / 'work' and re.fullmatch('mobile-clock-[a-z0-9-]{1,48}', args.directory.name))
     args.directory.mkdir(mode=0o700)
     commands = usb.Commands(args.directory, os.environ, files)
-    print(json.dumps(clock(commands), sort_keys=True))
+    selected = None if args.minimum_available_gib is None else args.minimum_available_gib * 1024 ** 3
+    print(json.dumps(clock(commands, minimum_available_bytes=selected), sort_keys=True))
 
 
 if __name__ == '__main__':

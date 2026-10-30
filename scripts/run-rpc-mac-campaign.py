@@ -245,6 +245,7 @@ def result_summary(value):
                 initialization=value.get("initialization"), postRetention=value.get("postRetention"),
                 connectedIdle=value.get("connectedIdle"), generatorBefore=value.get("generatorBefore"),
                 generatorAfter=value.get("generatorAfter"),
+                generatorMemoryAdmission=value.get("generatorMemoryAdmission"),
                 thermalAbort=value.get("thermalAbort"), cleanup=value.get("phoneCleanup"),
                 errors=value.get("errors"), batteryDrainQualified=False,
                 observedBatteryStates=sorted({r["batteryState"] for r in rows if "batteryState" in r}),

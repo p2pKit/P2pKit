@@ -37,6 +37,9 @@ def settings(values, source, label, lab):
     if values['schema'] == '2' and 'iosControlTransport' in values:
         fields |= {'iosControlTransport'}
         need(values['iosControlTransport'] in ('wired', 'wireless'), 'Explicit wired or wireless iPhone control required')
+    if values['schema'] == '2' and 'macGeneratorMinimumAvailableGiB' in values:
+        fields |= {'macGeneratorMinimumAvailableGiB'}
+        need(values['macGeneratorMinimumAvailableGiB'] in ('1', '6'), 'Explicit1GiB or6GiB Mac policy required')
     need(set(values) == fields and all(type(v) is str for v in values.values()) and
          values['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', values['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
