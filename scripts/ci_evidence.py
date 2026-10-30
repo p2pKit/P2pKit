@@ -145,6 +145,7 @@ TASK_NAMES = frozenset({
     "verify-rpc-windows-msi-payload-test.py", "rpc-windows-package-inspection",
     "check-rpc-windows-image-runtime-test.py", "rpc-windows-runtime-readback",
     "rpc-capacity-evidence-test.py", "run-rpc-capacity-lab-test.py", "rpc-capacity-macos-stage-test.py",
+    "prepare-rpc-capacity-copy-test.py",
     "rpc-mobile-capacity-test.py", "rpc-mobile-commands-test.py", "rpc-ios-usb-test.py",
     "run-rpc-mobile-capacity-test.py", "rpc-mobile-mac-control-test.py", "rpc-darwin-capacity-test.py",
     "run-rpc-mac-campaign-test.py",
