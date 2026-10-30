@@ -110,6 +110,54 @@ class FileProtocol(unittest.TestCase):
             with self.assertRaises(ValueError):
                 m.file_inventory(dict(result=dict(files=rows)))
 
+    def test_nested_coredevice_metadata_preserves_exact_size_and_rejects_missing_or_conflicting_flags(self):
+        row = dict(name='prepared.txt', metadata=dict(size=200),
+                   resources=dict(isDirectory=False, isSymbolicLink=False))
+        self.assertEqual(m.file_inventory(dict(result=dict(files=[row]))), {'prepared.txt': 200})
+        changes = [dict(metadata={}), dict(metadata=dict(size=True)), dict(metadata=dict(size='200')),
+                   dict(metadata=dict(size=16385)), dict(resources={}), dict(resources=[]),
+                   dict(resources=dict(isDirectory=0, isSymbolicLink=False)),
+                   dict(resources=dict(isDirectory=False, isSymbolicLink=0)),
+                   dict(resources=dict(isDirectory=False, isSymbolicLink=True)),
+                   dict(isDirectory=False), dict(isSymbolicLink=False), dict(fileSize=200)]
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                m.file_inventory(dict(result=dict(files=[row | change])))
+        for key in ('metadata', 'resources'):
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                m.file_inventory(dict(result=dict(files=[{k: v for k, v in row.items() if k != key}])))
+
+    def test_nested_control_directory_observations_cannot_turn_links_or_unknown_flags_into_a_slot(self):
+        backend = object.__new__(m.DevicectlFiles)
+        backend.selected = 'SELECTED'
+        backend.remote = 'Library/Application Support/rpc-capacity/selected-run'
+        names = ('Application Support', 'rpc-capacity', 'selected-run')
+
+        def rows(change):
+            return [dict(name=name, metadata=dict(size=96),
+                         resources=dict(isDirectory=True, isSymbolicLink=False)) | change for name in names]
+
+        for change in ({}, dict(resources=dict(isDirectory=True, isSymbolicLink=True)),
+                       dict(resources=dict(isDirectory='true', isSymbolicLink=False)), dict(metadata=None),
+                       dict(isDirectory=True)):
+            records = iter(rows(change))
+            backend.command = lambda *_: dict(result=dict(files=[next(records)]))
+            with self.subTest(change=change):
+                if not change:
+                    self.assertTrue(backend.slot_present(100))
+                else:
+                    with self.assertRaises(ValueError):
+                        backend.slot_present(100)
+
+    def test_flat_directory_schema_remains_supported_without_inventing_a_size(self):
+        backend = object.__new__(m.DevicectlFiles)
+        backend.selected = 'SELECTED'
+        backend.remote = 'Library/Application Support/rpc-capacity/selected-run'
+        rows = iter(dict(name=name, isDirectory=True, isSymbolicLink=False)
+                    for name in ('Application Support', 'rpc-capacity', 'selected-run'))
+        backend.command = lambda *_: dict(result=dict(files=[next(rows)]))
+        self.assertTrue(backend.slot_present(100))
+
     def test_inbox_retains_full_binding_and_exactly_128_distinct_pins(self):
         self.assertEqual(m.inbox_record(m.protocol.encode(inbox()), bound()), inbox())
         for key, value in (('hostSourceSha', '4' * 40), ('hostPlatform', 'Android'), ('runNonce', '4' * 64),

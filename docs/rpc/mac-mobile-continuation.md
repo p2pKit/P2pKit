@@ -31,7 +31,10 @@ The source includes the opt-in `host256()` and shared readiness I/O from
 
 The checked-in test harness is not proof that a particular phone, signed
 installation, CoreDevice output schema, USB observation deadline or physical
-network has passed. The exact reviewed commit/PR and hosted checks are linked
+network has passed. The file backend accepts the historical flat CoreDevice
+fields and the observed nested `metadata.size`/`resources` fields. Both paths
+still require exact sizes and directory/link flags; incomplete or conflicting
+metadata fails admission. The exact reviewed commit/PR and hosted checks are linked
 from #525. Published [`0.8.0-rc8`](../releases/0.8.0-rc8.md) includes `host256()`
 and shared readiness I/O; immutable rc7 does not. This development campaign still
 requires the exact pinned source below and its source-matched lab preparation,

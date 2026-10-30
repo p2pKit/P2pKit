@@ -50,20 +50,35 @@ def selected_details(value, selected):
     protocol.ios_usb_details(dict(result=dict(devices=[value['result']])), selected)
 
 
+def file_properties(row):
+    """Read the two observed CoreDevice shapes without converting missing/ambiguous flags."""
+    need(type(row) is dict)
+    if 'metadata' not in row and 'resources' not in row:
+        return row  # Historical flat schema; callers still require exact boolean/integer types.
+    need(type(row.get('metadata')) is dict and type(row.get('resources')) is dict and
+         not {'fileSize', 'isDirectory', 'isSymbolicLink'} & set(row),
+         'Incomplete or ambiguous CoreDevice file metadata; preserve it, do not infer flags')
+    return dict(fileSize=row['metadata'].get('size'),
+                isDirectory=row['resources'].get('isDirectory'),
+                isSymbolicLink=row['resources'].get('isSymbolicLink'))
+
+
 def file_inventory(value):
     need(type(value) is dict and type(value.get('result')) is dict)
     rows = value['result'].get('files')
     need(type(rows) is list and len(rows) <= len(FILES) + 1)
     result, seen, scratch = {}, set(), 0
     for row in rows:
+        properties = file_properties(row)
         need(type(row) is dict and type(row.get('name')) is str and
              (row['name'] in FILES or re.fullmatch(ATOMIC_SCRATCH, row['name'])) and
-             row['name'] not in seen and row.get('isDirectory') is False and row.get('isSymbolicLink') is False and
-             type(row.get('fileSize')) is int and 0 <= row['fileSize'] <= protocol.RECORD_LIMIT,
+             row['name'] not in seen and properties.get('isDirectory') is False and
+             properties.get('isSymbolicLink') is False and type(properties.get('fileSize')) is int and
+             0 <= properties['fileSize'] <= protocol.RECORD_LIMIT,
              'Unknown, foreign, linked or unbounded app-container entry; preserve it, do not guess')
         seen.add(row['name'])
         if row['name'] in FILES:
-            result[row['name']] = row['fileSize']
+            result[row['name']] = properties['fileSize']
         else:
             # One serial app-owned atomic publisher can be in flight while
             # telemetry is listed. Never copy, consume or delete its scratch.
@@ -388,7 +403,9 @@ class DevicectlFiles:
             matches = [row for row in rows if row['name'] == name]
             if not matches:
                 return False
-            need(len(matches) == 1 and matches[0].get('isDirectory') is True and matches[0].get('isSymbolicLink') is False,
+            need(len(matches) == 1, 'Selected app control directory is ambiguous')
+            properties = file_properties(matches[0])
+            need(properties.get('isDirectory') is True and properties.get('isSymbolicLink') is False,
                  'Selected app control directory is linked, ambiguous or not a directory')
             parent += '/' + name
         return True
