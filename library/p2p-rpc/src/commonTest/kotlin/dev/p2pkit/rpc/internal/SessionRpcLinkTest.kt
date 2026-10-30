@@ -13,12 +13,18 @@ import dev.p2pkit.core.SessionConnectionInfo
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
+import dev.p2pkit.rpc.RpcApplicationSession
 import dev.p2pkit.rpc.RpcLimits
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.RawSource
@@ -28,6 +34,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertSame
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 private class LinkTestSession(index: Int = 0) : P2pSession {
     override val id = "rpc-test-session-$index"
@@ -68,6 +77,122 @@ private class LinkTestSession(index: Int = 0) : P2pSession {
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionRpcLinkTest {
+    @Test
+    fun scopedWriterRechecksRevocationExpiryAndGenerationAfterSuspendedPolicy() = runTest {
+        for (change in listOf("revoke", "session-expiry", "ticket-expiry", "generation", "disconnect", "trust")) {
+            val session = LinkTestSession()
+            val budget = PayloadBudget(8192)
+            val notificationBudget = PayloadBudget(4096)
+            val clock = RpcClock { testScheduler.currentTime }
+            val applicationSession = RpcApplicationSession(testFingerprint(), "employee", "login",
+                if (change == "session-expiry") 1.milliseconds else Duration.INFINITE, clock)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var trusted = true
+            val guard = RpcSendAuthorization(applicationSession, stillAllowed = { trusted }) {
+                entered.complete(Unit); release.await(); true
+            }
+            val link = SessionRpcLink(session, backgroundScope, budget, notificationBudget, clock)
+            val message = WireMessage(WireKind.Notify, TEST_REQUEST, TEST_INCARNATION, "changed", 1,
+                body = testBody("\"private\"", budget))
+            val ticket = assertNotNull(link.offer(message,
+                if (change == "ticket-expiry") clock.now() + 1 else clock.now() + 10_000,
+                notification = true, authorization = guard))
+            try {
+                link.start({}, {}); runCurrent(); assertTrue(entered.isCompleted)
+                when (change) {
+                    "revoke" -> applicationSession.revoke()
+                    "session-expiry", "ticket-expiry" -> advanceTimeBy(1)
+                    "generation" -> session.connectionInfo.value = SessionConnectionInfo(2)
+                    "disconnect" -> session.state.value = ConnectionState.Reconnecting
+                    "trust" -> trusted = false
+                }
+                release.complete(Unit); runCurrent()
+                assertFalse(ticket.started, "No commitment after $change")
+                assertFalse(ticket.completion.await())
+                assertTrue(session.sentKinds.isEmpty())
+                assertEquals(0L, notificationBudget.retainedBytes.value)
+            } finally { release.complete(Unit); link.close(); runCurrent(); message.release() }
+            assertEquals(0L, budget.retainedBytes.value)
+        }
+    }
+
+    @Test
+    fun closeReleasesDequeuedScopedTicketWhileItsAuthorizerIsSuspended() = runTest {
+        val session = LinkTestSession()
+        val budget = PayloadBudget(8192)
+        val notificationBudget = PayloadBudget(4096)
+        val entered = CompletableDeferred<Unit>()
+        val applicationSession = RpcApplicationSession(testFingerprint(), "employee", "login")
+        val link = SessionRpcLink(session, backgroundScope, budget, notificationBudget, RpcClock { 0 })
+        val message = WireMessage(WireKind.Notify, TEST_REQUEST, TEST_INCARNATION, "changed", 1,
+            body = testBody("\"private\"", budget))
+        val ticket = assertNotNull(link.offer(message, 10_000, notification = true,
+            authorization = RpcSendAuthorization(applicationSession) {
+                entered.complete(Unit); kotlinx.coroutines.awaitCancellation()
+            }))
+        link.start({}, {}); runCurrent(); assertTrue(entered.isCompleted)
+        link.close(); runCurrent(); message.release()
+        assertFalse(ticket.started)
+        assertFalse(ticket.completion.await())
+        assertTrue(session.sentKinds.isEmpty())
+        assertEquals(0L, notificationBudget.retainedBytes.value)
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun authorizerErrorReleasesUnstartedTicketAndPropagatesOriginalError() = runTest {
+        val marker = object : Error("writer authorization fixture") { val owner = Any() }
+        val errors = mutableListOf<Throwable>()
+        val owner = SupervisorJob()
+        val scope = CoroutineScope(coroutineContext + owner + CoroutineExceptionHandler { _, failure ->
+            errors += failure
+        })
+        val session = LinkTestSession()
+        val budget = PayloadBudget(8192)
+        val notificationBudget = PayloadBudget(4096)
+        val applicationSession = RpcApplicationSession(testFingerprint(), "employee", "login")
+        val link = SessionRpcLink(session, scope, budget, notificationBudget, RpcClock { 0 })
+        val message = WireMessage(WireKind.Notify, TEST_REQUEST, TEST_INCARNATION, "changed", 1,
+            body = testBody("\"private\"", budget))
+        val ticket = assertNotNull(link.offer(message, 10_000, notification = true,
+            authorization = RpcSendAuthorization(applicationSession) { throw marker }))
+        try {
+            link.start({}, {}); runCurrent()
+            assertSame(marker, errors.single())
+            assertFalse(ticket.started)
+            assertFalse(ticket.completion.await())
+            assertTrue(session.sentKinds.isEmpty())
+            assertEquals(0L, notificationBudget.retainedBytes.value)
+        } finally { link.close(); owner.cancelAndJoin(); message.release() }
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun sessionRevocationNeverWaitsForAlreadyCommittedNetworkWrite() = runTest {
+        val session = LinkTestSession()
+        val gate = CompletableDeferred<Unit>()
+        session.writeGate = gate
+        val budget = PayloadBudget(8192)
+        val applicationSession = RpcApplicationSession(testFingerprint(), "employee", "login")
+        val link = SessionRpcLink(session, backgroundScope, budget, PayloadBudget(4096), RpcClock { 0 })
+        val message = WireMessage(WireKind.Notify, TEST_REQUEST, TEST_INCARNATION, "changed", 1,
+            body = testBody("\"private\"", budget))
+        val guard = RpcSendAuthorization(applicationSession) { true }
+        val first = assertNotNull(link.offer(message, 10_000, notification = true, authorization = guard))
+        try {
+            link.start({}, {}); runCurrent(); assertTrue(first.started)
+            applicationSession.revoke()
+            val second = assertNotNull(link.offer(message, 10_000, notification = true, authorization = guard))
+            gate.complete(Unit); runCurrent()
+            assertTrue(first.completion.await())
+            assertFalse(second.started)
+            assertFalse(second.completion.await())
+            assertEquals(listOf(WireKind.Notify), session.sentKinds)
+        } finally { gate.complete(Unit); link.close(); runCurrent(); message.release() }
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
     @Test
     fun responsesAndControlTakePriorityWithoutPreemptingAnActiveNotification() = runTest {
         val session = LinkTestSession()

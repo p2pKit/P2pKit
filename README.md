@@ -38,10 +38,14 @@ must not be described as evidence for the released binaries.
   presentation.
 
 P2pKit does not provide internet signaling, NAT traversal, relays, accounts,
-rooms, or application-level authorization. Both peers must already be mutually
+rooms, or built-in application authorization policies. Both peers must already be mutually
 reachable on the LAN. Guest/enterprise Wi-Fi may block multicast or peer TCP.
 
 ## Optional organization-LAN RPC
+
+Newer source adds [immutable application-session authorization](docs/rpc/application-session-authorization.md)
+for employee-private RPC on shared trusted devices. The opt-in APIs are not present in the published rc7;
+existing peer-only routes remain device-level. Use a matching official release containing the new contract.
 
 The new optional [`p2p-rpc`](docs/rpc/README.md) module adds one explicitly
 selected authenticated host, dial-only clients, registered typed procedures,

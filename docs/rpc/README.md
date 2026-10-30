@@ -67,6 +67,15 @@ loading, reflection-based invocation, or business synchronization framework.
 Existing durable **file transfer is not durable RPC**; file-transfer paths are
 disabled in the RPC-owned restricted session.
 
+## Private application sessions
+
+Source after rc7 adds opt-in [application-session authorization](application-session-authorization.md)
+for employees sharing one trusted device. `registerScoped()` and `tryNotifyScoped()` preserve original
+verified login/resource facts through retained results, controls and queued output, with an awaited
+revocation-versus-commitment fence. Legacy registrations/notifications intentionally remain device-only.
+Credential validation, current employee/resource policy and durable business recovery remain the app's
+responsibility. The published rc7 artifacts do not include these new APIs.
+
 ## Dependency and source-workspace integration
 
 Use the matching published core/LAN/RPC version from Maven Central:

@@ -79,7 +79,20 @@ public class RpcCallContext internal constructor(
     public val hostIncarnation: String? = null,
     /** Local monitoring identity, or null if disabled/omitted at capacity; never an authentication token. */
     public val hostObservationId: Long? = null,
-)
+) {
+    private var capturedAuthorizationScope: RpcAuthorizationScope? = null
+
+    /** Original verified application facts for registerScoped(); null for legacy device-only routes. */
+    public val authorizationScope: RpcAuthorizationScope? get() = capturedAuthorizationScope
+
+    // Preserve the existing constructor/default ABI. Only construction can install an original scope.
+    internal constructor(
+        peer: PeerIdentity, requestId: RpcRequestId, remainingMillis: Long,
+        hostIncarnation: String?, hostObservationId: Long?, authorizationScope: RpcAuthorizationScope,
+    ) : this(peer, requestId, remainingMillis, hostIncarnation, hostObservationId) {
+        capturedAuthorizationScope = authorizationScope
+    }
+}
 
 internal fun validateRpcName(name: String, version: Int) {
     require(name.length in 1..96 && name.first() in 'a'..'z' &&

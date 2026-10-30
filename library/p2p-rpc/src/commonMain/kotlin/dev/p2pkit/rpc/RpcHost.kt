@@ -163,7 +163,10 @@ public class RpcHost private constructor(
         RpcEndpoint(lan.localAddress, info.port)
     }
 
-    /** Enqueued means local acceptance only. The application chooses who may receive each business update. */
+    /**
+     * Device-only best-effort update; no employee/session isolation. Use tryNotifyScoped for private
+     * application-session output. Enqueued means local acceptance, never remote disclosure approval.
+     */
     @Throws(Exception::class)
     public suspend fun <T> tryNotify(
         peer: PeerFingerprint, notification: RpcNotification<T>, value: T,
@@ -187,6 +190,32 @@ public class RpcHost private constructor(
                 RpcNotifyResult.DroppedAtCapacity
             } else RpcNotifyResult.Enqueued
         } finally { message.release() }
+    }
+
+    /**
+     * Explicit private update for an application-verified session. Fresh deny-by-default authorization
+     * runs before encoding and again at owned writer commitment. Session revocation/expiry wins against
+     * uncommitted tickets, without revoking device trust. Enqueued is not proof of later delivery.
+     */
+    @Throws(Exception::class)
+    public suspend fun <T> tryNotifyScoped(
+        authorizationScope: RpcAuthorizationScope,
+        notification: RpcNotification<T>,
+        value: T,
+        authorize: suspend (RpcAuthorizationContext) -> Boolean = { false },
+    ): RpcNotifyResult {
+        require(notificationDescriptors[notification.key] === notification) { "Register and reuse this notification" }
+        return engine.tryNotifyScoped(authorizationScope, notification, value, authorize)
+    }
+
+    /**
+     * Fence this application's original login, then request cancellation of matching owned work.
+     * Await before switching employees/policy. Does not close the shared device's authenticated link.
+     * Already committed output or noncooperative business effects still need application cleanup.
+     */
+    @Throws(Exception::class)
+    public suspend fun revokeApplicationSession(session: RpcApplicationSession) {
+        engine.revokeApplicationSession(session)
     }
 
     /** Cancels owned work; non-cooperative application handlers may retain resources until they actually exit. */

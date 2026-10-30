@@ -177,6 +177,50 @@ class CandidateTests(unittest.TestCase):
         self.assertNotIn(b"synthetic ignored build output", raw_manifest + patch_bytes)
         self.assert_retired()
 
+    def test_rpc_candidate_changes_only_rpc_baselines_and_uses_rpc_tasks(self):
+        files = A.api_files("p2p-rpc")
+        for name in files:
+            path = self.controller / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(api(name.endswith(".klib.api")).replace(b"p2pkit.core", b"p2pkit.rpc")
+                             .replace(b"p2pkit/core", b"p2pkit/rpc"))
+        self.command(self.controller, "add", ".")
+        self.command(self.controller, "commit", "--quiet", "-m", "Synthetic RPC baseline")
+        self.sha = A.git(self.controller, "rev-parse", "HEAD").decode().strip()
+        original = A.snapshot(self.controller, "p2p-rpc")
+        calls = []
+        def generation(argv, **options):
+            calls.append(argv)
+            if argv[-1] != "--stop" and argv[0] != "bash":
+                self.assertEqual([":p2p-rpc:updateKotlinAbi", ":p2p-rpc:updateAndroidAbi"], argv[-2:])
+                for name in files:
+                    (Path(options["cwd"]) / name).write_bytes(
+                        api(name.endswith(".klib.api"), True).replace(b"p2pkit.core", b"p2pkit.rpc")
+                        .replace(b"p2pkit/core", b"p2pkit/rpc"))
+            return subprocess.CompletedProcess(argv, 0)
+        with contextlib.redirect_stdout(self.log):
+            result = A.execute(self.controller, self.sha, self.output, self.temporary,
+                               module="p2p-rpc", run=generation)
+        self.assertEqual("RPC_API_CANDIDATE_REVIEW_ONLY", result["scope"])
+        self.assertEqual("p2p-rpc", result["module"])
+        self.assertEqual(list(files), result["changedFiles"])
+        self.assertEqual("rpc-api-candidate.patch", result["patch"]["path"])
+        self.assertEqual({"rpc-api-candidate.patch", "rpc-api-candidate.json"},
+                         {path.name for path in self.output.iterdir()})
+        self.command(self.controller, "apply", "--check", "-",
+                     input=(self.output / "rpc-api-candidate.patch").read_bytes())
+        self.assertEqual(original, A.snapshot(self.controller, "p2p-rpc"))
+        self.assertFalse(list(self.temporary.glob("rpc-api-worktree-*")))
+        self.assertEqual(4, len(calls))
+
+    def test_unsupported_module_refuses_before_git_or_execution(self):
+        for module in ("other", "../p2p-core", "p2p-rpc; echo wrong", "p2p-rpc\n"):
+            with self.subTest(module=module), self.assertRaisesRegex(A.CandidateError, "MODULE"):
+                A.execute(self.controller, self.sha, self.output, self.temporary,
+                          module=module, run=self.model())
+        self.assertFalse(self.calls)
+        self.assertFalse(self.output.exists())
+
     def test_successful_unchanged_generation_does_not_invent_an_api_delta(self):
         result = self.execute(unchanged=True)
         self.assertEqual("UNCHANGED", result["outcome"])
@@ -390,17 +434,21 @@ class RequestAndWorkflowTests(unittest.TestCase):
         self.assertEqual(2, failure.exception.code)
         execute.assert_not_called()
 
-    def test_workflow_has_one_exact_source_input_and_only_read_permissions(self):
+    def test_workflow_has_exact_source_and_bounded_module_inputs_and_only_read_permissions(self):
         workflow, job = self.workflow, self.job
         events = workflow.get("on", workflow.get("true"))
         self.assertEqual(["push", "workflow_dispatch"], list(events))
         inputs = events["workflow_dispatch"]["inputs"]
-        self.assertEqual(["source_sha"], list(inputs))
+        self.assertEqual(["source_sha", "module"], list(inputs))
+        self.assertEqual("choice", inputs["module"]["type"])
+        self.assertEqual("p2p-core", inputs["module"]["default"])
+        self.assertEqual(["p2p-core", "p2p-rpc"], inputs["module"]["options"])
         self.assertEqual("string", inputs["source_sha"]["type"])
         self.assertIs(True, inputs["source_sha"]["required"])
         self.assertNotIn("default", inputs["source_sha"])
         self.assertEqual({"contents": "read", "actions": "read"}, workflow["permissions"])
-        self.assertEqual({"group": "prepare-core-api-candidate", "cancel-in-progress": False}, workflow["concurrency"])
+        self.assertEqual({"group": "prepare-api-candidate-${{ github.ref }}-${{ inputs.module || 'p2p-core' }}",
+                          "cancel-in-progress": False}, workflow["concurrency"])
         self.assertEqual(["register", "generate"], list(workflow["jobs"]))
         self.assertEqual("${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' }}", job["if"])
         self.assertEqual("macos-15-intel", job["runs-on"])
@@ -467,7 +515,8 @@ class RequestAndWorkflowTests(unittest.TestCase):
         self.assertLess(setup, generation)
         self.assertEqual("python3 -B scripts/ci_evidence.py --component api-candidate --timeout-seconds 5400 "
                          '--output-dir "$RUNNER_TEMP/api-candidate-evidence" -- python3 -B scripts/prepare-api-candidate.py '
-                         '--source-sha "$API_CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/core-api-candidate"\n',
+                         '--source-sha "$API_CANDIDATE_SOURCE_SHA" --module "$API_CANDIDATE_MODULE" '
+                         '--output "$RUNNER_TEMP/$API_CANDIDATE_PREFIX-api-candidate"\n',
                          steps[generation]["run"])
         for suffix in ("SHA256", "FINGERPRINT"):
             self.assertEqual("${{ vars.CI_EVIDENCE_RECIPIENT_" + suffix + " }}",
@@ -481,8 +530,9 @@ class RequestAndWorkflowTests(unittest.TestCase):
         self.assertEqual("${{ success() }}", review["if"])
         self.assertEqual(["${{ runner.temp }}/api-candidate-evidence/" + name for name in
                           ("manifest.json", "evidence.tar.gz.gpg", "failure.json")], evidence["with"]["path"].splitlines())
-        self.assertEqual(["${{ runner.temp }}/core-api-candidate/" + name for name in
-                          ("core-api-candidate.patch", "core-api-candidate.json")], review["with"]["path"].splitlines())
+        self.assertEqual(["${{ runner.temp }}/${{ env.API_CANDIDATE_PREFIX }}-api-candidate/" + name for name in
+                          ("${{ env.API_CANDIDATE_PREFIX }}-api-candidate.patch",
+                           "${{ env.API_CANDIDATE_PREFIX }}-api-candidate.json")], review["with"]["path"].splitlines())
         for upload in uploads:
             self.assertEqual(14, upload["with"]["retention-days"])
             self.assertEqual("error", upload["with"]["if-no-files-found"])

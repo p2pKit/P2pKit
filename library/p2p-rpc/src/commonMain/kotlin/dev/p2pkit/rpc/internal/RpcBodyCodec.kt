@@ -76,7 +76,9 @@ internal object RpcBodyCodec {
     fun <T> decode(
         serializer: KSerializer<T>, body: OwnedBytes, limit: Int, budget: PayloadBudget,
         reservation: PayloadLease? = null,
+        releaseReservation: Boolean = true,
     ): T {
+        require(releaseReservation || reservation != null) { "A retained decode allowance needs an explicit owner" }
         if (body.size > limit) invalid(RpcFailurePhase.Decoding)
         val scratch = reservation ?: budget.tryReserve(4L * body.size + 32_768)
             ?: throw RpcFailure(RpcFailureKind.Overloaded, RpcFailurePhase.Decoding)
@@ -90,7 +92,7 @@ internal object RpcBodyCodec {
             if (failure is RpcFailure) throw failure
             invalid(RpcFailurePhase.Decoding)
         } finally {
-            scratch.release()
+            if (releaseReservation) scratch.release()
         }
     }
 

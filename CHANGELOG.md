@@ -5,6 +5,12 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 
 ## Unreleased source
 
+- Add opt-in immutable application-session RPC authorization for shared trusted
+  devices (#528). Preserve the verified original login/resource through execution,
+  retained controls and queued success/error/notification disclosure; awaited
+  revocation fences new commitments without changing legacy device-only routes,
+  the wire, or existing capacity profiles. Applications still validate credentials
+  and own private presentation and durable business recovery.
 - Add optional selected-outbound-route SPI and per-session protection status.
   Retain at most64 exact numeric routes for originally authorized secure
   outgoing sessions, outside the untrusted discovery budgets. Fence original

@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.rpc.internal.RegisteredProcedure
 import dev.p2pkit.rpc.internal.registeredProcedure
+import dev.p2pkit.rpc.internal.registeredScopedProcedure
 import dev.p2pkit.transport.lan.OrganizationLan
 
 /** No raw P2pKit/security/transport customization that could bypass the RPC profile. */
@@ -48,6 +49,28 @@ public class RpcHostConfiguration internal constructor() : RpcConfiguration() {
     ) {
         require(procedure.key !in procedures) { "Duplicate procedure descriptor" }
         procedures[procedure.key] = registeredProcedure(procedure, authorize, handler)
+    }
+
+    /**
+     * Opt-in application-session isolation without changing the RPC wire or existing registrations.
+     * Authenticate validates the typed request's application credentials and returns immutable facts;
+     * RPC itself never treats a request-body employee/session claim as authenticated. Return the same
+     * RpcApplicationSession instance for one verified login, with a bounded per-request resource.
+     *
+     * Authorize is deny-by-default and freshly checks the ORIGINAL scope before execution, duplicate/
+     * status/cancel/receipt handling, and success/error/bodyless output, including at writer commitment.
+     * Both callbacks must be fast and cancellation-cooperative; the owned five-second bound and shorter
+     * request allowance still apply. Revoke and await the original session before switching employees.
+     * Already committed output/business effects need application presentation cleanup and recovery.
+     */
+    public fun <Q, R, E> registerScoped(
+        procedure: RpcProcedure<Q, R, E>,
+        authenticate: suspend (PeerIdentity, Q) -> RpcAuthorizationScope?,
+        authorize: suspend (RpcAuthorizationContext) -> Boolean = { false },
+        handler: suspend (RpcCallContext, Q) -> RpcReply<R, E>,
+    ) {
+        require(procedure.key !in procedures) { "Duplicate procedure descriptor" }
+        procedures[procedure.key] = registeredScopedProcedure(procedure, authenticate, authorize, handler)
     }
 }
 

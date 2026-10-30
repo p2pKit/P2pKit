@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a review-only core API patch in a fresh detached exact-source worktree.
+"""Generate a review-only module API patch in a fresh detached exact-source worktree.
 
 Run only through the reviewed hosted workflow and ci_evidence.py. No dependency
 writer, arbitrary Gradle task, baseline application, commit or publication is
@@ -20,12 +20,18 @@ import tempfile
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ".github/workflows/prepare-api-candidate.yml"
-API_FILES = (
-    "library/p2p-core/api/p2p-core.klib.api",
-    "library/p2p-core/api/jvm/p2p-core.api",
-    "library/p2p-core/api/android/p2p-core.api",
-    "library/p2p-core/api/android-bcv/p2p-core.api",
-)
+SUPPORTED_MODULES = ("p2p-core", "p2p-rpc")
+
+
+def api_files(module="p2p-core"):
+    require(module in SUPPORTED_MODULES, "MODULE")
+    return (f"library/{module}/api/{module}.klib.api", f"library/{module}/api/jvm/{module}.api",
+            f"library/{module}/api/android/{module}.api", f"library/{module}/api/android-bcv/{module}.api")
+
+
+# Keep the existing core defaults; a reviewed RPC API addition uses the same helper, not a new gate.
+API_FILES = ("library/p2p-core/api/p2p-core.klib.api", "library/p2p-core/api/jvm/p2p-core.api",
+             "library/p2p-core/api/android/p2p-core.api", "library/p2p-core/api/android-bcv/p2p-core.api")
 TASKS = (":p2p-core:updateKotlinAbi", ":p2p-core:updateAndroidAbi")
 GRADLE_OPTIONS = ("--no-daemon", "--console=plain", "--no-build-cache",
                   "--no-configuration-cache", "--dependency-verification", "strict",
@@ -75,7 +81,7 @@ def regular_file(root, name, limit):
     return raw, stat.S_IMODE(info.st_mode)
 
 
-def snapshot(root):
+def snapshot(root, module="p2p-core"):
     """Check real tracked bytes too; Git's assume-unchanged flags cannot hide writes."""
     result, total = {}, 0
     for row in git(root, "ls-files", "--stage", "-z").split(b"\0"):
@@ -91,14 +97,15 @@ def snapshot(root):
         total += len(raw)
         require(len(result) < 20000 and total <= 256 * 1024 * 1024, "SOURCE_LIMIT")
         result[name] = (mode, blob, permissions, hashlib.sha256(raw).hexdigest())
-    require(result and set(API_FILES) <= result.keys(), "MISSING_BASELINE")
+    require(result and set(api_files(module)) <= result.keys(), "MISSING_BASELINE")
     return result
 
 
-def api_bytes(root):
+def api_bytes(root, module="p2p-core"):
     """Bounded dump-shape checks, not a replacement for the ABI compatibility tasks."""
     result = {}
-    for name in API_FILES:
+    package = "dev.p2pkit." + module.removeprefix("p2p-")
+    for name in api_files(module):
         raw, _ = regular_file(root, name, MAX_API_BYTES)
         text = raw.decode("utf-8")
         require(raw and raw.endswith(b"\n") and not re.search(r"[\x00-\x08\x0b-\x1f\x7f]", text), "INVALID_API")
@@ -111,10 +118,10 @@ def api_bytes(root):
         if name.endswith(".klib.api"):
             require(text.startswith("// Klib ABI Dump\n") and
                     "// Targets: [iosArm64, iosSimulatorArm64, iosX64]\n" in text and
-                    re.search(r"^[^\n]*\b(class|interface|object) dev\.p2pkit\.core/[^\n]+ \{$", code, re.M),
+                    re.search(r"^[^\n]*\b(class|interface|object) " + re.escape(package) + r"/[^\n]+ \{$", code, re.M),
                     "INVALID_NATIVE_API")
         else:
-            require(re.search(r"^public [^\n]*\b(class|interface) dev/p2pkit/core/[^\n]+ \{$", code, re.M),
+            require(re.search(r"^public [^\n]*\b(class|interface) " + re.escape(package.replace(".", "/")) + r"/[^\n]+ \{$", code, re.M),
                     "INVALID_JVM_API")
         result[name] = raw
     return result
@@ -122,7 +129,8 @@ def api_bytes(root):
 
 def review_patch(before, after):
     parts = []
-    for name in API_FILES:
+    require(before.keys() == after.keys(), "API_ROSTER_CHANGED")
+    for name in before:
         parts.extend(difflib.unified_diff(before[name].decode().splitlines(keepends=True),
                                          after[name].decode().splitlines(keepends=True),
                                          fromfile="a/" + name, tofile="b/" + name, n=3))
@@ -131,65 +139,68 @@ def review_patch(before, after):
     return patch
 
 
-def execute(root, sha, output, temporary, *, run=subprocess.run):
+def execute(root, sha, output, temporary, *, run=subprocess.run, module="p2p-core"):
+    files = api_files(module)
+    tasks = (f":{module}:updateKotlinAbi", f":{module}:updateAndroidAbi")
+    prefix = module.removeprefix("p2p-")
     root, temporary = root.resolve(strict=True), temporary.resolve(strict=True)
     output = output.absolute()
     require(output.parent.resolve(strict=True) == temporary and root != temporary and
             root not in temporary.parents and not output.exists() and not output.is_symlink(), "OUTPUT_PATH")
     identity = source(root, sha)
-    controller = snapshot(root)
-    state = Path(tempfile.mkdtemp(prefix="core-api-worktree-", dir=temporary))
+    controller = snapshot(root, module)
+    state = Path(tempfile.mkdtemp(prefix=prefix + "-api-worktree-", dir=temporary))
     candidate = state / "source"
     git(root, "worktree", "add", "--detach", str(candidate), sha)
     try:
         require(source(candidate, sha) == identity, "WORKTREE_SOURCE")
-        before = snapshot(candidate)
+        before = snapshot(candidate, module)
         # Checkout permissions may reflect a different umask. Git modes and real
         # bytes must match; each worktree's full permissions stay fixed thereafter.
         require(before.keys() == controller.keys() and all(
             value[:2] == controller[name][:2] and value[3] == controller[name][3]
             for name, value in before.items()), "WORKTREE_SOURCE")
-        old_api = api_bytes(candidate)
+        old_api = api_bytes(candidate, module)
         for check in ("check-gradle-wrapper.sh", "check-dependency-verification.sh"):
             require(run(["bash", str(candidate / "scripts" / check)], cwd=candidate,
                         stdin=subprocess.DEVNULL, check=False).returncode == 0, "PREREQUISITE_FAILED")
         try:
-            generated = run([str(candidate / "gradlew"), *GRADLE_OPTIONS, *TASKS],
+            generated = run([str(candidate / "gradlew"), *GRADLE_OPTIONS, *tasks],
                             cwd=candidate, stdin=subprocess.DEVNULL, check=False).returncode
         finally:
             stopped = run([str(candidate / "gradlew"), "--stop"], cwd=candidate,
                           stdin=subprocess.DEVNULL, timeout=90, check=False).returncode
         require(generated == 0 and stopped == 0, "GENERATION_OR_STOP_FAILED")
         require(source(candidate, sha, clean=False) == identity, "WORKTREE_SOURCE")
-        after = snapshot(candidate)
+        after = snapshot(candidate, module)
         require(before.keys() == after.keys(), "SOURCE_ROSTER_CHANGED")
         for name, original in before.items():
             require(original[:3] == after[name][:3], "SOURCE_MODE_OR_INDEX_CHANGED")
-            require(original[3] == after[name][3] or name in API_FILES, "NON_API_SOURCE_CHANGED")
-        new_api = api_bytes(candidate)
+            require(original[3] == after[name][3] or name in files, "NON_API_SOURCE_CHANGED")
+        new_api = api_bytes(candidate, module)
         patch = review_patch(old_api, new_api)
     finally:
         # This exact directory was created by this invocation, never a caller's worktree.
         git(root, "worktree", "remove", "--force", str(candidate))
         state.rmdir()
-    require(source(root, sha) == identity and snapshot(root) == controller, "CONTROLLER_CHANGED")
-    changes = [name for name in API_FILES if old_api[name] != new_api[name]]
+    require(source(root, sha) == identity and snapshot(root, module) == controller, "CONTROLLER_CHANGED")
+    changes = [name for name in files if old_api[name] != new_api[name]]
     manifest = {
-        "schema": 1, "scope": "CORE_API_CANDIDATE_REVIEW_ONLY", "source": identity,
-        "workflow": {"path": WORKFLOW, "commit": sha}, "tasks": list(TASKS),
+        "schema": 1, "scope": prefix.upper() + "_API_CANDIDATE_REVIEW_ONLY", "module": module, "source": identity,
+        "workflow": {"path": WORKFLOW, "commit": sha}, "tasks": list(tasks),
         "dependencyVerification": "strict", "dependencyWritesAllowed": False,
         "requiresReviewBeforeApply": True, "releaseQualified": False,
         "outcome": "CHANGED" if changes else "UNCHANGED", "changedFiles": changes,
         "files": [{"path": name, "beforeSha256": hashlib.sha256(old_api[name]).hexdigest(),
                    "afterSha256": hashlib.sha256(new_api[name]).hexdigest(),
                    "beforeBytes": len(old_api[name]), "afterBytes": len(new_api[name])}
-                  for name in API_FILES],
-        "patch": {"path": "core-api-candidate.patch", "bytes": len(patch),
+                  for name in files],
+        "patch": {"path": prefix + "-api-candidate.patch", "bytes": len(patch),
                   "sha256": hashlib.sha256(patch).hexdigest()},
     }
     raw_manifest = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     output.mkdir(mode=0o700)
-    for name, raw in (("core-api-candidate.patch", patch), ("core-api-candidate.json", raw_manifest)):
+    for name, raw in ((prefix + "-api-candidate.patch", patch), (prefix + "-api-candidate.json", raw_manifest)):
         with (output / name).open("xb") as stream:
             stream.write(raw)
     # Captured by ci_evidence: bind the separate review artifact to the encrypted original log.
@@ -212,11 +223,12 @@ def validate_request(sha, environment):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--module", choices=SUPPORTED_MODULES, default="p2p-core")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         validate_request(args.source_sha, os.environ)
-        execute(ROOT, args.source_sha, args.output, Path(os.environ["RUNNER_TEMP"]))
+        execute(ROOT, args.source_sha, args.output, Path(os.environ["RUNNER_TEMP"]), module=args.module)
     except (CandidateError, OSError, UnicodeError, subprocess.SubprocessError, KeyError) as error:
         code = str(error) if type(error) is CandidateError else type(error).__name__
         print("API_CANDIDATE FAIL " + code, file=sys.stderr)

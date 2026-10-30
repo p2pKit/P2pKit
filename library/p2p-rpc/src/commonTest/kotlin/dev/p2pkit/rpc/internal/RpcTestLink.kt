@@ -25,22 +25,27 @@ internal class RpcTestLink(index: Int = 0, override val admission: PeerAdmission
 
     override suspend fun offer(
         message: WireMessage, expiresAt: Long, notification: Boolean, onStart: () -> Unit,
+        authorization: RpcSendAuthorization?,
     ): SendTicket? {
         if (transportState.value != ConnectionState.Connected) return null
         val ticket = SendTicket(
             message.retained(), expiresAt, generation.value.generation, notification,
-            onStart = { beforeStart(); onStart() },
+            onStart = { beforeStart(); onStart() }, authorization = authorization,
         )
         if (paused) queued += ticket else deliver(ticket)
         return ticket
     }
 
     suspend fun deliver(ticket: SendTicket) {
-        if (!ticket.begin()) return
+        var success = false
         try {
+            if (!ticket.beginAuthorized { transportState.value == ConnectionState.Connected &&
+                    generation.value.generation == ticket.generation
+            }) return
             sent += ticket.message.retained()
             onSend(ticket.message)
-        } finally { ticket.finish(true) }
+            success = true
+        } finally { ticket.finish(success) }
     }
 
     fun clearSent() { sent.forEach { it.release() }; sent.clear() }
