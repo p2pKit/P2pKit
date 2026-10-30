@@ -185,7 +185,7 @@ def campaign_environment(original, state):
     return value
 
 
-def retired_attempt(attempt, result):
+def bound_attempt_result(attempt, result):
     """A failed workload may retire safely; this grants reuse, never a test pass."""
     need(type(result) is dict and result.get("status") in
          ("FAIL", "MECHANICAL_PASS_PENDING_NETWORK_AND_RESOURCE_REVIEW") and
@@ -200,6 +200,10 @@ def retired_attempt(attempt, result):
          bound["hostPlatform"] == ("Android" if attempt["platform"] == "android" else "Ios") and
          bound["runLabel"] == attempt["runLabel"] and bound["hostSourceSha"] == attempt["source"]["commit"] and
          bound["hostArtifactSha256"] == attempt["hostArtifactSha256"], "Foreign phone/installed product/run")
+
+
+def retired_attempt(attempt, result):
+    bound_attempt_result(attempt, result)
     need(result.get("phoneCleanup") == dict(runtimeClosed=True, clientPinsRemoved=True, controlHealthy=True) and
          type(result.get("inboxSha256")) is str and re.fullmatch("[a-f0-9]{64}", result["inboxSha256"]),
          "Actual exact-inbox phone retirement is not established")
@@ -485,7 +489,7 @@ class Session:
         result = private_json(self.state / "work" / ("mobile-control-" + args.run_label) / "result.json")
         self.retire_pending(args.platform, attempt, result, proof)
         need(proof["finalExitCode"] == 0 and result["status"] == "MECHANICAL_PASS_PENDING_NETWORK_AND_RESOURCE_REVIEW" and
-             not result["errors"], "Attempt failed but healthy closure was retained; retry only this phase with a NEW label")
+             not result["errors"], "Attempt failed; original evidence and retirement scope retained; use a NEW label")
         print("ATTEMPT_COMPLETE; inspect the retained phone/client results before any physical qualification claim")
 
     def retire_pending(self, phone, attempt, result, proof):
@@ -497,16 +501,41 @@ class Session:
              proof.get("gradleHome") == str(self.state / "gradle-home"),
              "Only this session's original finalized native invocation can establish retirement")
         self.checker.validate(proof, proof["finalExitCode"], attempt["purpose"], ROOT, ROOT / "gradlew", attempt["argv"])
-        authority = retired_attempt(attempt, result)
+        if result.get("deviceControlStarted") is False:
+            bound_attempt_result(attempt, result)
+            need(result["status"] == "FAIL" and result.get("usbCommands") == [] and
+                 result.get("phoneSamples") == [] and
+                 not any(key in result for key in ("inboxSha256", "phoneCleanup", "installationAccepted",
+                                                   "developmentSlotLaunchAccepted", "measurement", "thermalAbort")),
+                 "No-contact retirement requires an untouched prerequisite rejection")
+            control = self.state / "work" / ("mobile-control-" + attempt["runLabel"])
+            need(not (control / "device-control-started.json").exists() and
+                 not (control / "device-control-started.json").is_symlink(), "Device control was attempted")
+            for directory in (control / "commands", control / "usb",
+                              self.state / "work" / ("mobile-client-" + attempt["runLabel"])):
+                private(directory)
+                need(not any(directory.iterdir()), "Phone or generator dispatch cannot be retired as untouched")
+            errors = result.get("errors")
+            need(type(errors) is list and errors and all(type(row) is dict and row.get("phase") in
+                 ("execution", "generator-final-observation") for row in errors), "Other cleanup failure is unqualified")
+            authority = None  # Preserve any prior installed continuation exactly.
+        else:
+            authority = retired_attempt(attempt, result)
         pending = self.state / "private" / (phone + "-pending.json")
         saved = artifact(pending)
         original = private_json(pending)
         attempt_path = Path(original["attempt"])
         need(private_json(attempt_path) == attempt and artifact(attempt_path)["sha256"] == original["sha256"],
              "Pending attempt was replaced; retain for diagnosis")
-        latest = self.state / "private" / (phone + "-latest.json")
-        module("mac_campaign_resume", "run-rpc-capacity-lab.py").write_private(
-            latest, (json.dumps(authority) + "\n").encode(), replace=latest.exists())
+        if authority is None:
+            new_json(self.state / "private" / ("undispatched-" + phone + "-" + attempt["runLabel"] + ".json"),
+                     dict(scope="PREREQUISITE_REJECTION_NO_DEVICE_CONTROL", source=self.source,
+                          runLabel=attempt["runLabel"], originalStatus=result["status"],
+                          originalReceiptSha256=artifact(Path(attempt["receipt"]))["sha256"], physicalQualified=False))
+        else:
+            latest = self.state / "private" / (phone + "-latest.json")
+            module("mac_campaign_resume", "run-rpc-capacity-lab.py").write_private(
+                latest, (json.dumps(authority) + "\n").encode(), replace=latest.exists())
         need(artifact(pending) == saved, "Pending lease changed during retirement")
         pending.unlink()  # Only this original lease; all attempt/results/receipts remain.
         sync_directory(pending.parent)
@@ -529,7 +558,7 @@ class Session:
         result = private_json(self.state / "work" / ("mobile-control-" + attempt["runLabel"]) / "result.json")
         proof = private_json(Path(attempt["receipt"]))
         self.retire_pending(phone, attempt, result, proof)
-        print("HEALTHY_RETIREMENT_VERIFIED; original " + result["status"] + " retained, not promoted to PASS")
+        print("ORIGINAL_ATTEMPT_RETIREMENT_VERIFIED; original " + result["status"] + " retained, not promoted to PASS")
 
 
 def main():

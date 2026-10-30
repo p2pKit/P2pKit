@@ -205,7 +205,8 @@ class Run:
         self.result = dict(schema=int(self.bound['schema']), scope=self.scope, mode=self.mode, source=self.context['source'],
             harnessSource=self.harness_source, harnessSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             settingsSha256=hashlib.sha256(raw).hexdigest(), status='FAIL', foundationStatus='NOT_READY',
-            physicalLanQualified=False, mobileCapacityQualified=False, nativeCommands={}, errors=[],
+            physicalLanQualified=False, mobileCapacityQualified=False, deviceControlStarted=False,
+            nativeCommands={}, errors=[],
             generatorBefore=self.initial_generator_snapshot())
         if self.bound['schema'] == '2':
             self.result['clientCount'] = self.client_count
@@ -262,7 +263,7 @@ class Run:
         need(re.findall(rb'(?m)^\s*java\.specification\.version = ([0-9]+)\s*$', properties) == [b'17'] and
              re.findall(rb'(?m)^\s*os\.arch = (\S+)\s*$', properties) in architectures,
              'Actual native JVM17 architecture must match the admitted generator')
-        # Keep the existing 125-second, <100ms-gap, >=6GiB, no-balloon preflight.
+        # Keep125seconds and <100ms gaps; memory uses the explicit owner policy.
         if self.native_host == 'macos-arm64':
             clock_argv = [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
                           str(self.state / 'work' / ('mobile-clock-' + self.config['runLabel']))]
@@ -293,12 +294,19 @@ class Run:
     def prerequisites(self):
         self.generator_prerequisites()
         self.result['adbSha256'] = hashlib.sha256(evidence.bounded(Path(self.values['adb']), 64 * 1024 * 1024)).hexdigest()
+        self.begin_device_control()
         self.phone.start()
         print('Authorize the new private USB key on the selected test phone; no RPC readiness timer has started.', flush=True)
         self.phone.await_authorization()
         apk = getattr(self.args, 'install_android_apk', None)
         if apk is not None:
             self.result['installationAccepted'] = self.phone.install_app(apk)
+
+    def begin_device_control(self):
+        # Persist before the first device command. A partial/failed publication
+        # blocks no-contact recovery; a result flag alone is never authority.
+        self.runner.write_new_json(self.control / 'device-control-started.json', self.bound)
+        self.result['deviceControlStarted'] = True
 
     def launch(self):
         self.lab.write_private(self.directory / 'config.txt', self.lab.encode(self.config))

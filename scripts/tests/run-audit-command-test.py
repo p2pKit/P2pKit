@@ -33,6 +33,7 @@ sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import audit_control_suite
 import hosted_windows_files as windows_files
 
 SPEC = importlib.util.spec_from_file_location("audit_runner", SCRIPTS / "run-audit-command.py")
@@ -6699,21 +6700,8 @@ def main():
         parser.error("Requested host does not match this native interpreter")
     FIXTURE_PARENT = validated_fixture_parent(args.fixture_parent, args.evidence_root)
     EVIDENCE_ROOT = allocate_evidence_root(args.evidence_root)
-    native = {"Linux": LinuxNativeTests, "Darwin": DarwinNativeTests, "Windows": WindowsNativeTests}.get(
-        __import__("platform").system())
-    if native is None:
-        parser.error("No native ownership fixture suite for this host")
-    suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(PurePolicyTests),
-                               unittest.defaultTestLoader.loadTestsFromTestCase(CapturePolicyTests),
-                               unittest.defaultTestLoader.loadTestsFromTestCase(DeadlinePolicyTests),
-                               unittest.defaultTestLoader.loadTestsFromTestCase(DarwinObservationTests),
-                               unittest.defaultTestLoader.loadTestsFromTestCase(native)])
-    if os.name == "posix":
-        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ReportRetentionPosixTests))
-
-    if native is LinuxNativeTests:
-        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(LinuxObservationTests))
-    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(SupervisorMergeTests))
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(globals()[name])
+                               for name in audit_control_suite.class_names(args.expected_host))
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)
     print(f"Retained fixture receipts/logs: {EVIDENCE_ROOT}", flush=True)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1

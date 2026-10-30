@@ -432,6 +432,68 @@ class Recovery(unittest.TestCase):
                 self.assertTrue((session.state / "private/ios-pending.json").exists())
                 self.assertFalse((session.state / "private/ios-latest.json").exists())
 
+    def untouched(self, root):
+        session, attempt, result, proof = self.session(root)
+        for key in ("inboxSha256", "phoneCleanup"):
+            result.pop(key)
+        result.update(deviceControlStarted=False, usbCommands=[], phoneSamples=[])
+        control = session.state / "work/mobile-control-failed-01"
+        control.mkdir(parents=True, mode=0o700)
+        for directory in (control / "usb", control / "commands", session.state / "work/mobile-client-failed-01"):
+            directory.mkdir(parents=True, mode=0o700)
+        return session, attempt, result, proof, control
+
+    def test_untouched_prerequisite_failure_releases_lease_without_inventing_installed_continuation(self):
+        for previous in (False, True):
+            with self.subTest(previous=previous), tempfile.TemporaryDirectory() as directory:
+                session, attempt, result, proof, _ = self.untouched(Path(directory).resolve())
+                latest = session.state / "private/ios-latest.json"
+                if previous:
+                    m.new_json(latest, dict(scope="ORIGINAL_CLOSED_INSTALLATION"))
+                saved = latest.read_bytes() if previous else None
+                with session.phone_lock("ios"):
+                    session.retire_pending("ios", attempt, result, proof)
+                self.assertFalse((session.state / "private/ios-pending.json").exists())
+                if previous:
+                    self.assertEqual(latest.read_bytes(), saved)
+                else:
+                    self.assertFalse(latest.exists())
+                retained = m.private_json(session.state / "private/undispatched-ios-failed-01.json")
+                self.assertEqual(retained["originalStatus"], "FAIL")
+                self.assertFalse(retained["physicalQualified"])
+
+    def test_flag_alone_cannot_erase_device_dispatch_or_unqualified_native_cleanup(self):
+        for mutation in ("marker", "linked-marker", "command", "phone-file", "client-file", "inbox", "installation",
+                         "phone-sample", "command-series", "native-failure", "thermal"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                session, attempt, result, proof, control = self.untouched(Path(directory).resolve())
+                if mutation == "marker":
+                    m.new_json(control / "device-control-started.json", {})
+                elif mutation == "linked-marker":
+                    (control / "device-control-started.json").symlink_to(control / "absent")
+                elif mutation in ("command", "phone-file", "client-file"):
+                    path = {"command": control / "commands/original.json", "phone-file": control / "usb/original.json",
+                            "client-file": session.state / "work/mobile-client-failed-01/config.txt"}[mutation]
+                    path.write_text("ORIGINAL_DISPATCH_EVIDENCE")
+                elif mutation == "inbox":
+                    result["inboxSha256"] = "8" * 64
+                elif mutation == "installation":
+                    result["installationAccepted"] = False
+                elif mutation == "phone-sample":
+                    result["phoneSamples"] = [{}]
+                elif mutation == "command-series":
+                    result["usbCommands"] = [{}]
+                elif mutation == "thermal":
+                    result["thermalAbort"] = {}
+                else:
+                    proof = proof | dict(stopExitCode=1)
+                    Path(attempt["receipt"]).write_text(json.dumps(proof))
+                    (session.state / "evidence" / proof["id"] / "receipt.json").write_text(json.dumps(proof))
+                with session.phone_lock("ios"), self.assertRaises(ValueError):
+                    session.retire_pending("ios", attempt, result, proof)
+                self.assertTrue((session.state / "private/ios-pending.json").exists())
+                self.assertFalse((session.state / "private/ios-latest.json").exists())
+
     def test_run_and_recover_are_serialized_until_original_retirement_finishes(self):
         with tempfile.TemporaryDirectory() as directory:
             session, attempt, result, proof = self.session(Path(directory).resolve())

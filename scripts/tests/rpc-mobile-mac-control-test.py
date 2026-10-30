@@ -641,6 +641,35 @@ class SlotPreparation(unittest.TestCase):
 
 
 class InstallBeforeRun(unittest.TestCase):
+    def test_ios_install_requires_checkpoint_before_first_device_command(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                run = object.__new__(ios_coordinator.Run)
+                run.result, run.control, run.bound = {}, root, binding('Ios')
+                run.values = dict(iosControlTransport='wireless')
+                run.generator_prerequisites = Mock()
+                run.args = SimpleNamespace(install_ios_app=root / 'OFFLINE_NOT_INSTALLED.app', prepare_ios_slot=False)
+                run.phone = Mock()
+                writer = load('ios_checkpoint_writer', 'run-audit-command.py')
+                run.runner = SimpleNamespace(write_new_json=writer.write_new_json)
+                if failure:
+                    run.runner.write_new_json = Mock(side_effect=OSError('OFFLINE_CHECKPOINT_FAILURE'))
+                    with self.assertRaises(OSError):
+                        run.prerequisites()
+                    run.phone.backend.install_app.assert_not_called()
+                    run.phone.start.assert_not_called()
+                else:
+                    def install(*args):
+                        self.assertEqual(writer.read_json(root / 'device-control-started.json'), run.bound)
+                        self.assertTrue(run.result['deviceControlStarted'])
+                        raise ValueError('OFFLINE_INSTALL_STOP_NO_DEVICE_EXECUTION')
+
+                    run.phone.backend.install_app.side_effect = install
+                    with self.assertRaisesRegex(ValueError, 'OFFLINE_INSTALL_STOP'):
+                        run.prerequisites()
+                    run.phone.start.assert_not_called()
+
     def test_android_install_is_checksum_bound_and_does_not_claim_readiness(self):
         with tempfile.TemporaryDirectory() as temporary:
             apk = Path(temporary) / 'sample.apk'

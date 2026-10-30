@@ -233,6 +233,15 @@ A failed first attempt cannot make
 the next command silently reinstall an app with uncertain existing ownership.
 Continuations also bind the selected physical device, not only its product hash.
 
+The actual native fixture runner and its prerequisite assessor share the same
+current-host class selection, including capture, deadline, report-retention and
+supervisor controls. A prerequisite rejection before device control can retire
+only its original pending lease after native finalization, an explicit untouched
+result and empty dispatch directories. The durable device-control checkpoint
+is published before the first device command; an existing or partially published
+checkpoint prevents this recovery. No installed continuation or phone-cleanup
+claim is created from a prerequisite-only failure.
+
 ```bash
 python3 -B scripts/run-rpc-mac-campaign.py run --state "$STATE" \
   --platform android --clients 128 --mode large \

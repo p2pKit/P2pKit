@@ -98,6 +98,7 @@ class Run(base.Run):
     def prerequisites(self):
         self.result['iosControlTransport'] = self.values.get('iosControlTransport', 'wired')
         self.generator_prerequisites()
+        self.begin_device_control()
         import time
         app = getattr(self.args, 'install_ios_app', None)
         prepare = getattr(self.args, 'prepare_ios_slot', False)
