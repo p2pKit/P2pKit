@@ -74,13 +74,132 @@ class RpcApplicationSessionAuthorizationTest {
         return Fixture(host, link, budget)
     }
 
-    private fun invoke(budget: PayloadBudget, id: String = TEST_REQUEST, value: String = "credential", time: Int = 10_000) =
-        WireMessage(WireKind.Invoke, id, TEST_INCARNATION, procedure.name, 1, time, 1,
-            body = testBody("\"$value\"", budget))
+    private fun invoke(
+        budget: PayloadBudget, id: String = TEST_REQUEST, value: String = "credential",
+        time: Int = 10_000, code: Int = 0,
+    ) = WireMessage(WireKind.Invoke, id, TEST_INCARNATION, procedure.name, 1, time, 1, code,
+        body = testBody("\"$value\"", budget))
 
     private fun control(budget: PayloadBudget, kind: WireKind, id: String = TEST_REQUEST) =
         WireMessage(kind, id, TEST_INCARNATION, procedure.name, 1, attempt = if (kind == WireKind.Status) 2 else 0,
             body = OwnedBytes.copy(payloadSha256("\"credential\"".encodeToByteArray()), budget))
+
+    @Test
+    fun prohibitedScopedReinvokeRefusesConservativelyWithoutPreventingOrdinaryAdmission() = runTest {
+        val original = session()
+        val grant = RpcAuthorizationScope(original, "sale-17")
+        var authenticationCalls = 0
+        var executions = 0
+        val f = fixture({ authenticationCalls++; grant }) { context, value ->
+            assertSame(grant, context.authorizationScope)
+            executions++
+            RpcReply.Success(value)
+        }
+        try {
+            val prohibited = invoke(f.budget, code = 1)
+            RpcWire.encode(prohibited) // The frame is wire-valid; only this procedure's retry contract refuses it.
+            f.host.deliver(f.link, prohibited); runCurrent()
+            val refusal = f.link.sent.single()
+            assertEquals(WireKind.Failure, refusal.kind)
+            assertEquals(WireFailure.AccessRevoked.code, refusal.code)
+            assertEquals(dev.p2pkit.rpc.RpcExecutionEvidence.MayHaveExecuted,
+                WireFailure.entries.single { it.code == refusal.code }.evidence)
+            assertEquals(0, authenticationCalls)
+            assertEquals(0, executions)
+            assertEquals(0L, f.host.diagnostics.value.acceptedCalls)
+            assertEquals(0L, f.budget.retainedBytes.value)
+            f.link.clearSent()
+
+            f.host.deliver(f.link, invoke(f.budget)); runCurrent()
+            assertEquals(WireKind.Success, f.link.sent.single().kind)
+            assertEquals(1, authenticationCalls)
+            assertEquals(1, executions)
+            assertEquals(1L, f.host.diagnostics.value.acceptedCalls)
+        } finally { f.close() }
+    }
+
+    @Test
+    fun oversizedScopedRequestKeepsDefiniteInvalidPayloadRefusalBeforeAuthentication() = runTest {
+        var authenticationCalls = 0
+        var executions = 0
+        val f = fixture({ authenticationCalls++; RpcAuthorizationScope(session()) }) { _, value ->
+            executions++; RpcReply.Success(value)
+        }
+        try {
+            f.host.deliver(f.link, invoke(f.budget, value = "x".repeat(procedure.requestLimitBytes))); runCurrent()
+            val refusal = f.link.sent.single()
+            assertEquals(WireFailure.InvalidPayload.code, refusal.code)
+            assertEquals(dev.p2pkit.rpc.RpcExecutionEvidence.RejectedBeforeExecution,
+                WireFailure.entries.single { it.code == refusal.code }.evidence)
+            assertEquals(0, authenticationCalls)
+            assertEquals(0, executions)
+            assertEquals(0L, f.host.diagnostics.value.acceptedCalls)
+            assertEquals(0L, f.budget.retainedBytes.value)
+        } finally { f.close() }
+    }
+
+    @Test
+    fun legacyRetryFlagKeepsExistingDefiniteInvalidPayloadRefusal() = runTest {
+        var authenticationCalls = 0
+        var executions = 0
+        val budget = PayloadBudget(1_048_576)
+        val descriptor = registeredProcedure(procedure, { authenticationCalls++; true }) { _, value ->
+            executions++; RpcReply.Success(value)
+        }
+        val host = RpcHostEngine(backgroundScope, mapOf(descriptor.key to descriptor), RpcLimits(), budget,
+            RpcClock { testScheduler.currentTime }, { true }, TEST_INCARNATION)
+        val f = Fixture(host, RpcTestLink(), budget)
+        try {
+            host.negotiate(f.link)
+            host.deliver(f.link, invoke(budget, code = 1)); runCurrent()
+            val refusal = f.link.sent.single()
+            assertEquals(WireFailure.InvalidPayload.code, refusal.code)
+            assertEquals(dev.p2pkit.rpc.RpcExecutionEvidence.RejectedBeforeExecution,
+                WireFailure.entries.single { it.code == refusal.code }.evidence)
+            assertEquals(1, authenticationCalls)
+            assertEquals(0, executions)
+            assertEquals(0L, host.diagnostics.value.acceptedCalls)
+            assertEquals(0L, budget.retainedBytes.value)
+        } finally { f.close() }
+    }
+
+    @Test
+    fun matchingScopedRetryFlagsKeepOriginalRunningAndRetainedScopeWithoutReexecution() = runTest {
+        val original = RpcAuthorizationScope(session("a"), "sale-a")
+        var currentGrant = original
+        var authenticationCalls = 0
+        var executions = 0
+        val gate = CompletableDeferred<Unit>()
+        val checked = mutableListOf<RpcAuthorizationContext>()
+        val f = fixture({ authenticationCalls++; currentGrant }, { checked += it; true }) { context, value ->
+            assertSame(original, context.authorizationScope)
+            executions++
+            gate.await()
+            RpcReply.Success(value)
+        }
+        try {
+            f.host.deliver(f.link, invoke(f.budget)); runCurrent()
+            currentGrant = RpcAuthorizationScope(session("b"), "sale-b")
+            f.host.deliver(f.link, invoke(f.budget, code = 1))
+            assertEquals(WireKind.Running, f.link.sent.single().kind)
+            assertEquals(1, authenticationCalls)
+            assertEquals(1, executions)
+            f.link.clearSent()
+
+            gate.complete(Unit); runCurrent()
+            assertEquals(WireKind.Success, f.link.sent.single().kind)
+            f.link.clearSent()
+            f.host.deliver(f.link, invoke(f.budget, code = 1))
+            assertEquals(WireKind.Success, f.link.sent.single().kind)
+            assertEquals(1, authenticationCalls)
+            assertEquals(1, executions)
+            assertEquals(1L, f.host.diagnostics.value.acceptedCalls)
+            assertEquals(2L, f.host.diagnostics.value.duplicateRequests)
+            assertEquals(2, checked.count { it.operation == RpcAuthorizationOperation.Duplicate })
+            assertTrue(checked.any { it.operation == RpcAuthorizationOperation.Running })
+            assertTrue(checked.all { it.scope === original })
+        } finally { gate.complete(Unit); runCurrent(); f.close() }
+    }
 
     @Test
     fun delayedSuccessAndApplicationErrorNeverAdoptCurrentEmployeeEvenWithZeroCache() = runTest {

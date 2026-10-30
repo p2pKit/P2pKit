@@ -82,8 +82,9 @@ including bodyless failures. Missing/expired scoped control records also remain
 silent: digest-only controls supply no verified original application authority.
 The caller may therefore time out with an uncertain execution outcome. Generic
 pre-authentication refusal contains only the caller's request/procedure metadata;
-failed application authentication is conservatively `AccessRevoked`
-(`MayHaveExecuted`) because another invocation may race admission of that ID.
+failed application authentication or a prohibited scoped reinvocation flag is
+conservatively `AccessRevoked` (`MayHaveExecuted`) because another invocation
+may race admission of that ID.
 Never infer rollback, nonexecution or successful cancellation from silence.
 Malformed protocol input still fails the existing protocol checks; physical
 connection-generation fencing remains in force.

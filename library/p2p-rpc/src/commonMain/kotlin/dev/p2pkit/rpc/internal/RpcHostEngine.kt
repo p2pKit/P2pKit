@@ -254,9 +254,13 @@ internal class RpcHostEngine(
         }
         var authorizationScope: RpcAuthorizationScope? = null
         if (procedure.scoped) {
-            if (body.size > procedure.requestLimit ||
-                (message.code == 1 && procedure.retrySafety != RpcRetrySafety.Idempotent)
-            ) { refuse(link, message, WireFailure.InvalidPayload); return }
+            if (body.size > procedure.requestLimit) { refuse(link, message, WireFailure.InvalidPayload); return }
+            if (message.code == 1 && procedure.retrySafety != RpcRetrySafety.Idempotent) {
+                // Retry flags are not part of the logical request digest. An ordinary invocation
+                // can admit this same ID/body after the snapshot, so refuse without claiming rollback.
+                refuse(link, message, WireFailure.AccessRevoked)
+                return
+            }
             authorizationScope = try {
                 if (!trusted(pin) || firstDeadline <= clock.now()) null else
                     withTimeoutOrNull(minOf(firstDeadline - clock.now(), AUTHORIZATION_TIMEOUT_MILLIS)) {
@@ -306,7 +310,8 @@ internal class RpcHostEngine(
             sendOwned(link, retained)
             return
         }
-        if (message.code == 1 && procedure.retrySafety != RpcRetrySafety.Idempotent) {
+        // Scoped routes already rejected this flag before authentication; this is the legacy guard.
+        if (!procedure.scoped && message.code == 1 && procedure.retrySafety != RpcRetrySafety.Idempotent) {
             refuse(link, message, WireFailure.InvalidPayload)
             return
         }
