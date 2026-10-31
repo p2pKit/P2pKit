@@ -1,68 +1,134 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
-## October31 latest: regressions passed; signing recovery awaits local unlock
+## October31 latest: signed preparation complete; both startup gates failed
 
-**No physical qualification criterion has passed. Android128/256 and
-iPhone128/256 each remain at0/1800s of measured steady workload.** Main was
-fetched again and remains `eb6ba5da6c06a440de852477cf485264b2ab3dd3`, tree
+**No physical acceptance criterion has passed. All four measured steady runs
+remain0/1800s.** The verified main base is
+`eb6ba5da6c06a440de852477cf485264b2ab3dd3`, tree
 `a11d94517d0a28e1045c880eeb3fbf21d34de81b`.
 
-The frozen product source remains `70700ce039c826fbdc041646bc11c783fb1a3658`,
-tree `ed6fd771242e155e2dadbe238efbbbefc5fb2a31`. At that source, the original
-supervised JVM/Android regression command passed672 JVM tests and396 Android
-unit tests, with zero failures, errors or skips. Its native result was product0,
-final0, Stop0, unchanged source, no errors and no owned survivors. Product
-preparation also finalized with product0/final0/Stop0, no errors and no survivors.
-The APK, Mac driver/native library and debug XCFramework were independently
-hash-verified and retained. They have not been deployed or physically qualified.
+The exact prepared and attempted product source is
+`70700ce039c826fbdc041646bc11c783fb1a3658`, tree
+`ed6fd771242e155e2dadbe238efbbbefc5fb2a31`. Its original supervised
+regressions passed672 JVM tests and396 Android unit tests, with no failures,
+errors or skips, product0/final0/Stop0 and no owned survivors. Product preparation
+also passed its original finalization. Signing recovery subsequently produced
+a verified signed development iPhone app, with product0/final0/Stop0 and no
+owned survivors. A strict independent signature verification and complete
+preparation-manifest verification passed.
 
-| Current partial prepared product | SHA-256 |
+Xcode reordered the two existing XCFramework `AvailableLibraries` entries
+while signing. The first recovery conservatively refused that metadata change.
+An independent review verified identical plist semantics, retained original
+metadata and unchanged framework binaries; the complete manifest now binds the
+actual reordered metadata. All52 prepared entries have a complete independently
+hash-verified private archive. Original signing failures, refusal receipts and
+unsigned inputs remain retained.
+
+| Exact prepared product from70700ce0 | SHA-256 |
 | --- | --- |
 | Android APK | `02232ee0b13b70c04cfd767ed8a4c3b36c51f4fe805309211ee05a50e8e92f74` |
 | Mac driver manifest | `ea69e350914d918b47b6ab204bc0d9f3f2a50f6138e96beb361903d6f4641553` |
-| Mac capacity driver JAR | `fb242e2f8e31c01cececa34140681e070d85faace25787914c47fe6d24b24625` |
+| Capacity driver JAR | `fb242e2f8e31c01cececa34140681e070d85faace25787914c47fe6d24b24625` |
 | Mac scoped TCP library | `f45941542c1e9ce60d74c76e6a4a3f8624f8102468008117f7671523d9b12bb8` |
 | Mac native manifest JAR | `4e16ce7095fde0de99eeb4b9a1beb71f45cca2695ee1641dfd0062c4b48d37df` |
 | iPhone ARM64 framework | `878f4d3b56b9aa232252d52fca54794264e09b66c7f1856918ef1b333de77e32` |
-| Universal simulator framework | `c1fdf8e6d11b5616f2635a65a183ca1750f1005951de6e9657b1d2a0e8bc3dce` |
-| Signed iPhone app/executable/debug dylib and complete app inventory | Unavailable; signing has not passed |
+| Simulator framework | `c1fdf8e6d11b5616f2635a65a183ca1750f1005951de6e9657b1d2a0e8bc3dce` |
+| Signed iPhone executable | `b3bba60f79e6b832ac6e57935f9139bcc0a60862aab485e04ec1f3836e28870a` |
+| Signed iPhone debug dylib | `21fe495e247d3f1d83fe0f138b9f7f75e1e15ef276b75bb94ed2801b44b264d3` |
+| Complete signed-app inventory,7 files | `d1ac6e747eb7c5f0edf50b4ed18409c8bb117126a54ea771be4d1294ffc54c36` |
+| Current XCFramework Info.plist | `b02d2ded076bca86021188922cd526e904549b88d633e06c475b190848bc64c0` |
 
-Xcode failed signing the development debug dylib with `errSecInternalComponent`.
-That original invocation finalized with product65/final65/Stop0, no errors,
-unchanged source and no owned survivors. System security diagnostics recorded
-keychain unlock attempts at the failure; no password or signing material was
-collected. The prior worker retired through its bounded protocol. A replacement
-signing-only recovery is queued behind the owner's existing local Terminal
-authorization and keychain-unlock prompts. It verifies the original finalized
-receipts and retained products, retries only the iPhone producer, checks unchanged
-non-iPhone products, verifies the signature and then verifies the complete manifest.
-Neither a queued retry nor retained failed signing inputs is a prepared signed app.
+The signed-app inventory digest covers sorted app-relative
+`{path,bytes,sha256}` entries, sorted object keys, compact JSON and one final LF.
+It is a complete signed-bundle binding, not an unsigned ZIP substitute.
 
-Required hosted checks on report commit
-`36186c1faf020b7604ffdeeab3e15bf36ed79b2c` exposed a Windows Java setup failure
-before native test execution: the exact selector `21.0.12+101.0` no longer matched
-the supplier listing, which identifies the same build as `21.0.12+101.0.LTS`.
-Commit `4b5c5226` retains that LTS suffix. The upstream official release asset still
-matches the unchanged205,073,461-byte supplier and SHA-256
-`f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e`.
-The exact archive pin and complete selected-JDK byte verification remain required.
-All21 Windows packaging source controls,78 negative JDK/cache policy controls and
-the modular workflow policy passed. The original hosted failure remains retained;
-required checks for the new PR head must complete independently. This CI-only
-correction does not change the frozen Mac/phone product binding above.
+| Phone / capacity | Latest physical attempt | Measured steady | Phone workload/resource results |
+| --- | --- | --- | --- |
+| Android128 | Large gate failed at APK installation |0/1800s | No Host/client start, samples or workload measurements |
+| Android256 | Not executed |0/1800s | Unavailable |
+| iPhone128 | Large gate failed before readiness; Stop unverified |0/1800s |0 phone samples; correctness, throughput and latency unavailable |
+| iPhone256 | Not executed |0/1800s | Unavailable |
 
-The current deployment/startup/Stop gates, private Android-key consent,
-independent physical phases and application role matrix remain pending. Full
-cohort measurements, throughput, correctness, p95/p99, missed schedules, phone
-CPU/RSS/native threads, connected idle, post-Stop drain and generator workload
-utilization remain unavailable. Simultaneous255 Mac plus one physical-phone
-client, genuine socket backpressure, long mixed faults and actual unplugged
-recording still require their reviewed extensions and original execution evidence.
-The owner reports external iPhone charging with Mac USB disconnected; this is
-neither sensor evidence nor discharge qualification. The1GiB generator admission,
-125-second scheduling gate and thermal/cleanup boundaries remain selected.
-#525 stays open with no new acceptance box checked. All identifiers, network
-values, keys, signed inputs and raw evidence remain private. No tag, publication,
+The Android private-key handover was explicitly owner-authorized for one phone.
+The existing debugging server remained running and its keys were not read.
+After the selected Detach, a fresh private server detected the phone and the
+owner approved its test key. Initial admission and a later installed-APK
+certificate inspection each passed original native product0/final0/Stop0.
+The selected app process was absent and its selected private-LAN RPC endpoint
+refused a connect-only probe; no RPC payload was sent.
+
+Android `a128-large-02` then failed with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`: the prepared APK's signer differs from
+the already installed sample. The existing local development certificate matches
+the prepared APK, but does not match that installed app. The controller did not
+provision an inbox, launch a Host or start a Mac client. Its private server exited,
+owned key copies retired, and the outer native result was product1/final1/Stop0
+with no errors or owned survivors. Existing app data and approvals were not erased.
+This is an installation refusal, not a phone Stop or large-body pass.
+
+The iPhone `i128-large-04` installed the exact signed app and prepared its bound
+slot through explicitly selected wireless CoreDevice control. Sealed inbox and
+Start staging records were transferred. No canonical inbox/Start, ready,
+telemetry, failed or closed record was observed. The actual execution failure
+was the shared four-second wireless observation budget: two completed commands
+consumed about3.045s, leaving about0.935s for the final selected-device check,
+which did not finish within that original budget. Phone/client retirement and
+final generator observation consequently remained unqualified. The enclosing
+native invocation was product1/final1/Stop0 with no owned survivors; the cancelled
+Mac-client invocation retained final125 and must not be described as a healthy pass.
+
+The owner subsequently observed no active role and a disabled Stop button.
+Read-only debugger attempts did not successfully reflect the internal owner.
+Fresh process inventories show that the installed test app process ended. A
+separately isolated forensic pass copied and verified every original staged input
+and seal, checked its exact source/artifact-bound prepared record, and observed
+no app process before or after. It confirmed no canonical activation or runtime
+output. Review therefore permits a new source's first deployment; it creates no
+healthy `closed.txt`, no installed continuation and no old-source reuse authority.
+The original failed result and unqualified Stop remain retained. The exact original
+pending leases were retired under their per-phone locks only after this review.
+
+The selected1GiB generator admission remains explicit. Both original125-second
+scheduling preflights passed: Android minimum available memory3,412,344,832bytes
+and maximum gap66.050333ms; iPhone minimum3,856,728,064bytes and maximum
+gap70.244750ms. These are generator admission observations, not sustained-load
+utilization evidence. Generator CPU/GC under workload, response correctness,
+connection success, throughput, p95/p99, missed schedules, phone CPU/RSS/native
+threads, connected-idle overhead and post-Stop resource drain remain unavailable.
+
+Android's separate battery observation was100%, USB powered/full, with battery
+temperature29.0°C. That is not CPU temperature or battery discharge. The owner
+reports external iPhone charging with Mac USB disconnected; no current iPhone
+sensor series or calibrated energy measurement exists. Actual unplugged discharge
+and workload thermal observations remain pending.
+
+Recovery fixes are committed at
+`1abee80ac1692fc9ef03c04175563768bd47691d`, tree
+`aaa0a3f4be6dfd5ed91e3c3d2a1a9a3927d0a505`, in a separate frozen worktree.
+They add a source-prepared, distinctly identified Android Debug lab APK,
+strict compiled APK identity admission, once-per-process iPhone developer launch,
+bounded prepared keep-awake, explicit pre-start cancellation evidence, and one
+exact inventory for absent wireless output. Present output keeps pre/post transport
+checks, exact sizes and the original deadline. Ordinary Android identities,
+`host128()`, public defaults, protected approvals and the Apple ABI baseline are
+unchanged. These fixes have not yet been physically qualified or substituted
+into the70700ce0 attempt. New source-matched preparation is running independently.
+
+Focused offline controls passed:31 iPhone USB,27 phone-control policy,42 Mac
+campaign,6 bounded mobile commands,40 Mac mobile control,25 mobile coordinator
+and35 mobile protocol tests. An initial Mac-control invocation used a symlinked
+system temporary path and was refused; the retained rerun used a canonical private
+temporary directory and passed without relaxing file policy. Native Swift/XCTest
+behavior verification and replacement-product preparation remain required.
+All14 required components and the complete hosted gate passed for the prior
+report head720e23b5; the new code/report head requires its own checks.
+
+Simultaneous255 Mac plus one physical-phone client, genuine socket slow-consumer
+backpressure, long mixed-fault workloads, reviewed unplugged recording, independent
+large/correctness/churn/steady phases and the actual application role matrix remain
+incomplete. #525 stays open with no new acceptance box checked. Identifiers,
+addresses, keys, signed bundles and raw evidence remain private. No tag, publication,
 VPS work, cancelled full audit or deferred #520 investigation was performed.
 
 ## October31 continuation: verified build inputs and retained network failures
