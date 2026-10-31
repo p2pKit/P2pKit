@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 from urllib.parse import urlsplit
+import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -246,6 +247,93 @@ def campaign_environment(original, state):
     return value
 
 
+def read_only_dependency_cache(state):
+    """Only sealed external inputs from a finalized local producer; never compiled project outputs."""
+    cache = state.parent / "tool-cache/gradle-ro-dependencies"
+    if not cache.exists() and not cache.is_symlink():
+        return None
+    private(cache)
+    manifest_path = cache / "manifest.json"
+    value = private_json(manifest_path)
+    need(type(value) is dict and set(value) == {"schema", "scope", "policies", "producerReceipt", "artifacts"} and
+         value["schema"] == 1 and type(value["schema"]) is int and
+         value["scope"] == "SEALED_LOCAL_EXTERNAL_DEPENDENCIES_NOT_CAMPAIGN_PRODUCTS", "Unknown dependency cache")
+    policies = ("gradle/verification-metadata.xml", "gradle/plugin-provenance-policy.txt",
+                "gradle/wrapper/gradle-wrapper.properties")
+    need(type(value["policies"]) is dict and set(value["policies"]) == set(policies) and all(
+        value["policies"][name] == hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in policies),
+        "Read-only cache binds another dependency, plugin or wrapper policy")
+    producer = value["producerReceipt"]
+    need(type(producer) is dict and set(producer) == {"path", "bytes", "sha256"}, "Missing cache producer")
+    producer_path = Path(producer["path"])
+    need(producer_path.parent.name == "commands" and producer_path.parent.parent.parent == state.parent and
+         re.fullmatch(r"prepare-products-[a-f0-9]{8}\.json", producer_path.name) and
+         artifact(producer_path) == producer, "Only an original local campaign producer receipt is admitted")
+    proof = private_json(producer_path)
+    module("cache_producer_receipt", "check-audit-receipt.py").validate(
+        proof, 0, "prepare-products", proof["cwd"], proof["wrapper"], proof["requestedArgv"])
+    need(proof.get("kind") == "gradle" and proof["sourceBefore"]["status"] == "" and
+         proof["sourceBefore"]["diffSha256"] == hashlib.sha256(b"").hexdigest(), "Unqualified cache producer")
+    producer_commit = proof["sourceBefore"]["commit"]
+    subprocess.run(["git", "merge-base", "--is-ancestor", producer_commit, "HEAD"], cwd=ROOT, check=True,
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    for name in policies:
+        old = subprocess.check_output(["git", "show", producer_commit + ":" + name], cwd=ROOT, timeout=30)
+        need(hashlib.sha256(old).hexdigest() == value["policies"][name], "Producer used another dependency policy")
+    namespace = {"v": "https://schema.gradle.org/dependency-verification"}
+    components = {}
+    for component in ET.parse(ROOT / policies[0]).getroot().findall("v:components/v:component", namespace):
+        coordinate = tuple(component.attrib[name] for name in ("group", "name", "version"))
+        need(coordinate not in components, "Ambiguous verification component")
+        components[coordinate] = {a.attrib["name"]: {h.attrib["value"] for h in a.findall("v:sha256", namespace)}
+                                  for a in component}
+    entries = value["artifacts"]
+    need(type(entries) is dict and 0 < len(entries) <= 10_000 and
+         all(type(e) is dict and set(e) == {"path", "bytes", "sha256"} and
+             type(e["bytes"]) is int and 0 < e["bytes"] <= 512 * 1024 ** 2 for e in entries.values()) and
+         sum(e["bytes"] for e in entries.values()) <= 2 * 1024 ** 3, "Unbounded dependency cache")
+    modules = cache / "modules-2"
+    private(modules)
+    actual_files = set()
+    for index, path in enumerate(modules.rglob("*")):
+        need(index < 75_000, "Dependency cache directory inventory exceeded its bound")
+        info = path.lstat()
+        need(not path.is_symlink() and info.st_uid == os.getuid() and not stat.S_IMODE(info.st_mode) & 0o022,
+             "Dependency cache contains a foreign, linked or writable input")
+        if path.is_dir():
+            continue
+        need(stat.S_IMODE(info.st_mode) == 0o400, "Dependency cache file must be read-only")
+        relative = path.relative_to(modules).as_posix()
+        actual_files.add(relative)
+        need(relative in entries and artifact(path) == entries[relative], "Dependency cache input changed")
+        parts = path.relative_to(modules).parts
+        if parts[0] == "files-2.1":
+            need(len(parts) == 6 and re.fullmatch("0|[1-9a-f][0-9a-f]{0,39}", parts[4]) and
+                 not parts[1].lower().startswith("dev.p2pkit"), "Unknown cache slot or forbidden P2pKit product")
+            coordinate, name = tuple(parts[1:4]), parts[5]
+            need(coordinate in components and name in components[coordinate] and
+                 entries[relative]["sha256"] in components[coordinate][name], "External artifact is not source-pinned")
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                need((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) ==
+                     (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns), "Cache slot lifetime changed")
+                # Gradle renders its SHA1 slot as an unpadded positive hexadecimal integer.
+                slot = format(int(hashlib.file_digest(stream, "sha1").hexdigest(), 16), "x")
+                need(slot == parts[4], "Wrong Gradle file-cache slot")
+                after = os.fstat(stream.fileno())
+                need((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) ==
+                     (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) and
+                     artifact(path) == entries[relative], "Cache slot changed during validation")
+        else:
+            need(re.fullmatch(r"metadata-2\.[0-9]{1,4}", parts[0]) and (
+                (len(parts) == 2 and parts[1] in ("module-metadata.bin", "module-artifact.bin", "resource-at-url.bin")) or
+                (len(parts) == 7 and parts[1] == "descriptors" and tuple(parts[2:5]) in components and
+                 re.fullmatch("[a-f0-9]{32}", parts[5]) and parts[6] == "descriptor.bin")),
+                "Only original Gradle module metadata is admitted; no locks, transforms or scripts")
+    need(actual_files == set(entries), "Missing or additional cache files")
+    return dict(path=str(cache), manifest=artifact(manifest_path), producerReceipt=producer)
+
+
 def bound_attempt_result(attempt, result):
     """A failed workload may retire safely; this grants reuse, never a test pass."""
     need(type(result) is dict and result.get("status") in
@@ -336,6 +424,11 @@ class Session:
         _, context = self.runner.context_at(str(self.state))
         need(context["source"] == self.source and context["root"] == str(ROOT), "Session binds another source")
         self.env = campaign_environment(os.environ, self.state)
+        self.dependency_cache = read_only_dependency_cache(self.state)
+        if self.dependency_cache is not None:
+            self.env["GRADLE_RO_DEP_CACHE"] = self.dependency_cache["path"]
+        else:
+            self.env.pop("GRADLE_RO_DEP_CACHE", None)
 
     @contextlib.contextmanager
     def phone_lock(self, phone):
@@ -396,6 +489,8 @@ class Session:
                 raise
         proof = self.runner.read_json(receipt)
         self.checker.validate(proof, code, label, ROOT, ROOT / "gradlew", list(map(str, argv)))
+        need(read_only_dependency_cache(self.state) == self.dependency_cache,
+             "Read-only dependency inputs changed during the original native invocation")
         need((code == 0 or not require_success) and proof["sourceBefore"] == proof["sourceAfter"] == self.source and
              not proof["errors"] and not proof["ownedSurvivors"] and proof["stopExitCode"] == 0,
              "Command failed; retained private receipt: " + str(receipt))

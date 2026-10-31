@@ -187,6 +187,23 @@ This optional archive is independent of phone/driver source revisions. It does
 not supply compiled P2pKit products or waive dependency verification, signing,
 network admission or cleanup. Its original download failure stays retained.
 
+An unstable dependency-repository route may also use Gradle's supported
+`GRADLE_RO_DEP_CACHE`, through a separately reviewed, sealed local snapshot at
+`$STATE/../tool-cache/gradle-ro-dependencies`. Do not point it at a live Gradle
+installation or the owner's global cache. Its private `manifest.json` must bind
+every copied file and an original successful, finalized local `prepare-products`
+receipt. The producer must be an ancestor with byte-identical wrapper,
+verification metadata and plugin provenance policy. Only current checksum-pinned
+external artifacts and the producer's original Gradle module metadata are admitted;
+P2pKit products, scripts, transforms, locks and wrapper completion markers are
+refused. Copy into a new private directory after the producer is closed, retain
+its original snapshot evidence, and make copied files mode0400 before sealing.
+The coordinator checks the complete inventory before and after every native
+command. Omission retains normal dependency resolution and strips an unrelated
+inherited cache selection. Cache misses still resolve normally; strict verification,
+dependency locks, forced task execution and source-matched preparation remain
+required. This is build-input reuse, not a device or product qualification pass.
+
 ## Configure the actual devices and LAN once
 
 Create independent settings files with the exact prepared hashes:

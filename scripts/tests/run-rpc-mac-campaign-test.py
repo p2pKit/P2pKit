@@ -97,6 +97,140 @@ class Preparation(unittest.TestCase):
             m.stage_pinned_wrapper_archive(self.root / "state")
         self.assertFalse((self.root / "state").exists())
 
+    def dependency_cache(self, data=b"OFFLINE_EXTERNAL_DEPENDENCY_NOT_REAL_BYTECODE"):
+        for helper in ("run-rpc-capacity-lab.py", "run-audit-command.py", "check-audit-receipt.py"):
+            self.file("scripts/" + helper, (ROOT / "scripts" / helper).read_bytes())
+        slot = format(int(hashlib.sha1(data).hexdigest(), 16), "x")
+        cache = self.root / "tool-cache/gradle-ro-dependencies"
+        relative = "files-2.1/test.vendor/example/1/" + slot + "/example-1.jar"
+        dependency = self.file("tool-cache/gradle-ro-dependencies/modules-2/" + relative, data)
+        metadata = self.file("tool-cache/gradle-ro-dependencies/modules-2/metadata-2.107/module-metadata.bin",
+                             b"OFFLINE_OPAQUE_METADATA_NOT_GRADLE_EXECUTION_EVIDENCE")
+        for path in (cache, cache / "modules-2"):
+            path.chmod(0o700)
+        for path in (dependency, metadata):
+            path.chmod(0o400)
+        policies = {}
+        xml = ('<verification-metadata xmlns="https://schema.gradle.org/dependency-verification"><components>'
+               '<component group="test.vendor" name="example" version="1"><artifact name="example-1.jar">'
+               '<sha256 value="' + hashlib.sha256(data).hexdigest() + '"/></artifact></component>'
+               '</components></verification-metadata>')
+        for name, raw in (("gradle/verification-metadata.xml", xml.encode()),
+                          ("gradle/plugin-provenance-policy.txt", b"OFFLINE_POLICY"),
+                          ("gradle/wrapper/gradle-wrapper.properties", b"OFFLINE_WRAPPER_POLICY")):
+            policies[name] = m.artifact(self.file(name, raw))["sha256"]
+        source = self.source | dict(status="", diffSha256=hashlib.sha256(b"").hexdigest())
+        proof = dict(schema=1, id="offline", purpose="prepare-products", kind="gradle", cwd=str(self.root),
+                     wrapper=str(self.root / "gradlew"), requestedArgv=["OFFLINE_NOT_A_BUILD"],
+                     productExitCode=0, finalExitCode=0, stopExitCode=0, errors=[], ownedSurvivors=[],
+                     sourceUnchanged=True, sourceBefore=source, sourceAfter=source)
+        producer = self.file("s-old/commands/prepare-products-aabbccdd.json", json.dumps(proof).encode())
+        producer.parent.chmod(0o700)
+        manifest = dict(schema=1, scope="SEALED_LOCAL_EXTERNAL_DEPENDENCIES_NOT_CAMPAIGN_PRODUCTS", policies=policies,
+                        producerReceipt=m.artifact(producer), artifacts={relative: m.artifact(dependency),
+                        "metadata-2.107/module-metadata.bin": m.artifact(metadata)})
+        self.file("tool-cache/gradle-ro-dependencies/manifest.json", json.dumps(manifest).encode())
+        return cache, dependency, producer, manifest
+
+    def cache_git(self, argv, **kwargs):
+        return (self.root / argv[2].split(":", 1)[1]).read_bytes()
+
+    def validate_cache(self):
+        with patch.object(m, "ROOT", self.root), patch.object(m.subprocess, "run"), \
+                patch.object(m.subprocess, "check_output", side_effect=self.cache_git):
+            return m.read_only_dependency_cache(self.root / "state")
+
+    def test_absent_dependency_cache_keeps_normal_resolution(self):
+        self.assertIsNone(self.validate_cache())
+
+    def test_sealed_external_cache_has_a_separate_manifest_binding(self):
+        cache, _, _, _ = self.dependency_cache()
+        selected = self.validate_cache()
+        self.assertEqual(selected["path"], str(cache))
+        self.assertEqual(selected["manifest"], m.artifact(cache / "manifest.json"))
+
+    def test_gradle_slot_omits_leading_zeroes_without_relaxing_integrity(self):
+        data = next(str(n).encode() for n in range(1000) if hashlib.sha1(str(n).encode()).hexdigest().startswith("0"))
+        _, dependency, _, _ = self.dependency_cache(data)
+        self.assertLess(len(dependency.parent.name), 40)
+        self.assertIsNotNone(self.validate_cache())
+
+    def test_failed_native_producer_cannot_seed_a_qualified_cache(self):
+        cache, _, producer, manifest = self.dependency_cache()
+        proof = json.loads(producer.read_text())
+        proof.update(productExitCode=1, finalExitCode=1)
+        producer.write_text(json.dumps(proof))
+        manifest["producerReceipt"] = m.artifact(producer)
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_requires_current_policy_and_original_source_pins(self):
+        cache, dependency, _, manifest = self.dependency_cache()
+        original = dependency.read_bytes()
+        dependency.chmod(0o600)
+        dependency.write_bytes(b"UNPINNED_REPLACEMENT")
+        dependency.chmod(0o400)
+        relative = dependency.relative_to(cache / "modules-2").as_posix()
+        manifest["artifacts"][relative] = m.artifact(dependency)
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+        dependency.chmod(0o600)
+        dependency.write_bytes(original)
+        dependency.chmod(0o400)
+        manifest["artifacts"][relative] = m.artifact(dependency)
+        manifest["policies"]["gradle/verification-metadata.xml"] = "f" * 64
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_rejects_writable_and_additional_inputs(self):
+        cache, dependency, _, _ = self.dependency_cache()
+        dependency.chmod(0o600)
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+        dependency.chmod(0o400)
+        extra = self.file("tool-cache/gradle-ro-dependencies/modules-2/extra.bin")
+        extra.chmod(0o400)
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_rejects_an_invented_gradle_content_slot(self):
+        cache, dependency, _, manifest = self.dependency_cache()
+        relative = dependency.relative_to(cache / "modules-2").as_posix()
+        moved = dependency.parent.parent / ("0" * 40) / dependency.name
+        moved.parent.mkdir()
+        dependency.rename(moved)
+        manifest["artifacts"].pop(relative)
+        manifest["artifacts"][moved.relative_to(cache / "modules-2").as_posix()] = m.artifact(moved)
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_cannot_admit_a_link_even_with_an_inventory_entry(self):
+        _, dependency, _, _ = self.dependency_cache()
+        original = dependency.with_suffix(".original")
+        dependency.rename(original)
+        dependency.symlink_to(original)
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_p2pkit_products_cannot_enter_the_external_cache(self):
+        cache, dependency, _, manifest = self.dependency_cache()
+        files = cache / "modules-2/files-2.1"
+        (files / "test.vendor").rename(files / "dev.p2pkit")
+        moved = files / "dev.p2pkit" / dependency.relative_to(files / "test.vendor")
+        relative = dependency.relative_to(cache / "modules-2").as_posix()
+        manifest["artifacts"].pop(relative)
+        manifest["artifacts"][moved.relative_to(cache / "modules-2").as_posix()] = m.artifact(moved)
+        xml = self.root / "gradle/verification-metadata.xml"
+        xml.write_text(xml.read_text().replace("test.vendor", "dev.p2pkit"))
+        manifest["policies"]["gradle/verification-metadata.xml"] = m.artifact(xml)["sha256"]
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
     def test_hash_binds_actual_owned_file_and_detects_mutation(self):
         path = self.file("owned.bin")
         row = m.artifact(path)
