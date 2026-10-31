@@ -159,6 +159,16 @@ prepared JAR/native entry, APK, framework and complete signed app inventory.
 Changing/additionally inserting files makes reuse fail. Unsigned app ZIP hashes
 cannot stand in for the signed installed executable hash.
 
+Source-prepared mobile campaigns use a dedicated, stable capacity-approval
+namespace on each phone. Ordinary application pairing keeps its existing
+Keychain/Keystore namespace and device identity. Campaign import and exact-pin
+retirement cannot replace ordinary approvals. Earlier products used the ordinary
+namespace: do not erase or migrate its approvals to make an old attempt start.
+The capacity namespace must still be empty before import; retained approvals
+produce `CapacityApprovalsRetained` and require review of the previous run.
+The iPhone's development failure record retains a fixed-vocabulary `reason`
+when available. Neither a refusal code nor an idle screen proves runtime closure.
+
 Retain the exact `SOURCE`, `STATE`, pinned SHA and private settings locally in a
 mode0600 continuation note outside Git. Do not copy old VPS caches, keys,
 compiled frameworks or evidence into this build. A cache miss resolves normal

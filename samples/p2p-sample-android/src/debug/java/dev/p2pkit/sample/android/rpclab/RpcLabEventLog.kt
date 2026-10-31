@@ -5,6 +5,7 @@ import dev.p2pkit.rpc.RpcExecutionEvidence
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcFailureKind
 import dev.p2pkit.rpc.RpcHostState
+import dev.p2pkit.sample.rpc.RpcPhoneCapacityTrustOccupied
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -29,8 +30,11 @@ internal class RpcLabEventLog {
     fun record(event: Event) { append(event.name) }
 
     fun failure(error: Exception): String {
-        val safe = if (error is RpcFailure) "${error.kind.name}/${error.phase.name}/${error.executionEvidence.name}"
-            else "LocalOrProtocolFailure"
+        val safe = when (error) {
+            is RpcFailure -> "${error.kind.name}/${error.phase.name}/${error.executionEvidence.name}"
+            is RpcPhoneCapacityTrustOccupied -> "CapacityApprovalsRetained"
+            else -> "LocalOrProtocolFailure"
+        }
         mutableLastFailure.value = safe
         append("Failure $safe")
         return safe

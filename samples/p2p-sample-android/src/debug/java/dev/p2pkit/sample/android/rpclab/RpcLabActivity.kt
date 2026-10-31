@@ -365,7 +365,7 @@ internal class RpcLabController(
         try {
             withContext(Dispatchers.Default) {
                 val platform = RpcPlatform.android(applicationContext)
-                val trust = AndroidRpcLabTrustStore(applicationContext)
+                val trust = AndroidRpcLabTrustStore(applicationContext, mobileCapacity = mobile != null)
                 // Retain before returning across a cancellation-sensitive dispatcher boundary.
                 val runtime = if (mobile != null)
                     RpcPhoneLab.createMobileCapacityHost(platform, trust, mobile, "Android")

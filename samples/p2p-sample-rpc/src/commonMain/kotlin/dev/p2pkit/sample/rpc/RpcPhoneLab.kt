@@ -510,7 +510,7 @@ public class RpcPhoneLab private constructor(
         ): RpcPhoneLab {
             require(RpcPhoneBuildStamp.SOURCE_CLEAN && config.hostSourceSha == compiledSource)
             require(actualPlatform in setOf("Android", "Ios") && config.hostPlatform == actualPlatform)
-            require(trustStore.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients).isEmpty())
+            requireEmptyMobileCapacityApprovals(trustStore)
             try {
                 val lab = createHostInternal(platform, config.settings, trustStore, config.clientPins, null,
                     capacityExercises = config.schema == "2")

@@ -6,6 +6,7 @@ import dev.p2pkit.rpc.ios
 /** Thin Swift entry point: existing device-only identity plus this test app's non-synchronizable Keychain approvals. */
 public object RpcPhoneIos {
     private val trust = IosRpcPhoneTrustStore()
+    private val capacityTrust = IosRpcPhoneTrustStore(mobileCapacity = true)
 
     public val compiledSource: String get() = RpcPhoneLab.compiledSource
 
@@ -14,7 +15,7 @@ public object RpcPhoneIos {
 
     @Throws(Exception::class)
     public suspend fun createCapacityHost(config: RpcMobileCapacityConfig): RpcPhoneLab =
-        RpcPhoneLab.createMobileCapacityHost(RpcPlatform.ios(), trust, config, "Ios")
+        RpcPhoneLab.createMobileCapacityHost(RpcPlatform.ios(), capacityTrust, config, "Ios")
 
     @Throws(Exception::class)
     public suspend fun createHost(settings: RpcPhoneSettings, explicitlyApprovedCapacityPins: String): RpcPhoneLab =

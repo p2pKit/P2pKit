@@ -542,7 +542,10 @@ final class RpcPhoneModel: ObservableObject {
                         // Foreground/lifecycle Stop owns the active runtime; do not invent a successful receipt.
                     } catch {
                         self.mobileFailed = true
-                        do { try files.publish("failed.txt", "failed=true\nphase=mobile-start\n") }
+                        do {
+                            let reason = self.eventLog.lastFailure ?? "LocalOrProtocolFailure"
+                            try files.publish("failed.txt", "failed=true\nphase=mobile-start\nreason=\(reason)\n")
+                        }
                         catch { self.status = "USB start failed; no capacity qualification." }
                         if self.owner.hasOwner || self.actionBusy { self.stop() }
                     }
@@ -976,6 +979,9 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     private func failure(_ error: Error) -> RpcPhoneEventLog.Failure {
+        if (error as NSError).kotlinException is RpcPhoneCapacityTrustOccupied {
+            return RpcPhoneEventLog.Failure(callback: "CapacityApprovalsRetained")
+        }
         if let failure = (error as NSError).kotlinException as? RpcFailure {
             return RpcPhoneEventLog.Failure(callback:
                 "\(failure.kind.name)/\(failure.phase.name)/\(failure.executionEvidence.name)")
@@ -985,6 +991,9 @@ final class RpcPhoneModel: ObservableObject {
 
     private func safeError(_ error: Error) -> String {
         let code = failure(error).code
+        if code == "CapacityApprovalsRetained" {
+            return "Existing capacity approvals were preserved. Verify the earlier run’s cleanup before retrying."
+        }
         return code == "LocalOrProtocolFailure" ? "Invalid setup or local operation failed; no qualification claim." : code
     }
 
