@@ -1109,7 +1109,7 @@ class PurePolicyTests(unittest.TestCase):
         self.assertEqual(runner.gradle_arguments(original)[:len(original)], original)
 
     def test_security_resource_and_home_overrides_are_rejected(self):
-        for arguments in (["check", "--parallel"], ["check", "--max-workers", "3"],
+        for arguments in (["check", "--offline"], ["check", "--parallel"], ["check", "--max-workers", "3"],
                           ["check", "--dependency-verification=off"], ["check", "--build-cache"],
                           ["check", "-g/tmp/shared"], ["check", "--gradle-user-home=/tmp/shared"],
                           ["check", "-Foff"], ["check", "-F", "lenient"],
@@ -1118,6 +1118,38 @@ class PurePolicyTests(unittest.TestCase):
                           ["check", "-Dorg.gradle.java.home=/unowned"], ["check", "--write-verification-metadata=sha256"]):
             with self.subTest(arguments=arguments), self.assertRaises(runner.AuditError):
                 runner.gradle_arguments(arguments)
+
+    def test_offline_mobile_preparation_requires_exact_commands_source_host_and_sealed_cache(self):
+        argv = [":p2p-sample-rpc:jvmTest", ":p2p-sample-android:testDebugUnitTest",
+                "--dependency-verification=strict", "--console=plain", "--no-parallel", "--max-workers=2", "--offline"]
+        self.assertEqual(runner.gradle_arguments(argv, sealed_mobile_offline=True)[:len(argv)], argv)
+        for changed in (["check", "--offline"], argv + ["--offline"], argv[:-1] + ["-offline"],
+                        [*argv[:-1], "--dependency-verification=off", "--offline"]):
+            with self.assertRaises(runner.AuditError):
+                runner.gradle_arguments(changed, sealed_mobile_offline=True)
+        source = dict(commit="a" * 40, tree="b" * 40, status="", diffSha256=runner.digest(b""))
+        context = dict(host="macos-arm64", source=source)
+        cache = dict(path="/private/fixture/sealed/modules-2", manifest=dict(sha256="c" * 64))
+        campaign = SimpleNamespace(read_only_dependency_cache=mock.Mock(return_value=cache))
+        spec = SimpleNamespace(loader=SimpleNamespace(exec_module=mock.Mock()))
+        with mock.patch.object(runner, "host_role", return_value="macos-arm64"), \
+                mock.patch.object(runner, "source_snapshot", return_value=source), \
+                mock.patch.object(runner.importlib.util, "spec_from_file_location", return_value=spec), \
+                mock.patch.object(runner.importlib.util, "module_from_spec", return_value=campaign), \
+                mock.patch.dict(os.environ, GRADLE_RO_DEP_CACHE=cache["path"]):
+            self.assertEqual(runner.sealed_mobile_offline_binding(Path("/private/fixture"), context,
+                Path("/private/source"), argv, "prepare-phone-regressions"), cache)
+            for wrong in (dict(host="linux-x64", source=source), dict(host="macos-arm64", source=dict(source, commit="d" * 40))):
+                with self.assertRaises(runner.AuditError):
+                    runner.sealed_mobile_offline_binding(Path("/private/fixture"), wrong,
+                        Path("/private/source"), argv, "prepare-phone-regressions")
+            with self.assertRaises(runner.AuditError):
+                runner.sealed_mobile_offline_binding(Path("/private/fixture"), context,
+                    Path("/private/source"), argv, "unrelated-build")
+            campaign.read_only_dependency_cache.return_value = None
+            with self.assertRaises(runner.AuditError):
+                runner.sealed_mobile_offline_binding(Path("/private/fixture"), context,
+                    Path("/private/source"), argv, "prepare-phone-regressions")
 
     def test_every_property_alias_preserves_accepted_raw_tokens(self):
         expressions = ["maven.repo.local=/tmp/fixture repository", "fixture.value=first=second",

@@ -415,11 +415,13 @@ def result_summary(value):
 
 
 class Session:
-    def __init__(self, state, *, initialize=False):
+    def __init__(self, state, *, initialize=False, offline_preparation=False):
         need(platform.system() == "Darwin" and platform.machine() == "arm64" and
              os.getuid() == os.geteuid() != 0, "Use a native ordinary-user Apple-Silicon Mac")
         need(sys.version_info >= (3, 12), "Python3.12+ required")
         self.source = source()
+        need(type(offline_preparation) is bool, "Explicit offline preparation option required")
+        self.offline_preparation = offline_preparation
         self.runner = module("mac_campaign_native", "run-audit-command.py")
         self.checker = module("mac_campaign_receipts", "check-audit-receipt.py")
         need(state.is_absolute() and not state.is_symlink(), "Absolute private session path required")
@@ -472,6 +474,9 @@ class Session:
 
     def command(self, label, argv, timeout=120, *, gradle=False, stem=None, require_success=True):
         need(re.fullmatch("[a-z0-9-]{1,64}", label), "Stable command label required")
+        if gradle and getattr(self, "offline_preparation", False) and label in ("prepare-phone-regressions", "prepare-products"):
+            need(self.dependency_cache is not None, "Offline preparation requires a sealed verified dependency cache")
+            argv = [*argv, "--offline"]
         if stem is None:
             stem = self.state / "commands" / (label + "-" + os.urandom(4).hex())
         need(stem.parent == self.state / "commands" and
@@ -747,6 +752,8 @@ def main():
             command.add_argument("--new-session", action="store_true", help="Initialize a new native session")
         if name == "prepare":
             command.add_argument("--team", help="Existing locally provisioned Apple development team; never a token")
+            command.add_argument("--offline-preparation", action="store_true",
+                                 help="Exact mobile builds only, with a sealed verified cache; missing inputs fail")
         if name == "run":
             command.add_argument("--platform", choices=("android", "ios"), required=True)
             command.add_argument("--clients", type=int, choices=(128, 256), required=True)
@@ -772,7 +779,8 @@ def main():
         return
     if args.action == "run":
         need(re.fullmatch("[a-z0-9-]{1,24}", args.run_label), "New short run label required for the private USB socket")
-    session = Session(args.state, initialize=getattr(args, "new_session", False))
+    session = Session(args.state, initialize=getattr(args, "new_session", False),
+                      offline_preparation=getattr(args, "offline_preparation", False))
     if args.action == "doctor":
         session.doctor()
     elif args.action == "prepare":

@@ -221,6 +221,15 @@ inherited cache selection. Cache misses still resolve normally; strict verificat
 dependency locks, forced task execution and source-matched preparation remain
 required. This is build-input reuse, not a device or product qualification pass.
 
+For a stalled repository metadata route, `prepare --offline-preparation` may
+use that same sealed cache. The native executor accepts offline mode only for
+the exact Mac mobile regression/product preparation commands, verifies the
+complete cache before and after execution, and retains its binding in the
+receipt. Dependency hashes, locks, forced compilation and native cleanup remain
+required. A missing input fails offline preparation; it does not permit an
+unverified download or a physical qualification claim. Other commands and
+omission retain the original online policy.
+
 ## Configure the actual devices and LAN once
 
 Create independent settings files with the exact prepared hashes:
