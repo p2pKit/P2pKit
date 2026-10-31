@@ -1,5 +1,115 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
+## October31 continuation: startup diagnosis and source correction
+
+**No physical capacity criterion has passed. All four measured steady runs remain0s.**
+The original phone attempts still bind to source
+`20563fd8c2e86be0f837fad63bb5c9476203cf54`, tree
+`b729731a0268188b1b45f795c29dae5ebce36e58`, and the exact product hashes in the
+next section. All51 unique products were independently copied and hash-verified
+into a private archive before changing the execution checkout. They are not
+reused under the corrected source.
+
+The corrected preparation candidate is
+`0f79ca1d8a7a163d3f87efd15b2f137f991e4bab`, tree
+`172a55eb404f5d556a366409865fe89e25f46c51`. Its source fixes are
+`6c26a05138f971f1459cee2fba3f4eadd30a406d` (separate mobile capacity approval
+storage) and `0f79ca1d8a7a163d3f87efd15b2f137f991e4bab` (require JVM/Android
+regressions and their native finalization before preparing products).
+New source-matched preparation has started; this checkpoint does not bind a
+replacement signed application or claim that the corrected Host has run.
+
+The third iPhone128 large attempt passed241 native controls in104.712s and its
+125.000422458-second generator clock observation. Minimum available memory was
+3,969,302,528bytes and maximum scheduling gap66.083208ms; the selected admission
+threshold remained1,073,741,824bytes. Signed installation and slot preparation
+succeeded. After exact inbox/campaign publication, the app recorded
+`failed=true`, `phase=mobile-start`, with no ready, telemetry or closed record.
+No measured RPC or phone resource series exists. The Mac client was cancelled:
+its original audit result125 and cancellation errors remain unqualified, although
+its recorded Stop exit was0 with no observed owned survivors. The enclosing
+invocation finalized with product/final exit1, Stop0, no errors and no owned
+survivors. This is a failed physical admission, not a load result.
+
+Read-only diagnostics on the selected installed application found two valid
+ordinary Host approvals in its device-only Keychain. Neither belongs to the
+campaign roster. The installed factory requires that same namespace to be empty
+before allocating/importing a capacity Host; this observed state independently
+explains a pre-allocation refusal. The old failure record did not retain the
+caught exception, so its historical exception cannot be reconstructed from the
+generic popup. The phone's current Wi-Fi address also changed within the approved
+private subnet. Future settings must use the fresh owner-observed address.
+No approval was erased to obtain admission.
+
+The correction gives sealed mobile campaigns separate stable Keychain/Keystore
+capacity namespaces on both phones. Ordinary application stores, device identity,
+authentication, encryption, exact import/retirement, admission limits, defaults,
+`host128()` and the library Apple ABI baseline remain unchanged. An occupied
+capacity store still refuses before allocation and reports the fixed diagnostic
+`CapacityApprovalsRetained`; development iPhone failure records retain a safe
+reason when available. New common regressions verify that occupied/unavailable
+approvals are never replaced. App-hosted Keychain and Android Keystore controls
+exercise128/256 import and retirement while retaining ordinary approvals.
+Those platform controls require their actual current-source execution evidence.
+
+The original iPhone test process was absent in subsequent selected-device
+inventories. A separate paused diagnostic launch later ended with SIGKILL; it
+started no RPC factory or workload. The owner reopened the app without starting
+either role. A fresh inventory and private screenshot showed the new idle app;
+a connect-only probe to its current selected test endpoint returned connection
+refused and sent no RPC bytes. A reviewed private forensic decision released
+only the original lease for a **new source's first deployment after diagnosis**.
+It grants no old-source product reuse or installed continuation. The original
+phone Stop/native retirement remains unqualified; no synthetic `closed.txt` or
+healthy cleanup claim was created. Original records and unrelated approvals
+remain retained.
+
+The first Android128 large attempt passed241 controls in134.708s and the
+125.0018285-second clock observation. Minimum available memory was
+4,128,636,928bytes and maximum gap66.082125ms. The private ADB server then observed
+207 empty device inventories and reached its unchanged120-second authorization
+bound. No installation, app command or Mac client dispatch occurred. The private
+server exited, its copied key files were retired and the campaign key remained
+private. An exact no-device recovery review checked all original captures,
+receipts and empty dispatch directories, then retired only that failed lease.
+It created no installed continuation or phone Stop claim. The existing owner ADB
+server sees the authorized phone with the LIBUSB backend; selected-device USB
+handover remains to be established without stopping that server or using its keys.
+
+| Phone Host | Capacity | Large | Correctness/churn | Measured steady | Workload resource measurements |
+| --- | --- | --- | --- | --- | --- |
+| Android |128| Failed private USB authorization before installation | Not run |0s| Unavailable |
+| Android |256| Not run | Not run |0s| Unavailable |
+| iPhone |128| Failed mobile startup after installation | Not run |0s| Unavailable |
+| iPhone |256| Not run | Not run |0s| Unavailable |
+
+A local corrected-source JVM/Android regression invocation at6c26a051 returned
+Gradle product0 and Stop0, but its final audit was125 because the shared desktop
+introduced unclassified Darwin lifetimes. Its original failure and unknown
+cleanup observations are retained; it is not a qualified native test result.
+No generated output from that invocation is copied into the new producer.
+The replacement isolated session preserves audit policy and drops administrator
+rights before tools run. New preparation requires the regressions to pass there.
+All28 offline Mac campaign controls passed at0f79ca1d.
+
+The prior23c5319049ddad77a42d344fa0a17a09ac8036c8 complete
+[CI run41124075595](https://github.com/p2pKit/P2pKit/actions/runs/41124075595)
+passed all14 components and the complete gate. The earlier20563fd8 retry also
+passed14 components, but its complete gate correctly rejected a superseded PR
+head. Current-source results must be read from [PR #532's checks](https://github.com/p2pKit/P2pKit/pull/532/checks).
+CI is not physical qualification.
+
+Phone workload CPU, RSS, native threads, latency, throughput, connected idle and
+post-Stop drain remain unavailable. The iPhone is controlled wirelessly with USB
+disconnected; its coarse UI battery reading was19% during diagnosis, outside any
+measured workload. This is not calibrated battery energy or a discharge pass;
+no precise iOS temperature or thermal series was obtained. Android USB charging
+cannot establish discharge. Four30-minute workloads, real mixed255-Mac-plus-phone
+clients, socket backpressure, long mixed faults and the application role matrix
+remain required. #525 stays open with no new physical acceptance box checked.
+No tag, publication, VPS access or deferred investigation was performed.
+
+
 ## Latest continuation: source-matched preparation and generator preflight
 
 **Physical qualification remains incomplete; measured steady workload is zero.**
