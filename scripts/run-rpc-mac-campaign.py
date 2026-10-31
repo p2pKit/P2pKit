@@ -22,6 +22,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +169,66 @@ def verify_native_jdk(raw, major):
          [str(major).encode("ascii")] and
          re.findall(rb"(?m)^\s*os\.arch = (\S+)\s*$", raw) == [b"aarch64"],
          "Installed native JDK" + str(major) + " required; Rosetta or a different JVM cannot satisfy preparation")
+
+
+def stage_pinned_wrapper_archive(state):
+    """Optional private build-tool cache. The original wrapper still verifies and installs its ZIP."""
+    cache = state.parent / "tool-cache" / "gradle-distribution.zip"
+    if not cache.exists() and not cache.is_symlink():
+        return
+    private(cache.parent)
+    properties = {}
+    for line in (ROOT / "gradle/wrapper/gradle-wrapper.properties").read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        need(key not in properties, "Duplicate wrapper property")
+        properties[key] = value
+    url = properties["distributionUrl"].replace("\\:", ":")
+    parsed = urlsplit(url)
+    name = Path(parsed.path).name
+    need(parsed.scheme == "https" and parsed.netloc == "services.gradle.org" and
+         not parsed.query and not parsed.fragment and re.fullmatch(r"gradle-[0-9][0-9A-Za-z.-]*-bin\.zip", name) and
+         properties["distributionBase"] == properties["zipStoreBase"] == "GRADLE_USER_HOME" and
+         properties["distributionPath"] == properties["zipStorePath"] == "wrapper/dists" and
+         properties["validateDistributionUrl"] == "true", "Unsupported pinned wrapper cache layout")
+    expected = properties["distributionSha256Sum"]
+    before = artifact(cache)
+    need(re.fullmatch("[0-9a-f]{64}", expected) and before["sha256"] == expected,
+         "Cached Gradle ZIP differs from the checked-in checksum")
+    # Wrapper PathAssembler's URL MD5/base36 is a directory name, never an integrity check.
+    number, bucket = int(hashlib.md5(url.encode("utf-8"), usedforsecurity=False).hexdigest(), 16), ""
+    while number:
+        number, digit = divmod(number, 36)
+        bucket = "0123456789abcdefghijklmnopqrstuvwxyz"[digit] + bucket
+    private(state)
+    directory = state
+    for part in ("gradle-home", "wrapper", "dists", name.removesuffix(".zip"), bucket or "0"):
+        directory = directory / part
+        directory.mkdir(mode=0o700, exist_ok=True)
+        private(directory)
+    target = directory / name
+    original_info = cache.lstat()
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
+    with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as output:
+        with os.fdopen(os.open(cache, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source_zip:
+            need(identity(os.fstat(source_zip.fileno())) == identity(original_info), "Cached ZIP was replaced")
+            remaining = before["bytes"]
+            while remaining:
+                block = source_zip.read(min(remaining, 65536))
+                need(block, "Cached ZIP ended early")
+                output.write(block)
+                remaining -= len(block)
+            need(not source_zip.read(1) and identity(os.fstat(source_zip.fileno())) == identity(original_info),
+                 "Cached ZIP changed during copy")
+        output.flush()
+        os.fsync(output.fileno())
+    need(identity(cache.lstat()) == identity(original_info) and artifact(cache) == before and
+         artifact(target)["sha256"] == expected, "Wrapper archive changed while staged")
+    sync_directory(directory)
+    new_json(state / "private/wrapper-cache.json", dict(scope="CHECKSUM_PINNED_BUILD_TOOL_CACHE_NOT_CAMPAIGN_PRODUCT",
+        distributionUrl=url, distributionSha256=expected, cachedArchive=before, stagedArchive=artifact(target),
+        wrapperVerificationRequired=True, completionMarkerCreated=False))
 
 
 def campaign_environment(original, state):
@@ -354,6 +415,7 @@ class Session:
         # wrapper's --stop. In a new Gradle home that would otherwise download
         # the distribution inside the unchanged 120-second cleanup deadline.
         # Bootstrap as its own supervised product, before any tool command.
+        stage_pinned_wrapper_archive(self.state)
         self.command("doctor-wrapper", ["--version"], 900, gradle=True)
         for major, key in ((17, "JAVA_HOME"), (21, "P2PKIT_AUDIT_JDK21")):
             java = self.command("doctor-jdk" + str(major), [Path(os.environ[key]) / "bin/java",

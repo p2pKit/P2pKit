@@ -175,6 +175,18 @@ mode0600 continuation note outside Git. Do not copy old VPS caches, keys,
 compiled frameworks or evidence into this build. A cache miss resolves normal
 dependencies through the approved locked/integrity-verified repositories.
 
+If the isolated build session cannot resolve the Gradle distribution host, an
+ordinary logged-in Mac session may download the exact `distributionUrl` in the
+checked-in wrapper properties into
+`$STATE/../tool-cache/gradle-distribution.zip` (private directory0700, file0600).
+Verify the complete ZIP against `distributionSha256Sum` first. Preparation checks
+the same checksum and stages only that build-tool archive into a new wrapper
+cache. The original wrapper still verifies and installs it, publishes its own
+completion marker, and must pass its unchanged native finalization and Stop.
+This optional archive is independent of phone/driver source revisions. It does
+not supply compiled P2pKit products or waive dependency verification, signing,
+network admission or cleanup. Its original download failure stays retained.
+
 ## Configure the actual devices and LAN once
 
 Create independent settings files with the exact prepared hashes:

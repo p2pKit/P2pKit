@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -40,6 +41,61 @@ class Preparation(unittest.TestCase):
         driver = self.file("samples/p2p-sample-rpc/build/capacity-lab/manifest.json")
         return dict(schema=1, scope=m.SCOPE, source=self.source, iosApp=None,
                     artifacts={"android-apk": m.artifact(apk), "jvm-manifest": m.artifact(driver)})
+
+    def wrapper_cache(self, checksum=None, url="https\\://services.gradle.org/distributions/gradle-9.7.0-bin.zip"):
+        for helper in ("run-rpc-capacity-lab.py", "run-audit-command.py"):
+            self.file("scripts/" + helper, (ROOT / "scripts" / helper).read_bytes())
+        data = b"OFFLINE_SYNTHETIC_ARCHIVE; THE_REAL_WRAPPER_MUST_VALIDATE_ZIP_FORMAT"
+        archive = self.file("tool-cache/gradle-distribution.zip", data)
+        archive.parent.chmod(0o700)
+        checksum = checksum or hashlib.sha256(data).hexdigest()
+        self.file("gradle/wrapper/gradle-wrapper.properties", (
+            "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\n" +
+            "zipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n" +
+            "validateDistributionUrl=true\ndistributionUrl=" + url + "\ndistributionSha256Sum=" + checksum + "\n"
+        ).encode())
+        return archive
+
+    def test_wrapper_archive_cache_keeps_original_verification_without_completion_markers(self):
+        archive = self.wrapper_cache()
+        state = self.root / "state"
+        state.mkdir(mode=0o700)
+        (state / "private").mkdir(mode=0o700)
+        with patch.object(m, "ROOT", self.root):
+            m.stage_pinned_wrapper_archive(state)
+        copies = list((state / "gradle-home").rglob("*.zip"))
+        self.assertEqual(len(copies), 1)
+        self.assertEqual(copies[0].read_bytes(), archive.read_bytes())
+        self.assertEqual(list(state.rglob("*.ok")), [])
+        proof = m.private_json(state / "private/wrapper-cache.json")
+        self.assertTrue(proof["wrapperVerificationRequired"])
+        self.assertFalse(proof["completionMarkerCreated"])
+        with patch.object(m, "ROOT", self.root), self.assertRaises(FileExistsError):
+            m.stage_pinned_wrapper_archive(state)
+
+    def test_wrapper_cache_checksum_failure_retains_input_and_stages_nothing(self):
+        archive = self.wrapper_cache(checksum="f" * 64)
+        before = archive.read_bytes()
+        with patch.object(m, "ROOT", self.root), self.assertRaises(ValueError):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+        self.assertEqual(archive.read_bytes(), before)
+        self.assertFalse((self.root / "state").exists())
+
+    def test_wrapper_cache_refuses_linked_archive_and_unsupported_distribution_origin(self):
+        archive = self.wrapper_cache(url="https\\://unapproved.invalid/gradle-9.7.0-bin.zip")
+        with patch.object(m, "ROOT", self.root), self.assertRaises(ValueError):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+        self.wrapper_cache()
+        original = archive.with_suffix(".original")
+        archive.rename(original)
+        archive.symlink_to(original)
+        with patch.object(m, "ROOT", self.root), self.assertRaises(ValueError):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+
+    def test_absent_wrapper_archive_retains_normal_bootstrap_path(self):
+        with patch.object(m, "ROOT", self.root):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+        self.assertFalse((self.root / "state").exists())
 
     def test_hash_binds_actual_owned_file_and_detects_mutation(self):
         path = self.file("owned.bin")
