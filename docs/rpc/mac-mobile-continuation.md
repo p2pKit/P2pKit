@@ -150,7 +150,8 @@ prepare a new session after signing is available to add the iPhone producer.
 Preparation runs independently supervised strict Gradle builds, stages the
 source-matched Mac native library and exactly its manifest JAR, verifies the
 XCFramework provenance, builds the signed development iPhone app and verifies
-its signature. Before the tool checks, it bootstraps the checked-in Gradle
+its signature. JVM facade and Android unit regressions must pass their original
+native finalization before products are prepared. Before the tool checks, it bootstraps the checked-in Gradle
 distribution with a separately supervised `--version` command in the new private
 Gradle home. Distribution download has its own preparation deadline; the
 unchanged 120-second wrapper Stop deadline remains a cleanup boundary.

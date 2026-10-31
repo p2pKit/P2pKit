@@ -390,6 +390,9 @@ class Session:
 
     def prepare(self, team):
         self.doctor()
+        self.command("prepare-phone-regressions", [":p2p-sample-rpc:jvmTest",
+            ":p2p-sample-android:testDebugUnitTest", "--dependency-verification=strict", "--console=plain",
+            "--no-parallel", "--max-workers=2"], 2400, gradle=True)
         keys = self.campaign_keys()
         tasks = [":p2p-sample-rpc:prepareRpcCapacityLab", ":p2p-sample-android:assembleDebug"]
         if team is not None:
