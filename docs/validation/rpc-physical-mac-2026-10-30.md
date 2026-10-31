@@ -1,6 +1,6 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
-## October31 continuation: verified wrapper archive and compiler routing
+## October31 continuation: verified build inputs and retained network failures
 
 **Physical qualification remains incomplete. Each of the four measured steady
 runs remains0s.** Main was fetched again and still matches
@@ -8,8 +8,8 @@ runs remains0s.** Main was fetched again and still matches
 `a11d94517d0a28e1045c880eeb3fbf21d34de81b`.
 
 The new frozen preparation source is
-`c5b57d558adb87d708f9d04aece9b5610bb4d6a3`, tree
-`d2f82b920f24ded5aedcec729d6545071397cc22`, on the separate campaign worktree
+`70700ce039c826fbdc041646bc11c783fb1a3658`, tree
+`ed6fd771242e155e2dadbe238efbbbefc5fb2a31`, on the separate campaign worktree
 and branch `codex/rpc-physical-qualification-20261030`, [PR #532](https://github.com/p2pKit/P2pKit/pull/532).
 No replacement APK, framework, signed iPhone app or Mac driver inventory has
 yet been admitted for this source. Historical product hashes below retain their
@@ -44,6 +44,36 @@ duplicate declarations and repository overrides. Dependency locks, verification
 metadata, repository order and required Google inputs remain unchanged.
 Current-source native regression execution and matched product preparation are
 still required; offline routing checks are not compilation or phone evidence.
+
+The next preparation at `c5b57d558adb87d708f9d04aece9b5610bb4d6a3`, tree
+`d2f82b920f24ded5aedcec729d6545071397cc22`, failed resolving the cryptography
+plugin before compilation. Its enclosing preparation elapsed341.813s, with
+product1/final1, Stop0 and no owned survivors. It produced no replacement
+product inventory and contacted no phone. Its original evidence remains private.
+
+The new source explicitly admits Gradle's supported read-only external
+dependency cache from a sealed, closed **local** producer. The selected snapshot
+contains1,434 artifact/metadata files totaling586,948,841bytes, with manifest
+SHA-256 `22485043cf56ab483803952c9a3a40903efe4bf78d52ae7aeb167cc69706f712`.
+Its successful original `prepare-products` invocation binds
+`5af1d503b60d11210441125e2666872bb01427d1`, and the wrapper, plugin provenance
+policy and verification metadata are byte-identical to the new source.
+Each copied external artifact matches the current checked-in SHA-256; original
+Gradle module metadata is separately inventory-bound. Copied files are mode0400.
+The snapshot contains no P2pKit product, transform, script, lock or wrapper
+completion marker. The full input inventory is checked before and after every
+native command; missing dependencies still resolve normally. Strict verification,
+locks, forced execution, signing and matched product preparation remain required.
+All41 offline preparation controls passed, including original-producer failures,
+source-pin/policy changes, links, writable/additional inputs, Gradle's unpadded
+content slots and forbidden P2pKit artifacts. This is build-input reuse, not
+old-source phone/driver reuse or physical qualification.
+
+To preserve build space,1,753,991,340bytes of reproducible dependency files from
+three earlier closed private caches were reclaimed after checking their native
+finalization, absence of open files, exact file lifetimes and a retained hash
+inventory. Original logs, receipts, phone records and archived products were
+preserved. The selected producer above and its new read-only snapshot remain.
 
 A fresh selected-device observation opened the iPhone's manually paired
 wireless Apple control connection with Developer Mode enabled. A fresh USB
