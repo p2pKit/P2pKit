@@ -247,6 +247,15 @@ def campaign_environment(original, state):
     return value
 
 
+def verify_android_campaign_identity(raw):
+    need(type(raw) is bytes and 0 < len(raw) <= 262144, "Bounded APK identity output required")
+    lines = raw.decode("utf-8", errors="strict").splitlines()
+    packages = [line for line in lines if line.startswith("package:")]
+    need(len(packages) == 1 and re.match(r"^package: name='dev\.p2pkit\.sample\.android\.rpclab' ", packages[0]) and
+         lines.count("application-debuggable") == 1,
+         "Only the separate debuggable RPC campaign package may enter preparation")
+
+
 def read_only_dependency_cache(state):
     """Only sealed external inputs from a finalized local producer; never compiled project outputs."""
     cache = state.parent / "tool-cache/gradle-ro-dependencies"
@@ -551,11 +560,18 @@ class Session:
             ":p2p-sample-android:testDebugUnitTest", "--dependency-verification=strict", "--console=plain",
             "--no-parallel", "--max-workers=2"], 2400, gradle=True)
         keys = self.campaign_keys()
-        tasks = [":p2p-sample-rpc:prepareRpcCapacityLab", ":p2p-sample-android:assembleDebug"]
+        tasks = [":p2p-sample-rpc:prepareRpcCapacityLab", ":p2p-sample-android:assembleDebug",
+                 "-Pp2pkitRpcCampaign=true"]
         if team is not None:
             need(re.fullmatch("[A-Z0-9]{10}", team), "Exact development team identifier required, not a credential")
             tasks += [":p2p-sample-rpc:verifyP2pKitRpcExampleDebugXCFrameworkProvenance"]
         self.command("prepare-products", tasks, 7200, gradle=True)
+        apk = ROOT / "samples/p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk"
+        original_apk = artifact(apk)
+        identity = self.command("prepare-android-identity", [Path(os.environ["ANDROID_HOME"]) /
+            "build-tools/36.0.0/aapt2", "dump", "badging", apk])
+        verify_android_campaign_identity((self.state / "evidence" / identity["id"] / "product.stdout.log").read_bytes())
+        need(artifact(apk) == original_apk, "APK changed during identity verification")
         paths = {"android-apk": ROOT / "samples/p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk",
                  "jvm-manifest": ROOT / "samples/p2p-sample-rpc/build/capacity-lab/manifest.json"}
         paths.update({"jvm-" + p.name: p for p in (ROOT / "samples/p2p-sample-rpc/build/capacity-lab").glob("*.jar")})

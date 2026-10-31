@@ -19,7 +19,7 @@ import time
 
 import rpc_mobile_capacity as protocol
 
-ANDROID_PACKAGE = 'dev.p2pkit.sample.android'
+ANDROID_PACKAGE = 'dev.p2pkit.sample.android.rpclab'
 IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 need = protocol.need
 MAX_COMMANDS = 20_000

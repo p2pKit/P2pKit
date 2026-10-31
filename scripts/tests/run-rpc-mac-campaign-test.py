@@ -23,6 +23,15 @@ spec.loader.exec_module(m)
 
 
 class Preparation(unittest.TestCase):
+    def test_apk_identity_rejects_canonical_foreign_duplicate_or_non_debuggable_products(self):
+        good = b"package: name='dev.p2pkit.sample.android.rpclab' versionCode='1'\napplication-debuggable\n"
+        m.verify_android_campaign_identity(good)
+        for wrong in (good.replace(b'.rpclab', b''), good.replace(b'.rpclab', b'.other'),
+                      good.replace(b'application-debuggable\n', b''), good + good,
+                      good + b'application-debuggable\n', b'', b'\xff', None):
+            with self.subTest(raw=wrong), self.assertRaises((ValueError, UnicodeDecodeError)):
+                m.verify_android_campaign_identity(wrong)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

@@ -357,6 +357,37 @@ class NativeBackendPolicy(unittest.TestCase):
                 value.publish('inbox.txt', b'x=1\n', 60)
             self.assertEqual(len(value.copy.call_args_list), 2)
 
+    def test_absent_output_needs_only_exact_inventory_and_cannot_refresh_a_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = self.fixture(Path(tmp).resolve())
+            self.assertIsNone(value.read('telemetry.txt', 4))
+            value.inventory.assert_called_once_with(4)
+            value.verify.assert_not_called()
+            value.download.assert_not_called()
+
+    def test_present_output_keeps_pre_and_post_transport_checks_and_exact_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = self.fixture(Path(tmp).resolve())
+            value.inventory.return_value = {'ready.txt': 4}
+            self.assertEqual(value.read('ready.txt', 4), b'x=1\n')
+            self.assertEqual(value.verify.call_count, 2)
+            value.download.assert_called_once_with('ready.txt', 4)
+            value.download.return_value = b'x=1'
+            with self.assertRaises(ValueError):
+                value.read('ready.txt', 4)
+
+    def test_inventory_cannot_accept_other_or_missing_device_even_for_absence(self):
+        value = m.DevicectlFiles.__new__(m.DevicectlFiles)
+        value.selected, value.remote = 'SELECTED', 'EXACT-SLOT'
+        for identity in ('SELECTED', 'OTHER', None):
+            value.command = Mock(return_value=dict(result=dict(deviceIdentifier=identity, files=[])))
+            with self.subTest(identity=identity):
+                if identity == 'SELECTED':
+                    self.assertEqual(value.inventory(4), {})
+                else:
+                    with self.assertRaises(ValueError):
+                        value.inventory(4)
+
     def test_corrupt_or_partial_device_copy_never_publishes_seal(self):
         with tempfile.TemporaryDirectory() as tmp:
             value = self.fixture(Path(tmp).resolve())

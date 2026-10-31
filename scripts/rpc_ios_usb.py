@@ -391,6 +391,8 @@ class DevicectlFiles:
     def inventory(self, deadline):
         value = self.command('slot-files', ['device', 'info', 'files', '--device', self.selected,
             '--domain-type', 'appDataContainer', '--domain-identifier', IOS_PACKAGE, '--subdirectory', self.remote], deadline)
+        need(value['result'].get('deviceIdentifier') == self.selected,
+             'File inventory must identify the exact selected physical device')
         return file_inventory(value)
 
     def slot_present(self, deadline):
@@ -430,9 +432,14 @@ class DevicectlFiles:
 
     def read(self, name, deadline):
         need(name in OUTPUTS)
-        self.verify(deadline)
         rows = self.inventory(deadline)
-        raw = self.download(name, deadline) if name in rows else None
+        if name not in rows:
+            # An exact device-bound absence carries no payload or freshness.
+            # Avoid three wireless commands just to observe no new record.
+            return None
+        self.verify(deadline)
+        raw = self.download(name, deadline)
+        need(len(raw) == rows[name], 'Downloaded output differs from its observed size')
         self.verify(deadline)
         return raw
 

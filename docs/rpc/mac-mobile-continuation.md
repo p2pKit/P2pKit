@@ -160,6 +160,23 @@ prepared JAR/native entry, APK, framework and complete signed app inventory.
 Changing/additionally inserting files makes reuse fail. Unsigned app ZIP hashes
 cannot stand in for the signed installed executable hash.
 
+The source-prepared Android APK opts into `-Pp2pkitRpcCampaign=true`, giving only
+that Debug build the `dev.p2pkit.sample.android.rpclab` application identity and
+`P2pKit RPC Lab` name. Ordinary Debug and Release identities remain unchanged.
+The fixed campaign controller addresses only this lab package; it never uninstalls
+an owner's differently signed sample to resolve `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+The class namespace remains unchanged. Before a first install, inspect any existing
+lab installation and its ownership; a separate package is not permission to overwrite
+an uncertain lab runtime. The opt-in is part of the exact preparation command receipt.
+
+The iPhone developer launch is consumed once per process. A prepared foreground
+wait prevents idle sleep for at most600s per command wait; leaving the foreground
+cancels it and retains a pre-start failure when the protected files remain accessible.
+Returning cannot recreate the old slot. This safety bound does not extend any
+coordinator setup, four-second observation or runtime workload deadline. Wireless
+absent-record reads use one exact device-bound inventory; present records retain
+pre/post transport verification, exact size and the original observation budget.
+
 Source-prepared mobile campaigns use a dedicated, stable capacity-approval
 namespace on each phone. Ordinary application pairing keeps its existing
 Keychain/Keystore namespace and device identity. Campaign import and exact-pin
