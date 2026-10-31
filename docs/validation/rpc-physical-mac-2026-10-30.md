@@ -1,5 +1,68 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
+## October31 continuation: verified wrapper archive and compiler routing
+
+**Physical qualification remains incomplete. Each of the four measured steady
+runs remains0s.** Main was fetched again and still matches
+`eb6ba5da6c06a440de852477cf485264b2ab3dd3`, tree
+`a11d94517d0a28e1045c880eeb3fbf21d34de81b`.
+
+The new frozen preparation source is
+`c5b57d558adb87d708f9d04aece9b5610bb4d6a3`, tree
+`d2f82b920f24ded5aedcec729d6545071397cc22`, on the separate campaign worktree
+and branch `codex/rpc-physical-qualification-20261030`, [PR #532](https://github.com/p2pKit/P2pKit/pull/532).
+No replacement APK, framework, signed iPhone app or Mac driver inventory has
+yet been admitted for this source. Historical product hashes below retain their
+original source bindings and are not reused under this candidate.
+
+The complete150,308,896-byte Gradle9.7.0 archive was downloaded with normal TLS
+verification and independently hashed to the checked-in value
+`84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae`.
+Commit `3b20d96936080d87ef17d5f6eedda09f97b5e07b` stages only that pinned
+build-tool ZIP in a fresh private wrapper cache. It creates no wrapper completion
+marker or P2pKit product. All32 offline campaign controls passed. The original
+wrapper subsequently installed and verified the archive, and its native command
+finalized with Stop0 and no owned survivors.
+
+At source `3b20d969`, tree `ee4a13f51a58a3cefa9035c72663b566dcd16e25`,
+native JDK17/21, Xcode readiness, XcodeGen and Android tool checks passed.
+The first preparation then failed downloading Android build dependencies with
+`No route to host`. Its enclosing preparation elapsed352.336s. A fresh retry
+reached Kotlin compilation but failed an unnecessary Google-repository lookup
+for locked Kotlin compiler inputs; its enclosing preparation elapsed555.939s.
+Both original regression invocations returned product1/final1, Stop0, unchanged
+source, no ownership errors and no owned survivors. No phone deployment or
+workload was dispatched. These failures and the preceding isolated wrapper DNS
+failures remain retained privately.
+
+The new source routes eight additional **exact locked coordinates** to the
+existing Maven Central repository, extending the existing Kotlin metadata
+exception. All16 corresponding JAR/POM downloads from Central matched the
+checked-in SHA-256 values. Eight repository-policy controls passed, including
+refusal of missing filters, changed versions, broad exclusions, inactive filters,
+duplicate declarations and repository overrides. Dependency locks, verification
+metadata, repository order and required Google inputs remain unchanged.
+Current-source native regression execution and matched product preparation are
+still required; offline routing checks are not compilation or phone evidence.
+
+A fresh selected-device observation opened the iPhone's manually paired
+wireless Apple control connection with Developer Mode enabled. A fresh USB
+service-registry inventory found exactly one selected physical Huawei device;
+this does not establish private ADB-key authorization. Identifiers and current
+LAN values remain private. The owner reports that the iPhone is charging from
+an external charger with Mac USB disconnected and both application roles
+stopped. That owner observation is separate from sensor evidence and is not
+battery-discharge qualification. The selected schema2 generator minimum remains
+1GiB; the unchanged125-second scheduling and memory gate must precede each run.
+
+The corrected iPhone startup/Stop, Android private debugging authorization,
+independent128/256 phases, four30-minute steady runs, resource/drain comparison,
+application role matrix, mixed255-Mac-plus-phone clients, genuine socket
+backpressure, long mixed faults and actual unplugged recording remain pending.
+No new physical acceptance checkbox in #525 is complete, and the issue stays
+open. No tag, publication, VPS access, cancelled audit or #520 investigation
+was performed.
+
 ## October31 continuation: startup diagnosis and source correction
 
 **No physical capacity criterion has passed. All four measured steady runs remain0s.**
