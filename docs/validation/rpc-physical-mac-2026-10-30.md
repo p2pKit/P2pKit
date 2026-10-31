@@ -1,5 +1,70 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
+## October31 latest: regressions passed; signing recovery awaits local unlock
+
+**No physical qualification criterion has passed. Android128/256 and
+iPhone128/256 each remain at0/1800s of measured steady workload.** Main was
+fetched again and remains `eb6ba5da6c06a440de852477cf485264b2ab3dd3`, tree
+`a11d94517d0a28e1045c880eeb3fbf21d34de81b`.
+
+The frozen product source remains `70700ce039c826fbdc041646bc11c783fb1a3658`,
+tree `ed6fd771242e155e2dadbe238efbbbefc5fb2a31`. At that source, the original
+supervised JVM/Android regression command passed672 JVM tests and396 Android
+unit tests, with zero failures, errors or skips. Its native result was product0,
+final0, Stop0, unchanged source, no errors and no owned survivors. Product
+preparation also finalized with product0/final0/Stop0, no errors and no survivors.
+The APK, Mac driver/native library and debug XCFramework were independently
+hash-verified and retained. They have not been deployed or physically qualified.
+
+| Current partial prepared product | SHA-256 |
+| --- | --- |
+| Android APK | `02232ee0b13b70c04cfd767ed8a4c3b36c51f4fe805309211ee05a50e8e92f74` |
+| Mac driver manifest | `ea69e350914d918b47b6ab204bc0d9f3f2a50f6138e96beb361903d6f4641553` |
+| Mac capacity driver JAR | `fb242e2f8e31c01cececa34140681e070d85faace25787914c47fe6d24b24625` |
+| Mac scoped TCP library | `f45941542c1e9ce60d74c76e6a4a3f8624f8102468008117f7671523d9b12bb8` |
+| Mac native manifest JAR | `4e16ce7095fde0de99eeb4b9a1beb71f45cca2695ee1641dfd0062c4b48d37df` |
+| iPhone ARM64 framework | `878f4d3b56b9aa232252d52fca54794264e09b66c7f1856918ef1b333de77e32` |
+| Universal simulator framework | `c1fdf8e6d11b5616f2635a65a183ca1750f1005951de6e9657b1d2a0e8bc3dce` |
+| Signed iPhone app/executable/debug dylib and complete app inventory | Unavailable; signing has not passed |
+
+Xcode failed signing the development debug dylib with `errSecInternalComponent`.
+That original invocation finalized with product65/final65/Stop0, no errors,
+unchanged source and no owned survivors. System security diagnostics recorded
+keychain unlock attempts at the failure; no password or signing material was
+collected. The prior worker retired through its bounded protocol. A replacement
+signing-only recovery is queued behind the owner's existing local Terminal
+authorization and keychain-unlock prompts. It verifies the original finalized
+receipts and retained products, retries only the iPhone producer, checks unchanged
+non-iPhone products, verifies the signature and then verifies the complete manifest.
+Neither a queued retry nor retained failed signing inputs is a prepared signed app.
+
+Required hosted checks on report commit
+`36186c1faf020b7604ffdeeab3e15bf36ed79b2c` exposed a Windows Java setup failure
+before native test execution: the exact selector `21.0.12+101.0` no longer matched
+the supplier listing, which identifies the same build as `21.0.12+101.0.LTS`.
+Commit `4b5c5226` retains that LTS suffix. The upstream official release asset still
+matches the unchanged205,073,461-byte supplier and SHA-256
+`f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e`.
+The exact archive pin and complete selected-JDK byte verification remain required.
+All21 Windows packaging source controls,78 negative JDK/cache policy controls and
+the modular workflow policy passed. The original hosted failure remains retained;
+required checks for the new PR head must complete independently. This CI-only
+correction does not change the frozen Mac/phone product binding above.
+
+The current deployment/startup/Stop gates, private Android-key consent,
+independent physical phases and application role matrix remain pending. Full
+cohort measurements, throughput, correctness, p95/p99, missed schedules, phone
+CPU/RSS/native threads, connected idle, post-Stop drain and generator workload
+utilization remain unavailable. Simultaneous255 Mac plus one physical-phone
+client, genuine socket backpressure, long mixed faults and actual unplugged
+recording still require their reviewed extensions and original execution evidence.
+The owner reports external iPhone charging with Mac USB disconnected; this is
+neither sensor evidence nor discharge qualification. The1GiB generator admission,
+125-second scheduling gate and thermal/cleanup boundaries remain selected.
+#525 stays open with no new acceptance box checked. All identifiers, network
+values, keys, signed inputs and raw evidence remain private. No tag, publication,
+VPS work, cancelled full audit or deferred #520 investigation was performed.
+
 ## October31 continuation: verified build inputs and retained network failures
 
 **Physical qualification remains incomplete. Each of the four measured steady
