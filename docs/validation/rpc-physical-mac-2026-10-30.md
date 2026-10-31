@@ -113,7 +113,12 @@ exact inventory for absent wireless output. Present output keeps pre/post transp
 checks, exact sizes and the original deadline. Ordinary Android identities,
 `host128()`, public defaults, protected approvals and the Apple ABI baseline are
 unchanged. These fixes have not yet been physically qualified or substituted
-into the70700ce0 attempt. New source-matched preparation is running independently.
+into the70700ce0 attempt. Replacement preparation failed during JVM test dependency
+resolution after54 executed tasks: a DNS failure during the Kotlin plugin marker
+lookup disabled Maven Central, leaving locked test dependencies unresolved. Its
+original native result was product1/final1/Stop0, with no errors or owned survivors.
+It contacted no phone and admitted no replacement products. Recovery must use
+verified external build inputs and a fresh source-bound preparation state.
 
 Focused offline controls passed:31 iPhone USB,27 phone-control policy,42 Mac
 campaign,6 bounded mobile commands,40 Mac mobile control,25 mobile coordinator
@@ -123,6 +128,12 @@ temporary directory and passed without relaxing file policy. Native Swift/XCTest
 behavior verification and replacement-product preparation remain required.
 All14 required components and the complete hosted gate passed for the prior
 report head720e23b5; the new code/report head requires its own checks.
+The4b0a98e1 source component failed because its supplemental phone-route test
+still expected90 unit methods and79 owner methods. The actual maintained roster
+contains92 and81 after the two new foreground/cancellation tests. The corrected
+check pins both new methods and retains the complete roster;10 scalable-I/O and
+27 phone-control policy tests pass locally. This is inventory verification,
+not native XCTest or physical-device credit.
 
 Simultaneous255 Mac plus one physical-phone client, genuine socket slow-consumer
 backpressure, long mixed-fault workloads, reviewed unplugged recording, independent
