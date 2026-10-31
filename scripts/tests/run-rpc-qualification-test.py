@@ -188,9 +188,9 @@ class AdmissionTests(unittest.TestCase):
         # Include capture, deadlines, report retention and supervisor merge
         # controls selected by the actual executor, including inherited cases.
         # These are required inventory totals, not evidence of native execution.
-        self.assertEqual(q.control_inventory('macos-x64'), 241)
-        self.assertEqual(q.control_inventory('macos-arm64'), 241)
-        self.assertEqual(q.control_inventory('linux-x64'), 239)
+        self.assertEqual(q.control_inventory('macos-x64'), 242)
+        self.assertEqual(q.control_inventory('macos-arm64'), 242)
+        self.assertEqual(q.control_inventory('linux-x64'), 240)
 
     def test_static_inventory_matches_actual_selected_suite_without_running_native_fixtures(self):
         from audit_control_suite import class_names
@@ -1187,7 +1187,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
-        self.assertEqual(q.control_inventory('linux-x64'), 239)
+        self.assertEqual(q.control_inventory('linux-x64'), 240)
 
     def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
         for lane in ('apple-arm64', 'apple-x64'):
