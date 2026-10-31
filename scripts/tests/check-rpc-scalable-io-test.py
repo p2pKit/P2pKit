@@ -37,15 +37,17 @@ class ReceiptTest(unittest.TestCase):
         self.assertFalse(any("-only-testing" in item or "-skip-testing" in item for item in command))
         expected = ios.phone.inventory(ROOT)
         self.assertEqual({target: len(tests) for target, tests in expected.items()},
-                         {"p2pkit-rpc-phone-tests": 90, "p2pkit-rpc-phone-uitests": 7})
+                         {"p2pkit-rpc-phone-tests": 92, "p2pkit-rpc-phone-uitests": 7})
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       expected["p2pkit-rpc-phone-tests"])
         owner = {case for case in expected["p2pkit-rpc-phone-tests"]
                  if case.startswith("RpcPhoneRunOwnerTests/")}
-        self.assertEqual(len(owner), 79)  # Preserve the original77 plus2 used-slot/sealed-input regressions.
+        self.assertEqual(len(owner), 81)  # Original77,2 used-slot/sealed-input and2 foreground regressions.
         self.assertTrue({"RpcPhoneRunOwnerTests/" + name + "()" for name in (
             "testUsedOrInterruptedRuntimeOutputsAreRefusedBeforeReusingAUsbRun",
             "testDebugCampaignAndNextInputsRequireSealsAndCannotBeReplayedIntoANewFileOwner",
+            "testPreparedDeveloperWaitStaysAwakeAndForegroundLossRecordsCancellationWithoutReplay",
+            "testExplicitPreStartCampaignCancellationRetiresKeepAwakeAndPreservesFailedSlot",
         )} <= owner)
         self.assertEqual({case for case in expected["p2pkit-rpc-phone-tests"]
                           if case.startswith("RpcPhoneEnvironmentSamplerTests/")},

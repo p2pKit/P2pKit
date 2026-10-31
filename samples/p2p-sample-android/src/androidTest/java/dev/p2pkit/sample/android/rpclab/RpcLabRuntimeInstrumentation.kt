@@ -50,6 +50,8 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
     private var lab: RpcPhoneLab? = null
     private var fixtureRoot: File? = null
     private var fixtureAlias: String? = null
+    private var capacityTrustFixtureRoot: File? = null
+    private var capacityTrustFixtureAlias: String? = null
     private var capacityFixture: File? = null
 
     override fun onCreate(arguments: Bundle?) {
@@ -157,6 +159,13 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
 
         stage = "namespace-and-approval-validation"
         store.replace(appId, clientPurpose, setOf(pinB))
+        val capacityRoot = File(targetContext.noBackupFilesDir.canonicalFile, "rpc-phone-lab-capacity-trust-$token")
+        val capacityAlias = "dev.p2pkit.rpc.phone-lab.capacity-trust.v1-$token"
+        check(!capacityRoot.exists() && !keys.containsAlias(capacityAlias))
+        capacityTrustFixtureRoot = capacityRoot
+        capacityTrustFixtureAlias = capacityAlias
+        val capacityStore = AndroidRpcLabTrustStore(targetContext, token, mobileCapacity = true)
+        check(capacityStore.load(appId, hostPurpose).isEmpty())
         check(store.load(appId, hostPurpose) == setOf(pinA) && store.load(appId, clientPurpose) == setOf(pinB))
         check(runCatching { store.load(AppId("not.the.synthetic.app"), hostPurpose) }.isFailure)
         val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
@@ -169,6 +178,13 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
             store.replace(appId, hostPurpose, approved)
             check(AndroidRpcLabTrustStore(targetContext, token).load(appId, hostPurpose) == approved)
             check(store.load(appId, clientPurpose) == setOf(pinB))
+            capacityStore.replace(appId, hostPurpose, approved)
+            check(keys.getKey(capacityAlias, null).encoded == null)
+            check(AndroidRpcLabTrustStore(targetContext, token, mobileCapacity = true)
+                .load(appId, hostPurpose) == approved)
+            capacityStore.replace(appId, hostPurpose, emptySet())
+            check(capacityStore.load(appId, hostPurpose).isEmpty())
+            check(store.load(appId, hostPurpose) == approved && store.load(appId, clientPurpose) == setOf(pinB))
         }
         check(runCatching { store.replace(appId, hostPurpose, tooMany) }.isFailure)
         check(store.load(appId, hostPurpose) == tooMany.take(256).toSet())
@@ -444,10 +460,10 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
             }
             check(root.delete())
         }
-        fixtureAlias?.let { alias ->
+        listOfNotNull(capacityTrustFixtureAlias, fixtureAlias).forEach { alias ->
             KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(alias) }
         }
-        fixtureRoot?.let { root ->
+        listOfNotNull(capacityTrustFixtureRoot, fixtureRoot).forEach { root ->
             val known = RpcTrustPurpose.entries.map { "${it.name}.aesgcm" }.toSet() + "trust.lock"
             for (file in checkNotNull(root.listFiles())) {
                 val metadata = Os.lstat(file.path)

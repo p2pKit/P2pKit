@@ -1714,6 +1714,83 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testPreparedDeveloperWaitStaysAwakeAndForegroundLossRecordsCancellationWithoutReplay() async throws {
+        #if DEBUG
+        let label = "control-" + UUID().uuidString.lowercased()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        model.setForeground(true)
+        let arguments = ["phone", "--rpc-usb-prepare", label, "--rpc-usb-source-sha", model.compiledSource,
+                         "--rpc-usb-artifact-sha256", try RpcPhoneProcessSampler.installedArtifact(),
+                         "--rpc-usb-client-count", "128"]
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertNil(model.startProblem)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+        let files = try RpcPhoneCapacityFiles(runLabel: label)
+        let prepared = try XCTUnwrap(files.read("prepared.txt"))
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        // No task scheduling is required to preserve this immediate lifecycle interruption.
+        model.setForeground(false)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        let failure = try XCTUnwrap(files.read("failed.txt"))
+        XCTAssertEqual(failure, "failed=true\nphase=mobile-start\nreason=ForegroundLostBeforeStart\n")
+        await Task.yield()
+        model.setForeground(true)
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertNil(model.startProblem, "The same launch must not recreate its old slot")
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        XCTAssertEqual(try files.read("prepared.txt"), prepared)
+        XCTAssertEqual(try files.read("failed.txt"), failure)
+        XCTAssertNil(try files.read("closed.txt", optional: true), "Cancellation is never a successful Stop")
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        model.setForeground(false)
+        try retirePreparedDeveloperFixture(label: label)
+        #else
+        XCTFail("Prepared developer lifecycle controls require the Debug build")
+        #endif
+    }
+
+    @MainActor
+    func testExplicitPreStartCampaignCancellationRetiresKeepAwakeAndPreservesFailedSlot() async throws {
+        #if DEBUG
+        let label = "control-" + UUID().uuidString.lowercased()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        model.setForeground(true)
+        let arguments = ["phone", "--rpc-usb-prepare", label, "--rpc-usb-source-sha", model.compiledSource,
+                         "--rpc-usb-artifact-sha256", try RpcPhoneProcessSampler.installedArtifact(),
+                         "--rpc-usb-client-count", "256"]
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+        model.clearMobile()
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        let files = try RpcPhoneCapacityFiles(runLabel: label)
+        XCTAssertEqual(try files.read("failed.txt"),
+                       "failed=true\nphase=mobile-start\nreason=LocalCampaignCancelledBeforeStart\n")
+        XCTAssertNil(try files.read("closed.txt", optional: true))
+        await Task.yield()
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertNil(model.startProblem)
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        model.setForeground(false)
+        try retirePreparedDeveloperFixture(label: label)
+        #else
+        XCTFail("Prepared developer lifecycle controls require the Debug build")
+        #endif
+    }
+
+    private func retirePreparedDeveloperFixture(label: String) throws {
+        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: false)
+        let directory = base.appendingPathComponent("rpc-capacity/" + label)
+        let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        for entry in entries {
+            guard ["prepared.txt", "failed.txt"].contains(entry.lastPathComponent), unlink(entry.path) == 0 else {
+                throw RpcPhoneCapacityIOError.resourceRetirement
+            }
+        }
+        guard rmdir(directory.path) == 0 else { throw RpcPhoneCapacityIOError.resourceRetirement }
+    }
+
     private func withCapacityFiles(_ body: (RpcPhoneCapacityFiles, URL) throws -> Void) throws {
         let label = "control-" + UUID().uuidString.lowercased()
         let files = try RpcPhoneCapacityFiles(runLabel: label, requireNew: true)

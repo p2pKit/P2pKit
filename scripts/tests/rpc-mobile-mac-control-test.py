@@ -189,6 +189,38 @@ class MacAdmission(unittest.TestCase):
             with self.assertRaises((ValueError, RuntimeError)):
                 ios_coordinator.settings(values | changed, '2' * 40, 'offline-mac', lab)
 
+    def test_wireless_ios_control_is_an_explicit_schema2_option_without_changing_the_rpc_lan(self):
+        values = {key: val for key, val in self.settings().items() if key not in ('androidUsbSerial', 'adb')}
+        values |= dict(iosDeviceIdentifier='11111111-2222-3333-4444-555555555555', hostInterface='en0')
+        baseline = ios_coordinator.settings(values, '2' * 40, 'offline-mac', lab)
+        for transport in ('wired', 'wireless'):
+            self.assertEqual(ios_coordinator.settings(values | dict(iosControlTransport=transport),
+                                                     '2' * 40, 'offline-mac', lab), baseline)
+        for changed in (dict(iosControlTransport='localNetwork'), dict(iosControlTransport='auto'),
+                        dict(iosControlTransport=''), dict(iosControlTransport='wireless', endpointAddress='8.8.8.8')):
+            with self.subTest(change=changed), self.assertRaises((ValueError, RuntimeError)):
+                ios_coordinator.settings(values | changed, '2' * 40, 'offline-mac', lab)
+        legacy = {k: v for k, v in values.items() if k != 'clientCount'} | dict(schema='1')
+        with self.assertRaises((ValueError, RuntimeError)):
+            ios_coordinator.settings(legacy | dict(iosControlTransport='wireless'), '2' * 40, 'offline-mac', lab)
+
+    def test_explicit_mac_memory_policy_is_schema2_and_does_not_change_rpc_configuration(self):
+        android = self.settings()
+        ios = {k: v for k, v in android.items() if k not in ('androidUsbSerial', 'adb')}
+        ios |= dict(iosDeviceIdentifier='11111111-2222-3333-4444-555555555555', hostInterface='en0')
+        for module, values in ((coordinator, android), (ios_coordinator, ios)):
+            baseline = module.settings(values, '2' * 40, 'offline-mac', lab)
+            for gib in ('1', '6'):
+                self.assertEqual(module.settings(values | dict(macGeneratorMinimumAvailableGiB=gib),
+                                                 '2' * 40, 'offline-mac', lab), baseline)
+            for invalid in ('0', '01', '2', 'auto', ''):
+                with self.subTest(invalid=invalid), self.assertRaises((ValueError, RuntimeError)):
+                    module.settings(values | dict(macGeneratorMinimumAvailableGiB=invalid),
+                                    '2' * 40, 'offline-mac', lab)
+            legacy = {k: v for k, v in values.items() if k != 'clientCount'} | dict(schema='1')
+            with self.assertRaises((ValueError, RuntimeError)):
+                module.settings(legacy | dict(macGeneratorMinimumAvailableGiB='1'), '2' * 40, 'offline-mac', lab)
+
     def test_native_mac_admission_is_explicit_unprivileged_and_not_rosetta(self):
         run = coordinator.Run.__new__(coordinator.Run)
         with patch('audit_processes.host_role', return_value='macos-arm64'), \
@@ -609,6 +641,35 @@ class SlotPreparation(unittest.TestCase):
 
 
 class InstallBeforeRun(unittest.TestCase):
+    def test_ios_install_requires_checkpoint_before_first_device_command(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                run = object.__new__(ios_coordinator.Run)
+                run.result, run.control, run.bound = {}, root, binding('Ios')
+                run.values = dict(iosControlTransport='wireless')
+                run.generator_prerequisites = Mock()
+                run.args = SimpleNamespace(install_ios_app=root / 'OFFLINE_NOT_INSTALLED.app', prepare_ios_slot=False)
+                run.phone = Mock()
+                writer = load('ios_checkpoint_writer', 'run-audit-command.py')
+                run.runner = SimpleNamespace(write_new_json=writer.write_new_json)
+                if failure:
+                    run.runner.write_new_json = Mock(side_effect=OSError('OFFLINE_CHECKPOINT_FAILURE'))
+                    with self.assertRaises(OSError):
+                        run.prerequisites()
+                    run.phone.backend.install_app.assert_not_called()
+                    run.phone.start.assert_not_called()
+                else:
+                    def install(*args):
+                        self.assertEqual(writer.read_json(root / 'device-control-started.json'), run.bound)
+                        self.assertTrue(run.result['deviceControlStarted'])
+                        raise ValueError('OFFLINE_INSTALL_STOP_NO_DEVICE_EXECUTION')
+
+                    run.phone.backend.install_app.side_effect = install
+                    with self.assertRaisesRegex(ValueError, 'OFFLINE_INSTALL_STOP'):
+                        run.prerequisites()
+                    run.phone.start.assert_not_called()
+
     def test_android_install_is_checksum_bound_and_does_not_claim_readiness(self):
         with tempfile.TemporaryDirectory() as temporary:
             apk = Path(temporary) / 'sample.apk'

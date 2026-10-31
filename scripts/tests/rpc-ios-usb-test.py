@@ -98,6 +98,45 @@ class FileProtocol(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.selected_details(dict(result=dict(devices=[row])), 'SELECTED')
 
+    def test_wireless_control_requires_explicit_selection_and_observed_manual_pairing(self):
+        row = dict(identifier='SELECTED', hardwareProperties=dict(platform='iOS'),
+                   deviceProperties=dict(developerModeStatus='enabled'),
+                   connectionProperties=dict(transportType='localNetwork', pairingState='paired',
+                                             authenticationType='manualPairing', tunnelState='connected'))
+        m.selected_details(dict(result=row), 'SELECTED', control_transport='wireless')
+        with self.assertRaises(ValueError):
+            m.selected_details(dict(result=row), 'SELECTED')
+        with self.assertRaises(ValueError):
+            m.protocol.ios_usb_details(dict(result=dict(devices=[row])), 'SELECTED')
+        changes = [dict(identifier='OTHER'), dict(deviceProperties={}),
+                   dict(deviceProperties=dict(developerModeStatus='disabled')),
+                   dict(hardwareProperties=dict(platform='visionOS'))]
+        for name, value in (('transportType', 'wired'), ('transportType', 'wireless'),
+                            ('pairingState', 'unpaired'), ('authenticationType', 'automatic'),
+                            ('tunnelState', 'disconnected')):
+            changes.append(dict(connectionProperties=row['connectionProperties'] | {name: value}))
+        for name in ('authenticationType', 'tunnelState', 'pairingState', 'transportType'):
+            changes.append(dict(connectionProperties={k: v for k, v in row['connectionProperties'].items() if k != name}))
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                m.selected_details(dict(result=row | change), 'SELECTED', control_transport='wireless')
+        for transport in ('localNetwork', 'automatic', '', None):
+            with self.subTest(transport=transport), self.assertRaises(ValueError):
+                m.selected_details(dict(result=row), 'SELECTED', control_transport=transport)
+
+    def test_wireless_backend_rechecks_selected_transport_on_every_verification(self):
+        backend = object.__new__(m.DevicectlFiles)
+        backend.selected, backend.control_transport = 'SELECTED', 'wireless'
+        row = dict(identifier='SELECTED', hardwareProperties=dict(platform='iOS'),
+                   deviceProperties=dict(developerModeStatus='enabled'),
+                   connectionProperties=dict(transportType='localNetwork', pairingState='paired',
+                                             authenticationType='manualPairing', tunnelState='connected'))
+        backend.command = lambda *_: dict(result=row)
+        backend.verify(30)
+        row['connectionProperties']['transportType'] = 'wired'
+        with self.assertRaises(ValueError):
+            backend.verify(30)
+
     def test_missing_unknown_or_ambiguous_file_metadata_is_not_absence_or_a_regular_file(self):
         row = dict(name='prepared.txt', isDirectory=False, isSymbolicLink=False, fileSize=200)
         self.assertEqual(m.file_inventory(dict(result=dict(files=[row]))), {'prepared.txt': 200})
@@ -109,6 +148,54 @@ class FileProtocol(unittest.TestCase):
         for rows in ([row, row], [{k: v for k, v in row.items() if k != 'isSymbolicLink'}], None):
             with self.assertRaises(ValueError):
                 m.file_inventory(dict(result=dict(files=rows)))
+
+    def test_nested_coredevice_metadata_preserves_exact_size_and_rejects_missing_or_conflicting_flags(self):
+        row = dict(name='prepared.txt', metadata=dict(size=200),
+                   resources=dict(isDirectory=False, isSymbolicLink=False))
+        self.assertEqual(m.file_inventory(dict(result=dict(files=[row]))), {'prepared.txt': 200})
+        changes = [dict(metadata={}), dict(metadata=dict(size=True)), dict(metadata=dict(size='200')),
+                   dict(metadata=dict(size=16385)), dict(resources={}), dict(resources=[]),
+                   dict(resources=dict(isDirectory=0, isSymbolicLink=False)),
+                   dict(resources=dict(isDirectory=False, isSymbolicLink=0)),
+                   dict(resources=dict(isDirectory=False, isSymbolicLink=True)),
+                   dict(isDirectory=False), dict(isSymbolicLink=False), dict(fileSize=200)]
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                m.file_inventory(dict(result=dict(files=[row | change])))
+        for key in ('metadata', 'resources'):
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                m.file_inventory(dict(result=dict(files=[{k: v for k, v in row.items() if k != key}])))
+
+    def test_nested_control_directory_observations_cannot_turn_links_or_unknown_flags_into_a_slot(self):
+        backend = object.__new__(m.DevicectlFiles)
+        backend.selected = 'SELECTED'
+        backend.remote = 'Library/Application Support/rpc-capacity/selected-run'
+        names = ('Application Support', 'rpc-capacity', 'selected-run')
+
+        def rows(change):
+            return [dict(name=name, metadata=dict(size=96),
+                         resources=dict(isDirectory=True, isSymbolicLink=False)) | change for name in names]
+
+        for change in ({}, dict(resources=dict(isDirectory=True, isSymbolicLink=True)),
+                       dict(resources=dict(isDirectory='true', isSymbolicLink=False)), dict(metadata=None),
+                       dict(isDirectory=True)):
+            records = iter(rows(change))
+            backend.command = lambda *_: dict(result=dict(files=[next(records)]))
+            with self.subTest(change=change):
+                if not change:
+                    self.assertTrue(backend.slot_present(100))
+                else:
+                    with self.assertRaises(ValueError):
+                        backend.slot_present(100)
+
+    def test_flat_directory_schema_remains_supported_without_inventing_a_size(self):
+        backend = object.__new__(m.DevicectlFiles)
+        backend.selected = 'SELECTED'
+        backend.remote = 'Library/Application Support/rpc-capacity/selected-run'
+        rows = iter(dict(name=name, isDirectory=True, isSymbolicLink=False)
+                    for name in ('Application Support', 'rpc-capacity', 'selected-run'))
+        backend.command = lambda *_: dict(result=dict(files=[next(rows)]))
+        self.assertTrue(backend.slot_present(100))
 
     def test_inbox_retains_full_binding_and_exactly_128_distinct_pins(self):
         self.assertEqual(m.inbox_record(m.protocol.encode(inbox()), bound()), inbox())
@@ -269,6 +356,37 @@ class NativeBackendPolicy(unittest.TestCase):
             with self.assertRaises(ValueError):
                 value.publish('inbox.txt', b'x=1\n', 60)
             self.assertEqual(len(value.copy.call_args_list), 2)
+
+    def test_absent_output_needs_only_exact_inventory_and_cannot_refresh_a_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = self.fixture(Path(tmp).resolve())
+            self.assertIsNone(value.read('telemetry.txt', 4))
+            value.inventory.assert_called_once_with(4)
+            value.verify.assert_not_called()
+            value.download.assert_not_called()
+
+    def test_present_output_keeps_pre_and_post_transport_checks_and_exact_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = self.fixture(Path(tmp).resolve())
+            value.inventory.return_value = {'ready.txt': 4}
+            self.assertEqual(value.read('ready.txt', 4), b'x=1\n')
+            self.assertEqual(value.verify.call_count, 2)
+            value.download.assert_called_once_with('ready.txt', 4)
+            value.download.return_value = b'x=1'
+            with self.assertRaises(ValueError):
+                value.read('ready.txt', 4)
+
+    def test_inventory_cannot_accept_other_or_missing_device_even_for_absence(self):
+        value = m.DevicectlFiles.__new__(m.DevicectlFiles)
+        value.selected, value.remote = 'SELECTED', 'EXACT-SLOT'
+        for identity in ('SELECTED', 'OTHER', None):
+            value.command = Mock(return_value=dict(result=dict(deviceIdentifier=identity, files=[])))
+            with self.subTest(identity=identity):
+                if identity == 'SELECTED':
+                    self.assertEqual(value.inventory(4), {})
+                else:
+                    with self.assertRaises(ValueError):
+                        value.inventory(4)
 
     def test_corrupt_or_partial_device_copy_never_publishes_seal(self):
         with tempfile.TemporaryDirectory() as tmp:

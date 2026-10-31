@@ -8,12 +8,31 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 EXCLUSION = 'excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.4.20")'
+EXCLUSIONS = (
+    EXCLUSION,
+    'excludeVersion("org.jetbrains.kotlin", "kotlin-script-runtime", "2.4.20")',
+    'excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-common", "2.4.20")',
+    'excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-compiler-embeddable", "2.4.20")',
+    'excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-compiler-impl-embeddable", "2.4.20")',
+    'excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-jvm", "2.4.20")',
+    'excludeVersion("org.jetbrains.kotlin", "kotlin-serialization-compiler-plugin-embeddable", "2.4.20")',
+    'excludeVersion("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20")',
+    'excludeVersion("org.jetbrains", "annotations", "13.0")',
+)
 EXPECTED = '''dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google {
             content {
                 excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-script-runtime", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-common", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-compiler-embeddable", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-compiler-impl-embeddable", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-jvm", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-serialization-compiler-plugin-embeddable", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20")
+                excludeVersion("org.jetbrains", "annotations", "13.0")
             }
         }
         mavenCentral()
@@ -34,7 +53,7 @@ def check_project_repositories(source):
     actual = source[starts[0].start():ends[0].start()]
     actual_tokens = [token for token in tokens(actual) if not token.startswith("//")]
     if actual_tokens != tokens(EXPECTED):
-        raise ValueError("Project repositories must retain Google, Central, and only the exact Kotlin metadata exception")
+        raise ValueError("Project repositories must retain Google, Central, and only the exact locked compiler exceptions")
 
 
 class RepositoryContentPolicyTest(unittest.TestCase):
@@ -48,14 +67,18 @@ class RepositoryContentPolicyTest(unittest.TestCase):
         check_project_repositories(self.candidate(EXPECTED.replace(EXCLUSION, "// Exact Central coordinate.\n" + EXCLUSION)))
 
     def test_no_unfiltered_google_lookup_for_the_coordinate(self):
-        with self.assertRaises(ValueError):
-            check_project_repositories(self.candidate(EXPECTED.replace(EXCLUSION, "")))
+        for exclusion in EXCLUSIONS:
+            with self.subTest(exclusion=exclusion), self.assertRaises(ValueError):
+                check_project_repositories(self.candidate(EXPECTED.replace(exclusion, "")))
 
     def test_other_versions_and_modules_are_not_excluded(self):
-        for altered in (EXCLUSION.replace("2.4.20", "2.4.19"), EXCLUSION.replace("kotlin-metadata-jvm", "kotlin-stdlib"),
-                        EXCLUSION.replace("2.4.20", "2.4.20 ")):
-            with self.subTest(altered=altered), self.assertRaises(ValueError):
-                check_project_repositories(self.candidate(EXPECTED.replace(EXCLUSION, altered)))
+        for exclusion in EXCLUSIONS:
+            version = "13.0" if '"annotations"' in exclusion else "2.4.20"
+            for altered in (exclusion.replace(version, version + ".1"),
+                            exclusion.replace(version, version + " "), exclusion.replace('excludeVersion(',
+                                'excludeVersion("unreviewed", ')):
+                with self.subTest(altered=altered), self.assertRaises(ValueError):
+                    check_project_repositories(self.candidate(EXPECTED.replace(exclusion, altered)))
 
     def test_broad_module_or_group_exclusions_are_rejected(self):
         for altered in ('excludeModule("org.jetbrains.kotlin", "kotlin-metadata-jvm")',

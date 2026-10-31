@@ -9,6 +9,10 @@ plugins {
 }
 
 val applicationReleaseVersion = ApplicationReleaseVersion.parse(project.version.toString())
+val rpcCampaign = providers.gradleProperty("p2pkitRpcCampaign").map {
+    require(it == "true") { "p2pkitRpcCampaign accepts only the explicit true opt-in" }
+    true
+}.getOrElse(false)
 
 android {
     namespace = "dev.p2pkit.sample.android"
@@ -22,6 +26,7 @@ android {
         targetSdk = libs.versions.android.sample.targetSdk.get().toInt()
         versionCode = applicationReleaseVersion.androidCode
         versionName = applicationReleaseVersion.name
+        manifestPlaceholders["p2pkitAppLabel"] = "P2pKit Sample"
         // One API37 runtime case, driven explicitly by run-android-art-smoke.py; no third-party test runner.
         testInstrumentationRunner = "dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation"
     }
@@ -36,6 +41,13 @@ android {
     sourceSets.getByName("androidTest").kotlin.srcDir("src/runtimeValidation/kotlin")
 
     buildTypes {
+        debug {
+            if (rpcCampaign) {
+                // A fresh private campaign must not replace an owner's differently signed sample or approvals.
+                applicationIdSuffix = ".rpclab"
+                manifestPlaceholders["p2pkitAppLabel"] = "P2pKit RPC Lab"
+            }
+        }
         release {
             isMinifyEnabled = false
         }

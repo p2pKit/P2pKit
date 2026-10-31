@@ -185,12 +185,23 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('task.device.finalizeValue()', q.SIMULATOR_INIT)
         self.assertIn("['iosX64Test', 'iosSimulatorArm64Test']", q.SIMULATOR_INIT)
         self.assertNotIn('enabled = false', q.SIMULATOR_INIT)
-        # Source inventory: 45 pure policy + 66 modeled Darwin observation
-        # methods, plus 48 native Darwin methods (including inherited cases).
+        # Include capture, deadlines, report retention and supervisor merge
+        # controls selected by the actual executor, including inherited cases.
         # These are required inventory totals, not evidence of native execution.
-        self.assertEqual(q.control_inventory('macos-x64'), 159)
-        self.assertEqual(q.control_inventory('macos-arm64'), 159)
-        self.assertEqual(q.control_inventory('linux-x64'), 157)
+        self.assertEqual(q.control_inventory('macos-x64'), 241)
+        self.assertEqual(q.control_inventory('macos-arm64'), 241)
+        self.assertEqual(q.control_inventory('linux-x64'), 239)
+
+    def test_static_inventory_matches_actual_selected_suite_without_running_native_fixtures(self):
+        from audit_control_suite import class_names
+        controls = q.module('qualification_selected_control_inventory', 'tests/run-audit-command-test.py')
+        for host in ('macos-arm64', 'macos-x64', 'linux-x64', 'windows-x64'):
+            with self.subTest(host=host):
+                actual = sum(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(controls, name)).countTestCases()
+                             for name in class_names(host))
+                self.assertEqual(q.control_inventory(host), actual)
+        with self.assertRaises(ValueError):
+            class_names('unknown')
 
     def test_no_legacy_executor_or_pid_signaling_path(self):
         source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
@@ -1176,8 +1187,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
-        # 45 pure + 66 modeled Darwin + 40 native Linux + 6 Linux observation.
-        self.assertEqual(q.control_inventory('linux-x64'), 157)
+        self.assertEqual(q.control_inventory('linux-x64'), 239)
 
     def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
         for lane in ('apple-arm64', 'apple-x64'):

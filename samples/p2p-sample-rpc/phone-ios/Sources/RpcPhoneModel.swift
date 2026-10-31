@@ -34,7 +34,8 @@ final class RpcPhoneModel: ObservableObject {
 
     private enum LiveReadError: Error { case unavailable }
     private let liveObserver = RpcPhoneLiveObservation<RpcPhoneLab, LiveValue>()
-    let applicationSession = RpcApplicationSession()
+    // The sample history owner is disambiguated from the RPC authorization session in the exported framework.
+    let applicationSession = RpcApplicationSession_()
     @Published private(set) var requestEntries: [RpcRequestEntry] = []
     @Published private(set) var requestMetrics: [RpcMetricCard] = []
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
@@ -51,6 +52,9 @@ final class RpcPhoneModel: ObservableObject {
     #if DEBUG
         private var usbDeveloperMonitor: Task<Void, Never>?
         private var usbDeveloperGeneration: UUID?
+        private var usbDeveloperLaunchConsumed = false
+        private var usbDeveloperWaiting = false
+        private var usbDeveloperPreparedFiles: RpcPhoneCapacityFiles?
     #endif
     private let wifi: RpcPhoneWifiObserving
     private var wifiGeneration: UUID?
@@ -100,9 +104,17 @@ final class RpcPhoneModel: ObservableObject {
         self.invitationClipboard = invitationClipboard ?? RpcPhoneInvitationClipboard()
         changes = owner.$phase.sink { [weak self] phase in
             self?.objectWillChange.send()
-            // Only this foreground lab's active role prevents idle sleep; no background entitlement is requested.
-            UIApplication.shared.isIdleTimerDisabled = phase == .running
+            self?.updateIdleTimer(phase: phase)
         }
+    }
+
+    private func updateIdleTimer(phase: RpcPhoneRunOwner<RpcPhoneLab>.Phase? = nil) {
+        var awake = (phase ?? owner.phase) == .running
+        #if DEBUG
+            awake = awake || usbDeveloperWaiting
+        #endif
+        // Only a foreground role or bounded, explicitly prepared developer wait stays awake.
+        UIApplication.shared.isIdleTimerDisabled = foreground && awake
     }
 
     var isForeground: Bool { foreground }
@@ -166,7 +178,7 @@ final class RpcPhoneModel: ObservableObject {
                     status = owner.phase == .running ? "Returned to the same RPC role. Continue pairing." : status
                 } else { startWifiObservation() }
             } else { startWifiObservation() }
-            UIApplication.shared.isIdleTimerDisabled = owner.phase == .running
+            updateIdleTimer()
             startLiveObservation()
         } else {
             stopLiveObservation()
@@ -187,7 +199,7 @@ final class RpcPhoneModel: ObservableObject {
 
     private func expireAppSwitch() {
         #if DEBUG
-            usbDeveloperMonitor?.cancel()
+            cancelUsbDeveloperPreparation(reason: "ForegroundLostBeforeStart")
             if owner.hasOwner || actionBusy { mobileFailed = mobileConfig != nil }
         #endif
         stopLiveObservation()
@@ -464,7 +476,7 @@ final class RpcPhoneModel: ObservableObject {
     func clearMobile() {
         guard canStart else { return }
         #if DEBUG
-            usbDeveloperMonitor?.cancel()
+            cancelUsbDeveloperPreparation(reason: "LocalCampaignCancelledBeforeStart")
         #endif
         clearMobileSettings()
     }
@@ -479,16 +491,22 @@ final class RpcPhoneModel: ObservableObject {
     #if DEBUG
         /// An explicit developer launch creates one private slot; only sealed, exact-source commands may start it.
         func beginUsbDeveloperCampaign(arguments: [String]) {
-            guard arguments.contains("--rpc-usb-prepare"), usbDeveloperMonitor == nil else { return }
+            guard arguments.contains("--rpc-usb-prepare"), usbDeveloperMonitor == nil,
+                  !usbDeveloperLaunchConsumed else { return }
             do {
                 guard canStart, mobileConfig == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
                 let request = try RpcPhoneUsbDeveloperPrepare(arguments: arguments)
                 try request.verify(compiledSource: compiledSource, installedArtifact: RpcPhoneProcessSampler.installedArtifact())
+                // A foreground return must never recreate an abandoned create-only slot.
+                usbDeveloperLaunchConsumed = true
                 usbRunLabel = request.runLabel
                 let count = request.clientCount
                 let firstFiles = try prepareMobileSlot(clientCount: count)
                 let token = UUID()
                 usbDeveloperGeneration = token
+                usbDeveloperPreparedFiles = firstFiles
+                usbDeveloperWaiting = true
+                updateIdleTimer()
                 usbDeveloperMonitor = Task { @MainActor in
                     defer {
                         if self.usbDeveloperGeneration == token {
@@ -538,10 +556,14 @@ final class RpcPhoneModel: ObservableObject {
                             files = nextFiles
                         }
                     } catch is CancellationError {
-                        // Foreground/lifecycle Stop owns the active runtime; do not invent a successful receipt.
+                        // The synchronous lifecycle path records a pre-start cancellation.
+                        // Active-runtime Stop remains responsible for its real closure.
                     } catch {
                         self.mobileFailed = true
-                        do { try files.publish("failed.txt", "failed=true\nphase=mobile-start\n") }
+                        do {
+                            let reason = self.eventLog.lastFailure ?? "LocalOrProtocolFailure"
+                            try files.publish("failed.txt", "failed=true\nphase=mobile-start\nreason=\(reason)\n")
+                        }
                         catch { self.status = "USB start failed; no capacity qualification." }
                         if self.owner.hasOwner || self.actionBusy { self.stop() }
                     }
@@ -550,12 +572,45 @@ final class RpcPhoneModel: ObservableObject {
         }
 
         private func waitForUsbCommand(_ name: String, files: RpcPhoneCapacityFiles) async throws -> String {
+            let deadline = ProcessInfo.processInfo.systemUptime + 600
+            usbDeveloperWaiting = true
+            usbDeveloperPreparedFiles = name == "campaign.txt" ? files : nil
+            updateIdleTimer()
+            defer {
+                usbDeveloperWaiting = false
+                usbDeveloperPreparedFiles = nil
+                updateIdleTimer()
+            }
             while !Task.isCancelled {
                 guard foreground else { throw CancellationError() }
-                if let record = try files.read(name, optional: true) { return record }
+                guard ProcessInfo.processInfo.systemUptime < deadline else {
+                    throw RpcPhoneCapacityIOError.resourceObservation
+                }
+                if let record = try files.read(name, optional: true) {
+                    guard ProcessInfo.processInfo.systemUptime < deadline else {
+                        throw RpcPhoneCapacityIOError.resourceObservation
+                    }
+                    return record
+                }
                 try await Task.sleep(nanoseconds: 500_000_000)
             }
             throw CancellationError()
+        }
+
+        private func cancelUsbDeveloperPreparation(reason: String) {
+            usbDeveloperMonitor?.cancel()
+            if let files = usbDeveloperPreparedFiles, !owner.hasOwner, !actionBusy, mobileConfig == nil {
+                mobileFailed = true
+                do {
+                    try files.publish("failed.txt", "failed=true\nphase=mobile-start\nreason=\(reason)\n")
+                    status = "Prepared campaign cancelled before startup. Review the retained failure; no qualification claim."
+                } catch {
+                    status = "Prepared campaign cancellation could not be recorded; no qualification claim."
+                }
+            }
+            usbDeveloperPreparedFiles = nil
+            usbDeveloperWaiting = false
+            updateIdleTimer()
         }
     #endif
 
@@ -975,6 +1030,9 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     private func failure(_ error: Error) -> RpcPhoneEventLog.Failure {
+        if (error as NSError).kotlinException is RpcPhoneCapacityTrustOccupied {
+            return RpcPhoneEventLog.Failure(callback: "CapacityApprovalsRetained")
+        }
         if let failure = (error as NSError).kotlinException as? RpcFailure {
             return RpcPhoneEventLog.Failure(callback:
                 "\(failure.kind.name)/\(failure.phase.name)/\(failure.executionEvidence.name)")
@@ -984,6 +1042,9 @@ final class RpcPhoneModel: ObservableObject {
 
     private func safeError(_ error: Error) -> String {
         let code = failure(error).code
+        if code == "CapacityApprovalsRetained" {
+            return "Existing capacity approvals were preserved. Verify the earlier run’s cleanup before retrying."
+        }
         return code == "LocalOrProtocolFailure" ? "Invalid setup or local operation failed; no qualification claim." : code
     }
 

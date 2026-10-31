@@ -22,6 +22,8 @@ import shutil
 import stat
 import subprocess
 import sys
+from urllib.parse import urlsplit
+import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -170,6 +172,66 @@ def verify_native_jdk(raw, major):
          "Installed native JDK" + str(major) + " required; Rosetta or a different JVM cannot satisfy preparation")
 
 
+def stage_pinned_wrapper_archive(state):
+    """Optional private build-tool cache. The original wrapper still verifies and installs its ZIP."""
+    cache = state.parent / "tool-cache" / "gradle-distribution.zip"
+    if not cache.exists() and not cache.is_symlink():
+        return
+    private(cache.parent)
+    properties = {}
+    for line in (ROOT / "gradle/wrapper/gradle-wrapper.properties").read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        need(key not in properties, "Duplicate wrapper property")
+        properties[key] = value
+    url = properties["distributionUrl"].replace("\\:", ":")
+    parsed = urlsplit(url)
+    name = Path(parsed.path).name
+    need(parsed.scheme == "https" and parsed.netloc == "services.gradle.org" and
+         not parsed.query and not parsed.fragment and re.fullmatch(r"gradle-[0-9][0-9A-Za-z.-]*-bin\.zip", name) and
+         properties["distributionBase"] == properties["zipStoreBase"] == "GRADLE_USER_HOME" and
+         properties["distributionPath"] == properties["zipStorePath"] == "wrapper/dists" and
+         properties["validateDistributionUrl"] == "true", "Unsupported pinned wrapper cache layout")
+    expected = properties["distributionSha256Sum"]
+    before = artifact(cache)
+    need(re.fullmatch("[0-9a-f]{64}", expected) and before["sha256"] == expected,
+         "Cached Gradle ZIP differs from the checked-in checksum")
+    # Wrapper PathAssembler's URL MD5/base36 is a directory name, never an integrity check.
+    number, bucket = int(hashlib.md5(url.encode("utf-8"), usedforsecurity=False).hexdigest(), 16), ""
+    while number:
+        number, digit = divmod(number, 36)
+        bucket = "0123456789abcdefghijklmnopqrstuvwxyz"[digit] + bucket
+    private(state)
+    directory = state
+    for part in ("gradle-home", "wrapper", "dists", name.removesuffix(".zip"), bucket or "0"):
+        directory = directory / part
+        directory.mkdir(mode=0o700, exist_ok=True)
+        private(directory)
+    target = directory / name
+    original_info = cache.lstat()
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
+    with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as output:
+        with os.fdopen(os.open(cache, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source_zip:
+            need(identity(os.fstat(source_zip.fileno())) == identity(original_info), "Cached ZIP was replaced")
+            remaining = before["bytes"]
+            while remaining:
+                block = source_zip.read(min(remaining, 65536))
+                need(block, "Cached ZIP ended early")
+                output.write(block)
+                remaining -= len(block)
+            need(not source_zip.read(1) and identity(os.fstat(source_zip.fileno())) == identity(original_info),
+                 "Cached ZIP changed during copy")
+        output.flush()
+        os.fsync(output.fileno())
+    need(identity(cache.lstat()) == identity(original_info) and artifact(cache) == before and
+         artifact(target)["sha256"] == expected, "Wrapper archive changed while staged")
+    sync_directory(directory)
+    new_json(state / "private/wrapper-cache.json", dict(scope="CHECKSUM_PINNED_BUILD_TOOL_CACHE_NOT_CAMPAIGN_PRODUCT",
+        distributionUrl=url, distributionSha256=expected, cachedArchive=before, stagedArchive=artifact(target),
+        wrapperVerificationRequired=True, completionMarkerCreated=False))
+
+
 def campaign_environment(original, state):
     """Bind nested Xcode provenance to this source and strip unrelated publishers."""
     value = dict(original)
@@ -185,7 +247,103 @@ def campaign_environment(original, state):
     return value
 
 
-def retired_attempt(attempt, result):
+def verify_android_campaign_identity(raw):
+    need(type(raw) is bytes and 0 < len(raw) <= 262144, "Bounded APK identity output required")
+    lines = raw.decode("utf-8", errors="strict").splitlines()
+    packages = [line for line in lines if line.startswith("package:")]
+    need(len(packages) == 1 and re.match(r"^package: name='dev\.p2pkit\.sample\.android\.rpclab' ", packages[0]) and
+         lines.count("application-debuggable") == 1,
+         "Only the separate debuggable RPC campaign package may enter preparation")
+
+
+def read_only_dependency_cache(state):
+    """Only sealed external inputs from a finalized local producer; never compiled project outputs."""
+    cache = state.parent / "tool-cache/gradle-ro-dependencies"
+    if not cache.exists() and not cache.is_symlink():
+        return None
+    private(cache)
+    manifest_path = cache / "manifest.json"
+    value = private_json(manifest_path)
+    need(type(value) is dict and set(value) == {"schema", "scope", "policies", "producerReceipt", "artifacts"} and
+         value["schema"] == 1 and type(value["schema"]) is int and
+         value["scope"] == "SEALED_LOCAL_EXTERNAL_DEPENDENCIES_NOT_CAMPAIGN_PRODUCTS", "Unknown dependency cache")
+    policies = ("gradle/verification-metadata.xml", "gradle/plugin-provenance-policy.txt",
+                "gradle/wrapper/gradle-wrapper.properties")
+    need(type(value["policies"]) is dict and set(value["policies"]) == set(policies) and all(
+        value["policies"][name] == hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in policies),
+        "Read-only cache binds another dependency, plugin or wrapper policy")
+    producer = value["producerReceipt"]
+    need(type(producer) is dict and set(producer) == {"path", "bytes", "sha256"}, "Missing cache producer")
+    producer_path = Path(producer["path"])
+    need(producer_path.parent.name == "commands" and producer_path.parent.parent.parent == state.parent and
+         re.fullmatch(r"prepare-products-[a-f0-9]{8}\.json", producer_path.name) and
+         artifact(producer_path) == producer, "Only an original local campaign producer receipt is admitted")
+    proof = private_json(producer_path)
+    module("cache_producer_receipt", "check-audit-receipt.py").validate(
+        proof, 0, "prepare-products", proof["cwd"], proof["wrapper"], proof["requestedArgv"])
+    need(proof.get("kind") == "gradle" and proof["sourceBefore"]["status"] == "" and
+         proof["sourceBefore"]["diffSha256"] == hashlib.sha256(b"").hexdigest(), "Unqualified cache producer")
+    producer_commit = proof["sourceBefore"]["commit"]
+    subprocess.run(["git", "merge-base", "--is-ancestor", producer_commit, "HEAD"], cwd=ROOT, check=True,
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    for name in policies:
+        old = subprocess.check_output(["git", "show", producer_commit + ":" + name], cwd=ROOT, timeout=30)
+        need(hashlib.sha256(old).hexdigest() == value["policies"][name], "Producer used another dependency policy")
+    namespace = {"v": "https://schema.gradle.org/dependency-verification"}
+    components = {}
+    for component in ET.parse(ROOT / policies[0]).getroot().findall("v:components/v:component", namespace):
+        coordinate = tuple(component.attrib[name] for name in ("group", "name", "version"))
+        need(coordinate not in components, "Ambiguous verification component")
+        components[coordinate] = {a.attrib["name"]: {h.attrib["value"] for h in a.findall("v:sha256", namespace)}
+                                  for a in component}
+    entries = value["artifacts"]
+    need(type(entries) is dict and 0 < len(entries) <= 10_000 and
+         all(type(e) is dict and set(e) == {"path", "bytes", "sha256"} and
+             type(e["bytes"]) is int and 0 < e["bytes"] <= 512 * 1024 ** 2 for e in entries.values()) and
+         sum(e["bytes"] for e in entries.values()) <= 2 * 1024 ** 3, "Unbounded dependency cache")
+    modules = cache / "modules-2"
+    private(modules)
+    actual_files = set()
+    for index, path in enumerate(modules.rglob("*")):
+        need(index < 75_000, "Dependency cache directory inventory exceeded its bound")
+        info = path.lstat()
+        need(not path.is_symlink() and info.st_uid == os.getuid() and not stat.S_IMODE(info.st_mode) & 0o022,
+             "Dependency cache contains a foreign, linked or writable input")
+        if path.is_dir():
+            continue
+        need(stat.S_IMODE(info.st_mode) == 0o400, "Dependency cache file must be read-only")
+        relative = path.relative_to(modules).as_posix()
+        actual_files.add(relative)
+        need(relative in entries and artifact(path) == entries[relative], "Dependency cache input changed")
+        parts = path.relative_to(modules).parts
+        if parts[0] == "files-2.1":
+            need(len(parts) == 6 and re.fullmatch("0|[1-9a-f][0-9a-f]{0,39}", parts[4]) and
+                 not parts[1].lower().startswith("dev.p2pkit"), "Unknown cache slot or forbidden P2pKit product")
+            coordinate, name = tuple(parts[1:4]), parts[5]
+            need(coordinate in components and name in components[coordinate] and
+                 entries[relative]["sha256"] in components[coordinate][name], "External artifact is not source-pinned")
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                need((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) ==
+                     (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns), "Cache slot lifetime changed")
+                # Gradle renders its SHA1 slot as an unpadded positive hexadecimal integer.
+                slot = format(int(hashlib.file_digest(stream, "sha1").hexdigest(), 16), "x")
+                need(slot == parts[4], "Wrong Gradle file-cache slot")
+                after = os.fstat(stream.fileno())
+                need((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) ==
+                     (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) and
+                     artifact(path) == entries[relative], "Cache slot changed during validation")
+        else:
+            need(re.fullmatch(r"metadata-2\.[0-9]{1,4}", parts[0]) and (
+                (len(parts) == 2 and parts[1] in ("module-metadata.bin", "module-artifact.bin", "resource-at-url.bin")) or
+                (len(parts) == 7 and parts[1] == "descriptors" and tuple(parts[2:5]) in components and
+                 re.fullmatch("[a-f0-9]{32}", parts[5]) and parts[6] == "descriptor.bin")),
+                "Only original Gradle module metadata is admitted; no locks, transforms or scripts")
+    need(actual_files == set(entries), "Missing or additional cache files")
+    return dict(path=str(cache), manifest=artifact(manifest_path), producerReceipt=producer)
+
+
+def bound_attempt_result(attempt, result):
     """A failed workload may retire safely; this grants reuse, never a test pass."""
     need(type(result) is dict and result.get("status") in
          ("FAIL", "MECHANICAL_PASS_PENDING_NETWORK_AND_RESOURCE_REVIEW") and
@@ -200,6 +358,10 @@ def retired_attempt(attempt, result):
          bound["hostPlatform"] == ("Android" if attempt["platform"] == "android" else "Ios") and
          bound["runLabel"] == attempt["runLabel"] and bound["hostSourceSha"] == attempt["source"]["commit"] and
          bound["hostArtifactSha256"] == attempt["hostArtifactSha256"], "Foreign phone/installed product/run")
+
+
+def retired_attempt(attempt, result):
+    bound_attempt_result(attempt, result)
     need(result.get("phoneCleanup") == dict(runtimeClosed=True, clientPinsRemoved=True, controlHealthy=True) and
          type(result.get("inboxSha256")) is str and re.fullmatch("[a-f0-9]{64}", result["inboxSha256"]),
          "Actual exact-inbox phone retirement is not established")
@@ -245,6 +407,7 @@ def result_summary(value):
                 initialization=value.get("initialization"), postRetention=value.get("postRetention"),
                 connectedIdle=value.get("connectedIdle"), generatorBefore=value.get("generatorBefore"),
                 generatorAfter=value.get("generatorAfter"),
+                generatorMemoryAdmission=value.get("generatorMemoryAdmission"),
                 thermalAbort=value.get("thermalAbort"), cleanup=value.get("phoneCleanup"),
                 errors=value.get("errors"), batteryDrainQualified=False,
                 observedBatteryStates=sorted({r["batteryState"] for r in rows if "batteryState" in r}),
@@ -270,6 +433,11 @@ class Session:
         _, context = self.runner.context_at(str(self.state))
         need(context["source"] == self.source and context["root"] == str(ROOT), "Session binds another source")
         self.env = campaign_environment(os.environ, self.state)
+        self.dependency_cache = read_only_dependency_cache(self.state)
+        if self.dependency_cache is not None:
+            self.env["GRADLE_RO_DEP_CACHE"] = self.dependency_cache["path"]
+        else:
+            self.env.pop("GRADLE_RO_DEP_CACHE", None)
 
     @contextlib.contextmanager
     def phone_lock(self, phone):
@@ -330,6 +498,8 @@ class Session:
                 raise
         proof = self.runner.read_json(receipt)
         self.checker.validate(proof, code, label, ROOT, ROOT / "gradlew", list(map(str, argv)))
+        need(read_only_dependency_cache(self.state) == self.dependency_cache,
+             "Read-only dependency inputs changed during the original native invocation")
         need((code == 0 or not require_success) and proof["sourceBefore"] == proof["sourceAfter"] == self.source and
              not proof["errors"] and not proof["ownedSurvivors"] and proof["stopExitCode"] == 0,
              "Command failed; retained private receipt: " + str(receipt))
@@ -345,6 +515,12 @@ class Session:
         need(sdk.is_absolute() and all((sdk / item).exists() for item in
              ("platforms/android-36", "platforms/android-37.0", "ndk/29.0.14206865", "platform-tools/adb")),
              "Install both Android compile platforms, platform-tools and pinned NDK29.0.14206865")
+        # Every supervised command finalizes this session with the checked-in
+        # wrapper's --stop. In a new Gradle home that would otherwise download
+        # the distribution inside the unchanged 120-second cleanup deadline.
+        # Bootstrap as its own supervised product, before any tool command.
+        stage_pinned_wrapper_archive(self.state)
+        self.command("doctor-wrapper", ["--version"], 900, gradle=True)
         for major, key in ((17, "JAVA_HOME"), (21, "P2PKIT_AUDIT_JDK21")):
             java = self.command("doctor-jdk" + str(major), [Path(os.environ[key]) / "bin/java",
                                                            "-XshowSettings:properties", "-version"])
@@ -380,12 +556,22 @@ class Session:
 
     def prepare(self, team):
         self.doctor()
+        self.command("prepare-phone-regressions", [":p2p-sample-rpc:jvmTest",
+            ":p2p-sample-android:testDebugUnitTest", "--dependency-verification=strict", "--console=plain",
+            "--no-parallel", "--max-workers=2"], 2400, gradle=True)
         keys = self.campaign_keys()
-        tasks = [":p2p-sample-rpc:prepareRpcCapacityLab", ":p2p-sample-android:assembleDebug"]
+        tasks = [":p2p-sample-rpc:prepareRpcCapacityLab", ":p2p-sample-android:assembleDebug",
+                 "-Pp2pkitRpcCampaign=true"]
         if team is not None:
             need(re.fullmatch("[A-Z0-9]{10}", team), "Exact development team identifier required, not a credential")
             tasks += [":p2p-sample-rpc:verifyP2pKitRpcExampleDebugXCFrameworkProvenance"]
         self.command("prepare-products", tasks, 7200, gradle=True)
+        apk = ROOT / "samples/p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk"
+        original_apk = artifact(apk)
+        identity = self.command("prepare-android-identity", [Path(os.environ["ANDROID_HOME"]) /
+            "build-tools/36.0.0/aapt2", "dump", "badging", apk])
+        verify_android_campaign_identity((self.state / "evidence" / identity["id"] / "product.stdout.log").read_bytes())
+        need(artifact(apk) == original_apk, "APK changed during identity verification")
         paths = {"android-apk": ROOT / "samples/p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk",
                  "jvm-manifest": ROOT / "samples/p2p-sample-rpc/build/capacity-lab/manifest.json"}
         paths.update({"jvm-" + p.name: p for p in (ROOT / "samples/p2p-sample-rpc/build/capacity-lab").glob("*.jar")})
@@ -479,7 +665,7 @@ class Session:
         result = private_json(self.state / "work" / ("mobile-control-" + args.run_label) / "result.json")
         self.retire_pending(args.platform, attempt, result, proof)
         need(proof["finalExitCode"] == 0 and result["status"] == "MECHANICAL_PASS_PENDING_NETWORK_AND_RESOURCE_REVIEW" and
-             not result["errors"], "Attempt failed but healthy closure was retained; retry only this phase with a NEW label")
+             not result["errors"], "Attempt failed; original evidence and retirement scope retained; use a NEW label")
         print("ATTEMPT_COMPLETE; inspect the retained phone/client results before any physical qualification claim")
 
     def retire_pending(self, phone, attempt, result, proof):
@@ -491,16 +677,41 @@ class Session:
              proof.get("gradleHome") == str(self.state / "gradle-home"),
              "Only this session's original finalized native invocation can establish retirement")
         self.checker.validate(proof, proof["finalExitCode"], attempt["purpose"], ROOT, ROOT / "gradlew", attempt["argv"])
-        authority = retired_attempt(attempt, result)
+        if result.get("deviceControlStarted") is False:
+            bound_attempt_result(attempt, result)
+            need(result["status"] == "FAIL" and result.get("usbCommands") == [] and
+                 result.get("phoneSamples") == [] and
+                 not any(key in result for key in ("inboxSha256", "phoneCleanup", "installationAccepted",
+                                                   "developmentSlotLaunchAccepted", "measurement", "thermalAbort")),
+                 "No-contact retirement requires an untouched prerequisite rejection")
+            control = self.state / "work" / ("mobile-control-" + attempt["runLabel"])
+            need(not (control / "device-control-started.json").exists() and
+                 not (control / "device-control-started.json").is_symlink(), "Device control was attempted")
+            for directory in (control / "commands", control / "usb",
+                              self.state / "work" / ("mobile-client-" + attempt["runLabel"])):
+                private(directory)
+                need(not any(directory.iterdir()), "Phone or generator dispatch cannot be retired as untouched")
+            errors = result.get("errors")
+            need(type(errors) is list and errors and all(type(row) is dict and row.get("phase") in
+                 ("execution", "generator-final-observation") for row in errors), "Other cleanup failure is unqualified")
+            authority = None  # Preserve any prior installed continuation exactly.
+        else:
+            authority = retired_attempt(attempt, result)
         pending = self.state / "private" / (phone + "-pending.json")
         saved = artifact(pending)
         original = private_json(pending)
         attempt_path = Path(original["attempt"])
         need(private_json(attempt_path) == attempt and artifact(attempt_path)["sha256"] == original["sha256"],
              "Pending attempt was replaced; retain for diagnosis")
-        latest = self.state / "private" / (phone + "-latest.json")
-        module("mac_campaign_resume", "run-rpc-capacity-lab.py").write_private(
-            latest, (json.dumps(authority) + "\n").encode(), replace=latest.exists())
+        if authority is None:
+            new_json(self.state / "private" / ("undispatched-" + phone + "-" + attempt["runLabel"] + ".json"),
+                     dict(scope="PREREQUISITE_REJECTION_NO_DEVICE_CONTROL", source=self.source,
+                          runLabel=attempt["runLabel"], originalStatus=result["status"],
+                          originalReceiptSha256=artifact(Path(attempt["receipt"]))["sha256"], physicalQualified=False))
+        else:
+            latest = self.state / "private" / (phone + "-latest.json")
+            module("mac_campaign_resume", "run-rpc-capacity-lab.py").write_private(
+                latest, (json.dumps(authority) + "\n").encode(), replace=latest.exists())
         need(artifact(pending) == saved, "Pending lease changed during retirement")
         pending.unlink()  # Only this original lease; all attempt/results/receipts remain.
         sync_directory(pending.parent)
@@ -523,7 +734,7 @@ class Session:
         result = private_json(self.state / "work" / ("mobile-control-" + attempt["runLabel"]) / "result.json")
         proof = private_json(Path(attempt["receipt"]))
         self.retire_pending(phone, attempt, result, proof)
-        print("HEALTHY_RETIREMENT_VERIFIED; original " + result["status"] + " retained, not promoted to PASS")
+        print("ORIGINAL_ATTEMPT_RETIREMENT_VERIFIED; original " + result["status"] + " retained, not promoted to PASS")
 
 
 def main():

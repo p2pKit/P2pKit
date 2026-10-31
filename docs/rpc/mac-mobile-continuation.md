@@ -31,7 +31,10 @@ The source includes the opt-in `host256()` and shared readiness I/O from
 
 The checked-in test harness is not proof that a particular phone, signed
 installation, CoreDevice output schema, USB observation deadline or physical
-network has passed. The exact reviewed commit/PR and hosted checks are linked
+network has passed. The file backend accepts the historical flat CoreDevice
+fields and the observed nested `metadata.size`/`resources` fields. Both paths
+still require exact sizes and directory/link flags; incomplete or conflicting
+metadata fails admission. The exact reviewed commit/PR and hosted checks are linked
 from #525. Published [`0.8.0-rc8`](../releases/0.8.0-rc8.md) includes `host256()`
 and shared readiness I/O; immutable rc7 does not. This development campaign still
 requires the exact pinned source below and its source-matched lab preparation,
@@ -72,6 +75,16 @@ not a mixture of Maven binaries and newer test tooling.
    awake/powered and sufficient free memory/storage. At least6GiB generator
    available memory is required during its actual preflight; allow substantial
    additional space for Xcode/NDK/Gradle and private reports.
+
+   An owner-selected schema2 campaign may explicitly set
+   `macGeneratorMinimumAvailableGiB=1` in each private settings file. Omission
+   retains6GiB; schema1 and Linux do not accept this override. The actual native
+   clock command records the selected threshold in schema2 evidence and the
+   coordinator independently checks it against the original settings. The
+   125-second observation, <100ms maximum scheduling gap and all workload,
+   thermal and cleanup checks remain unchanged. A lower memory admission
+   threshold is not evidence that the generator can sustain the workload;
+   inspect its utilization, GC, scheduling and observed available memory.
 
 Trust, Developer Mode, signing and OS permission prompts cannot legitimately
 be fabricated by automation. Reboot/reconnect/OEM prompts may recur. Apart from
@@ -137,15 +150,76 @@ prepare a new session after signing is available to add the iPhone producer.
 Preparation runs independently supervised strict Gradle builds, stages the
 source-matched Mac native library and exactly its manifest JAR, verifies the
 XCFramework provenance, builds the signed development iPhone app and verifies
-its signature. `$STATE/private/preparation.json` binds source/tree, every
+its signature. JVM facade and Android unit regressions must pass their original
+native finalization before products are prepared. Before the tool checks, it bootstraps the checked-in Gradle
+distribution with a separately supervised `--version` command in the new private
+Gradle home. Distribution download has its own preparation deadline; the
+unchanged 120-second wrapper Stop deadline remains a cleanup boundary.
+`$STATE/private/preparation.json` binds source/tree, every
 prepared JAR/native entry, APK, framework and complete signed app inventory.
 Changing/additionally inserting files makes reuse fail. Unsigned app ZIP hashes
 cannot stand in for the signed installed executable hash.
+
+The source-prepared Android APK opts into `-Pp2pkitRpcCampaign=true`, giving only
+that Debug build the `dev.p2pkit.sample.android.rpclab` application identity and
+`P2pKit RPC Lab` name. Ordinary Debug and Release identities remain unchanged.
+The fixed campaign controller addresses only this lab package; it never uninstalls
+an owner's differently signed sample to resolve `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+The class namespace remains unchanged. Before a first install, inspect any existing
+lab installation and its ownership; a separate package is not permission to overwrite
+an uncertain lab runtime. The opt-in is part of the exact preparation command receipt.
+
+The iPhone developer launch is consumed once per process. A prepared foreground
+wait prevents idle sleep for at most600s per command wait; leaving the foreground
+cancels it and retains a pre-start failure when the protected files remain accessible.
+Returning cannot recreate the old slot. This safety bound does not extend any
+coordinator setup, four-second observation or runtime workload deadline. Wireless
+absent-record reads use one exact device-bound inventory; present records retain
+pre/post transport verification, exact size and the original observation budget.
+
+Source-prepared mobile campaigns use a dedicated, stable capacity-approval
+namespace on each phone. Ordinary application pairing keeps its existing
+Keychain/Keystore namespace and device identity. Campaign import and exact-pin
+retirement cannot replace ordinary approvals. Earlier products used the ordinary
+namespace: do not erase or migrate its approvals to make an old attempt start.
+The capacity namespace must still be empty before import; retained approvals
+produce `CapacityApprovalsRetained` and require review of the previous run.
+The iPhone's development failure record retains a fixed-vocabulary `reason`
+when available. Neither a refusal code nor an idle screen proves runtime closure.
 
 Retain the exact `SOURCE`, `STATE`, pinned SHA and private settings locally in a
 mode0600 continuation note outside Git. Do not copy old VPS caches, keys,
 compiled frameworks or evidence into this build. A cache miss resolves normal
 dependencies through the approved locked/integrity-verified repositories.
+
+If the isolated build session cannot resolve the Gradle distribution host, an
+ordinary logged-in Mac session may download the exact `distributionUrl` in the
+checked-in wrapper properties into
+`$STATE/../tool-cache/gradle-distribution.zip` (private directory0700, file0600).
+Verify the complete ZIP against `distributionSha256Sum` first. Preparation checks
+the same checksum and stages only that build-tool archive into a new wrapper
+cache. The original wrapper still verifies and installs it, publishes its own
+completion marker, and must pass its unchanged native finalization and Stop.
+This optional archive is independent of phone/driver source revisions. It does
+not supply compiled P2pKit products or waive dependency verification, signing,
+network admission or cleanup. Its original download failure stays retained.
+
+An unstable dependency-repository route may also use Gradle's supported
+`GRADLE_RO_DEP_CACHE`, through a separately reviewed, sealed local snapshot at
+`$STATE/../tool-cache/gradle-ro-dependencies`. Do not point it at a live Gradle
+installation or the owner's global cache. Its private `manifest.json` must bind
+every copied file and an original successful, finalized local `prepare-products`
+receipt. The producer must be an ancestor with byte-identical wrapper,
+verification metadata and plugin provenance policy. Only current checksum-pinned
+external artifacts and the producer's original Gradle module metadata are admitted;
+P2pKit products, scripts, transforms, locks and wrapper completion markers are
+refused. Copy into a new private directory after the producer is closed, retain
+its original snapshot evidence, and make copied files mode0400 before sealing.
+The coordinator checks the complete inventory before and after every native
+command. Omission retains normal dependency resolution and strips an unrelated
+inherited cache selection. Cache misses still resolve normally; strict verification,
+dependency locks, forced task execution and source-matched preparation remain
+required. This is build-input reuse, not a device or product qualification pass.
 
 ## Configure the actual devices and LAN once
 
@@ -177,6 +251,27 @@ Fresh servers receive owned copies and retire them; the original campaign key
 stays private for later attempts. No user's `~/.android` material is opened or
 copied. Approve only the test key actually displayed on the selected phone.
 
+### Explicit wireless iPhone control
+
+When the owner selects wireless development control, schema2 iPhone settings
+may explicitly add `iosControlTransport=wireless`. First verify the selected
+physical CoreDevice UUID reports `transportType=localNetwork`, an existing
+manual pairing, a connected Apple control channel and enabled Developer Mode.
+The backend rechecks those observations on every device verification. It never
+infers wireless permission from a tunnel address, hostname or failed USB attempt;
+omitting this setting retains the existing wired requirement. Schema1 does not
+accept the option.
+
+The same installed native Apple tool performs source-bound installation and
+sealed app-container control over the approved local network. All RPC still
+uses the separately selected production private-LAN path. The existing record
+names and `usbCleanup` report field are legacy control-protocol labels; inspect
+`iosControlTransport` and the explicit wireless result scope to identify the
+actual control transport. File integrity, four-second observations, freshness,
+Stop, identity retirement and outer native finalization remain required. An
+unplugged phone's charging state and wireless observation overhead must be
+reported separately; wireless control alone is not a battery-discharge pass.
+
 ## Run independent phases and retry only the failed phase
 
 Run the small gate first. First deployment comes from the verified preparation
@@ -194,6 +289,15 @@ exclusive window. Never delete an owner lock file to force a competing command.
 A failed first attempt cannot make
 the next command silently reinstall an app with uncertain existing ownership.
 Continuations also bind the selected physical device, not only its product hash.
+
+The actual native fixture runner and its prerequisite assessor share the same
+current-host class selection, including capture, deadline, report-retention and
+supervisor controls. A prerequisite rejection before device control can retire
+only its original pending lease after native finalization, an explicit untouched
+result and empty dispatch directories. The durable device-control checkpoint
+is published before the first device command; an existing or partially published
+checkpoint prevents this recovery. No installed continuation or phone-cleanup
+claim is created from a prerequisite-only failure.
 
 ```bash
 python3 -B scripts/run-rpc-mac-campaign.py run --state "$STATE" \
