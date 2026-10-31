@@ -74,6 +74,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -207,6 +208,11 @@ internal class RpcLabController(
         })
         ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF),
             ContextCompat.RECEIVER_NOT_EXPORTED)
+        ui.launch {
+            RpcLabUsbDeveloperCommands.queue.commands.collect { command ->
+                if (command != null && interactive) consumeUsbDeveloperCommand()
+            }
+        }
     }
 
     override fun onStart(owner: LifecycleOwner) {

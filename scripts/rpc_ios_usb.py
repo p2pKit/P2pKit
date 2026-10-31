@@ -9,6 +9,7 @@ native finalization still require an actual selected owner-authorized iPhone.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 DEVICECTL = Path('/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl')
 COREDEVICE_INFO = DEVICECTL.parents[1] / 'Info.plist'
 INPUTS = frozenset(('inbox.txt', 'campaign.txt', 'next.txt', 'stop.txt'))
-OUTPUTS = frozenset(('prepared.txt', 'next-ready.txt', 'ready.txt', 'telemetry.txt', 'closed.txt', 'failed.txt'))
+OUTPUTS = frozenset(('prepared.txt', 'network.txt', 'next-ready.txt', 'ready.txt', 'telemetry.txt', 'closed.txt', 'failed.txt'))
 FILES = INPUTS | OUTPUTS | {prefix + name for prefix in ('.incoming-', '.sealed-') for name in INPUTS}
 ATOMIC_SCRATCH = r'\.capacity-[A-F0-9]{8}(?:-[A-F0-9]{4}){3}-[A-F0-9]{12}'
 INBOX_FIELDS = protocol.BINDINGS | {'hostAddress', 'hostPort', 'hostInterface', 'subnets', 'clientPins'}
@@ -93,6 +94,26 @@ def file_inventory(value):
 def inbox_record(raw, bound):
     row = protocol.inbox(raw, bound)
     need(bound['hostPlatform'] == 'Ios', 'Exact iOS signed-executable binding required')
+    return row
+
+
+def wifi_record(raw, bound, approved_subnets, approved_interface):
+    checked = protocol.binding(bound)
+    need(checked['schema'] == '2' and checked['hostPlatform'] == 'Ios')
+    row = protocol.parse(raw)
+    expected = dict(schema='2', scope='ios-usb-wifi', runLabel=checked['runLabel'],
+                    sourceSha=checked['hostSourceSha'], artifactSha256=checked['hostArtifactSha256'],
+                    clientCount=checked['clientCount'])
+    need(set(row) == set(expected) | {'hostAddress', 'hostInterface', 'subnets'} and
+         all(row[key] == val for key, val in expected.items()), 'Live Wi-Fi observation has a different source/app/run')
+    need(row['hostInterface'] == approved_interface and re.fullmatch('en[0-9]{1,3}', approved_interface) and
+         row['subnets'] in approved_subnets.split(','), 'Live Wi-Fi is outside the owner-approved network/interface')
+    network = ipaddress.IPv4Network(row['subnets'], strict=True)
+    address = ipaddress.IPv4Address(row['hostAddress'])
+    private = [ipaddress.IPv4Network(x) for x in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
+    need(any(network.subnet_of(x) for x in private) and network.prefixlen <= 30 and
+         address in network and address not in (network.network_address, network.broadcast_address),
+         'Live Wi-Fi must be a numeric host address on the approved private LAN')
     return row
 
 
@@ -337,14 +358,18 @@ class DevicectlFiles:
         self.verify(deadline)
         return dict(installerSucceeded=True, artifactSha256=digest, requiresInstalledReadyHash=True)
 
-    def launch_prepare(self, bound, deadline):
+    def launch_prepare(self, bound, deadline, *, discover_wifi=False):
         """Prepare one development slot in a stopped app; never terminate or relaunch an active runtime."""
         checked = protocol.binding(bound)
         need(checked['hostPlatform'] == 'Ios' and checked['schema'] == '2')
         self.verify(deadline)
-        self.command('launch-bound-prepare', ['device', 'process', 'launch', '--device', self.selected, IOS_PACKAGE, '--',
+        need(type(discover_wifi) is bool)
+        argv = ['device', 'process', 'launch', '--device', self.selected, IOS_PACKAGE, '--',
             '--rpc-usb-prepare', checked['runLabel'], '--rpc-usb-source-sha', checked['hostSourceSha'],
-            '--rpc-usb-artifact-sha256', checked['hostArtifactSha256'], '--rpc-usb-client-count', checked['clientCount']], deadline)
+            '--rpc-usb-artifact-sha256', checked['hostArtifactSha256'], '--rpc-usb-client-count', checked['clientCount']]
+        if discover_wifi:
+            argv += ['--rpc-usb-discover-wifi']
+        self.command('launch-bound-prepare', argv, deadline)
         self.verify(deadline)
 
     def prepare_next(self, bound, previous_label, previous_inbox_sha256, deadline):

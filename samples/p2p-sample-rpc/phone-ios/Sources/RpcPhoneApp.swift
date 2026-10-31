@@ -255,25 +255,25 @@ struct RpcPhoneView: View {
             } else {
                 Text(model.detectedWifi == nil ? model.wifiExplanation : "Wi-Fi ready · network selected automatically")
                     .accessibilityIdentifier("rpc.wifiStatus")
-                DisclosureGroup("Network details") {
-                    if let network = model.detectedWifi {
-                        Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
-                        Text("Private network: \(network.subnet) · \(network.interfaceName)").font(
-                            .caption.monospaced())
-                    }
-                    Button("Check Wi-Fi again") { model.refreshWifi() }
-                        .buttonStyle(.borderless)
-                        .disabled(!model.canRefreshWifi)
-                        .accessibilityIdentifier("rpc.refreshWifi")
-                        .accessibilityHint("Only re-reads the connection. Does not approve a network or start RPC.")
-                    DisclosureGroup("Wi-Fi check details") {
-                        Text(model.wifiObservation.details).font(.caption)
-                            .accessibilityIdentifier("rpc.wifiDetails")
-                        Text(
-                            "These are this app's observations, not proof of peer connectivity or multicast. "
-                                + "Advanced offers manual setup for independently verified approved networks."
-                        ).font(.footnote)
-                    }
+            }
+            DisclosureGroup("Network details") {
+                if let network = model.detectedWifi {
+                    Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
+                    Text("Private network: \(network.subnet) · \(network.interfaceName)").font(
+                        .caption.monospaced())
+                }
+                Button("Check Wi-Fi again") { model.refreshWifi() }
+                    .buttonStyle(.borderless)
+                    .disabled(!model.canRefreshWifi)
+                    .accessibilityIdentifier("rpc.refreshWifi")
+                    .accessibilityHint("Only re-reads the connection. Does not approve a network or start RPC.")
+                DisclosureGroup("Wi-Fi check details") {
+                    Text(model.wifiObservation.details).font(.caption)
+                        .accessibilityIdentifier("rpc.wifiDetails")
+                    Text(
+                        "These are this app's observations, not proof of peer connectivity or multicast. "
+                            + "Advanced offers manual setup for independently verified approved networks."
+                    ).font(.footnote)
                 }
             }
         }

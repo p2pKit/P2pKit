@@ -70,6 +70,22 @@ def fixture():
 
 
 class FileProtocol(unittest.TestCase):
+    def test_live_wifi_address_requires_exact_app_run_and_preapproved_private_network(self):
+        binding = bound() | dict(schema='2', clientCount='256')
+        row = dict(schema='2', scope='ios-usb-wifi', runLabel=binding['runLabel'],
+                   sourceSha=binding['hostSourceSha'], artifactSha256=binding['hostArtifactSha256'],
+                   clientCount='256', hostAddress='192.168.14.7', hostInterface='en0', subnets='192.168.14.0/24')
+        self.assertEqual(m.wifi_record(m.protocol.encode(row), binding, '192.168.14.0/24', 'en0'), row)
+        for change in (dict(sourceSha='4' * 40), dict(artifactSha256='4' * 64), dict(runLabel='other'),
+                       dict(clientCount='128'), dict(hostInterface='en1'), dict(hostAddress='192.168.15.7'),
+                       dict(hostAddress='192.168.14.0'), dict(hostAddress='192.168.14.255'),
+                       dict(subnets='192.168.0.0/16'), dict(extra='true')):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                m.wifi_record(m.protocol.encode(row | change), binding, '192.168.14.0/24', 'en0')
+        with self.assertRaises(ValueError):
+            m.wifi_record(m.protocol.encode(row | dict(hostAddress='8.8.8.8', subnets='8.8.8.0/24')),
+                          binding, '8.8.8.0/24', 'en0')
+
     def test_complete_seal_binds_exact_name_length_and_digest(self):
         raw = b'schema=1\n'
         seal = m.input_seal('inbox.txt', raw)

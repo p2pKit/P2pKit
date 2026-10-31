@@ -146,8 +146,8 @@ final class RpcPhoneModel: ObservableObject {
     var compiledSource: String { RpcPhoneIos.shared.compiledSource }
     var detectedWifi: RpcPhoneWifiNetwork? { wifiObservation.network }
     var wifiChecked: Bool { wifiObservation != .checking }
-    var canRefreshWifi: Bool { canStart && !manualNetworkSetup && mobileConfig == nil }
-    var canConfirmWifi: Bool { canRefreshWifi && detectedWifi != nil && !wifiApproved }
+    var canRefreshWifi: Bool { canStart && mobileConfig == nil }
+    var canConfirmWifi: Bool { canRefreshWifi && !manualNetworkSetup && detectedWifi != nil && !wifiApproved }
     var wifiApproved: Bool {
         guard let network = approvedWifi else { return false }
         return network == detectedWifi && !manualNetworkSetup && subnets == network.subnet &&
@@ -233,7 +233,8 @@ final class RpcPhoneModel: ObservableObject {
         clearWifiApproval()
         wifiObservation = .checking
         startProblem = nil
-        status = "Rechecking Wi-Fi. Confirm it again before choosing a role; nothing has started."
+        status = manualNetworkSetup ? "Rechecking live Wi-Fi; your manual settings are unchanged." :
+            "Rechecking Wi-Fi. Confirm it again before choosing a role; nothing has started."
         startWifiObservation()
     }
 
@@ -518,6 +519,21 @@ final class RpcPhoneModel: ObservableObject {
                     var selectedCount = count
                     do {
                         while !Task.isCancelled {
+                            var selectedWifi: RpcPhoneWifiNetwork?
+                            if request.discoverWifi {
+                                let deadline = ProcessInfo.processInfo.systemUptime + 20
+                                while selectedWifi == nil {
+                                    guard self.canStart, ProcessInfo.processInfo.systemUptime < deadline else {
+                                        throw RpcPhoneCapacityIOError.invalidRecord
+                                    }
+                                    self.receiveWifi(self.wifi.currentObservation())
+                                    selectedWifi = self.detectedWifi
+                                    if selectedWifi == nil { try await Task.sleep(nanoseconds: 100_000_000) }
+                                }
+                                guard let observed = selectedWifi else { throw RpcPhoneCapacityIOError.invalidRecord }
+                                try files.publish("network.txt", request.wifiRecord(
+                                    network: observed, runLabel: self.usbRunLabel, clientCount: selectedCount))
+                            }
                             let text = try await self.waitForUsbCommand("campaign.txt", files: files)
                             guard self.canStart, self.mobileConfig == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
                             let command = try RpcPhoneUsbDeveloperStart(record: text)
@@ -527,6 +543,15 @@ final class RpcPhoneModel: ObservableObject {
                                 }
                                 try command.verify(config: config, inbox: input, compiledSource: self.compiledSource,
                                                    installedArtifact: artifact)
+                                if let selectedWifi {
+                                    guard self.wifi.currentObservation().network == selectedWifi,
+                                          config.settings.localAddress == selectedWifi.localAddress,
+                                          config.settings.interfaceName == selectedWifi.interfaceName,
+                                          config.settings.subnets.split(separator: ",").contains(
+                                            Substring(selectedWifi.subnet)) else {
+                                        throw RpcPhoneCapacityIOError.invalidRecord
+                                    }
+                                }
                             }
                             self.approveImport = true
                             self.start(host: true)

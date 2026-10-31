@@ -11,7 +11,7 @@ enum RpcPhoneCapacityIOError: Error {
 final class RpcPhoneCapacityFiles {
     private let directory: URL
     private var imported: Set<String> = []
-    private static let names: Set<String> = ["prepared.txt", "next-ready.txt", "inbox.txt", "stop.txt", "campaign.txt", "next.txt",
+    private static let names: Set<String> = ["prepared.txt", "network.txt", "next-ready.txt", "inbox.txt", "stop.txt", "campaign.txt", "next.txt",
                                              "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"]
     private static let inputs: Set<String> = ["inbox.txt", "stop.txt", "campaign.txt", "next.txt"]
     private static let stagingNames = Set(inputs.flatMap { [".incoming-" + $0, ".sealed-" + $0] })
@@ -163,7 +163,7 @@ final class RpcPhoneCapacityFiles {
 
     /// Only the rotating telemetry slot may replace a file. Other evidence is atomically create-only.
     func publish(_ name: String, _ text: String) throws {
-        guard ["prepared.txt", "next-ready.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"].contains(name) else {
+        guard ["prepared.txt", "network.txt", "next-ready.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"].contains(name) else {
             throw RpcPhoneCapacityIOError.invalidRecord
         }
         try writeAtomic(name, text)

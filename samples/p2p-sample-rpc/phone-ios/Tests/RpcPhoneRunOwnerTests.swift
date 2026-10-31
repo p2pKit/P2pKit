@@ -1534,6 +1534,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         model.subnets = "10.1.2.0/24"
         model.interfaceName = "en3"
         model.localAddress = "10.1.2.3"
+        XCTAssertTrue(model.canRefreshWifi)
+        XCTAssertFalse(model.canConfirmWifi)
+        model.refreshWifi()
+        XCTAssertEqual(model.localAddress, "10.1.2.3")
         wifi.publish(nil)
         wifi.publish(network)
         model.confirmWifi()

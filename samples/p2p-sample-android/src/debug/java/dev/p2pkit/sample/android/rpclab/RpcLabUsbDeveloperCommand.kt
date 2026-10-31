@@ -5,9 +5,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
-import java.util.concurrent.atomic.AtomicReference
 
 /** Debug-APK developer command. It names existing private input, never supplies pins or a network policy. */
 internal class RpcLabUsbDeveloperCommand private constructor(
@@ -43,9 +45,10 @@ internal class RpcLabUsbDeveloperCommand private constructor(
 
 /** The shortcut hands one exact command to the maintained RPC section; an occupied command is never replaced. */
 internal class RpcLabUsbCommandQueue {
-    private val pending = AtomicReference<RpcLabUsbDeveloperCommand?>()
+    private val pending = MutableStateFlow<RpcLabUsbDeveloperCommand?>(null)
+    val commands = pending.asStateFlow()
     fun offer(command: RpcLabUsbDeveloperCommand): Boolean = pending.compareAndSet(null, command)
-    fun take(): RpcLabUsbDeveloperCommand? = pending.getAndSet(null)
+    fun take(): RpcLabUsbDeveloperCommand? = pending.getAndUpdate { null }
 }
 
 internal object RpcLabUsbDeveloperCommands {

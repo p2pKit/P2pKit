@@ -221,6 +221,19 @@ class MacAdmission(unittest.TestCase):
             with self.assertRaises((ValueError, RuntimeError)):
                 module.settings(legacy | dict(macGeneratorMinimumAvailableGiB='1'), '2' * 40, 'offline-mac', lab)
 
+    def test_live_wifi_discovery_is_explicit_ios_schema2_without_changing_approved_policy(self):
+        values = {k: v for k, v in self.settings().items() if k not in ('androidUsbSerial', 'adb')}
+        values |= dict(iosDeviceIdentifier='11111111-2222-3333-4444-555555555555', hostInterface='en0')
+        expected = ios_coordinator.settings(values, '2' * 40, 'offline-mac', lab)
+        self.assertEqual(ios_coordinator.settings(values | dict(iosDiscoverWifi='true'),
+                                                 '2' * 40, 'offline-mac', lab), expected)
+        for invalid in ('false', 'auto', '1', ''):
+            with self.assertRaises(ValueError):
+                ios_coordinator.settings(values | dict(iosDiscoverWifi=invalid), '2' * 40, 'offline-mac', lab)
+        legacy = {k: v for k, v in values.items() if k != 'clientCount'} | dict(schema='1')
+        with self.assertRaises(ValueError):
+            ios_coordinator.settings(legacy | dict(iosDiscoverWifi='true'), '2' * 40, 'offline-mac', lab)
+
     def test_native_mac_admission_is_explicit_unprivileged_and_not_rosetta(self):
         run = coordinator.Run.__new__(coordinator.Run)
         with patch('audit_processes.host_role', return_value='macos-arm64'), \

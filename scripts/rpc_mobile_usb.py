@@ -137,8 +137,17 @@ private_dir() {
     test "$(stat -c %a "$1")" = 700
 }
 rpc_stage=home
+'''
+    if operation == 'prepare':
+        # A fresh installation has not necessarily called Context.noBackupFilesDir yet.
+        # run-as has already selected the fixed debug app's UID and private data directory.
+        # Create only an absent child; never repair or replace an existing entry.
+        common += '''if test ! -e no_backup && test ! -L no_backup; then mkdir no_backup; fi
+'''
+    common += '''
 test -d no_backup
 test ! -L no_backup
+test "$(stat -c %u no_backup)" = "$uid"
 '''
     if operation == 'prepare':
         common += f'''rpc_stage=base-create

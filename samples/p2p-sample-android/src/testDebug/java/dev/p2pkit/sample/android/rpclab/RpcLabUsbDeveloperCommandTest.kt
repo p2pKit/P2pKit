@@ -6,6 +6,7 @@ import kotlinx.coroutines.CopyableThrowable
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -98,6 +99,50 @@ class RpcLabUsbDeveloperCommandTest {
         assertNull(queue.take())
         assertTrue(queue.offer(second))
         assertSame(second, queue.take())
+    }
+
+    @Test
+    fun aCommandArrivingAtAnAlreadyResumedEntryNotifiesItsConsumerWithoutAnotherResume() = runTest {
+        val queue = RpcLabUsbCommandQueue()
+        val consumed = mutableListOf<RpcLabUsbDeveloperCommand>()
+        backgroundScope.launch {
+            queue.commands.collect { command ->
+                if (command != null) queue.take()?.let(consumed::add)
+            }
+        }
+        runCurrent()
+        val first = RpcLabUsbDeveloperCommand.parse(extras())
+        val second = RpcLabUsbDeveloperCommand.parse(extras().apply { put("rpcUsbRunLabel", "another-run") })
+        assertTrue(queue.offer(first))
+        assertFalse(queue.offer(second))
+        runCurrent()
+        assertEquals(listOf(first), consumed)
+        assertNull(queue.take())
+        assertTrue(queue.offer(second))
+        runCurrent()
+        assertEquals(listOf(first, second), consumed)
+    }
+
+    @Test
+    fun aBackgroundNotificationRetainsTheExactCommandUntilTheExplicitResumeRead() = runTest {
+        val queue = RpcLabUsbCommandQueue()
+        var foreground = false
+        var consumed = 0
+        backgroundScope.launch {
+            queue.commands.collect { command ->
+                if (command != null && foreground && queue.take() != null) consumed++
+            }
+        }
+        runCurrent()
+        val command = RpcLabUsbDeveloperCommand.parse(extras())
+        assertTrue(queue.offer(command))
+        runCurrent()
+        assertEquals(0, consumed)
+        foreground = true
+        assertSame(command, queue.take())
+        runCurrent()
+        assertNull(queue.take())
+        assertEquals(0, consumed)
     }
 
     private fun hold(owner: RpcLabRuntimeOwner<Any>, runtime: Any): RpcLabRuntimeOwner.Token {

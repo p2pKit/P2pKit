@@ -210,6 +210,33 @@ class AndroidUsbControls(unittest.TestCase):
             self.assertEqual(base.stat().st_mode & 0o777, 0o755)
             self.assertEqual(list(base.iterdir()), [])
 
+    def test_first_install_creates_an_absent_app_owned_home_without_launching_the_app(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = self.run_script(root, 'prepare', data=b'schema=1\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            home = root / 'no_backup'
+            self.assertEqual(home.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((home / 'rpc-capacity/test-run/inbox.txt').read_bytes(), b'schema=1\n')
+
+    def test_first_install_refuses_a_linked_or_non_directory_home_without_replacing_it(self):
+        for linked in (False, True):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                target = root / 'original'
+                target.write_bytes(b'keep\n')
+                home = root / 'no_backup'
+                if linked:
+                    home.symlink_to(target)
+                else:
+                    home.write_bytes(b'keep\n')
+                before = home.lstat()
+                result = self.run_script(root, 'prepare', data=b'schema=1\n')
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(usb.android_shell_failure_stage(result.stderr), 'home')
+                self.assertEqual(home.lstat().st_ino, before.st_ino)
+                self.assertEqual(target.read_bytes(), b'keep\n')
+
     def test_stage_parser_never_exports_stderr_values_or_unknown_markers(self):
         self.assertIsNone(usb.android_shell_failure_stage(b'PRIVATE_VALUE without a fixed marker'))
         for stage in usb.ANDROID_SHELL_STAGES:

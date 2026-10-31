@@ -13,6 +13,8 @@ import android.view.WindowManager
 import dalvik.system.BaseDexClassLoader
 import dev.p2pkit.sample.android.MainActivity
 import dev.p2pkit.sample.android.SAMPLE_OPEN_RPC_ACTION
+import dev.p2pkit.sample.android.SampleProcessOwner
+import dev.p2pkit.sample.android.SampleProcessOwnership
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.rpc.RpcFailure
@@ -252,6 +254,9 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         activity = created
         waitForIdleSync()
         check(created is MainActivity && !created.isFinishing)
+        withTimeout(5_000) {
+            while (SampleProcessOwnership.owner.state.value?.lane != SampleProcessOwner.Lane.RpcSection) delay(10)
+        }
         check(created.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         runOnMainSync { created.finish() }
         withTimeout(10_000) { while (!created.isDestroyed) delay(50) }

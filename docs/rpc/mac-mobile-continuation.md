@@ -272,6 +272,18 @@ Stop, identity retirement and outer native finalization remain required. An
 unplugged phone's charging state and wireless observation overhead must be
 reported separately; wireless control alone is not a battery-discharge pass.
 
+Schema2 may explicitly select `iosDiscoverWifi=true`. The development app then
+publishes a create-only `network.txt` from its live native Wi-Fi observation,
+bound to the prepared source, signed executable, run and client count. Before
+generating clients, the coordinator accepts only a numeric host address on the
+already approved private subnet and iPhone interface, rechecks the Mac's direct
+route, and retains the original and observed addresses privately. The app checks
+the observation again before importing pins or starting the Host. A missing,
+changed, public or unapproved path refuses startup; discovery never broadens
+network approval. Omission and schema1 retain explicit saved settings. Live
+network details remain visible in the app's manual mode, and a passive refresh
+preserves manual settings.
+
 ## Run independent phases and retry only the failed phase
 
 Run the small gate first. First deployment comes from the verified preparation
