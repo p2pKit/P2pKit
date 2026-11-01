@@ -42,6 +42,7 @@ class RpcPhoneLabTerminalGuardTest {
                 callbacks++
             } },
             { lab.beginDeviceTest(RpcDeviceTestPhase.Large, null) { callbacks++ } },
+            { lab.beginMultiDeviceTests(RpcDeviceTestPhase.Adaptive, listOf("unused")) { callbacks++ } },
             { lab.echo(false) { callbacks++ } },
         )
         for (action in actions) {

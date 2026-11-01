@@ -42,6 +42,14 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var deviceTestReports: [RpcDeviceTestReport] = []
     @Published private(set) var deviceTestProgress: RpcDeviceTestProgress?
     @Published private(set) var deviceTestActivity: [RpcDeviceTestObservation] = []
+    @Published private(set) var activeDeviceTests: [RpcDeviceTestProgress] = []
+    @Published private(set) var liveTestResources: RpcDeviceLiveResources?
+    @Published private(set) var multiTests = false
+    @Published var selectedTestPeers: Set<String> = []
+    @Published var smartP95 = "1000"
+    @Published var smartP99 = "2000"
+    @Published var smartMemory = "512"
+    @Published var smartSeconds = "600"
     @Published private(set) var deviceTestStorageIssue: String?
     @Published var selectedTestPeer: String = ""
     @Published var allowHostTests = false
@@ -121,15 +129,28 @@ final class RpcPhoneModel: ObservableObject {
             try applicationSession.deviceTests.configureDeviceName(value: "iPhone")
             if FileManager.default.fileExists(atPath: deviceTestFile.path) {
                 let attributes = try FileManager.default.attributesOfItem(atPath: deviceTestFile.path)
-                guard ((attributes[.size] as? NSNumber)?.intValue ?? 512_001) <= 512_000 else {
+                guard ((attributes[.size] as? NSNumber)?.intValue ?? 8_388_609) <= 8_388_608 else {
                     throw LiveReadError.unavailable
                 }
                 let data = try Data(contentsOf: deviceTestFile)
-                guard data.count <= 512_000, let text = String(data: data, encoding: .utf8) else {
+                guard data.count <= 8_388_608, let text = String(data: data, encoding: .utf8) else {
                     throw LiveReadError.unavailable
                 }
                 try applicationSession.deviceTests.restoreJson(text: text)
                 savedDeviceTests = text
+                for report in applicationSession.deviceTests.reports {
+                    let marker = deviceTestFile.deletingLastPathComponent()
+                        .appendingPathComponent("rpc-test-archive/" + report.runId + ".deleted")
+                    if FileManager.default.fileExists(atPath: marker.path) {
+                        let attributes = try FileManager.default.attributesOfItem(atPath: marker.path)
+                        guard attributes[.type] as? FileAttributeType == .typeRegular,
+                            (attributes[.size] as? NSNumber)?.intValue == 32,
+                            try String(contentsOf: marker, encoding: .utf8) == report.runId
+                            else { throw LiveReadError.unavailable }
+                        applicationSession.deviceTests.confirmArchived(runId: report.runId)
+                        try applicationSession.deviceTests.forgetDeletedResult(runId: report.runId)
+                    }
+                }
                 deviceTestReports = applicationSession.deviceTests.reports
             }
         } catch { deviceTestStorageIssue = "Saved results could not be read; original file retained." }
@@ -212,18 +233,25 @@ final class RpcPhoneModel: ObservableObject {
             updateIdleTimer()
             startLiveObservation()
         } else {
-            stopLiveObservation()
             UIApplication.shared.isIdleTimerDisabled = false
             revealInvitation = false // Conceal secrets in the app switcher; preserve only the bounded transfer state.
             if UIApplication.shared.isProtectedDataAvailable, !manualNetworkSetup, wifiApproved,
                RpcPhoneShareWindow.eligible(running: owner.phase == .running, actionBusy: actionBusy,
-                operationBusy: operationBusy, cleanupPending: retirement != nil,
+                operationBusy: operationBusy, manualTestRunning: applicationSession.deviceTests.anyTestRunning,
+                cleanupPending: retirement != nil,
                 capacitySession: mobileConfig != nil || !capacityPins.isEmpty || approveImport),
                shareWindow.leave(expired: { [weak self] in self?.expireAppSwitch() }) {
-                status = "Return within 25 seconds to keep this role. iOS may end background time sooner."
+                status = "Return within 25 seconds to keep this role and test. iOS may end background time sooner."
             } else { expireAppSwitch() }
         }
         objectWillChange.send()
+    }
+
+    func testMemoryPressure() {
+        guard applicationSession.deviceTests.anyTestRunning else { return }
+        applicationSession.deviceTests.signalMemoryPressure()
+        status = "Test interrupted by an iOS memory-pressure warning; partial results are retained."
+        stop()
     }
 
     func protectedDataUnavailable() { expireAppSwitch() }
@@ -760,7 +788,8 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     private func canObserve(_ lab: RpcPhoneLab) -> Bool {
-        foreground && retirement == nil && owner.accepts(lab)
+        (foreground || shareWindow.pending) && UIApplication.shared.isProtectedDataAvailable &&
+            retirement == nil && owner.accepts(lab)
     }
 
     private func readLive(_ lab: RpcPhoneLab) throws -> LiveValue {
@@ -1037,7 +1066,79 @@ final class RpcPhoneModel: ObservableObject {
         } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
     }
 
-    var deviceTestRunning: Bool { applicationSession.deviceTests.progress.running || operationBusy }
+    var deviceTestRunning: Bool { applicationSession.deviceTests.anyTestRunning || operationBusy }
+
+    var testSummary: String {
+        let saved = applicationSession.deviceTests.reports
+        return "Running \(activeDeviceTests.count) · completed \(saved.filter { $0.status == "Completed" }.count) · " +
+            "failed \(saved.filter { $0.status == "Failed" }.count) · interrupted/cancelled " +
+            "\(saved.filter { $0.status == "Interrupted" || $0.status == "Cancelled" }.count) (recent runs)"
+    }
+
+    func setTestMode(_ multi: Bool) {
+        guard foreground, !deviceTestRunning, !actionBusy else { return }
+        do { try applicationSession.deviceTests.setMultiDeviceMode(enabled: multi); multiTests = multi }
+        catch { report(error) }
+    }
+
+    func clearTestDisplay() {
+        applicationSession.deviceTests.clearDisplayedActivity()
+        refreshDeviceTests()
+    }
+
+    func showSavedTests() {
+        applicationSession.deviceTests.showSavedResults()
+        refreshDeviceTests()
+    }
+
+    func applySmartSafety() {
+        guard canAct, !deviceTestRunning, let p95 = Int32(smartP95), let p99 = Int32(smartP99),
+            let memory = Int32(smartMemory), let seconds = Int32(smartSeconds) else { return }
+        do {
+            try applicationSession.deviceTests.configureSmartSafety(p95Millis: p95, p99Millis: p99,
+                memoryMiB: memory, durationSeconds: seconds)
+            status = "Smart safety settings saved."
+        } catch { status = "Invalid safety settings; previous settings kept." }
+    }
+
+    func cancelTest(_ runId: String) { owner.runtime?.cancelDeviceTestRun(runId: runId) }
+
+    func deleteTest(_ runId: String) {
+        guard foreground, !deviceTestRunning, !actionBusy, deviceTestStorageIssue == nil else { return }
+        refreshDeviceTests()
+        let tests = applicationSession.deviceTests
+        guard let result = tests.reports.first(where: { $0.runId == runId }) else { return }
+        actionBusy = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var reserved = false
+            var deleted = false
+            do {
+                reserved = try await tests.beginResultDeletion(runId: runId).boolValue
+                guard reserved else { self.actionBusy = false; return }
+                let archive = self.deviceTestFile.deletingLastPathComponent()
+                    .appendingPathComponent("rpc-test-archive", isDirectory: true)
+                let attributes = try FileManager.default.attributesOfItem(atPath: archive.path)
+                guard attributes[.type] as? FileAttributeType == .typeDirectory else { throw LiveReadError.unavailable }
+                let target = archive.appendingPathComponent(runId + ".json")
+                let item = try FileManager.default.attributesOfItem(atPath: target.path)
+                guard item[.type] as? FileAttributeType == .typeRegular,
+                    ((item[.size] as? NSNumber)?.intValue ?? 65_537) <= 65_536,
+                    let text = String(data: try Data(contentsOf: target), encoding: .utf8),
+                    tests.archivedResultMatchesForDeletion(report: result, text: text)
+                    else { throw LiveReadError.unavailable }
+                let marker = archive.appendingPathComponent(runId + ".deleted")
+                try Data(runId.utf8).write(to: marker, options: [.atomic, .completeFileProtection])
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+                deleted = true
+                try FileManager.default.removeItem(at: target)
+                self.status = "Selected output deleted on this device."
+            } catch { self.deviceTestStorageIssue = "Output deletion incomplete; retained records need review." }
+            if reserved { try? tests.finishResultDeletion(runId: runId, deleted: deleted) }
+            self.actionBusy = false
+            self.refreshDeviceTests()
+        }
+    }
 
     func startDeviceTestRole(host: Bool) {
         guard canStart, mobileConfig == nil, capacityPins.isEmpty else { return }
@@ -1053,12 +1154,13 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     func refreshDeviceTests() {
-        deviceTestReports = applicationSession.deviceTests.reports
+        deviceTestReports = applicationSession.deviceTests.displayedReports
+        activeDeviceTests = applicationSession.deviceTests.activeTests
+        liveTestResources = applicationSession.deviceTests.liveResources
         deviceTestProgress = applicationSession.deviceTests.progress
         deviceTestActivity = applicationSession.deviceTests.activity
         let text = applicationSession.deviceTests.exportJson()
-        guard !deviceTestReports.isEmpty,
-            text != savedDeviceTests || !applicationSession.deviceTests.unarchivedReports.isEmpty,
+        guard text != savedDeviceTests || !applicationSession.deviceTests.unarchivedReports.isEmpty,
             deviceTestStorageIssue == nil else { return }
         do {
             let directory = deviceTestFile.deletingLastPathComponent()
@@ -1068,12 +1170,12 @@ final class RpcPhoneModel: ObservableObject {
                 attributes: [.posixPermissions: 0o700])
             for report in applicationSession.deviceTests.unarchivedReports {
                 let data = Data(applicationSession.deviceTests.reportJson(report: report).utf8)
-                guard data.count <= 16_384 else { throw LiveReadError.unavailable }
+                guard data.count <= 65_536 else { throw LiveReadError.unavailable }
                 let target = archive.appendingPathComponent(report.runId + ".json")
                 if FileManager.default.fileExists(atPath: target.path) {
                     let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
                     guard attributes[.type] as? FileAttributeType == .typeRegular,
-                        ((attributes[.size] as? NSNumber)?.intValue ?? 16_385) <= 16_384,
+                        ((attributes[.size] as? NSNumber)?.intValue ?? 65_537) <= 65_536,
                         let retained = String(data: try Data(contentsOf: target), encoding: .utf8),
                         applicationSession.deviceTests.archiveMatches(report: report, json: retained)
                         else { throw LiveReadError.unavailable }
@@ -1081,8 +1183,11 @@ final class RpcPhoneModel: ObservableObject {
                     try data.write(to: target, options: [.atomic, .completeFileProtection])
                     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
                 }
+                try applicationSession.deviceTests.hydrateArchived(report: report,
+                    json: String(contentsOf: target, encoding: .utf8))
                 applicationSession.deviceTests.confirmArchived(runId: report.runId)
             }
+            deviceTestReports = applicationSession.deviceTests.displayedReports
             try Data(text.utf8).write(to: deviceTestFile, options: [.atomic, .completeFileProtection])
             savedDeviceTests = text
         } catch { deviceTestStorageIssue = "Saving results failed; results remain in this session." }
@@ -1095,8 +1200,7 @@ final class RpcPhoneModel: ObservableObject {
         operationID = id
         operationBusy = true
         do {
-            operation = try lab.beginDeviceTest(phase: phase,
-                selectedPeer: hostRole ? selectedTestPeer : nil) { [weak self, lab] error in
+            let completed: (String?) -> Void = { [weak self, lab] error in
                 DispatchQueue.main.async {
                     guard let self, self.operationID == id else { return }
                     self.operation = nil
@@ -1107,6 +1211,14 @@ final class RpcPhoneModel: ObservableObject {
                         self.status = error ?? "Test finished; inspect the saved result below."
                     }
                 }
+            }
+            if multiTests && hostRole {
+                let selected = trustedDevices.filter { $0.presence == "Connected" && selectedTestPeers.contains($0.fingerprint) }
+                    .map { $0.fingerprint }
+                operation = try lab.beginMultiDeviceTests(phase: phase, selectedPeers: selected, onComplete: completed)
+            } else {
+                operation = try lab.beginDeviceTest(phase: phase,
+                    selectedPeer: hostRole ? selectedTestPeer : nil, onComplete: completed)
             }
         } catch { operationBusy = false; operationID = nil; report(error) }
     }

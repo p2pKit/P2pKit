@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.rpc
 
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -10,6 +11,62 @@ import kotlin.test.assertTrue
 class RpcDeviceTestSessionTest {
     private val command = DeviceTestCommand("a".repeat(32), "b".repeat(40), RpcDeviceTestPhase.Large)
     private val failed = emptyDeviceTestReport(command, "Failed", "InterruptedBeforeMeasurement")
+
+    @Test
+    fun multiAdmissionKeepsPairIsolationAndOneActiveRunPerApprovedClient() {
+        val multi = command.copy(mode = "Multi", groupId = "c".repeat(32))
+        val active = listOf("peer-one" to multi)
+        assertTrue(deviceTestAdmission(true, active, "peer-two", multi.copy(runId = "d".repeat(32))))
+        assertFalse(deviceTestAdmission(false, active, "peer-two", multi.copy(runId = "d".repeat(32))))
+        assertFalse(deviceTestAdmission(true, active, "peer-one", multi.copy(runId = "d".repeat(32))))
+        assertFalse(deviceTestAdmission(true, active, "peer-two", command.copy(runId = "d".repeat(32))))
+        assertFalse(deviceTestAdmission(true, active, "peer-two", multi))
+        val full = (0 until DEVICE_TEST_MAX_PARALLEL).map { "$it" to multi }
+        assertFalse(deviceTestAdmission(true, full, "new", multi.copy(runId = "d".repeat(32))))
+    }
+
+    @Test
+    fun completingOneClientDoesNotClearAnotherAndDisplayClearRetainsRealEvidence() {
+        val history = RpcRequestHistory()
+        val session = RpcDeviceTestSession(history)
+        session.publish(RpcDeviceTestProgress("one", "First", true))
+        session.publish(RpcDeviceTestProgress("two", "Second", true))
+        session.finishProgress("one")
+        assertEquals(listOf("two"), session.activeTests.map { it.runId })
+        assertTrue(session.anyTestRunning)
+        session.finishProgress("two")
+        session.save(failed)
+        val id = history.begin(RpcRequestSide.Client, "qualification.echo", 1, "[test body omitted]")
+        history.finish(id, RpcRequestOutcome.Succeeded, 1, "[reply omitted]")
+        val archived = session.reportJson(failed)
+        val realHistory = history.entries()
+        session.clearDisplayedActivity()
+        assertTrue(session.activity.isEmpty())
+        assertTrue(session.displayedReports.isEmpty())
+        assertEquals(realHistory, history.entries())
+        assertEquals(archived, session.reportJson(session.reports.single()))
+        session.showSavedResults()
+        assertEquals(listOf(failed), session.displayedReports)
+    }
+
+    @Test
+    fun deletionRequiresFinishedArchivedOutputAndCannotDeleteAnotherRun() = runTest {
+        val session = RpcDeviceTestSession()
+        session.save(failed)
+        assertFalse(session.beginResultDeletion(failed.runId))
+        session.confirmArchived(failed.runId)
+        session.publish(RpcDeviceTestProgress("active", "Active", true))
+        assertFalse(session.beginResultDeletion(failed.runId))
+        session.finishProgress("active")
+        assertTrue(session.beginResultDeletion(failed.runId))
+        assertFailsWith<IllegalStateException> { session.finishResultDeletion("d".repeat(32), true) }
+        session.finishResultDeletion(failed.runId, false)
+        assertEquals(listOf(failed), session.reports)
+        assertTrue(session.beginResultDeletion(failed.runId))
+        session.finishResultDeletion(failed.runId, true)
+        assertTrue(session.reports.isEmpty())
+        assertFalse(session.resultDeletionInProgress)
+    }
 
     @Test
     fun openingAndRestoringResultsNeverStartsAWorkload() {
@@ -49,7 +106,7 @@ class RpcDeviceTestSessionTest {
         assertFailsWith<IllegalArgumentException> {
             RpcDeviceTestSession().restoreJson(Json.encodeToString(listOf(failed, failed)))
         }
-        assertFailsWith<IllegalArgumentException> { RpcDeviceTestSession().restoreJson("x".repeat(512_001)) }
+        assertFailsWith<IllegalArgumentException> { RpcDeviceTestSession().restoreJson("x".repeat(8_388_609)) }
     }
     @Test
     fun sampledCountersKeepProcessKindsAndChargingSeparate() {
@@ -192,6 +249,70 @@ class RpcDeviceTestSessionTest {
         assertFalse(validTestObservation(observation.copy(executionEvidence = "SecretPayload")))
         assertFalse(validTestObservation(observation.copy(clientStage = "ConfirmedRemoteReceipt")))
         assertFalse(validDeviceTestReport(failed.copy(observations = List(33) { observation })))
+    }
+
+    @Test
+    fun perRunResourceWindowsRemainSeparateAndCompletionKeepsOtherSamples() {
+        val session = RpcDeviceTestSession()
+        session.beginResources("first")
+        session.observeResources(1_000_000, 10_000_000, "RESIDENT_BYTES", 10, "NATIVE_THREADS", null)
+        session.beginResources("second")
+        session.observeResources(2_000_000, 20_000_000, "RESIDENT_BYTES", 20, "NATIVE_THREADS", null)
+        assertEquals(10_000_000, session.finishResources("first")?.peakMemoryBytes)
+        assertEquals(20_000_000, session.resources("second")?.peakMemoryBytes)
+        assertEquals(20_000_000, session.finishResources("second")?.peakMemoryBytes)
+    }
+
+    @Test
+    fun groupMetadataCannotBeReassignedToAnotherRunOrPeer() {
+        val multi = command.copy(mode = "Multi", groupId = "c".repeat(32))
+        val begin = DeviceTestBegin(multi, "Android", 1_793_510_000_000, "Host")
+        val result = failed.copy(mode = "Multi", groupId = multi.groupId, clientPlatform = "Android",
+            hostPlatform = "iPhone", startedAtEpochMillis = begin.startedAtEpochMillis, initiatedBy = "Host")
+        assertTrue(matchesDeviceTestResult("peer", "peer", result, multi, begin, "iPhone"))
+        assertFalse(matchesDeviceTestResult("another", "peer", result, multi, begin, "iPhone"))
+        assertFalse(matchesDeviceTestResult("peer", "peer", result.copy(groupId = "d".repeat(32)), multi, begin, "iPhone"))
+        assertFalse(matchesDeviceTestResult("peer", "peer", result.copy(mode = "Pair"), multi, begin, "iPhone"))
+    }
+
+    @Test
+    fun smartStagesAreArchivedSeparatelyAndHydratedAfterCompactIndexReopen() {
+        val settings = RpcSmartTestSettings()
+        val step = RpcSmartTestStep(10, 1, 100, 100, 0, 0, 0, 10_000, 10_000, 20_000, 30_000,
+            "StableBoundaryConfirmed")
+        val smart = RpcSmartTestResult(settings, listOf(step), 10.0, 10.0, 1,
+            "StableBoundaryConfirmed", true, true, true, highestConfirmedTargetRps = 10)
+        val result = failed.copy(phase = RpcDeviceTestPhase.Adaptive, status = "Completed", calls = 100,
+            correctResponses = 100, failureCode = null, smart = smart)
+        val original = RpcDeviceTestSession()
+        original.save(result)
+        val archive = original.reportJson(result)
+        val reopened = RpcDeviceTestSession()
+        reopened.restoreJson(original.exportJson())
+        assertTrue(reopened.reports.single().smart!!.steps.isEmpty())
+        reopened.hydrateArchived(reopened.unarchivedReports.single(), archive)
+        assertEquals(result, reopened.reports.single())
+        assertTrue(archive.encodeToByteArray().size <= 65_536)
+        val many = RpcDeviceTestSession()
+        repeat(100) { index ->
+            val report = result.copy(runId = index.toString(16).padStart(32, '0'))
+            many.save(report)
+            many.confirmArchived(report.runId)
+        }
+        assertTrue(many.exportJson().encodeToByteArray().size <= 262_100, "Recent index fits one encrypted vault record")
+    }
+
+    @Test
+    fun memoryPressureOnlyInterruptsAnActiveRunAndDoesNotPoisonTheNextRun() {
+        val session = RpcDeviceTestSession()
+        session.signalMemoryPressure()
+        assertEquals(null, session.safetyStopReason)
+        session.publish(RpcDeviceTestProgress("first", "First", true))
+        session.signalMemoryPressure()
+        assertEquals("MemoryPressureSignal", session.safetyStopReason)
+        session.finishProgress("first")
+        session.publish(RpcDeviceTestProgress("second", "Second", true))
+        assertEquals(null, session.safetyStopReason)
     }
 
 }

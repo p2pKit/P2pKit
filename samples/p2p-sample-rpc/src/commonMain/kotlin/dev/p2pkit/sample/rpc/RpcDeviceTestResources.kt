@@ -2,6 +2,30 @@ package dev.p2pkit.sample.rpc
 
 import kotlinx.serialization.Serializable
 
+/** Latest self-process sample; memory kinds and coarse battery/thermal sensors remain explicit. */
+public data class RpcDeviceLiveResources(
+    public val memoryBytes: Long,
+    public val memoryKind: String,
+    public val threads: Int,
+    public val threadKind: String,
+    public val cpuPercentOfOneCore: Double?,
+    public val batteryPercentMilli: Int?,
+    public val chargingState: String,
+    public val thermalState: String,
+    public val batteryTemperatureMilliC: Int?,
+    public val batteryCurrentMicroamps: Long?,
+) {
+    public val title: String get() = "${memoryBytes / 1_048_576} MiB ($memoryKind) · " +
+        "$threads threads ($threadKind) · " + (cpuPercentOfOneCore?.let {
+            "${(it * 10).toLong() / 10.0}% of one CPU core"
+        } ?: "CPU interval unavailable")
+    public val environmentTitle: String get() = "Battery: " +
+        (batteryPercentMilli?.let { "${it / 1_000}%" } ?: "unavailable") + " · $chargingState · " +
+        "thermal category: $thermalState · battery temperature: " +
+        (batteryTemperatureMilliC?.let { "${it / 1_000.0} °C" } ?: "unavailable") + " · battery current: " +
+        (batteryCurrentMicroamps?.let { "$it µA" } ?: "unavailable")
+}
+
 /** Sampled self-process interval only; no battery-energy, CPU-temperature or post-Stop drain claim. */
 @Serializable
 public data class RpcDeviceTestResources(
@@ -22,10 +46,18 @@ public data class RpcDeviceTestResources(
 ) {
     public val cpuPercentOfOneCore: Double? get() = if (sampledMillis > 0)
         cpuDeltaNanos.toDouble() / (sampledMillis * 10_000.0) else null
-    public val title: String get() = "${peakMemoryBytes / 1_048_576} MiB ($memoryKind) · " +
-        "$peakThreads threads ($threadKind) · $samples samples · " +
+    public val title: String get() = "Peak ${peakMemoryBytes / 1_048_576} MiB ($memoryKind) · " +
+        "peak $peakThreads threads ($threadKind) · $samples samples · " +
         (cpuPercentOfOneCore?.let { "${(it * 10).toLong() / 10.0}% of one CPU core" } ?: "CPU interval unavailable")
     public val thermalStopped: Boolean get() = thermalStates.any { it == "serious" || it == "critical" }
+    public val environmentTitle: String get() = "Battery " +
+        (firstBatteryPercentMilli?.let { "${it / 1_000}%" } ?: "unavailable") + " → " +
+        (lastBatteryPercentMilli?.let { "${it / 1_000}%" } ?: "unavailable") +
+        " · ${batteryStates.joinToString()} · thermal categories: ${thermalStates.joinToString()} · " +
+        "peak battery temperature: " +
+        (peakBatteryTemperatureMilliC?.let { "${it / 1_000.0} °C" } ?: "unavailable") +
+        " · current: ${minBatteryCurrentMicroamps ?: "unavailable"} / " +
+        "${maxBatteryCurrentMicroamps ?: "unavailable"} µA"
 }
 
 internal data class DeviceResourceWindow(

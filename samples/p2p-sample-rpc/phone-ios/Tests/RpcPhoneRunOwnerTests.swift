@@ -658,6 +658,18 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     }
 
     @MainActor
+    func testManualTestMayUseTheBoundedShareWindowButOtherBusyWorkCannot() {
+        XCTAssertTrue(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: false))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: true,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: false))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: true))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: true, capacitySession: false))
+    }
+
+    @MainActor
     func testShareWindowEligibilityRejectsBusyRetiringAndCapacityRoles() {
         for flags in 0..<32 {
             XCTAssertEqual(RpcPhoneShareWindow.eligible(running: flags & 1 != 0,
@@ -1329,10 +1341,12 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         model.setManualNetworkSetup(true)
         model.subnets = "10.0.0.0/24"
         model.refreshWifi()
-        XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
+        XCTAssertTrue(model.canRefreshWifi)
+        XCTAssertFalse(model.canConfirmWifi)
         XCTAssertTrue(model.wifiExplanation.contains("Manual"))
         XCTAssertEqual(model.subnets, "10.0.0.0/24")
-        XCTAssertEqual(wifi.callbacks.count, 1)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertEqual(wifi.callbacks.count, 2)
         model.setManualNetworkSetup(false)
         let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
         wifi.publish(network)
@@ -1344,13 +1358,13 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
         XCTAssertTrue(model.wifiExplanation.contains("starting"))
         model.refreshWifi()
-        XCTAssertEqual(wifi.callbacks.count, 1)
-        XCTAssertEqual(wifi.stops, 0)
+        XCTAssertEqual(wifi.callbacks.count, 2)
+        XCTAssertEqual(wifi.stops, 1)
         model.stop() // Synchronous Stop prevents the scheduled task from entering the real network factory.
         XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
         XCTAssertTrue(model.wifiExplanation.contains("cleanup"))
         model.refreshWifi()
-        XCTAssertEqual(wifi.callbacks.count, 1)
+        XCTAssertEqual(wifi.callbacks.count, 2)
         let stopped = expectation(description: "scheduled start and cleanup retire without a Wi-Fi refresh")
         let statusObservation = model.$status.sink {
             if $0 == "Stopped; owned RPC cleanup completed." { stopped.fulfill() }

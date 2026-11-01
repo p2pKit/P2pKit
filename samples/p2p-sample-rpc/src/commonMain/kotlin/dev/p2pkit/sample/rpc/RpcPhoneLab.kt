@@ -284,6 +284,8 @@ public class RpcPhoneLab private constructor(
 
     public fun cancelDeviceTest() { deviceTests?.cancel() }
 
+    public fun cancelDeviceTestRun(runId: String) { deviceTests?.cancel(runId) }
+
     public fun allowDeviceTestsFromHost(enabled: Boolean) { checkNotNull(deviceTests).enableRemote(enabled) }
 
     @Throws(Exception::class)
@@ -293,6 +295,16 @@ public class RpcPhoneLab private constructor(
         { "Test failed or interrupted; result saved" }, onComplete, operationFailures) {
         check(mobileRun == null && nearbyMode)
         checkNotNull(deviceTests).run(phase, selectedPeer)
+        null
+    }
+
+    @Throws(Exception::class)
+    public fun beginMultiDeviceTests(
+        phase: RpcDeviceTestPhase, selectedPeers: List<String>, onComplete: (String?) -> Unit,
+    ): RpcPhoneOperation = startPhoneOperation(scope, callBusy, { "Cancelled; individual results saved" },
+        { "Multi-device test failed; inspect individual results" }, onComplete, operationFailures) {
+        check(mobileRun == null && nearbyMode)
+        checkNotNull(deviceTests).runGroup(phase, selectedPeers)
         null
     }
 

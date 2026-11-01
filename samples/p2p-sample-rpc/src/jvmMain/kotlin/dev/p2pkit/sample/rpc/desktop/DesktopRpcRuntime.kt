@@ -119,7 +119,7 @@ internal class DesktopRpcRuntime private constructor(
     }
 
     private fun saveTests() {
-        if (vault == null || application.deviceTests.reports.isEmpty()) return
+        if (vault == null) return
         val tests = application.deviceTests
         val archive = DesktopRpcTestArchive(checkNotNull(vault))
         tests.unarchivedReports.forEach { archive.retain(tests, it) }
@@ -136,6 +136,24 @@ internal class DesktopRpcRuntime private constructor(
         val operation = checkNotNull(lab).beginDeviceTest(phase, peer, completed)
         val cancel: () -> Unit = { operation.cancel() }
         cancel
+    }
+    suspend fun multiTest(phase: RpcDeviceTestPhase, peers: List<String>): String? =
+        awaitDesktopRpcCompletion { completed ->
+            val operation = checkNotNull(lab).beginMultiDeviceTests(phase, peers, completed)
+            val cancel: () -> Unit = { operation.cancel() }
+            cancel
+        }
+
+    suspend fun deleteTest(runId: String) {
+        val tests = application.deviceTests
+        val report = checkNotNull(tests.reports.firstOrNull { it.runId == runId })
+        check(tests.beginResultDeletion(runId)) { "Stop or finish active tests before deleting outputs" }
+        var deleted = false
+        try {
+            DesktopRpcTestArchive(checkNotNull(vault)).delete(tests, report)
+            deleted = true
+        } finally { tests.finishResultDeletion(runId, deleted) }
+        saveTests()
     }
 
     suspend fun invitation(): String = checkNotNull(lab).invitation()

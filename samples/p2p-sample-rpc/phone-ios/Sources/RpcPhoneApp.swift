@@ -54,6 +54,9 @@ struct RpcPhoneApp: App {
                     if $0 == .active { model.beginUsbDeveloperCampaign(arguments: ProcessInfo.processInfo.arguments) }
                 #endif
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                model.testMemoryPressure()
+            }
             .onReceive(
                 NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)
             ) { _ in
@@ -66,6 +69,7 @@ struct RpcPhoneView: View {
     @ObservedObject var model: RpcPhoneModel
     @State private var showAdvanced = false
     @State private var showingDeviceTests = false
+    @State private var deletingTest: String?
     @StateObject private var presentation = RpcPhoneDecisionPresentation()
 
     var body: some View {
@@ -75,9 +79,12 @@ struct RpcPhoneView: View {
                     deviceTests
                 } else {
                 Section {
-                    Button("Device tests") { showingDeviceTests = true; model.refreshDeviceTests() }
+                    Button("Device tests") { model.setTestMode(false); showingDeviceTests = true; model.refreshDeviceTests() }
                         .disabled(model.mobileConfig != nil || model.actionBusy)
                         .accessibilityIdentifier("rpc.deviceTests")
+                    Button("Multi-device tests") {
+                        model.setTestMode(true); showingDeviceTests = true; model.refreshDeviceTests()
+                    }.disabled(model.mobileConfig != nil || model.actionBusy || model.deviceTestRunning)
                     VStack(alignment: .leading, spacing: 10) {
                         Label("LOCAL API WORKSPACE", systemImage: "network")
                             .font(.caption.weight(.semibold)).foregroundColor(.secondary)
@@ -149,7 +156,7 @@ struct RpcPhoneView: View {
                 advancedControls
                 }
             }
-            .navigationTitle(showingDeviceTests ? "Device tests" : "P2pKit RPC")
+            .navigationTitle(showingDeviceTests ? (model.multiTests ? "Multi-device tests" : "Device tests") : "P2pKit RPC")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     if showingDeviceTests {
@@ -188,9 +195,17 @@ struct RpcPhoneView: View {
 
     private var deviceTests: some View {
         Group {
+            Section("Test section") {
+                HStack {
+                    Button("Two devices") { model.setTestMode(false) }
+                    Button("Multiple devices") { model.setTestMode(true) }
+                }.buttonStyle(.borderless).disabled(model.deviceTestRunning || model.actionBusy)
+                Text(model.multiTests ? "Several trusted Clients → one Host. Each run is saved separately." :
+                    "One Client → one Host. The Client sends requests and the Host replies.").font(.footnote)
+            }
             Section("Connect devices automatically") {
                 Text(model.status).accessibilityIdentifier("rpc.testStatus")
-                Text("Open Device tests on both phones and the Mac, on the same private Wi-Fi. No IP entry is needed.")
+                Text("Use the same private Wi-Fi. Approve fingerprints and enable test permission on each Client.")
                 HStack {
                     Button("Host here") { model.startDeviceTestRole(host: true) }
                         .buttonStyle(.borderedProminent).disabled(!model.canStart)
@@ -202,21 +217,29 @@ struct RpcPhoneView: View {
                         .buttonStyle(.borderless).disabled(!model.owner.hasOwner)
                         .accessibilityIdentifier("rpc.testStop")
                 }
-                Text("The first connection requires fingerprint approval on the Host.").font(.footnote)
+                Text("For a brief app switch, return within 25 seconds. iOS may end background time sooner.")
+                    .font(.footnote)
             }
             if model.nearbyMode {
                 Section("Your device identity · compare on the other device") {
                     Text(model.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
                 }
                 RpcPhoneNearbyView(model: model, presentation: presentation)
-                Section(model.hostRole ? "Connected client to test" : "Test permission") {
+                Section(model.hostRole ? "Select connected Clients" : "Test permission") {
                     if model.hostRole {
                         ForEach(model.trustedDevices.filter { $0.presence == "Connected" }, id: \.fingerprint) { device in
-                            Button((model.selectedTestPeer == device.fingerprint ? "✓ " : "") +
+                            Button((testPeerSelected(device.fingerprint) ? "✓ " : "") +
                                 device.name + " · " + device.fingerprint.suffix(8)) {
-                                model.selectedTestPeer = device.fingerprint
-                            }.disabled(model.deviceTestRunning)
+                                if model.multiTests {
+                                    if model.selectedTestPeers.contains(device.fingerprint) {
+                                        model.selectedTestPeers.remove(device.fingerprint)
+                                    } else if model.selectedTestPeers.count < 16 {
+                                        model.selectedTestPeers.insert(device.fingerprint)
+                                    }
+                                } else { model.selectedTestPeer = device.fingerprint }
+                            }.disabled(model.deviceTestRunning || model.actionBusy)
                         }
+                        if model.multiTests { Text("Up to 16 connected Clients per group.").font(.footnote) }
                     } else {
                         Toggle("Allow selected Host to start tests while this screen is open", isOn: Binding(
                             get: { model.allowHostTests }, set: { model.setAllowHostTests($0) }))
@@ -224,51 +247,85 @@ struct RpcPhoneView: View {
                     }
                 }
             }
-            Section("Run one test at a time") {
-                Text("These buttons measure one connected Client. 128/256-client qualification is a separate Mac campaign.")
+            Section(model.multiTests ? "Start a test on the selected Clients" : "Run a test") {
+                Text("Smart Test searches this connected path. Safety ceilings are not a discovered Host capacity.")
                     .font(.footnote)
-                ForEach([RpcDeviceTestPhase.large, .correctness, .reconnect, .steady, .deadlines], id: \.name) { phase in
+                ForEach([RpcDeviceTestPhase.large, .correctness, .reconnect, .steady, .deadlines, .adaptive], id: \.name) { phase in
                     Button(phase.title) { model.runDeviceTest(phase) }
                         .disabled(!model.canAct || model.deviceTestRunning || !model.nearbyMode ||
                             (model.hostRole ? !model.trustedDevices.contains {
-                                $0.fingerprint == model.selectedTestPeer && $0.presence == "Connected"
+                                testPeerSelected($0.fingerprint) && $0.presence == "Connected"
                             } : model.owner.runtime?.state != "Ready"))
                 }
-                if let progress = model.deviceTestProgress, progress.running {
-                    Text("\(progress.direction) · \(progress.title) · \(progress.stage)")
-                    Text("\(progress.elapsedSeconds)s / \(progress.plannedSeconds)s · \(progress.calls) responses")
-                    Button("Cancel test") { model.cancelOperation() }
+                DisclosureGroup("Smart safety settings · automatic defaults") {
+                    TextField("p95 limit (ms)", text: $model.smartP95).keyboardType(.numberPad)
+                    TextField("p99 limit (ms)", text: $model.smartP99).keyboardType(.numberPad)
+                    TextField("Memory safety limit (MiB)", text: $model.smartMemory).keyboardType(.numberPad)
+                    TextField("Time safety budget (seconds)", text: $model.smartSeconds).keyboardType(.numberPad)
+                    Button("Apply safety settings") { model.applySmartSafety() }
+                }.disabled(!model.canAct || model.deviceTestRunning)
+            }
+            Section("Monitor") {
+                Text(model.testSummary)
+                if let resources = model.liveTestResources {
+                    Text(resources.title).monospacedDigit()
+                    Text(resources.environmentTitle).font(.footnote)
+                } else { Text("Resource sample unavailable") }
+                ForEach(model.activeDeviceTests, id: \.runId) { progress in
+                    VStack(alignment: .leading) {
+                        Text(progress.monitorText).monospacedDigit()
+                        if let host = progress.hostResources {
+                            Text("Host: " + host.title).font(.footnote)
+                            Text(host.environmentTitle).font(.footnote)
+                        }
+                        Button("Cancel this test") { model.cancelTest(progress.runId) }.buttonStyle(.borderless)
+                    }
                 }
+                if model.deviceTestRunning { Button("Cancel all tests") { model.cancelOperation() } }
             }
             Section("Live test activity") {
-                Text("Sent from here: Client. Received here: Host. Host finalization alone does not prove Client receipt.")
-                    .font(.footnote)
-                if model.deviceTestActivity.isEmpty {
-                    Text("Waiting for test requests. Start a short test on the connected Client.")
-                }
+                HStack {
+                    Button("Clear displayed logs") { model.clearTestDisplay() }
+                    Button("Show saved results") { model.showSavedTests() }
+                }.buttonStyle(.borderless)
+                Text("Clearing this display keeps all saved output.").font(.footnote)
                 ForEach(Array(model.deviceTestActivity.reversed().enumerated()), id: \.offset) { _, activity in
                     Text(activity.title).font(.footnote)
                 }
             }
-            Section("Saved results · recent 100 runs") {
-                Text(model.deviceTestStorageIssue ?? "Every completed run is archived privately; older runs are kept.")
+            Section("Saved results · separate output per run") {
+                Text(model.deviceTestStorageIssue ?? "Recent list: 100. Older outputs remain saved privately.")
                 ForEach(model.deviceTestReports.reversed(), id: \.runId) { report in
-                    VStack(alignment: .leading) {
-                        Text(report.title)
-                        Text("Started by: \(report.initiatedBy) · Run: \(report.runId)").font(.footnote)
+                    DisclosureGroup(report.title) {
+                        Text(report.detail).font(.footnote).textSelection(.enabled)
                         if report.startedAtEpochMillis > 0 {
-                            Text(Date(timeIntervalSince1970: Double(report.startedAtEpochMillis) / 1000),
-                                style: .date).font(.footnote)
+                            Text("Started: " + Date(timeIntervalSince1970: Double(report.startedAtEpochMillis) / 1000)
+                                .formatted()).font(.footnote)
                         }
-                        if let sample = report.clientResources { Text("Client: \(sample.title)").font(.footnote) }
-                        if let sample = report.initiatingHostResources { Text("Host: \(sample.title)").font(.footnote) }
-                        Text("p95 \(report.p95Micros / 1000) ms · p99 \(report.p99Micros / 1000) ms · missed \(report.missedSchedules)")
-                            .font(.footnote)
-                        if let error = report.failureCode { Text(error).font(.footnote) }
+                        if report.endedAtEpochMillis > 0 {
+                            Text("Ended: " + Date(timeIntervalSince1970: Double(report.endedAtEpochMillis) / 1000)
+                                .formatted()).font(.footnote)
+                        }
+                        Button("Delete this output…", role: .destructive) { deletingTest = report.runId }
+                            .buttonStyle(.borderless).disabled(model.deviceTestRunning || model.actionBusy)
                     }
                 }
             }
         }
+        .alert("Delete this test output?", isPresented: Binding(
+            get: { deletingTest != nil }, set: { if !$0 { deletingTest = nil } })) {
+                Button("Delete output", role: .destructive) {
+                    if let runId = deletingTest { model.deleteTest(runId) }
+                    deletingTest = nil
+                }
+                Button("Keep output", role: .cancel) { deletingTest = nil }
+            } message: {
+                Text("Permanently deletes only the selected run on this iPhone. Other devices keep their copies.")
+            }
+    }
+
+    private func testPeerSelected(_ fingerprint: String) -> Bool {
+        model.multiTests ? model.selectedTestPeers.contains(fingerprint) : model.selectedTestPeer == fingerprint
     }
 
     private var liveControls: some View {
