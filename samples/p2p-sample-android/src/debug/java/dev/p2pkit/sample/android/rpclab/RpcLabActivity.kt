@@ -692,7 +692,7 @@ internal class RpcLabController(
         val available = interactive && !busy && !closing && !progress.running && operation?.active != true
         val connectedHost = snapshot?.takeIf { !it.asHost && it.safeState == "Ready" }
             ?.connection?.selectedFingerprint
-        val permissionAvailable = available && connectedHost != null && snapshot?.trusted?.any {
+        val permissionAvailable = available && connectedHost != null && snapshot.trusted.any {
             it.fingerprint == connectedHost && it.presence == "Connected"
         } == true
         RpcLabPage {
