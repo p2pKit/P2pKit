@@ -669,6 +669,7 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
             operationBusy: true, manualTestRunning: true, cleanupPending: true, capacitySession: false))
     }
 
+    @MainActor
     func testShareWindowEligibilityRejectsBusyRetiringAndCapacityRoles() {
         for flags in 0..<32 {
             XCTAssertEqual(RpcPhoneShareWindow.eligible(running: flags & 1 != 0,
