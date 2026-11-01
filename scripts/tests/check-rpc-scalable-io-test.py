@@ -37,7 +37,9 @@ class ReceiptTest(unittest.TestCase):
         self.assertFalse(any("-only-testing" in item or "-skip-testing" in item for item in command))
         expected = ios.phone.inventory(ROOT)
         self.assertEqual({target: len(tests) for target, tests in expected.items()},
-                         {"p2pkit-rpc-phone-tests": 92, "p2pkit-rpc-phone-uitests": 7})
+                         {"p2pkit-rpc-phone-tests": 92, "p2pkit-rpc-phone-uitests": 8})
+        self.assertIn("RpcPhonePresentationTests/testDeviceTestRoleButtonsDispatchOnlyTheTappedRole()",
+                      expected["p2pkit-rpc-phone-uitests"])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       expected["p2pkit-rpc-phone-tests"])
         owner = {case for case in expected["p2pkit-rpc-phone-tests"]
