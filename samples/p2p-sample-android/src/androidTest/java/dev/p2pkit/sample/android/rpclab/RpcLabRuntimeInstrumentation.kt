@@ -288,10 +288,21 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.publish("ready.txt", "ready=false\n") }.isFailure)
         check(files.read("ready.txt") == "ready=true\n")
+        val appData = targetContext.noBackupFilesDir.parentFile!!.canonicalPath
+        check(RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "ready.txt").decodeToString() == "ready=true\n")
+        check(runCatching { RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "failed.txt") }.isFailure)
+        check(runCatching { RpcLabFdStat.readRecordAt(appData, "../unowned", "ready.txt") }.isFailure)
+        check(runCatching { RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "inbox.txt") }.isFailure)
+        val readyFile = File(capacityRoot, "ready.txt")
+        Os.chmod(readyFile.path, 0x1b6)
+        try { check(runCatching { RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "ready.txt") }.isFailure) }
+        finally { Os.chmod(readyFile.path, 0x180) }
+
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         files.publish("telemetry.txt", "sequence=1\n")
         files.publish("telemetry.txt", "sequence=2\n")
         check(files.read("telemetry.txt") == "sequence=2\n")
+        check(RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "telemetry.txt").decodeToString() == "sequence=2\n")
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.read("../unowned") }.isFailure)
         check(runCatching { files.publish("failed.txt", "x=" + "a".repeat(16_384)) }.isFailure)

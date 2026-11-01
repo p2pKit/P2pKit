@@ -232,6 +232,7 @@ public class RpcPhoneLab private constructor(
     private val client: RpcClient?,
     private val application: RpcApplicationSession? = null,
 ) {
+    private val deviceTests = application?.deviceTests?.bind(scope, host, client)
     private val callBusy = MutableStateFlow(false)
     private val operationFailures = PhoneOperationFailureState()
     private val controlBusy = MutableStateFlow(false)
@@ -278,6 +279,20 @@ public class RpcPhoneLab private constructor(
     public suspend fun reject(requestId: String) = operationFailures.effect {
         check(mobileRun == null)
         checkNotNull(host).pairing.reject(requestId)
+    }
+
+    public fun cancelDeviceTest() { deviceTests?.cancel() }
+
+    public fun allowDeviceTestsFromHost(enabled: Boolean) { checkNotNull(deviceTests).enableRemote(enabled) }
+
+    @Throws(Exception::class)
+    public fun beginDeviceTest(
+        phase: RpcDeviceTestPhase, selectedPeer: String?, onComplete: (String?) -> Unit,
+    ): RpcPhoneOperation = startPhoneOperation(scope, callBusy, { "Cancelled; partial result saved" },
+        { "Test failed or interrupted; result saved" }, onComplete) {
+        check(mobileRun == null && nearbyMode)
+        checkNotNull(deviceTests).run(phase, selectedPeer)
+        null
     }
 
     public val applicationAvailable: Boolean get() = application != null
@@ -479,9 +494,11 @@ public class RpcPhoneLab private constructor(
             operationFailures.retire {
                 host?.let { application?.history?.observeHost(it.requests.value) }
                 try {
-                    try { discovery?.close() } finally {
-                        host?.close()
-                        client?.close()
+                    try { deviceTests?.close() } finally {
+                        try { discovery?.close() } finally {
+                            host?.close()
+                            client?.close()
+                        }
                     }
                 } finally {
                     scope.coroutineContext[Job]?.cancelAndJoin()
@@ -623,6 +640,10 @@ public class RpcPhoneLab private constructor(
                 val client = RpcClient.create(platform, scope) {
                     appId = RpcCapacityContract.appId
                     lan = settings.policy(host = false)
+                    if (application != null) {
+                        notification(DeviceTestContract.start)
+                        notification(DeviceTestContract.cancel)
+                    }
                     transportReconnect = !nearby
                     this.trustStore = trustStore
                 }.also { owner.resource = it }

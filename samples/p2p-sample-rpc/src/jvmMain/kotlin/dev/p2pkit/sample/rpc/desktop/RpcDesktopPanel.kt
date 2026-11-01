@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.rpc.desktop
 
+import dev.p2pkit.sample.rpc.RpcDeviceTestPhase
 import dev.p2pkit.sample.rpc.RpcApplicationExample
 import dev.p2pkit.sample.rpc.RpcApplicationInput
 import dev.p2pkit.sample.rpc.RpcApplicationProcedure
@@ -32,6 +33,7 @@ import javax.swing.BorderFactory
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
+import javax.swing.JCheckBox
 import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JComponent
@@ -133,6 +135,22 @@ public class RpcDesktopPanel(
         accessibleContext.accessibleName = "RPC outcome and network setup guidance"
     }
     private val workspaceScroll = JScrollPane()
+    private lateinit var mainPage: JComponent
+    private val testPage = DesktopRpcColumn()
+    private var showingTests = false
+    private val testPeers = JComboBox<RpcKnownDevice>().apply {
+        renderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int,
+                selected: Boolean, focus: Boolean): Component = super.getListCellRendererComponent(
+                list, (value as? RpcKnownDevice)?.let { "${it.name} · ${it.fingerprint.takeLast(8)}" } ?: "Choose client",
+                index, selected, focus)
+        }
+    }
+    private val testDiscovery = DesktopRpcDiscoveryPanel(::selectNearby, ::forgetNearby)
+    private val testButtons = RpcDeviceTestPhase.entries.map { JButton(it.title) to it }
+    private val allowTests = JCheckBox("Allow selected Host to start tests while this page is open")
+    private val testProgress = JLabel("No test running")
+    private val testResults = JTextArea(12, 54).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }
     private var statusUpdates: Job? = null
     private var networkRefresh: Job? = null
     private var closing = false
@@ -154,6 +172,7 @@ public class RpcDesktopPanel(
                 background = DesktopRpcAppearance.background
                 border = BorderFactory.createEmptyBorder(4, 8, 20, 8)
                 add(JButton("Back to samples").apply { addActionListener { requestBack() } })
+                add(JButton("Device tests").apply { addActionListener { showDeviceTests() } })
                 add(DesktopRpcAppearance.hero())
                 add(DesktopRpcAppearance.heading("Connect"))
                 add(DesktopRpcWrappedLabel("Choose Host on one device and Client on the other. " +
@@ -223,7 +242,7 @@ public class RpcDesktopPanel(
         host.addActionListener { startRole(host = true) }
         client.addActionListener { startRole(host = false) }
         stop.addActionListener { clearSensitive(); owner.stop(); render() }
-        cancel.addActionListener { owner.cancelAction(); render() }
+        cancel.addActionListener { owner.current()?.cancelTest(); owner.cancelAction(); render() }
         invite.addActionListener {
             val epoch = invitationEpoch
             action { runtime ->
@@ -274,6 +293,36 @@ public class RpcDesktopPanel(
                 requestHistory.render()
             }
         } } }
+        mainPage = workspaceScroll.viewport.view as JComponent
+        testPage.apply {
+            add(JButton("Back to RPC").apply { addActionListener { requestBack() } })
+            add(DesktopRpcAppearance.heading("Device tests"))
+            add(DesktopRpcWrappedLabel("Choose Host here or Client here. Open Device tests on the phones. " +
+                "Private LAN discovery finds addresses automatically; approve each first connection."))
+            add(row("Roles", JButton("Host here").apply { addActionListener { startRole(true) } },
+                JButton("Client here").apply { addActionListener { startRole(false) } },
+                JButton("Stop").apply { addActionListener { owner.stop(); render() } }))
+            add(testDiscovery)
+            add(row("Connected client to test", testPeers))
+            add(allowTests.apply { addActionListener { owner.current()?.allowTests(isSelected) } })
+            add(DesktopRpcWrappedLabel("These tests measure one connected Client. " +
+                "128/256-client qualification remains a separate source-matched Mac campaign."))
+            testButtons.forEach { (button, phase) ->
+                add(button.apply { addActionListener {
+                    val peer = (testPeers.selectedItem as? RpcKnownDevice)?.fingerprint
+                    action { runtime ->
+                        val failure = runtime.test(phase, peer)
+                        publish(runtime) { outcome.text = failure ?: "Test finished; result saved." }
+                    }
+                } })
+            }
+            add(testProgress)
+            add(JButton("Cancel test").apply { addActionListener {
+                owner.current()?.cancelTest(); owner.cancelAction()
+            } })
+            add(DesktopRpcWrappedLabel("Results save automatically in your encrypted local profile (last 100)."))
+            add(JScrollPane(testResults))
+        }
         statusUpdates = scope.launch {
             owner.snapshots.collect {
                 // Await each EDT delivery: a busy UI gets the newest StateFlow value, not a growing event queue.
@@ -282,6 +331,13 @@ public class RpcDesktopPanel(
         }
         render()
         refreshNetworks()
+    }
+
+    private fun showDeviceTests() {
+        if (closing) return
+        showingTests = true
+        workspaceScroll.setViewportView(testPage)
+        render()
     }
 
     private fun startRole(host: Boolean) {
@@ -456,6 +512,20 @@ public class RpcDesktopPanel(
             requests.forEach(pendingModel::addElement)
             pending.selectedIndex = desktopRpcPendingSelection(selection, requests)
         }
+        testDiscovery.render(status, snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing)
+        val connected = status?.trusted?.filter { it.presence == "Connected" }.orEmpty()
+        val previousPeers = (0 until testPeers.itemCount).map { testPeers.getItemAt(it) }
+        if (connected != previousPeers) {
+            val selected = testPeers.selectedItem as? RpcKnownDevice
+            testPeers.model = DefaultComboBoxModel(connected.toTypedArray())
+            testPeers.selectedItem = connected.firstOrNull { it.fingerprint == selected?.fingerprint }
+        }
+        val test = applicationSession.deviceTests.progress
+        testProgress.text = "${test.title} · ${test.elapsedSeconds}s / ${test.plannedSeconds}s · ${test.calls} responses"
+        testResults.text = applicationSession.deviceTests.reports.asReversed().joinToString("\n\n") {
+            "${it.title}\np95 ${it.p95Micros / 1_000} ms · p99 ${it.p99Micros / 1_000} ms · " +
+                "missed ${it.missedSchedules}" + (it.failureCode?.let { code -> " · $code" } ?: "")
+        }
         discovery.render(status, snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing)
         if (requests.isEmpty()) lastOffered = null
         if (dialog == null && !approvalDialog && windowActive && isShowing && snapshot.stage == DesktopRpcRunOwner.Stage.Ready) {
@@ -484,6 +554,11 @@ public class RpcDesktopPanel(
         echo.isEnabled = pair.isEnabled && snapshot.status?.state == "Ready"
         examples.forEach { it.first.isEnabled = echo.isEnabled }
         requests.forEach { it.first.isEnabled = echo.isEnabled }
+        val testsIdle = ready && !applicationSession.deviceTests.progress.running
+        testButtons.forEach { it.first.isEnabled = testsIdle &&
+            (echo.isEnabled || (snapshot.role == "Host" && testPeers.selectedItem != null)) }
+        allowTests.isEnabled = testsIdle && snapshot.role == "Client"
+        testPeers.isEnabled = testsIdle && snapshot.role == "Host"
     }
 
     private fun clearInvitationText() {
@@ -510,6 +585,17 @@ public class RpcDesktopPanel(
     /** Toolbar, Swing Escape and programmatic section Back use this same policy. */
     public fun requestBack() {
         check(SwingUtilities.isEventDispatchThread())
+        if (showingTests) {
+            if (applicationSession.deviceTests.progress.running || owner.snapshot().stage == DesktopRpcRunOwner.Stage.Working) {
+                testProgress.text = "Cancel the test and wait for its saved result before returning."
+                return
+            }
+            owner.current()?.allowTests(false)
+            allowTests.isSelected = false
+            showingTests = false
+            workspaceScroll.setViewportView(mainPage)
+            return
+        }
         if (dialog != null) { dialogEpoch = Any(); dialog?.dispose(); return }
         if (!closing) onBackRequested()
     }

@@ -59,6 +59,7 @@ import dev.p2pkit.rpc.android
 import dev.p2pkit.sample.rpc.RpcApplicationExample
 import dev.p2pkit.sample.rpc.RpcApplicationInput
 import dev.p2pkit.sample.rpc.RpcApplicationProcedure
+import dev.p2pkit.sample.rpc.RpcDeviceTestPhase
 import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
 import dev.p2pkit.sample.rpc.RpcPhoneLab
@@ -131,6 +132,12 @@ internal class RpcLabController(
     private var closing by mutableStateOf(false)
     private val eventLog = RpcLabEventLog()
     private val applicationSession = RpcApplicationSession()
+    private var deviceTestScreen by mutableStateOf(false)
+    private var selectedTestPeer by mutableStateOf<String?>(null)
+    private var allowHostTests by mutableStateOf(false)
+    private var testStorageIssue by mutableStateOf<String?>(null)
+    private var lastSavedTests = ""
+    private var testResultWriter: Job? = null
     private var inputUser by mutableStateOf("123")
     private var inputOffset by mutableStateOf("0")
     private var inputLimit by mutableStateOf("20")
@@ -182,6 +189,29 @@ internal class RpcLabController(
         // Pairing secrets/pins belong to a trusted local UI, not screenshots, recents or crash transcripts.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AndroidRpcCapacityFiles.prepareHome(applicationContext)
+        val testFile = java.io.File(applicationContext.filesDir, "rpc-device-tests.json")
+        try {
+            if (testFile.exists()) {
+                check(testFile.length() <= 262_100)
+                applicationSession.deviceTests.restoreJson(testFile.readText())
+            }
+        } catch (_: Exception) { testStorageIssue = "Saved results could not be read; original file retained." }
+        testResultWriter = ui.launch {
+            applicationSession.deviceTests.changes.collect { reports ->
+                val text = applicationSession.deviceTests.exportJson()
+                if (reports.isNotEmpty() && testStorageIssue == null && text != lastSavedTests) {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            val file = android.util.AtomicFile(testFile)
+                            val output = file.startWrite()
+                            try { output.write(text.toByteArray()); file.finishWrite(output) }
+                            catch (failure: Exception) { file.failWrite(output); throw failure }
+                        }
+                        lastSavedTests = text
+                    } catch (_: Exception) { testStorageIssue = "Saving results failed; results remain in this session." }
+                }
+            }
+        }
         invitationClipboard = RpcLabInvitationClipboard(getSystemService(ClipboardManager::class.java), expired = {
             eventLog.record(RpcLabEventLog.Event.InvitationExpired)
             if (hostRole) { invitation = ""; invitationVisible = false }
@@ -583,6 +613,16 @@ internal class RpcLabController(
     /** Both toolbar and system/predictive Back call this one policy; neither pops during cleanup. */
     fun requestLeave() {
         if (!interactive) return
+        if (deviceTestScreen) {
+            if (applicationSession.deviceTests.progress.running || operation?.active == true) {
+                status = "Cancel the current test and wait for its saved result before returning."
+                return
+            }
+            deviceTestScreen = false
+            allowHostTests = false
+            lab?.takeIf { it.applicationAvailable }?.allowDeviceTestsFromHost(false)
+            return
+        }
         if (inspectedRequest != null) { inspectedRequest = null; return }
         if (startProblem != null) { startProblem = null; return }
         leave.request(foreground && !detached,
@@ -602,8 +642,8 @@ internal class RpcLabController(
     @Composable
     fun Content() {
         Column {
-            TextButton(::requestLeave) { Text("Back to Room") }
-            Controls()
+            TextButton(::requestLeave) { Text(if (deviceTestScreen) "Back to RPC" else "Back to Room") }
+            if (deviceTestScreen) DeviceTests() else Controls()
         }
         when (leave.phase) {
             RpcLabLeaveGate.Phase.Confirm, RpcLabLeaveGate.Phase.Failed -> AlertDialog(
@@ -627,6 +667,81 @@ internal class RpcLabController(
             )
             else -> Unit
         }
+    }
+
+    @Composable
+    private fun DeviceTests() {
+        val progress by applicationSession.deviceTests.progressChanges.collectAsState()
+        val reports by applicationSession.deviceTests.changes.collectAsState()
+        val ownership by runtimeOwner.state.collectAsState()
+        val available = foreground && !busy && !closing && !progress.running && operation?.active != true
+        RpcLabPage {
+            RpcLabSectionHeading("Device tests", "Find devices on private Wi-Fi · run one test at a time")
+            Text(status)
+            Text("Connect both devices to the same Wi-Fi and open Device tests. USB is optional for setup.")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button({ networkSetup.setManual(false); start(true) }, enabled = available && ownership == null &&
+                    mobileConfig == null && capacityPins.isEmpty()) { Text("Host here") }
+                Button({ networkSetup.setManual(false); start(false) }, enabled = available && ownership == null &&
+                    mobileConfig == null && capacityPins.isEmpty()) { Text("Client here") }
+                Button({ stop() }, enabled = ownership != null && !closing) { Text("Stop") }
+            }
+            if (lab?.nearbyMode == true) {
+                NearbyControls()
+                LivePendingRequests()
+                if (hostRole) {
+                    Text("Choose the connected client to exercise")
+                    lab?.trustedDevices()?.filter { it.presence == "Connected" }?.forEach { device ->
+                        TextButton({ selectedTestPeer = device.fingerprint }, enabled = available) {
+                            Text((if (selectedTestPeer == device.fingerprint) "✓ " else "") +
+                                device.name + " · " + device.fingerprint.takeLast(8))
+                        }
+                    }
+                } else {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(allowHostTests, { enabled ->
+                            allowHostTests = enabled
+                            lab?.allowDeviceTestsFromHost(enabled)
+                        }, enabled = available)
+                        Text("Allow this trusted Host to start a test while this screen is open")
+                    }
+                }
+            }
+            Text("These buttons measure one connected Client. 128/256-client qualification is a separate Mac campaign.",
+                style = MaterialTheme.typography.bodySmall)
+            RpcDeviceTestPhase.entries.forEach { phase ->
+                Button({ runDeviceTest(phase) }, enabled = available && lab?.nearbyMode == true &&
+                    ((!hostRole && lab?.state == "Ready") || (hostRole && lab?.trustedDevices()?.any {
+                        it.fingerprint == selectedTestPeer && it.presence == "Connected"
+                    } == true))) { Text(phase.title) }
+            }
+            if (progress.running) {
+                Text("${progress.title} · ${progress.elapsedSeconds}s / ${progress.plannedSeconds}s · ${progress.calls} responses")
+                Button({ operation?.cancel(); lab?.cancelDeviceTest() }) { Text("Cancel test") }
+            }
+            Text(testStorageIssue ?: "Results save automatically in private app storage (last 100 runs).")
+            reports.asReversed().forEach { report ->
+                Text(report.title)
+                Text("p95 ${report.p95Micros / 1_000} ms · p99 ${report.p99Micros / 1_000} ms · " +
+                    "missed ${report.missedSchedules}" + (report.failureCode?.let { " · $it" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+
+    private fun runDeviceTest(phase: RpcDeviceTestPhase) {
+        val owned = lab ?: return
+        if (!interactive || !deviceTestScreen || busy || closing || operation?.active == true) return
+        try {
+            operation = owned.beginDeviceTest(phase, selectedTestPeer) { failure ->
+                ui.launch {
+                    if (lab === owned) {
+                        operation = null
+                        status = failure ?: "Test finished; inspect the saved result below."
+                    }
+                }
+            }
+        } catch (failure: Exception) { report(failure) }
     }
 
     private fun call(large: Boolean) {
@@ -991,6 +1106,9 @@ internal class RpcLabController(
             RpcLabHero(status, if (lab == null) "Not connected" else if (hostRole) "Host" else "Client")
             Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not.",
                 style = MaterialTheme.typography.bodyMedium)
+            Button({ deviceTestScreen = true }, enabled = mobileConfig == null && !closing) {
+                Text("Device tests")
+            }
             RpcLabSectionHeading("Overview", "Host an API or connect to a nearby device")
             if (lab != null) {
                 Text(if (hostRole) "Active role: Host" else "Active role: Client",

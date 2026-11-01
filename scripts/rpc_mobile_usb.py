@@ -30,7 +30,7 @@ ANDROID_SHELL_STAGES = (
     'seal-presence', 'seal-type', 'seal-owner', 'seal-mode', 'seal-links', 'seal-size',
     'seal-metadata', 'seal-open', 'seal-descriptor', 'read-presence', 'read-type', 'read-owner',
     'read-mode', 'read-links', 'read-size', 'read-metadata', 'read-open', 'read-descriptor',
-    'read-data', 'read-after', 'seal-after',
+    'read-data', 'read-after', 'seal-after', 'read-owned-record',
 )
 
 
@@ -159,6 +159,13 @@ private_dir {run}
 '''
     else:
         common += f'private_dir {base}\nprivate_dir {run}\n'
+    if operation == 'read' and name in ('ready.txt', 'failed.txt', 'telemetry.txt', 'closed.txt'):
+        # One ART process verifies the complete descriptor/marker lifecycle. Starting
+        # four separate VMs for one present record exceeded the original four-second
+        # observation budget on the physical phone. Keep the deadline and checks.
+        return common + f'''rpc_stage=read-owned-record
+/system/bin/app_process /system/bin dev.p2pkit.sample.android.rpclab.RpcLabFdStat read {run_label} {name}
+'''
     if operation in ('prepare', 'stop'):
         name = 'inbox.txt' if operation == 'prepare' else 'stop.txt'
         target, marker = run + '/' + name, run + '/.complete-' + name

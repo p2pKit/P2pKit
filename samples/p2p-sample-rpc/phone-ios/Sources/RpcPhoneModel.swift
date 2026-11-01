@@ -20,11 +20,14 @@ final class RpcPhoneModel: ObservableObject {
         var connection: RpcDiscoveryConnectionStatus? = nil
         var networkActivity: String = "Idle"
         var metrics: [RpcMetricCard] = []
+        var testRevision: String = ""
+        var testProgress: RpcDeviceTestProgress? = nil
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.summary == rhs.summary && lhs.historyRevision == rhs.historyRevision &&
                 lhs.nearby == rhs.nearby && lhs.trusted == rhs.trusted && lhs.connection == rhs.connection &&
                 lhs.networkActivity == rhs.networkActivity && lhs.metrics == rhs.metrics &&
+                lhs.testRevision == rhs.testRevision && lhs.testProgress == rhs.testProgress &&
                 lhs.requests.count == rhs.requests.count &&
                 zip(lhs.requests, rhs.requests).allSatisfy {
                     $0.requestId == $1.requestId && $0.fingerprint == $1.fingerprint
@@ -36,6 +39,16 @@ final class RpcPhoneModel: ObservableObject {
     private let liveObserver = RpcPhoneLiveObservation<RpcPhoneLab, LiveValue>()
     // The sample history owner is disambiguated from the RPC authorization session in the exported framework.
     let applicationSession = RpcApplicationSession_()
+    @Published private(set) var deviceTestReports: [RpcDeviceTestReport] = []
+    @Published private(set) var deviceTestProgress: RpcDeviceTestProgress?
+    @Published private(set) var deviceTestStorageIssue: String?
+    @Published var selectedTestPeer: String = ""
+    @Published var allowHostTests = false
+    private var savedDeviceTests = ""
+    private var deviceTestFile: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("rpc-device-tests.json")
+    }
     @Published private(set) var requestEntries: [RpcRequestEntry] = []
     @Published private(set) var requestMetrics: [RpcMetricCard] = []
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
@@ -102,6 +115,17 @@ final class RpcPhoneModel: ObservableObject {
         self.shareWindow = shareWindow ?? RpcPhoneShareWindow()
         self.wifi = wifi ?? RpcPhoneWifiObserver()
         self.invitationClipboard = invitationClipboard ?? RpcPhoneInvitationClipboard()
+        do {
+            if FileManager.default.fileExists(atPath: deviceTestFile.path) {
+                let data = try Data(contentsOf: deviceTestFile)
+                guard data.count <= 262_100, let text = String(data: data, encoding: .utf8) else {
+                    throw LiveReadError.unavailable
+                }
+                try applicationSession.deviceTests.restoreJson(text: text)
+                savedDeviceTests = text
+                deviceTestReports = applicationSession.deviceTests.reports
+            }
+        } catch { deviceTestStorageIssue = "Saved results could not be read; original file retained." }
         changes = owner.$phase.sink { [weak self] phase in
             self?.objectWillChange.send()
             self?.updateIdleTimer(phase: phase)
@@ -700,6 +724,7 @@ final class RpcPhoneModel: ObservableObject {
             self.mobileMonitor = nil
             let completed = await self.owner.stop()
             self.requestEntries = self.applicationSession.history.entries()
+            self.refreshDeviceTests()
             self.eventLog.append(.stopped(clean: completed))
             if completed {
                 self.operation = nil
@@ -717,6 +742,7 @@ final class RpcPhoneModel: ObservableObject {
 
     func cancelOperation() {
         operation?.cancel()
+        owner.runtime?.cancelDeviceTest()
         // Native close is the completion barrier. Never infer remote rollback from cancel().
         if operation != nil {
             eventLog.append(.cancellationRequested)
@@ -736,10 +762,13 @@ final class RpcPhoneModel: ObservableObject {
             completed: Int64(diagnostics.completedCalls), queued: Int64(diagnostics.queuedCalls)), requests: requests,
             historyRevision: applicationSession.history.revision,
             nearby: lab.nearbyHosts(), trusted: lab.trustedDevices(), connection: lab.discoveryConnection,
-            networkActivity: lab.networkActivity, metrics: lab.requestMetrics)
+            networkActivity: lab.networkActivity, metrics: lab.requestMetrics,
+            testRevision: applicationSession.deviceTests.exportJson(),
+            testProgress: applicationSession.deviceTests.progress)
     }
 
     private func publishLive(_ value: LiveValue) {
+        refreshDeviceTests()
         requestEntries = applicationSession.history.entries()
         liveIssue = nil
         nearbyHosts = value.nearby
@@ -990,6 +1019,54 @@ final class RpcPhoneModel: ObservableObject {
                 }
             }
         } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
+    }
+
+    var deviceTestRunning: Bool { applicationSession.deviceTests.progress.running || operationBusy }
+
+    func startDeviceTestRole(host: Bool) {
+        guard canStart, mobileConfig == nil, capacityPins.isEmpty else { return }
+        setManualNetworkSetup(false)
+        start(host: host, automatic: true)
+    }
+
+    func setAllowHostTests(_ enabled: Bool) {
+        allowHostTests = enabled && canAct && !hostRole && nearbyMode
+        owner.runtime?.allowDeviceTestsFromHost(enabled: allowHostTests)
+    }
+
+    func refreshDeviceTests() {
+        deviceTestReports = applicationSession.deviceTests.reports
+        deviceTestProgress = applicationSession.deviceTests.progress
+        let text = applicationSession.deviceTests.exportJson()
+        guard !deviceTestReports.isEmpty, text != savedDeviceTests, deviceTestStorageIssue == nil else { return }
+        do {
+            let directory = deviceTestFile.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: deviceTestFile, options: [.atomic, .completeFileProtection])
+            savedDeviceTests = text
+        } catch { deviceTestStorageIssue = "Saving results failed; results remain in this session." }
+    }
+
+    func runDeviceTest(_ phase: RpcDeviceTestPhase) {
+        guard canAct, nearbyMode, let lab = owner.runtime, lab.applicationAvailable else { return }
+        let id = UUID()
+        operationID = id
+        operationBusy = true
+        do {
+            operation = try lab.beginDeviceTest(phase: phase,
+                selectedPeer: hostRole ? selectedTestPeer : nil) { [weak self, lab] error in
+                DispatchQueue.main.async {
+                    guard let self, self.operationID == id else { return }
+                    self.operation = nil
+                    self.operationID = nil
+                    self.operationBusy = false
+                    self.refreshDeviceTests()
+                    if self.owner.accepts(lab) {
+                        self.status = error ?? "Test finished; inspect the saved result below."
+                    }
+                }
+            }
+        } catch { operationBusy = false; operationID = nil; report(error) }
     }
 
     func runExample(_ example: RpcApplicationExample) {
