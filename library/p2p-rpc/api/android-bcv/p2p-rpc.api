@@ -9,10 +9,18 @@ public final class dev/p2pkit/rpc/RpcApplicationSession {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/rpc/RpcAuthenticationContext {
+	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun getPhysicalSession ()Ldev/p2pkit/rpc/RpcPhysicalSession;
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/p2pkit/rpc/RpcAuthorizationContext {
 	public final fun getHostIncarnation ()Ljava/lang/String;
 	public final fun getOperation ()Ldev/p2pkit/rpc/RpcAuthorizationOperation;
+	public final fun getOriginalPhysicalSession ()Ldev/p2pkit/rpc/RpcPhysicalSession;
 	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun getPhysicalSession ()Ldev/p2pkit/rpc/RpcPhysicalSession;
 	public final fun getProcedureName ()Ljava/lang/String;
 	public final fun getProcedureVersion ()I
 	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
@@ -50,6 +58,7 @@ public final class dev/p2pkit/rpc/RpcCallContext {
 	public final fun getHostIncarnation ()Ljava/lang/String;
 	public final fun getHostObservationId ()Ljava/lang/Long;
 	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun getPhysicalSession ()Ldev/p2pkit/rpc/RpcPhysicalSession;
 	public final fun getRemainingMillis ()J
 	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
 }
@@ -285,6 +294,8 @@ public final class dev/p2pkit/rpc/RpcHost {
 	public final fun tryNotify-ALQvzA0 (Ljava/lang/String;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun tryNotifyScoped (Ldev/p2pkit/rpc/RpcAuthorizationScope;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun tryNotifyScoped$default (Ldev/p2pkit/rpc/RpcHost;Ldev/p2pkit/rpc/RpcAuthorizationScope;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun tryNotifyScopedFrom (Ldev/p2pkit/rpc/RpcPhysicalSession;Ldev/p2pkit/rpc/RpcAuthorizationScope;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun tryNotifyScopedFrom$default (Ldev/p2pkit/rpc/RpcHost;Ldev/p2pkit/rpc/RpcPhysicalSession;Ldev/p2pkit/rpc/RpcAuthorizationScope;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class dev/p2pkit/rpc/RpcHost$Companion {
@@ -328,6 +339,8 @@ public final class dev/p2pkit/rpc/RpcHostConfiguration : dev/p2pkit/rpc/RpcConfi
 	public static synthetic fun register$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
 	public final fun registerScoped (Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;)V
 	public static synthetic fun registerScoped$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
+	public final fun registerScopedWithPhysicalSession (Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;)V
+	public static synthetic fun registerScopedWithPhysicalSession$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
 	public final fun setAdvertise (Z)V
 	public final fun setAllowNearbyPairing (Z)V
 	public final fun setRequestHistoryCapacity (I)V
@@ -434,6 +447,25 @@ public final class dev/p2pkit/rpc/RpcPeerConnection {
 	public final fun getGeneration ()J
 	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
 	public final fun getState ()Ldev/p2pkit/core/ConnectionState;
+}
+
+public final class dev/p2pkit/rpc/RpcPhysicalSession {
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getClosure ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getGeneration ()J
+	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun isConnected ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcPhysicalSessionClosure : java/lang/Enum {
+	public static final field Closed Ldev/p2pkit/rpc/RpcPhysicalSessionClosure;
+	public static final field Closing Ldev/p2pkit/rpc/RpcPhysicalSessionClosure;
+	public static final field Incomplete Ldev/p2pkit/rpc/RpcPhysicalSessionClosure;
+	public static final field Open Ldev/p2pkit/rpc/RpcPhysicalSessionClosure;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcPhysicalSessionClosure;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcPhysicalSessionClosure;
 }
 
 public final class dev/p2pkit/rpc/RpcPlatform {

@@ -81,6 +81,10 @@ public class RpcCallContext internal constructor(
     public val hostObservationId: Long? = null,
 ) {
     private var capturedAuthorizationScope: RpcAuthorizationScope? = null
+    private var capturedPhysicalSession: RpcPhysicalSession? = null
+
+    /** Original scoped request's physical connection, never the current reply destination. */
+    public val physicalSession: RpcPhysicalSession? get() = capturedPhysicalSession
 
     /** Original verified application facts for registerScoped(); null for legacy device-only routes. */
     public val authorizationScope: RpcAuthorizationScope? get() = capturedAuthorizationScope
@@ -91,6 +95,13 @@ public class RpcCallContext internal constructor(
         hostIncarnation: String?, hostObservationId: Long?, authorizationScope: RpcAuthorizationScope,
     ) : this(peer, requestId, remainingMillis, hostIncarnation, hostObservationId) {
         capturedAuthorizationScope = authorizationScope
+    }
+    internal constructor(
+        peer: PeerIdentity, requestId: RpcRequestId, remainingMillis: Long,
+        hostIncarnation: String?, hostObservationId: Long?, authorizationScope: RpcAuthorizationScope,
+        physicalSession: RpcPhysicalSession,
+    ) : this(peer, requestId, remainingMillis, hostIncarnation, hostObservationId, authorizationScope) {
+        capturedPhysicalSession = physicalSession
     }
 }
 

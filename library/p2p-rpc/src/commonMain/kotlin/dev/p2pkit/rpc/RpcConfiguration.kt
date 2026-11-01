@@ -3,6 +3,7 @@ package dev.p2pkit.rpc
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.rpc.internal.RegisteredProcedure
+import dev.p2pkit.rpc.internal.registeredPhysicalScopedProcedure
 import dev.p2pkit.rpc.internal.registeredProcedure
 import dev.p2pkit.rpc.internal.registeredScopedProcedure
 import dev.p2pkit.transport.lan.OrganizationLan
@@ -71,6 +72,22 @@ public class RpcHostConfiguration internal constructor() : RpcConfiguration() {
     ) {
         require(procedure.key !in procedures) { "Duplicate procedure descriptor" }
         procedures[procedure.key] = registeredScopedProcedure(procedure, authenticate, authorize, handler)
+    }
+
+    /**
+     * registerScoped with SDK-owned physical provenance captured before authenticate can suspend.
+     * Authorizers receive the original request connection separately from the actual operation's
+     * connection; handlers keep the original. Existing application-session revocation still applies.
+     * Incoming Host reconnects create distinct capabilities even when generation numbers repeat.
+     */
+    public fun <Q, R, E> registerScopedWithPhysicalSession(
+        procedure: RpcProcedure<Q, R, E>,
+        authenticate: suspend (RpcAuthenticationContext, Q) -> RpcAuthorizationScope?,
+        authorize: suspend (RpcAuthorizationContext) -> Boolean = { false },
+        handler: suspend (RpcCallContext, Q) -> RpcReply<R, E>,
+    ) {
+        require(procedure.key !in procedures) { "Duplicate procedure descriptor" }
+        procedures[procedure.key] = registeredPhysicalScopedProcedure(procedure, authenticate, authorize, handler)
     }
 }
 
