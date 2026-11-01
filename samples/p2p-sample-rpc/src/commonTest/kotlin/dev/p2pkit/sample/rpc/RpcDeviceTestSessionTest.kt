@@ -302,4 +302,17 @@ class RpcDeviceTestSessionTest {
         assertTrue(many.exportJson().toByteArray().size <= 262_100, "Recent index fits one encrypted vault record")
     }
 
+    @Test
+    fun memoryPressureOnlyInterruptsAnActiveRunAndDoesNotPoisonTheNextRun() {
+        val session = RpcDeviceTestSession()
+        session.signalMemoryPressure()
+        assertEquals(null, session.safetyStopReason)
+        session.publish(RpcDeviceTestProgress("first", "First", true))
+        session.signalMemoryPressure()
+        assertEquals("MemoryPressureSignal", session.safetyStopReason)
+        session.finishProgress("first")
+        session.publish(RpcDeviceTestProgress("second", "Second", true))
+        assertEquals(null, session.safetyStopReason)
+    }
+
 }

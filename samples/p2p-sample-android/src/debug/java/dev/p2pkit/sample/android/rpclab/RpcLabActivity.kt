@@ -136,6 +136,7 @@ internal class RpcLabController(
     private var closing by mutableStateOf(false)
     private val eventLog = RpcLabEventLog()
     private val applicationSession = RpcApplicationSession()
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     private val memoryWarnings = object : android.content.ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
         override fun onLowMemory() = interruptForMemoryPressure()
