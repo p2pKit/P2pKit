@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -43,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -125,7 +127,7 @@ internal class RpcLabController(
     private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var foreground by mutableStateOf(false)
     private var action: Job? = null
-    private var operation: RpcPhoneOperation? = null
+    private var operation: RpcPhoneOperation? by mutableStateOf(null)
     private var lab: RpcPhoneLab? by mutableStateOf(null)
     private val runtimeOwner get() = RpcLabProcessRuntime.owner
     private var ownedToken: RpcLabRuntimeOwner.Token? = null
@@ -684,7 +686,15 @@ internal class RpcLabController(
         val progress by applicationSession.deviceTests.progressChanges.collectAsState()
         val reports by applicationSession.deviceTests.changes.collectAsState()
         val ownership by runtimeOwner.state.collectAsState()
-        val available = foreground && !busy && !closing && !progress.running && operation?.active != true
+        val live by liveStatus.view.collectAsState()
+        val snapshot = live.snapshot
+        val owned = lab
+        val available = interactive && !busy && !closing && !progress.running && operation?.active != true
+        val connectedHost = snapshot?.takeIf { !it.asHost && it.safeState == "Ready" }
+            ?.connection?.selectedFingerprint
+        val permissionAvailable = available && connectedHost != null && snapshot?.trusted?.any {
+            it.fingerprint == connectedHost && it.presence == "Connected"
+        } == true
         RpcLabPage {
             RpcLabSectionHeading("Device tests", "Find devices on private Wi-Fi · run one test at a time")
             Text(status)
@@ -704,19 +714,30 @@ internal class RpcLabController(
                 LivePendingRequests()
                 if (hostRole) {
                     Text("Choose the connected client to exercise")
-                    lab?.trustedDevices()?.filter { it.presence == "Connected" }?.forEach { device ->
+                    snapshot?.trusted?.filter { it.presence == "Connected" }?.forEach { device ->
                         TextButton({ selectedTestPeer = device.fingerprint }, enabled = available) {
                             Text((if (selectedTestPeer == device.fingerprint) "✓ " else "") +
                                 device.name + " · " + device.fingerprint.takeLast(8))
                         }
                     }
                 } else {
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Checkbox(allowHostTests, { enabled ->
-                            allowHostTests = enabled
-                            lab?.allowDeviceTestsFromHost(enabled)
-                        }, enabled = available)
+                    Row(Modifier.fillMaxWidth().toggleable(allowHostTests, enabled = permissionAvailable,
+                        role = Role.Checkbox, onValueChange = { enabled ->
+                            if (lab === owned && interactive && !closing && !progress.running &&
+                                owned?.state == "Ready" && owned.discoveryConnection?.selectedFingerprint ==
+                                connectedHost && owned.trustedDevices().any {
+                                    it.fingerprint == connectedHost && it.presence == "Connected"
+                                }) {
+                                owned.allowDeviceTestsFromHost(enabled)
+                                allowHostTests = enabled
+                            }
+                        }), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(allowHostTests, onCheckedChange = null, enabled = permissionAvailable)
                         Text("Allow this trusted Host to start a test while this screen is open")
+                    }
+                    if (!permissionAvailable && !progress.running) {
+                        Text("Select the Host and finish fingerprint approval; permission becomes available when Ready.",
+                            style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -724,7 +745,7 @@ internal class RpcLabController(
                 style = MaterialTheme.typography.bodySmall)
             RpcDeviceTestPhase.entries.forEach { phase ->
                 Button({ runDeviceTest(phase) }, enabled = available && lab?.nearbyMode == true &&
-                    ((!hostRole && lab?.state == "Ready") || (hostRole && lab?.trustedDevices()?.any {
+                    ((!hostRole && snapshot?.safeState == "Ready") || (hostRole && snapshot?.trusted?.any {
                         it.fingerprint == selectedTestPeer && it.presence == "Connected"
                     } == true))) { Text(phase.title) }
             }
@@ -1070,7 +1091,11 @@ internal class RpcLabController(
                     check(lab === owned && owned.nearbyHosts().count { it.fingerprint == host.fingerprint } == 1)
                     operation = owned.beginSelectNearby(host.fingerprint, true) { failure ->
                         ui.launch {
-                            if (lab === owned) status = failure ?: "Selection saved; connection status updates live."
+                            if (lab === owned) {
+                                if (operation?.active != true) operation = null
+                                status = failure ?: "Selection saved; connection status updates live."
+                                liveStatus.refresh()
+                            }
                         }
                     }
                 }

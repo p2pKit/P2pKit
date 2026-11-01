@@ -229,6 +229,36 @@ final class RpcPhonePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testDeviceTestRoleButtonsDispatchOnlyTheTappedRole() {
+        for (control, selected, other) in [
+            ("rpc.testClient", "Client: start requested", "Host: start requested"),
+            ("rpc.testHost", "Host: start requested", "Client: start requested")
+        ] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--rpc-ui-network-unavailable"]
+            app.launch()
+            XCTAssertTrue(app.buttons["rpc.deviceTests"].waitForExistence(timeout: 5))
+            app.buttons["rpc.deviceTests"].tap()
+            let button = app.buttons[control]
+            reveal(button, in: app, up: true)
+            XCTAssertTrue(button.isEnabled)
+            button.tap()
+            let alert = app.alerts["Cannot start RPC"]
+            XCTAssertTrue(alert.waitForExistence(timeout: 5))
+            alert.buttons["OK"].tap()
+            XCTAssertFalse(app.buttons["rpc.testStop"].isEnabled)
+            app.buttons["Back to RPC"].tap()
+            expand("Diagnostics", in: app)
+            expand("Recent events (last 64)", in: app)
+            let log = app.staticTexts["rpc.diagnostics"]
+            reveal(log, in: app, up: true)
+            XCTAssertTrue(log.label.contains(selected), "The tapped role must be the requested role")
+            XCTAssertFalse(log.label.contains(other), "A Form row must not dispatch its other role button")
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testApprovalSheetSurvivesLiveUpdatesSwipeAndExpiryWithoutApproving() {
         let app = XCUIApplication()
         app.launchArguments = ["--rpc-ui-network-unavailable", "--rpc-ui-approval-presentation"]

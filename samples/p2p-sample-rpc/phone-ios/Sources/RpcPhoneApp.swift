@@ -189,12 +189,18 @@ struct RpcPhoneView: View {
     private var deviceTests: some View {
         Group {
             Section("Connect devices automatically") {
-                Text(model.status)
+                Text(model.status).accessibilityIdentifier("rpc.testStatus")
                 Text("Open Device tests on both phones and the Mac, on the same private Wi-Fi. No IP entry is needed.")
                 HStack {
-                    Button("Host here") { model.startDeviceTestRole(host: true) }.disabled(!model.canStart)
-                    Button("Client here") { model.startDeviceTestRole(host: false) }.disabled(!model.canStart)
-                    Button("Stop") { model.stop() }.disabled(!model.owner.hasOwner)
+                    Button("Host here") { model.startDeviceTestRole(host: true) }
+                        .buttonStyle(.borderedProminent).disabled(!model.canStart)
+                        .accessibilityIdentifier("rpc.testHost")
+                    Button("Client here") { model.startDeviceTestRole(host: false) }
+                        .buttonStyle(.bordered).disabled(!model.canStart)
+                        .accessibilityIdentifier("rpc.testClient")
+                    Button("Stop") { model.stop() }
+                        .buttonStyle(.borderless).disabled(!model.owner.hasOwner)
+                        .accessibilityIdentifier("rpc.testStop")
                 }
                 Text("The first connection requires fingerprint approval on the Host.").font(.footnote)
             }

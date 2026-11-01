@@ -365,12 +365,20 @@ public class RpcDesktopPanel(
     }
 
     private fun unlockProfile(ready: () -> Unit) {
+        val configured = System.getProperty("dev.p2pkit.rpc.profileDir")
+        // Advisory wording only. The protected provider independently validates the directory and existing identity.
+        val freshTestProfile = configured != null && runCatching {
+            !java.nio.file.Files.exists(java.nio.file.Path.of(configured).resolve("profile.header"),
+                java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        }.getOrDefault(false)
         val input = JPasswordField(32)
         input.accessibleContext.accessibleName = "RPC profile passphrase; not your computer login password"
         val answer = showOptions(arrayOf(
-            "Unlock or create your local encrypted RPC profile (12–128 characters).",
+            if (freshTestProfile) "Choose a NEW passphrase for this separate test profile (12–128 characters)."
+                else "Unlock or create your local encrypted RPC profile (12–128 characters).",
             "Use a separate strong passphrase, NOT your computer login password. No recovery or reset is automatic.", input,
-        ), "RPC profile", arrayOf("Unlock profile", "Cancel"), JOptionPane.PLAIN_MESSAGE)
+        ), "RPC profile", arrayOf(if (freshTestProfile) "Create profile" else "Unlock profile", "Cancel"),
+            JOptionPane.PLAIN_MESSAGE)
         val password = input.password
         input.text = ""
         if (answer != 0 || closing) { password.fill('\u0000'); return }

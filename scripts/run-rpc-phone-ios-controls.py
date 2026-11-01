@@ -30,7 +30,7 @@ TARGETS = {
         ("Tests/RpcPhoneUsbDeveloperCommandTests.swift", "RpcPhoneUsbDeveloperCommandTests", 6),
     ),
     "p2pkit-rpc-phone-uitests": (
-        ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 7),
+        ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 8),
     ),
 }
 LIMIT = 256 * 1024 * 1024

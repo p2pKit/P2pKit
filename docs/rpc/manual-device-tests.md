@@ -47,6 +47,13 @@ revocation coverage or battery-discharge qualification. Use the
 Both endpoints must use matching source; a mismatch produces a failed result.
 Authentication, encryption and first-connection approval remain required.
 
+If the Mac's existing profile passphrase is unavailable, run its prepared
+`run-desktop.py --new-test-profile` launcher. This creates a separate private
+test profile. Choose a new strong passphrase of 12–128 characters in the app;
+the existing profile, identity and approvals remain intact. Each invocation
+with this flag creates another profile. The normal launcher keeps its existing
+default profile.
+
 ## Screenshots
 
 The Mac image is an idle UI render fixture from the prepared source. The iPhone

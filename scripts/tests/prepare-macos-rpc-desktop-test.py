@@ -18,7 +18,7 @@ PREVIEW = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'package-rpc-
 
 
 class LauncherAdmissionTests(unittest.TestCase):
-    def exercise(self, transform=lambda root, manifest: None, *, pin_after=False, admitted=False):
+    def exercise(self, transform=lambda root, manifest: None, *, pin_after=False, admitted=False, new_profile=False):
         with tempfile.TemporaryDirectory(prefix='p2pkit-launcher-test-') as temp:
             root = Path(temp).resolve(strict=True)
             java = root / 'java'
@@ -45,7 +45,9 @@ class LauncherAdmissionTests(unittest.TestCase):
             # This is a parser/path/hash test, not signature or process-execution evidence. A complete
             # passing fixture is necessary: a malformed baseline would make every negative test vacuous.
             with mock.patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as signing, \
-                    mock.patch.object(os, 'execve') as launch:
+                    mock.patch.object(os, 'execve') as launch, \
+                    mock.patch('sys.argv', ['run.py', *(['--new-test-profile'] if new_profile else [])]), \
+                    mock.patch.object(Path, 'home', return_value=root):
                 if admitted:
                     runpy.run_path(str(script), run_name='__main__')
                     signing.assert_called_once_with(
@@ -55,6 +57,16 @@ class LauncherAdmissionTests(unittest.TestCase):
                     self.assertEqual(str(java), launch.call_args.args[0])
                     self.assertEqual('dev.p2pkit.sample.rpc.desktop.RpcDesktopMainKt',
                         launch.call_args.args[1][-1])
+                    overrides = [value for value in launch.call_args.args[1]
+                        if value.startswith('-Ddev.p2pkit.rpc.profileDir=')]
+                    if new_profile:
+                        self.assertEqual(1, len(overrides))
+                        profile = Path(overrides[0].split('=', 1)[1])
+                        self.assertEqual(root, profile.parent)
+                        self.assertEqual(0o700, profile.stat().st_mode & 0o777)
+                        self.assertEqual([], list(profile.iterdir()))
+                    else:
+                        self.assertEqual([], overrides)
                 else:
                     with self.assertRaises(AssertionError):
                         runpy.run_path(str(script), run_name='__main__')
@@ -62,6 +74,9 @@ class LauncherAdmissionTests(unittest.TestCase):
 
     def test_complete_fixture_reaches_only_the_mocked_execution_boundary(self):
         self.exercise(admitted=True)
+
+    def test_new_private_profile_is_separate_and_contains_no_password(self):
+        self.exercise(admitted=True, new_profile=True)
 
     def test_jointly_changed_manifest_and_payload_cannot_redefine_hash_authority(self):
         def change(root, manifest):
