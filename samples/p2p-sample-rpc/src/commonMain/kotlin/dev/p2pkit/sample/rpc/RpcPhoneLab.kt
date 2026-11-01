@@ -232,7 +232,8 @@ public class RpcPhoneLab private constructor(
     private val client: RpcClient?,
     private val application: RpcApplicationSession? = null,
 ) {
-    private val deviceTests = application?.deviceTests?.bind(scope, host, client)
+    private var deviceTests: DeviceTestRuntime? = null
+    private fun bindDeviceTests() { deviceTests = application?.deviceTests?.bind(scope, host, client) }
     private val callBusy = MutableStateFlow(false)
     private val operationFailures = PhoneOperationFailureState()
     private val controlBusy = MutableStateFlow(false)
@@ -534,6 +535,7 @@ public class RpcPhoneLab private constructor(
                 lab.mobileRun = PhoneMobileRun(config, trustStore)
                 // Return the owned runtime before performing fallible USB publication.
                 // mobileReadyRecord subsequently verifies its actual bound endpoint.
+                lab.bindDeviceTests()
                 return lab
             } catch (failure: Exception) {
                 withContext(NonCancellable) {
@@ -605,7 +607,7 @@ public class RpcPhoneLab private constructor(
                     if (capacityExercises) registerCapacityExercises(checkNotNull(capacityPins))
                 }.also { owner.resource = it }
                 host.start()
-                return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby }
+                return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby; it.bindDeviceTests() }
             } catch (failure: Exception) {
                 owner.failed(failure)
             } catch (failure: Error) {
@@ -653,6 +655,7 @@ public class RpcPhoneLab private constructor(
                         lab.operationFailures)
                     checkNotNull(lab.discovery).start()
                 }
+                lab.bindDeviceTests()
                 return lab
             } catch (failure: Exception) {
                 owner.failed(failure)
