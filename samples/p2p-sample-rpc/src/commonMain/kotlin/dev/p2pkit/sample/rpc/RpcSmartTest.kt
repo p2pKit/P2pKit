@@ -45,6 +45,7 @@ public data class RpcSmartTestStep(
     public val hostMemoryBytes: Long? = null,
     public val clientResources: RpcDeviceTestResources? = null,
     public val hostResources: RpcDeviceTestResources? = null,
+    public val peakInFlight: Int = 1,
 ) {
     public val throughputRps: Double get() = if (elapsedMillis > 0) correct * 1_000.0 / elapsedMillis else 0.0
     public val title: String get() = "$targetRps target/s · concurrency $concurrency · " +
@@ -67,6 +68,7 @@ public data class RpcSmartTestResult(
     public val highestConfirmedTargetRps: Int = 0,
     public val measurementScope: String = "CONNECTED_CLIENT_TO_HOST_PATH",
     public val limitations: List<String> = emptyList(),
+    public val confirmedWorkerLimit: Int = 0,
 ) {
     public val title: String get() = "Observed ${(maximumObservedRps * 10).toLong() / 10.0} correct/s · " +
         "confirmed stable ${(highestConfirmedStableRps * 10).toLong() / 10.0} correct/s · " +
@@ -169,7 +171,7 @@ internal fun validSmartStep(step: RpcSmartTestStep): Boolean = step.targetRps in
     step.errors in 0..step.attempts && step.correct + step.errors == step.attempts &&
     step.timeouts in 0..step.errors && step.missed in 0..1_000_000 && step.elapsedMillis in 1..60_000 &&
     step.p50Micros in 0..step.p95Micros && step.p95Micros in 0..step.p99Micros &&
-    step.p99Micros in 0..30_001_000 && step.decision.length <= 96 &&
+    step.p99Micros in 0..30_001_000 && step.decision.length <= 96 && step.peakInFlight in 0..step.concurrency &&
     listOfNotNull(step.clientMemoryBytes, step.hostMemoryBytes).all { it in 1..68_719_476_736 } &&
     validDeviceResources(step.clientResources) && validDeviceResources(step.hostResources)
 
@@ -180,6 +182,7 @@ internal fun validSmartResult(result: RpcSmartTestResult?): Boolean = result == 
         0.0..result.maximumObservedRps && result.stableConcurrency in 0..64 && result.stopReason.length <= 96 &&
         result.independentConnectionsCreated == 0 &&
         result.connectionPressureScope == "EXISTING_AUTHENTICATED_DEVICE_CONNECTION" &&
-        result.highestConfirmedTargetRps in 0..5_000 && result.measurementScope == "CONNECTED_CLIENT_TO_HOST_PATH" &&
+        result.highestConfirmedTargetRps in 0..5_000 && result.confirmedWorkerLimit in 0..64 &&
+        result.measurementScope == "CONNECTED_CLIENT_TO_HOST_PATH" &&
         result.limitations.size <= 8 && result.limitations.all { it.length <= 160 } &&
         (!result.stableLevelConfirmed || result.highestConfirmedStableRps > 0))

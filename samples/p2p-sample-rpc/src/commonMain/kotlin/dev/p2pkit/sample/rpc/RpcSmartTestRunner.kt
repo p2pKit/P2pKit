@@ -29,6 +29,7 @@ internal class SmartStageCounters(private val attemptsBefore: Long = 0, private 
     var timeouts = 0L
     var missed = 0L
     var inFlight = 0
+    var peakInFlight = 0
     var fatal: String? = null
     val totalAttempts: Long get() = attemptsBefore + attempts
     val totalCorrect: Long get() = correctBefore + correct
@@ -80,7 +81,11 @@ internal suspend fun runSmartTest(
                 val workers = List(level.concurrency) {
                     launch {
                         for (permit in permits) {
-                            counters.lock.withLock { counters.attempts++; counters.inFlight++ }
+                            counters.lock.withLock {
+                                counters.attempts++
+                                counters.inFlight++
+                                counters.peakInFlight = max(counters.peakInFlight, counters.inFlight)
+                            }
                             val result = try { call() }
                             catch (failure: CancellationException) {
                                 counters.lock.withLock { counters.failures++; counters.inFlight-- }
@@ -114,6 +119,10 @@ internal suspend fun runSmartTest(
                             counters.lock.withLock { counters.fatal = cause }
                         }
                         if (counters.lock.withLock { counters.fatal != null }) break
+                        if (counters.lock.withLock { counters.totalAttempts >= 1_000_000 || counters.missed >= 1_000_000 }) {
+                            counters.fatal = "RequestSafetyBudgetReached"
+                            break
+                        }
                         if (instant < next) {
                             delay(max(1, (next - instant + 999) / 1_000))
                             continue
@@ -144,7 +153,7 @@ internal suspend fun runSmartTest(
             smartPercentile(counters.buckets, counters.correct, 95),
             smartPercentile(counters.buckets, counters.correct, 99), "Measured",
             clientResources()?.peakMemoryBytes, hostResources()?.peakMemoryBytes,
-            clientResources(), hostResources())
+            clientResources(), hostResources(), counters.peakInFlight)
         val decision = search.consider(raw, if (cancelled) "CallerCancelled" else counters.fatal)
         steps += raw.copy(decision = decision.reason)
         progress(level, counters, decision.reason)
@@ -171,8 +180,9 @@ internal suspend fun runSmartTest(
         limitations += "Missed schedules can indicate generator pressure; Host saturation is not established."
     }
     val result = RpcSmartTestResult(settings, steps, maximum, stable?.throughputRps ?: 0.0,
-        stable?.concurrency ?: 0, stop, search.boundaryObserved, stable != null, true,
-        highestConfirmedTargetRps = stable?.targetRps ?: 0, limitations = limitations)
+        stable?.peakInFlight ?: 0, stop, search.boundaryObserved, stable != null, true,
+        highestConfirmedTargetRps = stable?.targetRps ?: 0, limitations = limitations,
+        confirmedWorkerLimit = stable?.concurrency ?: 0)
     return SmartRunOutput(result, attempts, correct, failures, missed, aggregate)
 }
 
