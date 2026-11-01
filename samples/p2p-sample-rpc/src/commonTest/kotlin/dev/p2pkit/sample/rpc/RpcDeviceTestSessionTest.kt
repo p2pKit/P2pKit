@@ -26,7 +26,7 @@ class RpcDeviceTestSessionTest {
     fun failedResultsStayImmutableAndHistoryIsBounded() {
         val session = RpcDeviceTestSession()
         session.save(failed)
-        session.save(failed.copy(status = "Completed"))
+        session.save(failed.copy(status = "Completed", calls = 3, correctResponses = 3, failureCode = null))
         assertEquals("Failed", session.reports.single().status)
         session.confirmArchived(failed.runId)
         repeat(110) { index ->
@@ -122,6 +122,30 @@ class RpcDeviceTestSessionTest {
         session.confirmArchived(report.runId)
         assertTrue(session.unarchivedReports.isEmpty())
         assertEquals(report, session.reports.single(), "Archiving does not erase the displayed result")
+    }
+
+    @Test
+    fun compactIndexReopenPreservesRicherArchiveAndStillRejectsChangedMeasurements() {
+        val observation = RpcDeviceTestObservation(RpcRequestSide.Client, "qualification.echo",
+            RpcRequestOutcome.Succeeded, 12, 1_024, "HandlerFinished", "Succeeded")
+        val report = failed.copy(observations = listOf(observation), clientPlatform = "iPhone",
+            hostPlatform = "Mac (JVM)", startedAtEpochMillis = 1_793_510_000_000)
+        val initial = RpcDeviceTestSession()
+        initial.save(report)
+        val archive = initial.reportJson(report)
+        val restored = RpcDeviceTestSession()
+        restored.restoreJson(initial.exportJson())
+        val compact = restored.unarchivedReports.single()
+        assertTrue(compact.observations.isEmpty())
+        assertTrue(restored.archiveMatches(compact, archive))
+        assertFalse(restored.archiveMatches(compact, initial.reportJson(report.copy(elapsedMillis = 1))))
+        assertFalse(restored.archiveMatches(compact, "invalid JSON"))
+        val fresh = RpcDeviceTestSession()
+        fresh.save(compact)
+        assertFalse(fresh.archiveMatches(compact, archive), "Only a restored index can omit archived observations")
+        restored.confirmArchived(compact.runId)
+        assertTrue(restored.unarchivedReports.isEmpty())
+        assertFalse(restored.archiveMatches(compact, archive), "Restore allowance ends after archive confirmation")
     }
 
     @Test

@@ -685,7 +685,8 @@ internal class RpcLabController(
                         val target = java.io.File(archive, "${report.runId}.json")
                         if (target.exists()) {
                             check(android.system.OsConstants.S_ISREG(android.system.Os.lstat(target.path).st_mode))
-                            check(target.length() <= 16_384 && target.readBytes().contentEquals(bytes))
+                            check(target.length() <= 16_384 &&
+                                applicationSession.deviceTests.archiveMatches(report, target.readText()))
                         } else {
                             val record = android.util.AtomicFile(target)
                             val stream = record.startWrite()

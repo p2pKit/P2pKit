@@ -36,7 +36,8 @@ internal class DesktopRpcTestArchive(private val vault: LabVault) {
         val bytes = session.reportJson(report).toByteArray()
         check(bytes.size <= 16_384)
         val retained = vault.putIfAbsent("device-test-${report.runId}", bytes)
-        try { check(retained.contentEquals(bytes)) } finally { retained.fill(0); bytes.fill(0) }
+        try { check(session.archiveMatches(report, retained.decodeToString())) }
+        finally { retained.fill(0); bytes.fill(0) }
         val existing = read("device-test-archive-slot-${report.runId}")?.toInt()
         if (existing != null) {
             check(existing in 0 until 1_000_000 && page(existing / 100).getOrNull(existing % 100) == report.runId)

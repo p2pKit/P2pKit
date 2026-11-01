@@ -1074,7 +1074,9 @@ final class RpcPhoneModel: ObservableObject {
                     let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
                     guard attributes[.type] as? FileAttributeType == .typeRegular,
                         ((attributes[.size] as? NSNumber)?.intValue ?? 16_385) <= 16_384,
-                        try Data(contentsOf: target) == data else { throw LiveReadError.unavailable }
+                        let retained = String(data: try Data(contentsOf: target), encoding: .utf8),
+                        applicationSession.deviceTests.archiveMatches(report: report, json: retained)
+                        else { throw LiveReadError.unavailable }
                 } else {
                     try data.write(to: target, options: [.atomic, .completeFileProtection])
                     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)

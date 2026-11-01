@@ -140,6 +140,7 @@ public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcR
     public val changes = records.asStateFlow()
     public val progressChanges = latest.asStateFlow()
     private val archivePending = MutableStateFlow<List<RpcDeviceTestReport>>(emptyList())
+    private val restoredArchivePending = MutableStateFlow<Set<String>>(emptySet())
     /** Bounded pending writes apply backpressure instead of dropping a completed run. */
     public val unarchivedReports: List<RpcDeviceTestReport> get() = archivePending.value
     public val archiveAvailable: Boolean get() = archivePending.value.size < 100
@@ -156,6 +157,16 @@ public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcR
     public fun reportJson(report: RpcDeviceTestReport): String = Json.encodeToString(report)
     public fun confirmArchived(runId: String) {
         archivePending.update { values -> values.filterNot { it.runId == runId } }
+        restoredArchivePending.update { it - runId }
+    }
+
+    /** A restored compact index may omit observations already preserved in its immutable archive. */
+    public fun archiveMatches(report: RpcDeviceTestReport, json: String): Boolean {
+        if (json.encodeToByteArray().size > 16_384) return false
+        val archived = try { Json.decodeFromString<RpcDeviceTestReport>(json) } catch (_: Exception) { return false }
+        return validDeviceTestReport(archived) && (archived == report ||
+            (report.runId in restoredArchivePending.value && report.observations.isEmpty() &&
+                archived.copy(observations = emptyList()) == report))
     }
 
     public val activity: List<RpcDeviceTestObservation> get() = history.entries()
@@ -205,8 +216,9 @@ public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcR
         require(restored.size <= 100 && restored.all(::validDeviceTestReport))
         require(restored.map { it.runId }.distinct().size == restored.size)
         check(records.value.isEmpty())
-        records.value = restored
+        restoredArchivePending.value = restored.map { it.runId }.toSet()
         archivePending.value = restored
+        records.value = restored
     }
 
     internal fun register(configuration: RpcHostConfiguration) {
