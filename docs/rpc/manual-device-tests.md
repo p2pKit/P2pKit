@@ -91,8 +91,9 @@ default profile.
 
 ## Screenshots
 
-The Mac image is an idle UI render fixture from the prepared source. The iPhone
-image shows source `3231b843` installed on the physical iPhone, with its Device
+The Mac image is an idle UI render fixture from prepared source `840a09da`,
+including the Live test activity panel and permanent-archive explanation. The iPhone
+image shows source `840a09da` installed on the physical iPhone, with its Device
 tests entry and no active role.
 Neither image is workload evidence. Android's protected screen refused automated
 capture; its private UI observation verified the page and all five buttons.

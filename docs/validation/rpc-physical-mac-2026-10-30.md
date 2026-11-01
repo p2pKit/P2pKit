@@ -1,6 +1,160 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
-## November 1 latest: corrected controls installed; separate Mac profile open
+## November 1 latest: live test activity and permanent archives
+
+The owner requested visible activity on both ends of each manual test and saved
+results that can be collected after all exercises. Android, iPhone and Mac now
+show actual request/reply observations and register Client-started tests with
+the Host. Reports retain Client → Host platform direction, start time,
+initiator, run ID, phase, exact source, measured durations, correctness, latency,
+missed schedules and available resources. Bounded progress control messages are
+counted separately from workload responses. Host reply finalization alone does
+not prove Client receipt; a missing final report remains unconfirmed.
+
+Each finished or failed run has an immutable private archive. The recent list
+keeps 100 records; older archives are retained. Android/iPhone use private app
+storage, and Mac uses encrypted records plus a paged index in its protected
+profile. A full pending archive queue refuses another test rather than dropping
+results. Reopening a compact recent index preserves the richer existing archive
+and rejects altered metadata. Stop and role changes retain saved runs. App
+uninstallation or profile/data deletion can still remove them. There is no
+export button yet; controlled private collection remains a later step.
+
+All new products were prepared from clean commit
+`840a09da7bd8bf37ccf38972037a58bece645ee0`, tree
+`d5f509036e4a8d0a9132d155ddb1de6c6279e9d6`. The requested main baseline remains
+`eb6ba5da6c06a440de852477cf485264b2ab3dd3`. This documentation is maintained in
+a separate worktree and does not change the source binding of those products.
+
+| Prepared product | SHA-256 |
+| --- | --- |
+| Android APK | `c71b7a0d41e4cdd4bae5ae56a2d411667a98a1415bc423be9eb7bfc7e1c1730f` |
+| Signed iPhone executable | `23ae409ab2c59375906e633bd29354ee9ad91798c32d3989f0d81145dd3a6738` |
+| Signed iPhone debug dylib | `8163dd0227bb28ad44ccee7e3a468b52004ba96f6eb7d8d0448a5a79aa3ab264` |
+| Complete signed-app inventory, 7 files | `f0b86b3046690f124b6cab053e71f07caea00329a855f88d731b5e370b641d9e` |
+| iPhone ARM64 framework | `cf3b8fdd77377d7be0d356a87949352b27600acbaa1e5e6928a42ca5efa483ff` |
+| Simulator framework | `4ec050b25649aa541b6c13441760e985d358406237054583c3a6a50c28dd9250` |
+| Complete framework/provenance inventory, 13 files | `536e6923cd9d4ed076a4794efc14053da1c35d15c848f73f3ed3c790eedd65d9` |
+| Mac driver manifest | `a03dac43422dfb272a88088c6b6083522019fe93259e7d46f8850209dfe3d2a0` |
+| Mac driver JAR | `32b6bb11d8f6b45a27552a544da1fe8d085d99ab6648effa9004a741875ad9ba` |
+| Complete prepared JVM inventory, 26 files | `d4eeec59656a3b86cd7039dbad37f1e154836870aee977ccd5b23f36756dc9a5` |
+| Mac native library | `b1173cade30d53ea8d5069ebe86505242de5870a0bdcb0c603ab9d1250357267` |
+| Mac native manifest JAR | `1b1ddf9dd81e280e8d852fdc7fffd8e9c6153c4eb72b82847488c540f9dda84c` |
+| Desktop manifest | `93b36fe6684c4d36895c8596171ff7d45183061929a5faef59b83a5f34ccb353` |
+| Desktop launcher | `b3dcde6af54f1b5f39d5ba6aa08fb852972286f75bf5522f7bf35bc170198d2a` |
+
+Inventory digests use prefix-stripped preparation labels mapped to
+`{bytes,sha256}`, sorted keys, compact JSON and a final LF. The redundant
+`ios-executable` alias is excluded from the signed-app inventory. The complete
+52-entry preparation manifest and independently verified immutable product
+archive stay private with original signing and command evidence.
+
+Exact-source preparation passed **687 JVM tests and 398 Android unit tests**,
+zero failures/errors/skips, using the authoritative XML retained by the
+successful native regression receipt. Preparation, signed iPhone verification
+and desktop staging finalized with product/final/Stop zero and no owned Mac
+survivors. Regression coverage includes report metadata admission, observer
+cleanup, cancellation outcomes, permanent encrypted storage beyond the recent
+100, reopening, compact-index restoration, interruption and immutable conflicts.
+The updated Mac screenshot in the [manual guide](../rpc/manual-device-tests.md)
+is a reviewed idle render fixture from this source, without workload credit.
+
+Android's old source and installed APK were verified. Main-screen Stop completion
+was observed before the exact idle process was retired. The new APK installed,
+its installed hash readback matched, and the prior saved index remained
+byte-identical. Device tests opened without starting a workload. The private ADB
+server exited and its copied host keys retired; the original campaign keys and
+the phone's debugging authorization remain available. The owner's ADB server
+and keys were preserved. Screen protection remains enabled.
+
+The old iPhone's source-bound main screen independently showed No active role,
+completed owned Stop cleanup and disabled Stop. Only that stopped app process
+was retired, and absence was verified. USB installation of the exact new signed
+app succeeded; its prior saved index remained byte-identical. The subsequent
+launch failed with CoreDevice/FBS security errors citing signature, entitlements
+or developer-app trust. Local strict signature verification passed. Both old
+and new apps have identical signed entitlements and the same valid provisioning
+profile/developer certificate, and the actual phone is provisioned. The profile's
+wildcard application identifier admits the signed bundle identifier; an earlier
+literal-suffix diagnostic was insufficient and is retained as superseded review.
+After the requested physical developer-app trust review, the owner opened the
+installed app successfully. A fresh exact-device process observation and
+screenshot confirmed it running, with No active role and disabled Stop. This
+observation finalized product/final/Stop zero, without starting a role or
+workload. It establishes a working manual launch; installed-executable readback
+is still unmeasured, and the initial security error's precise cause remains
+unconfirmed. No replacement build or blind reinstallation was performed.
+
+The new source-matched Mac window is running in a fresh separate private test
+profile. The owner chooses a new 12–128-character passphrase in Create profile.
+An older Mac window's process retained its profile lease after operator close
+replies. Its read-only thread inspection showed idle AWT loops but did not prove
+retirement. That old process and profile were preserved; their verified shutdown
+remains a cleanup blocker. No role or workload was automatically started in the
+new apps.
+
+After the final iPhone observation, the separate build worker was explicitly
+retired with exit zero and its process absence verified. Both preparation
+states had no pending phone lease. The owner-started apps remain available.
+The documentation passed `git diff --check` and the Markdown link check:
+1,018 relative links across 176 active files, with its embedded policy checks.
+
+Original failures are retained separately:
+
+- The first activity revision had one invalid immutability test fixture: it
+  proposed an invalid Completed result. The fixture now proposes a valid
+  conflicting result and verifies preservation of the original failure.
+- An online preparation passed JVM regressions but failed Android dependency
+  resolution at the repository DNS route. An offline retry then exhausted disk
+  space and was interrupted, with failed capture and no complete current XML.
+  A Windows assertion appeared in the interrupted stream; its cause is not
+  established from stale reports. Both native attempts retained their failures
+  and finalized Stop with no owned survivors.
+- Only inactive task-created dependency caches were retired after ownership and
+  lock checks, recovering about 17 GiB. Evidence, prepared products, signing,
+  phone data and profiles were preserved. A reviewed sealed external dependency
+  snapshot seeded the writable cache; the original read-only cache was restored
+  before the successful strictly verified source build.
+- Android update attempts refused because the app was not visibly stopped, then
+  because preservation code misread an integer exit status. No installation
+  occurred in those refused attempts. The corrected attempt verified Stop,
+  preserved data and succeeded. The iPhone launch rejection remains original
+  failed evidence despite the preceding successful installation.
+
+The original failed-launch checkpoint captured 57% and charging; the successful
+opened-app screen later showed 82% and charging. Neither has a measured
+current/thermal series or establishes current Wi-Fi readiness or battery
+discharge. No physical workload resource measurements were collected for this
+source. The owner starts tests manually in the six directions documented in the
+guide, reports failures immediately, and can request private collection after
+finishing.
+
+| Phone Host | Capacity | Capacity phases | Separate measured steady | Workload/resources |
+| --- | ---: | --- | --- | --- |
+| Android | 128 | Unrun on this source | 0/1800s | Unavailable |
+| Android | 256 | Unrun | 0/1800s | Unavailable |
+| iPhone | 128 | Unrun on this source | 0/1800s | Unavailable |
+| iPhone | 256 | Unrun | 0/1800s | Unavailable |
+
+The manual screen measures one connected Client per run. Capacity correctness,
+throughput, p95/p99, missed schedules, phone CPU/memory/threads, connected-idle
+overhead, post-Stop drain and separate Mac generator utilization remain
+unqualified. The actual role matrix, simultaneous 255 Mac plus one phone,
+genuine socket backpressure, long mixed faults, authorization/revocation,
+fairness and reviewed unplugged discharge remain pending. Four separate capacity
+steady runs still require two hours of measured workload. #525 remains open;
+no new qualification acceptance checkbox was checked.
+
+Product-source [CI 41276959729](https://github.com/p2pKit/P2pKit/actions/runs/41276959729)
+passed source, dependencies, JVM Linux/Windows, Android, Apple ARM64/x64, Desktop
+Linux/Windows/macOS, security, compatibility and consumers. **macos-shared and
+complete-gate failed; aggregate qualification was skipped.** The private hosted
+evidence key is unavailable on this Mac, and public failed-log retrieval also
+failed. The underlying shared-component cause is unconfirmed. The PR stays
+draft until required checks pass. No tag, publication, VPS work, cancelled full
+audit or deferred #520 investigation was performed.
+
+## November 1 earlier: corrected controls installed; separate Mac profile open
 
 Android and iPhone have been updated for the owner's manual Device tests
 workflow. The iPhone Host, Client and Stop buttons now have explicit SwiftUI
