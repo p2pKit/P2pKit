@@ -292,14 +292,14 @@ class RpcDeviceTestSessionTest {
         assertTrue(reopened.reports.single().smart!!.steps.isEmpty())
         reopened.hydrateArchived(reopened.unarchivedReports.single(), archive)
         assertEquals(result, reopened.reports.single())
-        assertTrue(archive.toByteArray().size <= 65_536)
+        assertTrue(archive.encodeToByteArray().size <= 65_536)
         val many = RpcDeviceTestSession()
         repeat(100) { index ->
             val report = result.copy(runId = index.toString(16).padStart(32, '0'))
             many.save(report)
             many.confirmArchived(report.runId)
         }
-        assertTrue(many.exportJson().toByteArray().size <= 262_100, "Recent index fits one encrypted vault record")
+        assertTrue(many.exportJson().encodeToByteArray().size <= 262_100, "Recent index fits one encrypted vault record")
     }
 
     @Test
