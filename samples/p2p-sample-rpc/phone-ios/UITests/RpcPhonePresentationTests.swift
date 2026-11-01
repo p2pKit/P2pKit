@@ -229,6 +229,42 @@ final class RpcPhonePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testMultiDeviceSectionAndDisplayControlsNeverStartAnUnconnectedRole() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--rpc-ui-network-unavailable"]
+        app.launch()
+        defer { app.terminate() }
+        let entry = app.buttons["Multi-device tests"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["Multi-device tests"].waitForExistence(timeout: 5))
+        app.buttons["Two devices"].tap()
+        XCTAssertTrue(app.navigationBars["Device tests"].waitForExistence(timeout: 5))
+        app.buttons["Multiple devices"].tap()
+        XCTAssertTrue(app.navigationBars["Multi-device tests"].waitForExistence(timeout: 5))
+        let smart = app.buttons["Smart · find stable load"]
+        reveal(smart, in: app, up: true)
+        XCTAssertFalse(smart.isEnabled, "No Client or Host connection has been established")
+        let phases = XCTAttachment(screenshot: app.screenshot())
+        phases.name = "Multi-device phases — no role started"
+        phases.lifetime = .keepAlways
+        add(phases)
+        let clear = app.buttons["Clear displayed logs"]
+        reveal(clear, in: app, up: true)
+        clear.tap()
+        let monitor = XCTAttachment(screenshot: app.screenshot())
+        monitor.name = "Test monitor and display controls — no invented resources"
+        monitor.lifetime = .keepAlways
+        add(monitor)
+        reveal(app.buttons["Show saved results"], in: app, up: true)
+        app.buttons["Show saved results"].tap()
+        reveal(app.buttons["rpc.testStop"], in: app, up: false)
+        XCTAssertFalse(app.buttons["rpc.testStop"].isEnabled)
+        app.buttons["Back to RPC"].tap()
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+    }
+
+    @MainActor
     func testDeviceTestRoleButtonsDispatchOnlyTheTappedRole() {
         for (control, selected, other) in [
             ("rpc.testClient", "Client: start requested", "Host: start requested"),

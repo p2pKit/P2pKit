@@ -327,14 +327,12 @@ internal class RpcLabController(
         }
     }
 
-    override fun onDestroy(owner: LifecycleOwner) {
-        applicationContext.unregisterComponentCallbacks(memoryWarnings)
-        detach()
-    }
+    override fun onDestroy(owner: LifecycleOwner) = detach()
 
     fun detach() {
         if (detached) return
         detached = true
+        applicationContext.unregisterComponentCallbacks(memoryWarnings)
         foreground = false
         leave.detach()
         liveStatus.stop()

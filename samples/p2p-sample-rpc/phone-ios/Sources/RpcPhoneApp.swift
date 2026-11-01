@@ -54,6 +54,9 @@ struct RpcPhoneApp: App {
                     if $0 == .active { model.beginUsbDeveloperCampaign(arguments: ProcessInfo.processInfo.arguments) }
                 #endif
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                model.testMemoryPressure()
+            }
             .onReceive(
                 NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)
             ) { _ in
@@ -196,7 +199,7 @@ struct RpcPhoneView: View {
                 HStack {
                     Button("Two devices") { model.setTestMode(false) }
                     Button("Multiple devices") { model.setTestMode(true) }
-                }.disabled(model.deviceTestRunning || model.actionBusy)
+                }.buttonStyle(.borderless).disabled(model.deviceTestRunning || model.actionBusy)
                 Text(model.multiTests ? "Several trusted Clients → one Host. Each run is saved separately." :
                     "One Client → one Host. The Client sends requests and the Host replies.").font(.footnote)
             }
@@ -284,7 +287,7 @@ struct RpcPhoneView: View {
                 HStack {
                     Button("Clear displayed logs") { model.clearTestDisplay() }
                     Button("Show saved results") { model.showSavedTests() }
-                }
+                }.buttonStyle(.borderless)
                 Text("Clearing this display keeps all saved output.").font(.footnote)
                 ForEach(Array(model.deviceTestActivity.reversed().enumerated()), id: \.offset) { _, activity in
                     Text(activity.title).font(.footnote)
