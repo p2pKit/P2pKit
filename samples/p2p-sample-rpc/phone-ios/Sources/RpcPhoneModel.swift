@@ -41,6 +41,7 @@ final class RpcPhoneModel: ObservableObject {
     let applicationSession = RpcApplicationSession_()
     @Published private(set) var deviceTestReports: [RpcDeviceTestReport] = []
     @Published private(set) var deviceTestProgress: RpcDeviceTestProgress?
+    @Published private(set) var deviceTestActivity: [RpcDeviceTestObservation] = []
     @Published private(set) var deviceTestStorageIssue: String?
     @Published var selectedTestPeer: String = ""
     @Published var allowHostTests = false
@@ -117,9 +118,14 @@ final class RpcPhoneModel: ObservableObject {
         self.wifi = wifi ?? RpcPhoneWifiObserver()
         self.invitationClipboard = invitationClipboard ?? RpcPhoneInvitationClipboard()
         do {
+            try applicationSession.deviceTests.configureDeviceName(value: "iPhone")
             if FileManager.default.fileExists(atPath: deviceTestFile.path) {
+                let attributes = try FileManager.default.attributesOfItem(atPath: deviceTestFile.path)
+                guard ((attributes[.size] as? NSNumber)?.intValue ?? 512_001) <= 512_000 else {
+                    throw LiveReadError.unavailable
+                }
                 let data = try Data(contentsOf: deviceTestFile)
-                guard data.count <= 262_100, let text = String(data: data, encoding: .utf8) else {
+                guard data.count <= 512_000, let text = String(data: data, encoding: .utf8) else {
                     throw LiveReadError.unavailable
                 }
                 try applicationSession.deviceTests.restoreJson(text: text)
@@ -1049,18 +1055,40 @@ final class RpcPhoneModel: ObservableObject {
     func refreshDeviceTests() {
         deviceTestReports = applicationSession.deviceTests.reports
         deviceTestProgress = applicationSession.deviceTests.progress
+        deviceTestActivity = applicationSession.deviceTests.activity
         let text = applicationSession.deviceTests.exportJson()
-        guard !deviceTestReports.isEmpty, text != savedDeviceTests, deviceTestStorageIssue == nil else { return }
+        guard !deviceTestReports.isEmpty,
+            text != savedDeviceTests || !applicationSession.deviceTests.unarchivedReports.isEmpty,
+            deviceTestStorageIssue == nil else { return }
         do {
             let directory = deviceTestFile.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let archive = directory.appendingPathComponent("rpc-test-archive", isDirectory: true)
+            try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            for report in applicationSession.deviceTests.unarchivedReports {
+                let data = Data(applicationSession.deviceTests.reportJson(report: report).utf8)
+                guard data.count <= 16_384 else { throw LiveReadError.unavailable }
+                let target = archive.appendingPathComponent(report.runId + ".json")
+                if FileManager.default.fileExists(atPath: target.path) {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+                    guard attributes[.type] as? FileAttributeType == .typeRegular,
+                        ((attributes[.size] as? NSNumber)?.intValue ?? 16_385) <= 16_384,
+                        try Data(contentsOf: target) == data else { throw LiveReadError.unavailable }
+                } else {
+                    try data.write(to: target, options: [.atomic, .completeFileProtection])
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+                }
+                applicationSession.deviceTests.confirmArchived(runId: report.runId)
+            }
             try Data(text.utf8).write(to: deviceTestFile, options: [.atomic, .completeFileProtection])
             savedDeviceTests = text
         } catch { deviceTestStorageIssue = "Saving results failed; results remain in this session." }
     }
 
     func runDeviceTest(_ phase: RpcDeviceTestPhase) {
-        guard canAct, nearbyMode, let lab = owner.runtime, lab.applicationAvailable else { return }
+        guard canAct, nearbyMode, deviceTestStorageIssue == nil, applicationSession.deviceTests.archiveAvailable,
+            let lab = owner.runtime, lab.applicationAvailable else { return }
         let id = UUID()
         operationID = id
         operationBusy = true

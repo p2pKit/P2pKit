@@ -16,6 +16,19 @@ RPC connection.
 4. Wait for the saved result before starting another test. **Cancel test** ends
    the current exercise; **Stop** closes the role and its owned resources.
 
+Start with **Correctness**, **Large data**, **Cancellation / deadline**, then
+**Disconnect / reconnect**. Run **Steady · 30 minutes** after the short tests
+work. Report a failure immediately with the direction, phase and saved run ID;
+there is no need to finish the other tests first. When finished, ask the agent
+to collect and analyze the private archives.
+
+For all application directions, exercise Android → Mac, iPhone → Mac,
+Mac → Android, iPhone → Android, Mac → iPhone and Android → iPhone. The arrow
+means Client sends requests to Host, even when the Host starts a test using
+the Client's explicit permission. Choose one phase on one Client at a time.
+Keep both phones connected as Clients while Mac is Host, and select each in
+turn for Host-started tests.
+
 | Button | Exercise |
 | --- | --- |
 | Large data | Check exact replies for 64 KiB, 256 KiB and 1 MiB encoded bodies |
@@ -30,11 +43,33 @@ outage that exceeds recovery bounds produces an interrupted or failed result;
 it does not silently restart a workload or turn the result into a pass.
 Rejoin the approved network and start a new test when the connection is Ready.
 
-Results retain the last 100 runs in private application storage and survive
-role Stop. The Mac uses its encrypted local profile. Reports include the source,
+**Live test activity** shows requests observed on this device, the procedure,
+generated body size when known, reply/error state, elapsed time and execution
+evidence. It uses actual RPC observations. A Host handler returning or finalizing
+a reply does not by itself prove the Client received it. Source-matched test
+registration makes Client-started runs visible on the Host, sends bounded
+progress messages about once per second, and delivers the final report.
+These progress messages are additional control traffic and are counted
+separately from workload responses. A missing final report stays unconfirmed;
+it is not converted into a passed result on the Host.
+
+Every completed or failed test is saved as a separate private archive record;
+older records are not automatically deleted. The recent-results list keeps
+100 runs in memory. Android and iPhone use application-private
+`rpc-test-archive` directories; Mac keeps encrypted records and a paged index
+inside its existing protected profile. Archive-write failure is displayed and
+pending records are retained; a full pending queue refuses new tests instead
+of discarding an old result. Stop and changing roles keep these archives.
+Uninstalling an app or deleting its profile/data can still remove its files.
+
+Reports include Client → Host platform direction, start time, which side
+initiated the test, run ID, phase and source,
 actual client count, initialization and measured durations, correct responses,
 latency percentiles, missed schedules, deliberate disconnect/deadline outcomes
-and available sampled resources. Missing measurements remain unavailable.
+and available sampled resources. They retain bounded recent request observations;
+the live panel can miss intermediate states and is not a complete packet trace.
+Old reports without endpoint metadata keep **Unknown** instead of guessing a
+direction or date. Missing measurements remain unavailable.
 Serious or critical thermal observations interrupt the exercise. Charging
 observations do not establish battery discharge.
 

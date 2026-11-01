@@ -152,6 +152,12 @@ public class RpcDesktopPanel(
     private val allowTests = JCheckBox("Allow selected Host to start tests while this page is open")
     private val testIdentity = JTextArea(2, 54).apply { isEditable = false; lineWrap = true }
     private val testProgress = JLabel("No test running")
+    private val testActivity = JTextArea(10, 55).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        accessibleContext.accessibleName = "Live test activity: requests, replies and execution outcomes"
+    }
     private val testResults = JTextArea(12, 54).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }
     private var statusUpdates: Job? = null
     private var networkRefresh: Job? = null
@@ -321,10 +327,15 @@ public class RpcDesktopPanel(
                 } })
             }
             add(testProgress)
+            add(DesktopRpcAppearance.heading("Live test activity"))
+            add(DesktopRpcWrappedLabel("Sent from here means this device is the Client. Received here means " +
+                "this device is the Host. Host reply finalization does not by itself prove Client receipt."))
+            add(JScrollPane(testActivity))
             add(JButton("Cancel test").apply { addActionListener {
                 owner.current()?.cancelTest(); owner.cancelAction()
             } })
-            add(DesktopRpcWrappedLabel("Results save automatically in your encrypted local profile (last 100)."))
+            add(DesktopRpcWrappedLabel("Every completed run is archived in your encrypted profile. " +
+                "The recent list shows 100; older archived runs are kept."))
             add(JScrollPane(testResults))
         }
         statusUpdates = scope.launch {
@@ -535,10 +546,16 @@ public class RpcDesktopPanel(
             testPeers.selectedItem = connected.firstOrNull { it.fingerprint == selected?.fingerprint }
         }
         val test = applicationSession.deviceTests.progress
-        testProgress.text = "${test.title} · ${test.elapsedSeconds}s / ${test.plannedSeconds}s · " +
-            "${test.calls} responses"
+        testProgress.text = "${test.direction} · ${test.title} · ${test.stage} · " +
+            "${test.elapsedSeconds}s / ${test.plannedSeconds}s · ${test.calls} responses"
+        val activityText = applicationSession.deviceTests.activity.asReversed().joinToString("\n\n") { it.title }
+            .ifEmpty { "Waiting for test requests. Start a short test on the connected Client." }
+        if (testActivity.text != activityText) testActivity.text = activityText
         testResults.text = applicationSession.deviceTests.reports.asReversed().joinToString("\n\n") {
-            "${it.title}\n" + (it.clientResources?.let { sample -> "Client: ${sample.title}\n" } ?: "") +
+            "${it.title}\nStarted: ${if (it.startedAtEpochMillis > 0)
+                java.time.Instant.ofEpochMilli(it.startedAtEpochMillis) else "Unavailable for this older result"} · " +
+                "Started by: ${it.initiatedBy} · Run: ${it.runId}\n" +
+                (it.clientResources?.let { sample -> "Client: ${sample.title}\n" } ?: "") +
                 (it.initiatingHostResources?.let { sample -> "Host: ${sample.title}\n" } ?: "") +
                 "p95 ${it.p95Micros / 1_000} ms · p99 ${it.p99Micros / 1_000} ms · " +
                 "missed ${it.missedSchedules}" + (it.failureCode?.let { code -> " · $code" } ?: "")
@@ -571,7 +588,8 @@ public class RpcDesktopPanel(
         echo.isEnabled = pair.isEnabled && snapshot.status?.state == "Ready"
         examples.forEach { it.first.isEnabled = echo.isEnabled }
         requests.forEach { it.first.isEnabled = echo.isEnabled }
-        val testsIdle = ready && !applicationSession.deviceTests.progress.running
+        val testsIdle = ready && !applicationSession.deviceTests.progress.running &&
+            applicationSession.deviceTests.archiveAvailable
         testButtons.forEach { it.first.isEnabled = testsIdle &&
             (echo.isEnabled || (snapshot.role == "Host" && testPeers.selectedItem != null)) }
         allowTests.isEnabled = testsIdle && snapshot.role == "Client"

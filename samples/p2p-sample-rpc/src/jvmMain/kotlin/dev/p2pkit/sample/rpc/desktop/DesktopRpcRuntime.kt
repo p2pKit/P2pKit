@@ -63,6 +63,11 @@ internal class DesktopRpcRuntime private constructor(
     }
 
     suspend fun start(host: Boolean, settings: RpcPhoneSettings, nearby: Boolean = true) {
+        application.deviceTests.configureDeviceName(when {
+            System.getProperty("os.name").startsWith("Mac") -> "Mac (JVM)"
+            System.getProperty("os.name").startsWith("Windows") -> "Windows (JVM)"
+            else -> "Linux (JVM)"
+        })
         prepareStore()
         val store = checkNotNull(vault)
         if (application.deviceTests.reports.isEmpty()) {
@@ -115,6 +120,9 @@ internal class DesktopRpcRuntime private constructor(
 
     private fun saveTests() {
         if (vault == null || application.deviceTests.reports.isEmpty()) return
+        val tests = application.deviceTests
+        val archive = DesktopRpcTestArchive(checkNotNull(vault))
+        tests.unarchivedReports.forEach { archive.retain(tests, it) }
         val text = application.deviceTests.exportJson()
         if (text != savedTests) {
             checkNotNull(vault).replace("device-test-results-v1", text.toByteArray())

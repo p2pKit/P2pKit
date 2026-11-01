@@ -192,13 +192,14 @@ internal class RpcLabController(
     }
 
     init {
+        applicationSession.deviceTests.configureDeviceName("Android")
         // Pairing secrets/pins belong to a trusted local UI, not screenshots, recents or crash transcripts.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AndroidRpcCapacityFiles.prepareHome(applicationContext)
         val testFile = java.io.File(applicationContext.filesDir, "rpc-device-tests.json")
         try {
             if (testFile.exists()) {
-                check(testFile.length() <= 262_100)
+                check(testFile.length() <= 512_000)
                 applicationSession.deviceTests.restoreJson(testFile.readText())
             }
         } catch (_: Exception) { testStorageIssue = "Saved results could not be read; original file retained." }
@@ -667,9 +668,34 @@ internal class RpcLabController(
     private suspend fun persistDeviceTests() = testResultLock.withLock {
         val reports = applicationSession.deviceTests.reports
         val text = applicationSession.deviceTests.exportJson()
-        if (reports.isNotEmpty() && testStorageIssue == null && text != lastSavedTests) {
+        if (reports.isNotEmpty() && testStorageIssue == null &&
+            (text != lastSavedTests || applicationSession.deviceTests.unarchivedReports.isNotEmpty())
+        ) {
             try {
                 withContext(Dispatchers.IO) {
+                    val archive = java.io.File(applicationContext.filesDir, "rpc-test-archive")
+                    check(archive.isDirectory || archive.mkdir())
+                    check(!android.system.Os.lstat(archive.path).let {
+                        android.system.OsConstants.S_ISLNK(it.st_mode)
+                    })
+                    android.system.Os.chmod(archive.path, 0x1c0) // 0700, application-private archive.
+                    applicationSession.deviceTests.unarchivedReports.forEach { report ->
+                        val bytes = applicationSession.deviceTests.reportJson(report).toByteArray()
+                        check(bytes.size <= 16_384)
+                        val target = java.io.File(archive, "${report.runId}.json")
+                        if (target.exists()) {
+                            check(android.system.OsConstants.S_ISREG(android.system.Os.lstat(target.path).st_mode))
+                            check(target.length() <= 16_384 && target.readBytes().contentEquals(bytes))
+                        } else {
+                            val record = android.util.AtomicFile(target)
+                            val stream = record.startWrite()
+                            try {
+                                stream.write(bytes); record.finishWrite(stream)
+                                android.system.Os.chmod(target.path, 0x180) // 0600.
+                            } catch (failure: Exception) { record.failWrite(stream); throw failure }
+                        }
+                        applicationSession.deviceTests.confirmArchived(report.runId)
+                    }
                     val file = android.util.AtomicFile(
                         java.io.File(applicationContext.filesDir, "rpc-device-tests.json"))
                     val output = file.startWrite()
@@ -689,7 +715,8 @@ internal class RpcLabController(
         val live by liveStatus.view.collectAsState()
         val snapshot = live.snapshot
         val owned = lab
-        val available = interactive && !busy && !closing && !progress.running && operation?.active != true
+        val available = interactive && !busy && !closing && !progress.running && operation?.active != true &&
+            testStorageIssue == null && applicationSession.deviceTests.archiveAvailable
         val connectedHost = snapshot?.takeIf { !it.asHost && it.safeState == "Ready" }
             ?.connection?.selectedFingerprint
         val permissionAvailable = available && connectedHost != null && snapshot.trusted.any {
@@ -750,13 +777,23 @@ internal class RpcLabController(
                     } == true))) { Text(phase.title) }
             }
             if (progress.running) {
-                Text("${progress.title} · ${progress.elapsedSeconds}s / ${progress.plannedSeconds}s · " +
-                    "${progress.calls} responses")
+                Text("${progress.direction} · ${progress.title} · ${progress.stage}")
+                Text("${progress.elapsedSeconds}s / ${progress.plannedSeconds}s · ${progress.calls} responses")
                 Button({ operation?.cancel(); lab?.cancelDeviceTest() }) { Text("Cancel test") }
             }
-            Text(testStorageIssue ?: "Results save automatically in private app storage (last 100 runs).")
+            RpcLabSectionHeading("Live test activity", "Requests and replies observed on this device")
+            Text("Sent from here: Client. Received here: Host. Host finalization alone does not prove Client receipt.")
+            val observations = applicationSession.deviceTests.activity
+            if (observations.isEmpty()) Text("Waiting for test requests. Start a short test on the connected Client.")
+            observations.asReversed().forEach { Text(it.title, style = MaterialTheme.typography.bodySmall) }
+            Text(testStorageIssue ?: "Every completed run is archived privately. Recent list: 100; older runs are kept.")
             reports.asReversed().forEach { report ->
                 Text(report.title)
+                Text("Started by: ${report.initiatedBy} · Run: ${report.runId}",
+                    style = MaterialTheme.typography.bodySmall)
+                Text(if (report.startedAtEpochMillis > 0) "Started: " +
+                    java.text.DateFormat.getDateTimeInstance().format(java.util.Date(report.startedAtEpochMillis))
+                    else "Start time unavailable for this older result", style = MaterialTheme.typography.bodySmall)
                 report.clientResources?.let { Text("Client: ${it.title}") }
                 report.initiatingHostResources?.let { Text("Host: ${it.title}") }
                 Text("p95 ${report.p95Micros / 1_000} ms · p99 ${report.p99Micros / 1_000} ms · " +

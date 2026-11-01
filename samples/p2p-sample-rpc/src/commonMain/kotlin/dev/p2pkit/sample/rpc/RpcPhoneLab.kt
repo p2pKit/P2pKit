@@ -597,11 +597,20 @@ public class RpcPhoneLab private constructor(
                     allowNearbyPairing = nearby
                     application?.register(this, authorize = { it.fingerprint != null })
                     // Engine admission still requires durable trust; enrollment-only peers cannot invoke these.
-                    register(RpcCapacityContract.echo, authorize = { it.fingerprint != null }) { _, value ->
+                    register(RpcCapacityContract.echo, authorize = { it.fingerprint != null }) { context, value ->
+                        val capture = application?.deviceTests?.capture(context,
+                            RpcCapacityContract.echo.name,
+                            (value.length + 2).takeIf { value == RpcCapacityContract.payload })
+                        if (value == RpcCapacityContract.payload) {
+                            application?.deviceTests?.response(capture, value.length + 2)
+                        }
                         if (value == RpcCapacityContract.payload) RpcReply.Success(value)
                         else RpcReply.ApplicationError("unexpected synthetic body")
                     }
-                    register(RpcCapacityContract.largeEcho, authorize = { it.fingerprint != null }) { _, value ->
+                    register(RpcCapacityContract.largeEcho, authorize = { it.fingerprint != null }) { context, value ->
+                        val size = (value.length + 2).takeIf { value.all { character -> character == 'a' } }
+                        val capture = application?.deviceTests?.capture(context, RpcCapacityContract.largeEcho.name, size)
+                        if (size != null) application?.deviceTests?.response(capture, size)
                         RpcReply.Success(value)
                     }
                     if (capacityExercises) registerCapacityExercises(checkNotNull(capacityPins))

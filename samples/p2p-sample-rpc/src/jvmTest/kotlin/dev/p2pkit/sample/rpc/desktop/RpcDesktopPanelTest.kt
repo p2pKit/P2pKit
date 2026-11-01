@@ -9,6 +9,7 @@ import java.awt.event.ActionEvent
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import javax.swing.JButton
+import javax.swing.JTextArea
 import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -84,6 +85,9 @@ class RpcDesktopPanelTest {
             val buttons = descendants(panel).filterIsInstance<JButton>().toList()
             assertEquals(0, buttons.count { it.text == "users.get" })
             assertEquals(1, buttons.count { it.text == "Host here" })
+            assertEquals(1, descendants(panel).filterIsInstance<JTextArea>().count {
+                it.accessibleContext.accessibleName == "Live test activity: requests, replies and execution outcomes"
+            })
             RpcDeviceTestPhase.entries.forEach { phase ->
                 assertEquals(1, buttons.count { it.text == phase.title })
                 assertTrue(!buttons.single { it.text == phase.title }.isEnabled)

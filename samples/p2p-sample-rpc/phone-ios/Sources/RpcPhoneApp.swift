@@ -235,15 +235,31 @@ struct RpcPhoneView: View {
                             } : model.owner.runtime?.state != "Ready"))
                 }
                 if let progress = model.deviceTestProgress, progress.running {
-                    Text("\(progress.title) · \(progress.elapsedSeconds)s / \(progress.plannedSeconds)s · \(progress.calls) responses")
+                    Text("\(progress.direction) · \(progress.title) · \(progress.stage)")
+                    Text("\(progress.elapsedSeconds)s / \(progress.plannedSeconds)s · \(progress.calls) responses")
                     Button("Cancel test") { model.cancelOperation() }
                 }
             }
-            Section("Saved results · last 100 runs") {
-                Text(model.deviceTestStorageIssue ?? "Results save automatically in private app storage.")
+            Section("Live test activity") {
+                Text("Sent from here: Client. Received here: Host. Host finalization alone does not prove Client receipt.")
+                    .font(.footnote)
+                if model.deviceTestActivity.isEmpty {
+                    Text("Waiting for test requests. Start a short test on the connected Client.")
+                }
+                ForEach(Array(model.deviceTestActivity.reversed().enumerated()), id: \.offset) { _, activity in
+                    Text(activity.title).font(.footnote)
+                }
+            }
+            Section("Saved results · recent 100 runs") {
+                Text(model.deviceTestStorageIssue ?? "Every completed run is archived privately; older runs are kept.")
                 ForEach(model.deviceTestReports.reversed(), id: \.runId) { report in
                     VStack(alignment: .leading) {
                         Text(report.title)
+                        Text("Started by: \(report.initiatedBy) · Run: \(report.runId)").font(.footnote)
+                        if report.startedAtEpochMillis > 0 {
+                            Text(Date(timeIntervalSince1970: Double(report.startedAtEpochMillis) / 1000),
+                                style: .date).font(.footnote)
+                        }
                         if let sample = report.clientResources { Text("Client: \(sample.title)").font(.footnote) }
                         if let sample = report.initiatingHostResources { Text("Host: \(sample.title)").font(.footnote) }
                         Text("p95 \(report.p95Micros / 1000) ms · p99 \(report.p99Micros / 1000) ms · missed \(report.missedSchedules)")
