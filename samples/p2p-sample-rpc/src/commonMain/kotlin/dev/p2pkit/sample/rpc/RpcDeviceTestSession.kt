@@ -95,6 +95,8 @@ internal data class DeviceTestDelay(val millis: Int, val body: String)
 internal object DeviceTestContract {
     val start = RpcNotification("device-tests.start", 1, DeviceTestCommand.serializer(), limitBytes = 1_024)
     val cancel = RpcNotification("device-tests.cancel", 1, String.serializer(), limitBytes = 128)
+    val source = RpcProcedure("device-tests.source", 1, String.serializer(),
+        String.serializer(), String.serializer(), requestLimitBytes = 128, responseLimitBytes = 128)
     val acknowledgement = RpcProcedure("device-tests.ack", 1, DeviceTestCommand.serializer(),
         String.serializer(), String.serializer(), requestLimitBytes = 1_024, responseLimitBytes = 128)
     val report = RpcProcedure("device-tests.report", 1, RpcDeviceTestReport.serializer(),
@@ -150,6 +152,10 @@ public class RpcDeviceTestSession {
     internal fun register(configuration: RpcHostConfiguration) {
         configuration.notification(DeviceTestContract.start)
         configuration.notification(DeviceTestContract.cancel)
+        configuration.register(DeviceTestContract.source, authorize = { it.fingerprint != null }) { _, value ->
+            if (value == "source") RpcReply.Success(RpcPhoneLab.compiledSource)
+            else RpcReply.ApplicationError("Unknown source request")
+        }
         configuration.register(DeviceTestContract.acknowledgement,
             authorize = { it.fingerprint != null }) { c, command ->
             if (runtime.value?.acknowledge(c, command) == true) RpcReply.Success("Accepted")
@@ -172,6 +178,9 @@ public class RpcDeviceTestSession {
 
     internal fun release(value: DeviceTestRuntime) { runtime.compareAndSet(value, null) }
     internal fun publish(value: RpcDeviceTestProgress) { latest.value = value }
+    internal fun finishProgress(runId: String) {
+        latest.update { if (it.runId == runId) RpcDeviceTestProgress() else it }
+    }
     internal fun save(value: RpcDeviceTestReport) {
         records.update { previous ->
             if (previous.any { it.runId == value.runId }) previous
@@ -210,16 +219,21 @@ internal class DeviceTestRuntime(
                             check(ack is RpcReply.Success)
                             execute(command)
                         } catch (cancelled: CancellationException) {
+                            session.save(emptyDeviceTestReport(command, "Cancelled", "CallerCancelledBeforeStart"))
                             throw cancelled
                         } catch (_: Exception) {
                             session.save(emptyDeviceTestReport(command, "Failed", "StartAcknowledgementFailed"))
                         } finally {
                             active.compareAndSet(currentCoroutineContext()[Job], null)
+                            session.finishProgress(command.runId)
                         }
                     }
                     if (remoteEnabled.value && !closed.value && session.reports.none { it.runId == command.runId } &&
                         client.state.value == RpcConnectionState.Ready && active.compareAndSet(null, job)
-                    ) job.start() else job.cancel()
+                    ) {
+                        session.publish(RpcDeviceTestProgress(command.runId, "Starting ${command.phase.title}", true))
+                        job.start()
+                    } else job.cancel()
                 }
             }
             cancellationListener = scope.launch {
@@ -288,7 +302,7 @@ internal class DeviceTestRuntime(
             withContext(NonCancellable) {
                 lock.withLock { pending = null; remoteResult = null; acknowledgement = null }
             }
-            session.publish(RpcDeviceTestProgress())
+            session.finishProgress(command.runId)
         }
     }
 
@@ -325,7 +339,11 @@ internal class DeviceTestRuntime(
                 measured.elapsedNow().inWholeSeconds, seconds))
         }
         try {
+            session.publish(RpcDeviceTestProgress(command.runId, "Checking connected source", true))
             withTimeout(30_000) { peer.state.first { it == RpcConnectionState.Ready } }
+            val source = peer.call(DeviceTestContract.source, "source", timeout = 5_000.milliseconds,
+                retry = RpcRetry.RecoverOnly(1))
+            check(source is RpcReply.Success && source.value == command.sourceSha)
             initializationMillis = initialization.elapsedNow().inWholeMilliseconds
             measured = TimeSource.Monotonic.markNow()
             initialized = true
@@ -416,7 +434,7 @@ internal class DeviceTestRuntime(
                         retry = RpcRetry.RecoverOnly(1)) } catch (_: Exception) { /* Local report remains saved. */ }
                 }
             }
-            session.publish(RpcDeviceTestProgress())
+            session.finishProgress(command.runId)
         }
     }
 

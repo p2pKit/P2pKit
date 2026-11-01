@@ -10,9 +10,10 @@ import java.io.FileDescriptor;
 import java.util.Arrays;
 
 /**
- * Debug-only run-as metadata primitive. API24's stat has no dereference option.
- * Uses public Android APIs on one explicitly inherited descriptor, never a path,
- * payload, key, authorization decision, or production RPC/transport entry point.
+ * Debug-only descriptor metadata and sealed control-record primitive.
+ * The CLI uses one fixed app-data root and fixed output names. No identity key,
+ * normal application payload, or production RPC/transport entry point is exposed.
+ * API24's stat has no dereference option; reads use public Android descriptor APIs.
  */
 public final class RpcLabFdStat {
     private RpcLabFdStat() { }

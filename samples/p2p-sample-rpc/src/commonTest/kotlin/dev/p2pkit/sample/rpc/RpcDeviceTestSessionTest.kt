@@ -71,4 +71,16 @@ class RpcDeviceTestSessionTest {
         assertTrue(window.summary!!.thermalStopped, "Thermal stop is recorded even between normal sample slots")
     }
 
+    @Test
+    fun staleCompletionCannotHideAStartingReplacementTest() {
+        val session = RpcDeviceTestSession()
+        session.publish(RpcDeviceTestProgress("old", "Starting old", true))
+        session.publish(RpcDeviceTestProgress("new", "Starting new", true))
+        session.finishProgress("old")
+        assertTrue(session.progress.running)
+        assertEquals("new", session.progress.runId)
+        session.finishProgress("new")
+        assertFalse(session.progress.running)
+    }
+
 }
