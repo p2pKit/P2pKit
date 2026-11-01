@@ -675,3 +675,116 @@ owner-selected memory change. The explicit-memory revision's modular run
 [41109598520](https://github.com/p2pKit/P2pKit/actions/runs/41109598520)
 is pending; its dependency review and advisory scan passed. Original failures
 and superseded results remain retained rather than relabeled as passes.
+
+## November 1: installed manual test workspace
+
+The owner selected a manual workflow: prepare and install the applications,
+open the Mac app, then let the owner start each exercise with a button.
+The [separate Device tests screen](../rpc/manual-device-tests.md) is implemented
+on Android, iPhone and Mac, with automatic private-LAN discovery, explicit first
+pairing, per-phase controls, bounded saved results and source matching. Back is
+blocked during a pending start acknowledgement and active workload. These are
+one-connected-client exercises; no capacity acceptance is inferred.
+
+Origin/main was fetched and remains the requested verified baseline
+`eb6ba5da6c06a440de852477cf485264b2ab3dd3`. All three prepared applications use
+commit `238c68577e985985654601bf6738656ba9132f3e`, tree
+`82a431d9c88ce550e7df61c57396d5e929b11f96`, with a clean source snapshot.
+This report and its screenshots were added after preparation; their later
+documentation commit does not relabel the prepared products.
+
+| Prepared product | SHA-256 |
+| --- | --- |
+| Android APK | `6fc094cf6dbb03759a2fff9bceb85969aad452e01b0f264aaa08696f6c3188a6` |
+| Signed iPhone executable | `50257365c4cf8cb7f265eb77311f4e8b5549b493cab783a20c6723e882caf6b8` |
+| Signed iPhone debug dylib | `c51e22712a655db97a0c279b296a7b6f258a5e52a321218847d260e744764af7` |
+| Complete signed iPhone file inventory | `72fcd38433388dc21db6d318b9ac11a85a739da43910aaf36025de33c82021c7` |
+| iOS ARM64 framework binary | `3e1656189639d58daf69b40898258fe5b7ad5b151ad5fafd85a5af845ca2461d` |
+| Complete framework/provenance inventory | `6e6aacd240217518556ece324ecf5b88f0af3af1fad5acdcc8666a1b6f66db50` |
+| Mac RPC driver JAR | `5a724c9dcae741c4558b9d9e126cd4e148bfcbb3099149a2ec144bfca2698315` |
+| Complete prepared JVM inventory | `5d210439082a2224cb57fd821fe2721e0b00f40c2b310005a55af3b9fba2ce2e` |
+| Mac native library | `9696ed1705a156b4edb7b29030a174a8f1a0dc754b0c44ca96d40aeee768eefe` |
+| Mac desktop manifest | `fb41ea0feab35ec504925dedadc5e77340e5c15f822cceee8db306c2f090c968` |
+| Mac desktop launcher | `1ca6fd723b081e9d5bb05534b9bcc50f17f19461636366f1bd27133007dd140f` |
+
+Inventory digests use UTF-8 JSON with sorted keys, compact separators and one
+final newline. Each entry maps its preparation label, without the platform
+prefix, to its byte count and SHA-256. The redundant `ios-executable` alias is
+excluded from the signed-app inventory. Full original preparation manifests,
+retained product copies, command receipts and signing evidence stay private.
+
+The exact-source preparation passed **678 JVM tests and 398 Android unit tests**,
+with zero failures, errors or skips. All preparation receipts recorded product,
+final and Stop exit zero, unchanged source and no owned Mac survivors. Signed
+iPhone verification and the source-matched desktop staging passed. The frozen
+products were reused for installation; no replacement build was needed.
+
+Android installation succeeded, and the installed APK's SHA-256 was read back
+and matched. Its Device tests page was opened; private UI evidence contains all
+five phase buttons, with no workload started. An automated screenshot request
+then failed; the Activity retains `FLAG_SECURE`. The overall original
+installation-worker failure is preserved separately from the successful install
+and UI observations. Screen protection was not disabled.
+
+The iPhone installer accepted the exact signed app over the existing paired
+wireless development channel. A foreground launch with no campaign arguments
+succeeded, and the captured screen shows Device tests and no active role.
+Installed executable readback and actual test startup remain unmeasured; installer
+success is not promoted to a qualified `ready` record. The captured battery level
+was81%; current charging, current draw and thermal measurements were not collected.
+This is no discharge result. The Mac's checksum-verifying launcher is running
+for the owner's manual use. These foreground applications intentionally remain
+available; the private build worker was explicitly retired.
+
+The final deployment followed separate review of the previous failures:
+
+- Android's original `fdf782a6`128-client large attempt failed during the first
+  four-second readiness observation. A later, separately bounded forensic read
+  obtained its original readiness and exact Stop/identity-retirement record.
+  That closure was read again using the matching older controller, and the old
+  installed APK hash was verified before the storage-preserving source update.
+  No phone workload sample or capacity pass was recovered from this failure.
+- The same-source iPhone attempt failed the Mac's clock prerequisite before
+  phone contact: maximum scheduling gap116.152334ms, minimum available memory
+  3,833,364,480bytes, selected admission floor1GiB. Two retained Mac-only memory
+  observations, empty device/client dispatch directories, absent device-control
+  checkpoint and finalized native ownership established no phone contact.
+  The canonical recovery guard refused those nonempty Mac-only records; a
+  separate reviewed retirement retained them and the original FAIL.
+- New installation attempts retained a pre-contact ownership-environment refusal,
+  an older-app/newer-reader mismatch, unavailable/changing Apple control transport,
+  an invalid setup budget refused before contact, and a connected-but-not-stopped
+  debugger refusal with unsuccessful detach. A subsequent exact inventory proved
+  the known older iPhone app process absent before installation. Its original
+  Stop remains unqualified; no synthetic closure or pin-retirement claim was made.
+  The failed screenshot-fixture preparation is also retained; the corrected idle
+  Mac render succeeded and closed its fixture owner.
+
+| Phone Host | Capacity | Large/correctness/churn qualification | Separate measured steady | Workload resources, throughput and latency |
+| --- | ---: | --- | --- | --- |
+| Android | 128 | Original large attempt failed; corrected-source phases unrun | 0/1800s | Unavailable: no measured workload series |
+| Android | 256 | Unrun | 0/1800s | Unavailable |
+| iPhone | 128 | Prerequisite failure before device contact; corrected-source phases unrun | 0/1800s | Unavailable |
+| iPhone | 256 | Unrun | 0/1800s | Unavailable |
+
+Connection/correctness/throughput/p95/p99/scheduling comparisons, phone and Mac
+generator CPU/RSS/native threads, connected-idle overhead and post-Stop drain
+therefore remain unqualified. The manual role matrix still needs its actual
+button-driven runs. Simultaneous255 Mac plus one phone client, genuine socket
+slow-consumer/backpressure, long mixed faults, authorization/revocation, fairness
+and reviewed unplugged discharge recording remain required scope. Four separate
+thirty-minute capacity runs still require two hours of measured workload.
+No #525 acceptance item was checked; the issue remains open. No version was
+tagged or published, and neither the cancelled full audit nor #520 was resumed.
+
+Current product-source modular CI
+[41259496927](https://github.com/p2pKit/P2pKit/actions/runs/41259496927)
+passed source, dependencies, JVM, Android, Apple, desktop, compatibility and
+consumer components, dependency review and advisory scans. **macos-shared and
+complete-gate failed.** Its sanitized manifest records known native cleanup,
+no timeout, no reported failed test methods and an incomplete shared build;
+this does not establish its underlying cause. The encrypted original artifact
+was retained, but its private decryption key is unavailable on this Mac. Required
+CI completion remains a blocker; no blind retry or current complete-gate pass
+is claimed. `git diff --check` and the Markdown link check were run for this
+documentation handoff separately from the product preparation.

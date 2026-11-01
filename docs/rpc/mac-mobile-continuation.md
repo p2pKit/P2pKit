@@ -8,6 +8,11 @@ repository-wide audit or publish a new Maven version merely to test this source.
 
 ## Delivered software and remaining device work
 
+For owner-started application exercises, use the separate
+[Device tests screen](manual-device-tests.md). It discovers addresses and saves
+one-client results on Android, iPhone and Mac. Its buttons do not replace this
+campaign's independent 128/256-client phases or physical acceptance evidence.
+
 The source includes the opt-in `host256()` and shared readiness I/O from
 [PR #524](https://github.com/p2pKit/P2pKit/pull/524). The handoff adds:
 
