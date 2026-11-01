@@ -3,6 +3,31 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc9 — development release candidate (not yet published)
+
+- Add opt-in exact RPC physical-session provenance for application integration
+  (#531, #534). `registerScopedWithPhysicalSession()` exposes the authenticated
+  incoming connection at login verification. Scoped authorization retains the
+  original physical session and identifies the current operation or disclosure
+  destination separately; `tryNotifyScopedFrom()` supplies an explicit origin.
+- Expose SDK-owned `RpcPhysicalSession` capabilities with immutable peer and
+  generation, observed connectivity, closure state and awaited exact-session
+  cleanup. Retain the original close result and deadline; an incomplete teardown
+  is not reported as successful merely because the transport is closed.
+- Preserve existing API/ABI signatures, application-session revocation,
+  authentication, encryption, conservative execution outcomes, admission limits,
+  bounded resources, `host128()`, `host256()` and ordinary defaults. This additive
+  integration API does not replace application credential verification.
+- Correct the complete pinned Windows Temurin version identifier used by CI
+  and its owned-JDK regression guard, retaining the same supplier archive and
+  checksum.
+
+This candidate requires its own main-source qualification and protected Maven
+publication. The installed manual-test applications and their saved results
+remain bound to their separate lab source. Physical 128/256-client qualification
+in #525, battery/thermal measurements and other existing external validation
+remain incomplete. This is a development prerelease, not stable/production READY.
+
 ## 0.8.0-rc8 — development release candidate (2026-10-30)
 
 - Add opt-in immutable application-session RPC authorization for shared trusted
