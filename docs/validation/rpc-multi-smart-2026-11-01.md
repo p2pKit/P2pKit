@@ -80,8 +80,12 @@ Application/native checks at the exact frozen implementation source:
 - Mac UI opened as an owner-controlled manual application using the preserved
   selected profile. No role or workload was started by delivery.
 
-Phone installation is awaiting the owner's current Stop and iPhone reconnect.
-The working older phone apps and all their outputs remain intact at this point.
+Both physical phone installations completed on 2026-11-01. Android's installed
+APK hash matches the prepared product; the updated Device tests page is open.
+The iPhone's installed executable hash and compiled source were read back from
+its exact idle developer slot, then the ordinary application was opened with no
+active role. The recent indexes and all 23 Android / 18 iPhone archive files
+were preserved byte-for-byte. No test workload was started during installation.
 The screenshots in the manual guide are current-source idle fixtures, with no
 physical workload or capacity credit.
 
@@ -132,6 +136,25 @@ to retained private evidence; a separately finalized review verified the restore
 original bundle, screenshots, source and prepared products. No XCTest or physical
 workload was repeated to obtain those images.
 
+The first Android installation attempt could not access the selected phone while
+the existing debugging server held it. The previously authorized selected-device
+handover retained that server and its keys. The next attempt refused the app's
+initial stopped status because it expected an explicit Stop-completed message.
+The source-matched UI instead showed Stop disabled and both role-start buttons
+enabled, proving no current owner or pending creation. The guarded idle update
+then succeeded, retained every output, verified the installed APK and opened the
+new test page. The private server exited and copied keys were retired; the selected
+phone was returned to the existing debugging server afterward.
+
+The iPhone installer succeeded and verified output preservation, but its initial
+readback used a different folder label from the idle developer launch and expired.
+That failure is retained. Recovery read the correct immutable prepared record,
+verified the installed source/executable and absence of any Start input, retired
+only the exact owned idle developer process, and opened the ordinary app. It did
+not reinstall. Final Android and iPhone recovery receipts have product/final/Stop
+exit 0, no errors and no owned Mac process survivors. These are installation and
+idle-process observations, not physical workload or post-Stop capacity measurements.
+
 ## Hosted checks
 
 The earlier full modular run is retained:
@@ -143,10 +166,15 @@ identify no failing task or assertion; its original encrypted evidence is retain
 That component is still unresolved and is not counted as passed.
 The corrected source component passed at `d4b12f4e`:
 [41298289841](https://github.com/p2pKit/P2pKit/actions/runs/41298289841).
-Apple ARM and x64 checks at `ab350b6e` are in progress:
+Apple ARM and x64 checks at `ab350b6e` both passed:
 [41300124068](https://github.com/p2pKit/P2pKit/actions/runs/41300124068) and
 [41300128988](https://github.com/p2pKit/P2pKit/actions/runs/41300128988).
-This draft does not claim that every required component is green.
+The full PR run at `e807d995` completed:
+[41300592232](https://github.com/p2pKit/P2pKit/actions/runs/41300592232).
+All 13 other components passed, including both Apple targets, Android, source,
+compatibility and consumers. `macos-shared` failed again, leaving `complete-gate`
+failed and release qualification skipped. This draft does not claim that every
+required component is green. No additional release or physical acceptance is granted.
 
 ## Measurement limits and remaining scope
 
