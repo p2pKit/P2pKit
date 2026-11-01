@@ -142,13 +142,15 @@ public class RpcDesktopPanel(
         renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int,
                 selected: Boolean, focus: Boolean): Component = super.getListCellRendererComponent(
-                list, (value as? RpcKnownDevice)?.let { "${it.name} · ${it.fingerprint.takeLast(8)}" } ?: "Choose client",
+                list, (value as? RpcKnownDevice)?.let { "${it.name} · ${it.fingerprint.takeLast(8)}" }
+                    ?: "Choose client",
                 index, selected, focus)
         }
     }
     private val testDiscovery = DesktopRpcDiscoveryPanel(::selectNearby, ::forgetNearby)
     private val testButtons = RpcDeviceTestPhase.entries.map { JButton(it.title) to it }
     private val allowTests = JCheckBox("Allow selected Host to start tests while this page is open")
+    private val testIdentity = JTextArea(2, 54).apply { isEditable = false; lineWrap = true }
     private val testProgress = JLabel("No test running")
     private val testResults = JTextArea(12, 54).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }
     private var statusUpdates: Job? = null
@@ -303,6 +305,7 @@ public class RpcDesktopPanel(
             add(row("Roles", JButton("Host here").apply { addActionListener { startRole(true) } },
                 JButton("Client here").apply { addActionListener { startRole(false) } },
                 JButton("Stop").apply { addActionListener { owner.stop(); render() } }))
+            add(DesktopRpcDisclosure("Your device identity · compare on the other device", testIdentity))
             add(testDiscovery)
             add(row("Connected client to test", testPeers))
             add(allowTests.apply { addActionListener { owner.current()?.allowTests(isSelected) } })
@@ -505,6 +508,7 @@ public class RpcDesktopPanel(
         requestMetrics.render(status?.metrics)
         val fingerprint = status?.fingerprint ?: ""
         if (identity.text != fingerprint) identity.text = fingerprint
+        testIdentity.text = fingerprint
         val requests = status?.pending ?: emptyList()
         val previous = (0 until pendingModel.size()).map { pendingModel[it] }
         if (requests != previous) {
@@ -522,9 +526,12 @@ public class RpcDesktopPanel(
             testPeers.selectedItem = connected.firstOrNull { it.fingerprint == selected?.fingerprint }
         }
         val test = applicationSession.deviceTests.progress
-        testProgress.text = "${test.title} · ${test.elapsedSeconds}s / ${test.plannedSeconds}s · ${test.calls} responses"
+        testProgress.text = "${test.title} · ${test.elapsedSeconds}s / ${test.plannedSeconds}s · " +
+            "${test.calls} responses"
         testResults.text = applicationSession.deviceTests.reports.asReversed().joinToString("\n\n") {
-            "${it.title}\np95 ${it.p95Micros / 1_000} ms · p99 ${it.p99Micros / 1_000} ms · " +
+            "${it.title}\n" + (it.clientResources?.let { sample -> "Client: ${sample.title}\n" } ?: "") +
+                (it.initiatingHostResources?.let { sample -> "Host: ${sample.title}\n" } ?: "") +
+                "p95 ${it.p95Micros / 1_000} ms · p99 ${it.p99Micros / 1_000} ms · " +
                 "missed ${it.missedSchedules}" + (it.failureCode?.let { code -> " · $code" } ?: "")
         }
         discovery.render(status, snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing)
@@ -587,7 +594,8 @@ public class RpcDesktopPanel(
     public fun requestBack() {
         check(SwingUtilities.isEventDispatchThread())
         if (showingTests) {
-            if (applicationSession.deviceTests.progress.running || owner.snapshot().stage == DesktopRpcRunOwner.Stage.Working) {
+            if (applicationSession.deviceTests.progress.running ||
+                owner.snapshot().stage == DesktopRpcRunOwner.Stage.Working) {
                 testProgress.text = "Cancel the test and wait for its saved result before returning."
                 return
             }

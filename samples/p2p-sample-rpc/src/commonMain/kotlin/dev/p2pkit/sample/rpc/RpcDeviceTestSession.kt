@@ -70,6 +70,8 @@ public data class RpcDeviceTestReport(
     public val measuredClientCount: Int = 1,
     public val latencyBucketMicros: Int = 1_000,
     public val latencySamples: Long = 0,
+    public val clientResources: RpcDeviceTestResources? = null,
+    public val initiatingHostResources: RpcDeviceTestResources? = null,
     public val scope: String = "INTERACTIVE_CONNECTED_DEVICE_RPC",
 ) {
     public val title: String get() = "${phase.title}: $status · $correctResponses responses · ${elapsedMillis / 1_000}s"
@@ -110,6 +112,28 @@ public class RpcDeviceTestSession {
     public val changes = records.asStateFlow()
     public val progressChanges = latest.asStateFlow()
     private val runtime = MutableStateFlow<DeviceTestRuntime?>(null)
+    private val resourceWindow = MutableStateFlow<DeviceResourceWindow?>(null)
+    private val resourceOrigin = TimeSource.Monotonic.markNow()
+
+    /** Frontend calls this from its existing foreground sampler; missing counters remain unavailable. */
+    @Throws(Exception::class)
+    public fun observeResources(cpuNanos: Long, memoryBytes: Long, memoryKind: String,
+        threads: Int, threadKind: String, environment: RpcPhoneEnvironmentStats?) {
+        require(cpuNanos >= 0 && memoryBytes > 0 && threads > 0)
+        val millis = resourceOrigin.elapsedNow().inWholeMilliseconds
+        resourceWindow.update {
+            it?.observe(millis, cpuNanos, memoryBytes, memoryKind, threads, threadKind, environment)
+        }
+        if (environment?.requiresThermalStop == true) runtime.value?.cancel()
+    }
+
+    internal fun beginResources(runId: String) { resourceWindow.value = DeviceResourceWindow(runId) }
+    internal fun finishResources(runId: String): RpcDeviceTestResources? {
+        while (true) {
+            val window = resourceWindow.value?.takeIf { it.runId == runId } ?: return null
+            if (resourceWindow.compareAndSet(window, null)) return window.summary
+        }
+    }
 
     public fun exportJson(): String = Json.encodeToString(reports)
 
@@ -126,7 +150,8 @@ public class RpcDeviceTestSession {
     internal fun register(configuration: RpcHostConfiguration) {
         configuration.notification(DeviceTestContract.start)
         configuration.notification(DeviceTestContract.cancel)
-        configuration.register(DeviceTestContract.acknowledgement, authorize = { it.fingerprint != null }) { c, command ->
+        configuration.register(DeviceTestContract.acknowledgement,
+            authorize = { it.fingerprint != null }) { c, command ->
             if (runtime.value?.acknowledge(c, command) == true) RpcReply.Success("Accepted")
             else RpcReply.ApplicationError("No matching test")
         }
@@ -239,11 +264,12 @@ internal class DeviceTestRuntime(
                 check(host.tryNotify(pin, DeviceTestContract.start, command) == RpcNotifyResult.Enqueued)
                 try {
                     withTimeout(7_000) { accepted.await() }
+                    session.beginResources(command.runId)
                     session.publish(RpcDeviceTestProgress(command.runId, phase.title, true))
                     val report = withTimeout(if (phase == RpcDeviceTestPhase.Steady) 1_850_000 else 240_000) {
                         result.await()
                     }
-                    session.save(report)
+                    session.save(report.copy(initiatingHostResources = session.finishResources(command.runId)))
                 } finally {
                     withContext(NonCancellable) { host.tryNotify(pin, DeviceTestContract.cancel, command.runId) }
                 }
@@ -257,6 +283,7 @@ internal class DeviceTestRuntime(
             session.save(emptyDeviceTestReport(command, "Failed", "ClientUnarmedBusyOrUnavailable"))
 
         } finally {
+            session.finishResources(command.runId)
             active.compareAndSet(job, null)
             withContext(NonCancellable) {
                 lock.withLock { pending = null; remoteResult = null; acknowledgement = null }
@@ -302,6 +329,7 @@ internal class DeviceTestRuntime(
             initializationMillis = initialization.elapsedNow().inWholeMilliseconds
             measured = TimeSource.Monotonic.markNow()
             initialized = true
+            session.beginResources(command.runId)
             when (command.phase) {
                 RpcDeviceTestPhase.Large -> for (size in listOf(65_536, 262_144, 1_048_576)) echo(true, size)
                 RpcDeviceTestPhase.Correctness -> {
@@ -312,7 +340,8 @@ internal class DeviceTestRuntime(
                     correct++
                     calls++
                     val invalid = peer.call(RpcApplicationContract.getUser, UserQuery(-1))
-                    check(invalid is RpcReply.ApplicationError && invalid.error.code == ApplicationProblemCode.InvalidArgument)
+                    check(invalid is RpcReply.ApplicationError &&
+                        invalid.error.code == ApplicationProblemCode.InvalidArgument)
                     correct++
                 }
                 RpcDeviceTestPhase.Reconnect -> repeat(5) {
@@ -373,11 +402,13 @@ internal class DeviceTestRuntime(
                 for (index in buckets.indices) { sum += buckets[index]; if (sum >= target) return (index + 1L) * 1_000 }
                 return 30_001_000
             }
+            val resources = session.finishResources(command.runId)
+            if (resources?.thermalStopped == true) { status = "Interrupted"; failureCode = "ThermalStop" }
             val report = RpcDeviceTestReport(command.runId, command.phase, command.sourceSha, status, calls, correct,
                 if (initialized) measured.elapsedNow().inWholeMilliseconds else 0,
                 if (initialized) initializationMillis else initialization.elapsedNow().inWholeMilliseconds, missed,
                 percentile(95), percentile(99), disconnects, deadlines, cancellations, failureCode,
-                latencySamples = latencySamples)
+                latencySamples = latencySamples, clientResources = resources)
             session.save(report)
             withContext(NonCancellable) {
                 if (peer.state.value == RpcConnectionState.Ready) {
@@ -404,8 +435,10 @@ internal fun validDeviceTestCommand(command: DeviceTestCommand): Boolean =
 
 internal fun validDeviceTestReport(value: RpcDeviceTestReport): Boolean =
     validDeviceTestCommand(DeviceTestCommand(value.runId, value.sourceSha, value.phase)) &&
+        validDeviceResources(value.clientResources) && validDeviceResources(value.initiatingHostResources) &&
         value.scope == "INTERACTIVE_CONNECTED_DEVICE_RPC" && value.measuredClientCount == 1 &&
-        value.latencySamples in 0..value.correctResponses && value.latencyBucketMicros == 1_000 && value.status in setOf("Completed", "Failed", "Cancelled", "Interrupted") &&
+        value.latencySamples in 0..value.correctResponses && value.latencyBucketMicros == 1_000 &&
+        value.status in setOf("Completed", "Failed", "Cancelled", "Interrupted") &&
         value.calls in 0..100_000 && value.correctResponses in 0..value.calls &&
         value.elapsedMillis in 0..1_850_000 && value.initializationMillis in 0..1_850_000 &&
         value.missedSchedules in 0..18_500 && value.p95Micros in 0..30_001_000 &&

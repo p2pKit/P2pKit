@@ -90,6 +90,12 @@ internal class DesktopRpcRuntime private constructor(
     fun status(host: Boolean): DesktopRpcStatus {
         val current = checkNotNull(lab)
         val diagnostics = current.diagnostics
+        val process = java.lang.management.ManagementFactory.getOperatingSystemMXBean()
+            as com.sun.management.OperatingSystemMXBean
+        application.deviceTests.observeResources(process.processCpuTime,
+            java.lang.management.ManagementFactory.getMemoryMXBean().heapMemoryUsage.used.coerceAtLeast(1),
+            "JVM_HEAP_BYTES", java.lang.management.ManagementFactory.getThreadMXBean().threadCount,
+            "JVM_THREADS", null)
         saveTests()
         return DesktopRpcStatus(
             role = if (host) DesktopRpcRole.Host else DesktopRpcRole.Client,
@@ -108,7 +114,7 @@ internal class DesktopRpcRuntime private constructor(
     }
 
     private fun saveTests() {
-        if (vault == null) return
+        if (vault == null || application.deviceTests.reports.isEmpty()) return
         val text = application.deviceTests.exportJson()
         if (text != savedTests) {
             checkNotNull(vault).replace("device-test-results-v1", text.toByteArray())
@@ -174,6 +180,12 @@ internal class DesktopRpcRuntime private constructor(
         // Physical runtime closure precedes any identity destruction, including failed initialization.
         check(creationCleanupFailure == null) { "Failed factory cleanup requires owner review" }
         lab?.close()
+        directory?.let { root ->
+            check(directoryKey != null && directoryIdentity(root) == directoryKey)
+            identityDirectory?.let { identity ->
+                check(identityDirectoryKey != null && directoryIdentity(identity) == identityDirectoryKey)
+            }
+        }
         saveTests()
         directory?.let { root ->
             check(directoryKey != null && directoryIdentity(root) == directoryKey)

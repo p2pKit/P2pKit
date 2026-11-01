@@ -45,6 +45,7 @@ final class RpcPhoneModel: ObservableObject {
     @Published var selectedTestPeer: String = ""
     @Published var allowHostTests = false
     private var savedDeviceTests = ""
+    private let testEnvironment = RpcPhoneEnvironmentSampler()
     private var deviceTestFile: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("rpc-device-tests.json")
@@ -725,6 +726,8 @@ final class RpcPhoneModel: ObservableObject {
             let completed = await self.owner.stop()
             self.requestEntries = self.applicationSession.history.entries()
             self.refreshDeviceTests()
+            self.testEnvironment.retire()
+            self.allowHostTests = false
             self.eventLog.append(.stopped(clean: completed))
             if completed {
                 self.operation = nil
@@ -755,6 +758,13 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     private func readLive(_ lab: RpcPhoneLab) throws -> LiveValue {
+        testEnvironment.acquire()
+        let environment = try testEnvironment.sample()
+        let resources = try RpcPhoneProcessSampler.sample(environment: environment)
+        try applicationSession.deviceTests.observeResources(cpuNanos: resources.cpuNanos,
+            memoryBytes: resources.residentBytes, memoryKind: "RESIDENT_BYTES", threads: resources.nativeThreads,
+            threadKind: "NATIVE_THREADS", environment: environment)
+        if environment.requiresThermalStop { stop(); throw LiveReadError.unavailable }
         let requests = hostRole && mobileConfig == nil ? try lab.pending() : []
         let diagnostics = lab.diagnostics
         return LiveValue(summary: .init(host: hostRole, state: lab.state,

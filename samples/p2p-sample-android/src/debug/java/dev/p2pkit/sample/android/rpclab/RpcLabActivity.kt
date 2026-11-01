@@ -79,6 +79,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
 
@@ -138,6 +140,8 @@ internal class RpcLabController(
     private var testStorageIssue by mutableStateOf<String?>(null)
     private var lastSavedTests = ""
     private var testResultWriter: Job? = null
+    private val testResultLock = Mutex()
+    private val testEnvironment by lazy { AndroidRpcPhoneEnvironment(applicationContext) }
     private var inputUser by mutableStateOf("123")
     private var inputOffset by mutableStateOf("0")
     private var inputLimit by mutableStateOf("20")
@@ -197,20 +201,7 @@ internal class RpcLabController(
             }
         } catch (_: Exception) { testStorageIssue = "Saved results could not be read; original file retained." }
         testResultWriter = ui.launch {
-            applicationSession.deviceTests.changes.collect { reports ->
-                val text = applicationSession.deviceTests.exportJson()
-                if (reports.isNotEmpty() && testStorageIssue == null && text != lastSavedTests) {
-                    try {
-                        withContext(Dispatchers.IO) {
-                            val file = android.util.AtomicFile(testFile)
-                            val output = file.startWrite()
-                            try { output.write(text.toByteArray()); file.finishWrite(output) }
-                            catch (failure: Exception) { file.failWrite(output); throw failure }
-                        }
-                        lastSavedTests = text
-                    } catch (_: Exception) { testStorageIssue = "Saving results failed; results remain in this session." }
-                }
-            }
+            applicationSession.deviceTests.changes.collect { persistDeviceTests() }
         }
         invitationClipboard = RpcLabInvitationClipboard(getSystemService(ClipboardManager::class.java), expired = {
             eventLog.record(RpcLabEventLog.Event.InvitationExpired)
@@ -591,6 +582,7 @@ internal class RpcLabController(
                     if (pendingOwner != null) runtimeOwner.retire(pendingOwner.token) { it.close() }
                     if (pendingOwner == null || lab === owned?.lab) lab = null
                     if (pendingOwner == null || ownedToken === pendingOwner.token) ownedToken = null
+                    persistDeviceTests()
                     releaseKeepScreenOn()
                     localPin = ""
                     eventLog.record(RpcLabEventLog.Event.CleanupCompleted)
@@ -669,6 +661,23 @@ internal class RpcLabController(
         }
     }
 
+    private suspend fun persistDeviceTests() = testResultLock.withLock {
+        val reports = applicationSession.deviceTests.reports
+        val text = applicationSession.deviceTests.exportJson()
+        if (reports.isNotEmpty() && testStorageIssue == null && text != lastSavedTests) {
+            try {
+                withContext(Dispatchers.IO) {
+                    val file = android.util.AtomicFile(
+                        java.io.File(applicationContext.filesDir, "rpc-device-tests.json"))
+                    val output = file.startWrite()
+                    try { output.write(text.toByteArray()); file.finishWrite(output) }
+                    catch (failure: Exception) { file.failWrite(output); throw failure }
+                }
+                lastSavedTests = text
+            } catch (_: Exception) { testStorageIssue = "Saving results failed; results remain in this session." }
+        }
+    }
+
     @Composable
     private fun DeviceTests() {
         val progress by applicationSession.deviceTests.progressChanges.collectAsState()
@@ -687,6 +696,9 @@ internal class RpcLabController(
                 Button({ stop() }, enabled = ownership != null && !closing) { Text("Stop") }
             }
             if (lab?.nearbyMode == true) {
+                RpcLabDisclosure("Your device identity · compare on the other device") {
+                    SelectionContainer { Text(lab?.fingerprint ?: "") }
+                }
                 NearbyControls()
                 LivePendingRequests()
                 if (hostRole) {
@@ -716,12 +728,15 @@ internal class RpcLabController(
                     } == true))) { Text(phase.title) }
             }
             if (progress.running) {
-                Text("${progress.title} · ${progress.elapsedSeconds}s / ${progress.plannedSeconds}s · ${progress.calls} responses")
+                Text("${progress.title} · ${progress.elapsedSeconds}s / ${progress.plannedSeconds}s · " +
+                    "${progress.calls} responses")
                 Button({ operation?.cancel(); lab?.cancelDeviceTest() }) { Text("Cancel test") }
             }
             Text(testStorageIssue ?: "Results save automatically in private app storage (last 100 runs).")
             reports.asReversed().forEach { report ->
                 Text(report.title)
+                report.clientResources?.let { Text("Client: ${it.title}") }
+                report.initiatingHostResources?.let { Text("Host: ${it.title}") }
                 Text("p95 ${report.p95Micros / 1_000} ms · p99 ${report.p99Micros / 1_000} ms · " +
                     "missed ${report.missedSchedules}" + (report.failureCode?.let { " · $it" } ?: ""),
                     style = MaterialTheme.typography.bodySmall)
@@ -766,6 +781,11 @@ internal class RpcLabController(
         if (mobileConfig != null || !foreground || closing || runtimeOwner.failure != null) return
         liveStatus.start(owned) {
             check(foreground && !closing && lab === owned && runtimeOwner.current(token)?.lab === owned)
+            val environment = testEnvironment.sample()
+            val resources = androidRpcPhoneProcessStats(environment)
+            applicationSession.deviceTests.observeResources(resources.cpuNanos, resources.residentBytes,
+                "RESIDENT_BYTES", resources.nativeThreads, "NATIVE_THREADS", environment)
+            if (environment.requiresThermalStop) stop()
             val diagnostics = owned.diagnostics
             RpcLabLiveSnapshot(hostRole, owned.state, owned.connectedClients,
                 diagnostics.completedCalls, diagnostics.queuedCalls,

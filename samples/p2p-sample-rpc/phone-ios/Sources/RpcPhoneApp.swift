@@ -198,6 +198,9 @@ struct RpcPhoneView: View {
                 Text("The first connection requires fingerprint approval on the Host.").font(.footnote)
             }
             if model.nearbyMode {
+                Section("Your device identity · compare on the other device") {
+                    Text(model.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                }
                 RpcPhoneNearbyView(model: model, presentation: presentation)
                 Section(model.hostRole ? "Connected client to test" : "Test permission") {
                     if model.hostRole {
@@ -234,6 +237,8 @@ struct RpcPhoneView: View {
                 ForEach(model.deviceTestReports.reversed(), id: \.runId) { report in
                     VStack(alignment: .leading) {
                         Text(report.title)
+                        if let sample = report.clientResources { Text("Client: \(sample.title)").font(.footnote) }
+                        if let sample = report.initiatingHostResources { Text("Host: \(sample.title)").font(.footnote) }
                         Text("p95 \(report.p95Micros / 1000) ms · p99 \(report.p99Micros / 1000) ms · missed \(report.missedSchedules)")
                             .font(.footnote)
                         if let error = report.failureCode { Text(error).font(.footnote) }

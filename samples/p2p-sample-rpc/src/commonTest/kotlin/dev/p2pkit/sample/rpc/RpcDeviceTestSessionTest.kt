@@ -46,4 +46,29 @@ class RpcDeviceTestSessionTest {
         }
         assertFailsWith<IllegalArgumentException> { RpcDeviceTestSession().restoreJson("x".repeat(512_001)) }
     }
+    @Test
+    fun sampledCountersKeepProcessKindsAndChargingSeparate() {
+        var window = DeviceResourceWindow(command.runId)
+        val charging = RpcPhoneEnvironmentStats(50_000, 400_000, 30_000,
+            "charging", "android-battery-manager", "nominal", "android-power-manager")
+        window = window.observe(100, 1_000_000_000, 10_000_000, "RESIDENT_BYTES", 20, "NATIVE_THREADS", charging)
+        window = window.observe(600, 1_100_000_000, 20_000_000, "RESIDENT_BYTES", 25, "NATIVE_THREADS", charging)
+        assertEquals(1, window.summary?.samples, "Subsecond reads do not increase the bounded series")
+        window = window.observe(1_100, 1_500_000_000, 30_000_000, "RESIDENT_BYTES", 30, "NATIVE_THREADS", charging)
+        val summary = window.summary!!
+        assertEquals(50.0, summary.cpuPercentOfOneCore)
+        assertEquals(30_000_000, summary.peakMemoryBytes)
+        assertEquals(listOf("charging"), summary.batteryStates)
+        assertEquals(30_000, summary.peakBatteryTemperatureMilliC)
+        assertTrue(validDeviceResources(summary))
+        assertFalse(validDeviceResources(summary.copy(memoryKind = "CPU_TEMPERATURE")))
+        assertFailsWith<IllegalArgumentException> {
+            window.observe(2_100, 1, 30_000_000, "RESIDENT_BYTES", 30, "NATIVE_THREADS", charging)
+        }
+        val serious = RpcPhoneEnvironmentStats(null, null, null, "unavailable", "unavailable",
+            "serious", "ios-process-info")
+        window = window.observe(1_101, 1_500_000_000, 30_000_000, "RESIDENT_BYTES", 30, "NATIVE_THREADS", serious)
+        assertTrue(window.summary!!.thermalStopped, "Thermal stop is recorded even between normal sample slots")
+    }
+
 }
