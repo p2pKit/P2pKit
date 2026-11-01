@@ -11,7 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class DesktopRpcTestArchiveTest {
+class DesktopRpcTestArchiveDeletionTest {
     private fun report(letter: Char) = emptyDeviceTestReport(
         DeviceTestCommand(letter.toString().repeat(32), "c".repeat(40), RpcDeviceTestPhase.Large),
         "Failed", "SyntheticFailure")

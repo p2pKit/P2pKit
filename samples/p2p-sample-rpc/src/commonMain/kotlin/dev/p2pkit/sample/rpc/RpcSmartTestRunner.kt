@@ -88,7 +88,9 @@ internal suspend fun runSmartTest(
                             }
                             val result = try { call() }
                             catch (failure: CancellationException) {
-                                counters.lock.withLock { counters.failures++; counters.inFlight-- }
+                                withContext(NonCancellable) {
+                                    counters.lock.withLock { counters.failures++; counters.inFlight-- }
+                                }
                                 throw failure
                             }
                             catch (_: Exception) { SmartCall(false, 0, fatal = "LocalCallFailure") }
