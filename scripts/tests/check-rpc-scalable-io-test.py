@@ -37,14 +37,20 @@ class ReceiptTest(unittest.TestCase):
         self.assertFalse(any("-only-testing" in item or "-skip-testing" in item for item in command))
         expected = ios.phone.inventory(ROOT)
         self.assertEqual({target: len(tests) for target, tests in expected.items()},
-                         {"p2pkit-rpc-phone-tests": 92, "p2pkit-rpc-phone-uitests": 8})
+                         {"p2pkit-rpc-phone-tests": 93, "p2pkit-rpc-phone-uitests": 9})
+        self.assertIn("RpcPhonePresentationTests/" +
+                      "testMultiDeviceSectionAndDisplayControlsNeverStartAnUnconnectedRole()",
+                      expected["p2pkit-rpc-phone-uitests"])
         self.assertIn("RpcPhonePresentationTests/testDeviceTestRoleButtonsDispatchOnlyTheTappedRole()",
                       expected["p2pkit-rpc-phone-uitests"])
+        self.assertIn("RpcPhoneRunOwnerTests/" +
+                      "testManualTestMayUseTheBoundedShareWindowButOtherBusyWorkCannot()",
+                      expected["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       expected["p2pkit-rpc-phone-tests"])
         owner = {case for case in expected["p2pkit-rpc-phone-tests"]
                  if case.startswith("RpcPhoneRunOwnerTests/")}
-        self.assertEqual(len(owner), 81)  # Original77,2 used-slot/sealed-input and2 foreground regressions.
+        self.assertEqual(len(owner), 82)  # Previous81 plus the bounded active-manual-test app-switch regression.
         self.assertTrue({"RpcPhoneRunOwnerTests/" + name + "()" for name in (
             "testUsedOrInterruptedRuntimeOutputsAreRefusedBeforeReusingAUsbRun",
             "testDebugCampaignAndNextInputsRequireSealsAndCannotBeReplayedIntoANewFileOwner",
