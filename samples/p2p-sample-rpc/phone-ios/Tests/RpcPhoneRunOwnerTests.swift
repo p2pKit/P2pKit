@@ -658,6 +658,17 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     }
 
     @MainActor
+    func testManualTestMayUseTheBoundedShareWindowButOtherBusyWorkCannot() {
+        XCTAssertTrue(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: false))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: true,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: false))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: true))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: true, capacitySession: false))
+    }
+
     func testShareWindowEligibilityRejectsBusyRetiringAndCapacityRoles() {
         for flags in 0..<32 {
             XCTAssertEqual(RpcPhoneShareWindow.eligible(running: flags & 1 != 0,

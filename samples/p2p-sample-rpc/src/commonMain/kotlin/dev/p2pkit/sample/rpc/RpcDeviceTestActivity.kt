@@ -7,7 +7,7 @@ import dev.p2pkit.rpc.RpcExecutionEvidence
 internal val deviceTestPlatforms = setOf("Unknown", "Android", "iPhone", "Mac (JVM)", "Windows (JVM)", "Linux (JVM)")
 internal val deviceTestProcedures = setOf("qualification.echo", "qualification.large-echo", "users.get",
     "device-tests.source", "device-tests.begin", "device-tests.progress", "device-tests.ack",
-    "device-tests.report", "device-tests.delayed")
+    "device-tests.report", "device-tests.delayed", "device-tests.telemetry")
 
 /** Safe test observations: no body, network address, key, fingerprint or engine request identifier. */
 @Serializable

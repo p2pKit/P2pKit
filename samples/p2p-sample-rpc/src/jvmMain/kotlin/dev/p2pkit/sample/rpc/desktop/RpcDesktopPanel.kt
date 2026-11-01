@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.sample.rpc.RpcDeviceTestPhase
+import dev.p2pkit.sample.rpc.RpcDeviceTestReport
 import dev.p2pkit.sample.rpc.RpcApplicationExample
 import dev.p2pkit.sample.rpc.RpcApplicationInput
 import dev.p2pkit.sample.rpc.RpcApplicationProcedure
@@ -138,6 +139,20 @@ public class RpcDesktopPanel(
     private val mainPage: JComponent
     private val testPage = DesktopRpcColumn()
     private var showingTests = false
+    private var showingMultiTests = false
+    private val testHeading = DesktopRpcAppearance.heading("Device tests")
+    private val testModeDescription = DesktopRpcWrappedLabel("Run one test on one connected Client.")
+    private val groupPeersModel = DefaultListModel<RpcKnownDevice>()
+    private val groupPeers = JList(groupPeersModel).apply {
+        selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+        visibleRowCount = 3
+        cellRenderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int,
+                selected: Boolean, focus: Boolean): Component = super.getListCellRendererComponent(list,
+                (value as? RpcKnownDevice)?.let { "${it.name} · ${it.presence}" } ?: "", index, selected, focus)
+        }
+    }
+    private val groupPeerScroll = JScrollPane(groupPeers)
     private val testPeers = JComboBox<RpcKnownDevice>().apply {
         renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int,
@@ -151,7 +166,13 @@ public class RpcDesktopPanel(
     private val testButtons = RpcDeviceTestPhase.entries.map { JButton(it.title) to it }
     private val allowTests = JCheckBox("Allow selected Host to start tests while this page is open")
     private val testIdentity = JTextArea(2, 54).apply { isEditable = false; lineWrap = true }
-    private val testProgress = JLabel("No test running")
+    private val testProgress = JTextArea("No test running", 5, 54).apply {
+        isEditable = false; lineWrap = true; wrapStyleWord = true
+    }
+    private val testResources = JTextArea(4, 54).apply {
+        isEditable = false; lineWrap = true; wrapStyleWord = true
+    }
+    private val testSummary = JLabel("No saved tests")
     private val testActivity = JTextArea(10, 55).apply {
         isEditable = false
         lineWrap = true
@@ -159,6 +180,21 @@ public class RpcDesktopPanel(
         accessibleContext.accessibleName = "Live test activity: requests, replies and execution outcomes"
     }
     private val testResults = JTextArea(12, 54).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }
+    private val testResultModel = DefaultListModel<RpcDeviceTestReport>()
+    private val testResultList = JList(testResultModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        visibleRowCount = 4
+        cellRenderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int,
+                selected: Boolean, focus: Boolean): Component = super.getListCellRendererComponent(list,
+                (value as? RpcDeviceTestReport)?.title ?: "", index, selected, focus)
+        }
+    }
+    private val deleteTestOutput = JButton("Delete selected test output")
+    private val smartP95 = field(4).apply { text = "1000" }
+    private val smartP99 = field(5).apply { text = "2000" }
+    private val smartMemory = field(4).apply { text = "512" }
+    private val smartDuration = field(3).apply { text = "600" }
     private var statusUpdates: Job? = null
     private var networkRefresh: Job? = null
     private var closing = false
@@ -181,6 +217,7 @@ public class RpcDesktopPanel(
                 border = BorderFactory.createEmptyBorder(4, 8, 20, 8)
                 add(JButton("Back to samples").apply { addActionListener { requestBack() } })
                 add(JButton("Device tests").apply { addActionListener { showDeviceTests() } })
+                add(JButton("Multi-device tests").apply { addActionListener { showDeviceTests(true) } })
                 add(DesktopRpcAppearance.hero())
                 add(DesktopRpcAppearance.heading("Connect"))
                 add(DesktopRpcWrappedLabel("Choose Host on one device and Client on the other. " +
@@ -305,7 +342,10 @@ public class RpcDesktopPanel(
         testPeers.addActionListener { renderButtons() }
         testPage.apply {
             add(JButton("Back to RPC").apply { addActionListener { requestBack() } })
-            add(DesktopRpcAppearance.heading("Device tests"))
+            add(testHeading)
+            add(row("Test section", JButton("Two-device tests").apply {
+                addActionListener { showDeviceTests(false) }
+            }, JButton("Multi-device tests").apply { addActionListener { showDeviceTests(true) } }))
             add(DesktopRpcWrappedLabel("Choose Host here or Client here. Open Device tests on the phones. " +
                 "Private LAN discovery finds addresses automatically; approve each first connection."))
             add(row("Roles", JButton("Host here").apply { addActionListener { startRole(true) } },
@@ -314,29 +354,65 @@ public class RpcDesktopPanel(
             add(DesktopRpcDisclosure("Your device identity · compare on the other device", testIdentity))
             add(testDiscovery)
             add(row("Connected client to test", testPeers))
+            add(groupPeerScroll)
+            add(JButton("Select all connected Clients").apply {
+                addActionListener {
+                    if (!applicationSession.deviceTests.anyTestRunning && groupPeersModel.size > 0) {
+                        groupPeers.setSelectionInterval(0, minOf(15, groupPeersModel.size - 1))
+                    }
+                }
+            })
             add(allowTests.apply { addActionListener { owner.current()?.allowTests(isSelected) } })
-            add(DesktopRpcWrappedLabel("These tests measure one connected Client. " +
-                "128/256-client qualification remains a separate source-matched Mac campaign."))
+            add(testModeDescription)
             testButtons.forEach { (button, phase) ->
                 add(button.apply { addActionListener {
                     val peer = (testPeers.selectedItem as? RpcKnownDevice)?.fingerprint
+                    val peers = groupPeers.selectedValuesList.map { it.fingerprint }
                     action { runtime ->
-                        val failure = runtime.test(phase, peer)
+                        val failure = if (showingMultiTests && owner.snapshot().role == "Host") {
+                            runtime.multiTest(phase, peers)
+                        } else runtime.test(phase, peer)
                         publish(runtime) { outcome.text = failure ?: "Test finished; result saved." }
                     }
                 } })
             }
             add(testProgress)
+            add(testSummary)
+            add(DesktopRpcAppearance.heading("Device resources · live self-process samples"))
+            add(testResources)
+            add(DesktopRpcDisclosure("Smart test safety settings", DesktopRpcColumn().apply {
+                add(DesktopRpcWrappedLabel("The search starts low, increases load and backs off on instability. " +
+                    "Safety budgets can finish it without finding a capacity boundary."))
+                add(row("p95 limit (ms)", smartP95, JLabel("p99 limit (ms)"), smartP99))
+                add(row("Process memory limit (MiB)", smartMemory, JLabel("Time budget (seconds)"), smartDuration))
+                add(JButton("Apply safety limits").apply { addActionListener {
+                    if (applicationSession.deviceTests.anyTestRunning) return@addActionListener
+                    try {
+                        applicationSession.deviceTests.configureSmartSafety(smartP95.text.toInt(),
+                            smartP99.text.toInt(), smartMemory.text.toInt(), smartDuration.text.toInt())
+                        outcome.text = "Smart test safety limits saved. Load selection stays automatic."
+                    } catch (_: Exception) { outcome.text = "Enter valid bounded safety limits; no test started." }
+                } })
+            }))
             add(DesktopRpcAppearance.heading("Live test activity"))
             add(DesktopRpcWrappedLabel("Sent from here means this device is the Client. Received here means " +
                 "this device is the Host. Host reply finalization does not by itself prove Client receipt."))
             add(JScrollPane(testActivity))
+            add(row("Display", JButton("Clear displayed logs").apply { addActionListener {
+                applicationSession.deviceTests.clearDisplayedActivity(); render()
+            } }, JButton("Show saved results").apply { addActionListener {
+                applicationSession.deviceTests.showSavedResults(); render()
+            } }))
             add(JButton("Cancel test").apply { addActionListener {
                 owner.current()?.cancelTest(); owner.cancelAction()
             } })
             add(DesktopRpcWrappedLabel("Every completed run is archived in your encrypted profile. " +
                 "The recent list shows 100; older archived runs are kept."))
+            add(JScrollPane(testResultList))
             add(JScrollPane(testResults))
+            add(deleteTestOutput)
+            testResultList.addListSelectionListener { renderSelectedTest() }
+            deleteTestOutput.addActionListener { deleteSelectedTest() }
         }
         statusUpdates = scope.launch {
             owner.snapshots.collect {
@@ -348,7 +424,19 @@ public class RpcDesktopPanel(
         refreshNetworks()
     }
 
-    private fun showDeviceTests() {
+    private fun showDeviceTests(multi: Boolean = false) {
+        if (closing) return
+        if (applicationSession.deviceTests.anyTestRunning || owner.snapshot().stage == DesktopRpcRunOwner.Stage.Working) {
+            outcome.text = "Finish or cancel the active tests before changing test sections."
+            return
+        }
+        applicationSession.deviceTests.setMultiDeviceMode(multi)
+        showingMultiTests = multi
+        testHeading.text = if (multi) "Multi-device tests" else "Device tests"
+        testModeDescription.showText(if (multi)
+            "Each selected Client runs concurrently and saves its own result. Open Multi-device tests on all " +
+                "participants and allow the selected Host to start tests. Up to 16 connected Clients per batch."
+            else "One connected Client per run. Smart concurrency counts requests, not independent devices.")
         if (closing) return
         showingTests = true
         workspaceScroll.setViewportView(testPage)
@@ -545,21 +633,47 @@ public class RpcDesktopPanel(
             testPeers.model = DefaultComboBoxModel(connected.toTypedArray())
             testPeers.selectedItem = connected.firstOrNull { it.fingerprint == selected?.fingerprint }
         }
-        val test = applicationSession.deviceTests.progress
-        testProgress.text = "${test.direction} · ${test.title} · ${test.stage} · " +
-            "${test.elapsedSeconds}s / ${test.plannedSeconds}s · ${test.calls} responses"
-        val activityText = applicationSession.deviceTests.activity.asReversed().joinToString("\n\n") { it.title }
-            .ifEmpty { "Waiting for test requests. Start a short test on the connected Client." }
-        if (testActivity.text != activityText) testActivity.text = activityText
-        testResults.text = applicationSession.deviceTests.reports.asReversed().joinToString("\n\n") {
-            "${it.title}\nStarted: ${if (it.startedAtEpochMillis > 0)
-                java.time.Instant.ofEpochMilli(it.startedAtEpochMillis) else "Unavailable for this older result"} · " +
-                "Started by: ${it.initiatedBy} · Run: ${it.runId}\n" +
-                (it.clientResources?.let { sample -> "Client: ${sample.title}\n" } ?: "") +
-                (it.initiatingHostResources?.let { sample -> "Host: ${sample.title}\n" } ?: "") +
-                "p95 ${it.p95Micros / 1_000} ms · p99 ${it.p99Micros / 1_000} ms · " +
-                "missed ${it.missedSchedules}" + (it.failureCode?.let { code -> " · $code" } ?: "")
+        val tests = applicationSession.deviceTests
+        val previousGroup = (0 until groupPeersModel.size()).map { groupPeersModel[it] }
+        if (connected != previousGroup) {
+            val selected = groupPeers.selectedValuesList.map { it.fingerprint }.toSet()
+            groupPeersModel.clear()
+            connected.forEach(groupPeersModel::addElement)
+            groupPeers.selectedIndices = connected.indices.filter {
+                selected.isEmpty() || connected[it].fingerprint in selected
+            }.toIntArray()
         }
+        groupPeerScroll.isVisible = showingMultiTests && snapshot.role == "Host"
+        testPeers.isVisible = !showingMultiTests
+        testProgress.text = tests.activeTests.joinToString("\n\n") { test ->
+            "${test.direction} · ${test.title} · ${test.stage}\n" +
+                "${test.elapsedSeconds}s · correct ${test.calls} · attempts ${test.attempts} · " +
+                "failed ${test.failures} · in progress ${test.inFlight}\n" +
+                "p50 ${test.p50Micros / 1_000} ms · p95 ${test.p95Micros / 1_000} ms · " +
+                "p99 ${test.p99Micros / 1_000} ms · target ${test.targetRps}/s · " +
+                "concurrent-request limit ${test.concurrency}"
+        }.ifEmpty { "No test running. Choose a phase after connecting and approving the devices." }
+        val saved = tests.reports
+        testSummary.text = "Running ${tests.activeTests.size} · completed ${saved.count { it.status == "Completed" }} · " +
+            "failed ${saved.count { it.status == "Failed" }} · interrupted/cancelled " +
+            "${saved.count { it.status in setOf("Interrupted", "Cancelled") }} (recent results)"
+        testResources.text = tests.liveResources?.let { "${it.title}\n${it.environmentTitle}" }
+            ?: "Device resource sample unavailable. Missing counters are not estimated."
+        if (showingMultiTests) testResources.append("\nProcess resources include all overlapping tests.")
+        val activityText = tests.activity.asReversed().joinToString("\n\n") { it.title }
+            .ifEmpty { "No displayed test activity. Archived observations are retained." }
+        if (testActivity.text != activityText) testActivity.text = activityText
+        val displayed = tests.displayedReports.asReversed()
+        val oldResults = (0 until testResultModel.size()).map { testResultModel[it] }
+        if (displayed != oldResults) {
+            val selected = testResultList.selectedValue?.runId
+            testResultModel.clear()
+            displayed.forEach(testResultModel::addElement)
+            testResultList.selectedIndex = displayed.indexOfFirst { it.runId == selected }.let {
+                if (it >= 0) it else if (displayed.isNotEmpty()) 0 else -1
+            }
+        }
+        renderSelectedTest()
         discovery.render(status, snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing)
         if (requests.isEmpty()) lastOffered = null
         if (dialog == null && !approvalDialog && windowActive && isShowing && snapshot.stage == DesktopRpcRunOwner.Stage.Ready) {
@@ -568,6 +682,57 @@ public class RpcDesktopPanel(
             }
         }
         renderButtons(snapshot)
+    }
+
+    private fun renderSelectedTest() {
+        val report = testResultList.selectedValue
+        testResults.text = if (report == null) "Select a saved run to inspect its separate result. " +
+            "Clearing this display keeps archived data." else buildString {
+            appendLine(report.title)
+            appendLine("Run: ${report.runId} · mode: ${report.mode} · started by: ${report.initiatedBy}")
+            if (report.groupId.isNotEmpty()) appendLine("Batch: ${report.groupId}")
+            appendLine("Source: ${report.sourceSha}")
+            appendLine("Started (UTC): " + if (report.startedAtEpochMillis > 0)
+                java.time.Instant.ofEpochMilli(report.startedAtEpochMillis) else "unavailable")
+            appendLine("Finished (UTC): " + if (report.endedAtEpochMillis > 0)
+                java.time.Instant.ofEpochMilli(report.endedAtEpochMillis) else "unavailable for this older result")
+            appendLine("Initialization ${report.initializationMillis} ms · measured ${report.elapsedMillis} ms")
+            appendLine("Correct ${report.correctResponses} / attempted ${report.calls} · " +
+                "failed ${report.calls - report.correctResponses} · missed ${report.missedSchedules}")
+            if (report.latencySamples > 0) {
+                appendLine("p50 ${report.p50Micros / 1_000} ms · p95 ${report.p95Micros / 1_000} ms · " +
+                    "p99 ${report.p99Micros / 1_000} ms (${report.latencySamples} samples)")
+            } else appendLine("No workload latency samples")
+            report.clientResources?.let { appendLine("Client process: ${it.title}"); appendLine(it.environmentTitle) }
+            report.initiatingHostResources?.let { appendLine("Host process: ${it.title}"); appendLine(it.environmentTitle) }
+            if (report.mode == "Multi") appendLine("Process resources are shared with overlapping runs.")
+            appendLine("Progress replies ${report.progressMessages} · telemetry replies ${report.telemetryMessages}")
+            report.failureCode?.let { appendLine("Reason: $it") }
+            report.smart?.let { smart ->
+                appendLine(smart.title)
+                appendLine("Boundary observed: ${smart.boundaryObserved} · stable level confirmed: " +
+                    "${smart.stableLevelConfirmed} · local test workers released: ${smart.workerCleanupVerified}")
+                appendLine("Confirmed target ${smart.highestConfirmedTargetRps}/s")
+                smart.limitations.forEach { appendLine(it) }
+                smart.steps.forEach { appendLine(it.title) }
+            }
+            report.observations.forEach { appendLine(it.title) }
+        }
+    }
+
+    private fun deleteSelectedTest() {
+        val report = testResultList.selectedValue ?: return
+        val runtime = owner.current() ?: return
+        if (applicationSession.deviceTests.anyTestRunning) return
+        val answer = showOptions("Delete this saved test output on this Mac?\n${report.direction} · " +
+            "${report.phase.title}\nRun: ${report.runId}\nThis is permanent. Other runs and devices are unaffected.",
+            "Delete selected output?", arrayOf("Delete this run", "Keep it"))
+        if (answer != 0 || closing || !owner.owns(runtime) || applicationSession.deviceTests.anyTestRunning) return
+        action { current ->
+            check(current === runtime)
+            current.deleteTest(report.runId)
+            publish(current) { outcome.text = "Selected test output deleted; other runs retained." }
+        }
     }
 
     private fun renderButtons(snapshot: DesktopRpcRunOwner.Snapshot = owner.snapshot()) {
@@ -588,12 +753,16 @@ public class RpcDesktopPanel(
         echo.isEnabled = pair.isEnabled && snapshot.status?.state == "Ready"
         examples.forEach { it.first.isEnabled = echo.isEnabled }
         requests.forEach { it.first.isEnabled = echo.isEnabled }
-        val testsIdle = ready && !applicationSession.deviceTests.progress.running &&
+        val testsIdle = ready && !applicationSession.deviceTests.anyTestRunning &&
             applicationSession.deviceTests.archiveAvailable
         testButtons.forEach { it.first.isEnabled = testsIdle &&
-            (echo.isEnabled || (snapshot.role == "Host" && testPeers.selectedItem != null)) }
+            (echo.isEnabled || (snapshot.role == "Host" &&
+                (if (showingMultiTests) groupPeers.selectedValuesList.size in 1..16 else testPeers.selectedItem != null))) }
         allowTests.isEnabled = testsIdle && snapshot.role == "Client"
         testPeers.isEnabled = testsIdle && snapshot.role == "Host"
+        groupPeers.isEnabled = testsIdle && showingMultiTests && snapshot.role == "Host"
+        deleteTestOutput.isEnabled = ready && !applicationSession.deviceTests.anyTestRunning &&
+            applicationSession.deviceTests.unarchivedReports.isEmpty() && testResultList.selectedValue != null
     }
 
     private fun clearInvitationText() {
@@ -621,7 +790,7 @@ public class RpcDesktopPanel(
     public fun requestBack() {
         check(SwingUtilities.isEventDispatchThread())
         if (showingTests) {
-            if (applicationSession.deviceTests.progress.running ||
+            if (applicationSession.deviceTests.anyTestRunning ||
                 owner.snapshot().stage == DesktopRpcRunOwner.Stage.Working) {
                 testProgress.text = "Cancel the test and wait for its saved result before returning."
                 return

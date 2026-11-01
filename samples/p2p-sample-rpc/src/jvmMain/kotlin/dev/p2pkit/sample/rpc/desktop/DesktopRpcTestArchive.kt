@@ -33,10 +33,15 @@ internal class DesktopRpcTestArchive(private val vault: LabVault) {
     }
 
     fun retain(session: RpcDeviceTestSession, report: RpcDeviceTestReport) {
+        if (read("device-test-deleted-${report.runId}") != null) {
+            session.confirmArchived(report.runId)
+            session.forgetDeletedResult(report.runId)
+            return
+        }
         val bytes = session.reportJson(report).toByteArray()
-        check(bytes.size <= 16_384)
+        check(bytes.size <= 65_536)
         val retained = vault.putIfAbsent("device-test-${report.runId}", bytes)
-        try { check(session.archiveMatches(report, retained.decodeToString())) }
+        try { session.hydrateArchived(report, retained.decodeToString()) }
         finally { retained.fill(0); bytes.fill(0) }
         val existing = read("device-test-archive-slot-${report.runId}")?.toInt()
         if (existing != null) {
@@ -66,13 +71,26 @@ internal class DesktopRpcTestArchive(private val vault: LabVault) {
         session.confirmArchived(report.runId)
     }
 
+    /** Exact selected output only. The durable tombstone prevents compact history from resurrecting it. */
+    fun delete(session: RpcDeviceTestSession, report: RpcDeviceTestReport) {
+        check(session.resultDeletionInProgress)
+        val key = "device-test-${report.runId}"
+        val old = read(key)
+        if (old != null) check(session.archivedResultMatchesForDeletion(report, old))
+        write("device-test-deleted-${report.runId}", "1")
+        vault.delete(key)
+        check(read(key) == null)
+    }
+
     /** Caller streams each bounded record to its private export; no all-history allocation. */
     fun visitRecords(visit: (String) -> Unit) {
         val total = count()
         for (number in 0 until (total + 99) / 100) {
             val ids = page(number)
             check(ids.size == minOf(100, total - number * 100))
-            ids.forEach { visit(checkNotNull(read("device-test-$it"))) }
+            ids.forEach {
+                if (read("device-test-deleted-$it") == null) visit(checkNotNull(read("device-test-$it")))
+            }
         }
     }
 }
