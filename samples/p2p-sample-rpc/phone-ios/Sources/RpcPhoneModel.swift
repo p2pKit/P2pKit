@@ -247,6 +247,13 @@ final class RpcPhoneModel: ObservableObject {
         objectWillChange.send()
     }
 
+    func testMemoryPressure() {
+        guard applicationSession.deviceTests.anyTestRunning else { return }
+        applicationSession.deviceTests.signalMemoryPressure()
+        status = "Test interrupted by an iOS memory-pressure warning; partial results are retained."
+        stop()
+    }
+
     func protectedDataUnavailable() { expireAppSwitch() }
 
     private func expireAppSwitch() {

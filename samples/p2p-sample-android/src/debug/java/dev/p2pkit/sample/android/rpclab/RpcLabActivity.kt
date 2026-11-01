@@ -136,6 +136,20 @@ internal class RpcLabController(
     private var closing by mutableStateOf(false)
     private val eventLog = RpcLabEventLog()
     private val applicationSession = RpcApplicationSession()
+    private val memoryWarnings = object : android.content.ComponentCallbacks2 {
+        override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
+        override fun onLowMemory() = interruptForMemoryPressure()
+        override fun onTrimMemory(level: Int) {
+            if (level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) interruptForMemoryPressure()
+        }
+    }
+    private fun interruptForMemoryPressure() {
+        if (applicationSession.deviceTests.anyTestRunning) {
+            applicationSession.deviceTests.signalMemoryPressure()
+            status = "Test interrupted by Android memory pressure; partial results are retained."
+            stop()
+        }
+    }
     private var deviceTestScreen by mutableStateOf(false)
     private var selectedTestPeer by mutableStateOf<String?>(null)
     private var multiTests by mutableStateOf(false)
@@ -196,6 +210,7 @@ internal class RpcLabController(
 
     init {
         applicationSession.deviceTests.configureDeviceName("Android")
+        applicationContext.registerComponentCallbacks(memoryWarnings)
         // Pairing secrets/pins belong to a trusted local UI, not screenshots, recents or crash transcripts.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AndroidRpcCapacityFiles.prepareHome(applicationContext)
@@ -311,7 +326,10 @@ internal class RpcLabController(
         }
     }
 
-    override fun onDestroy(owner: LifecycleOwner) = detach()
+    override fun onDestroy(owner: LifecycleOwner) {
+        applicationContext.unregisterComponentCallbacks(memoryWarnings)
+        detach()
+    }
 
     fun detach() {
         if (detached) return

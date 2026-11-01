@@ -11,6 +11,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class RpcSmartTestTest {
     private fun step(rate: Int, correct: Long = rate * 10L, errors: Long = 0, p95: Long = 20_000) =
         RpcSmartTestStep(rate, 1, correct + errors, correct, errors, 0, 0, 10_000,

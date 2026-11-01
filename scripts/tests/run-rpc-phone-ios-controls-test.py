@@ -318,7 +318,7 @@ class PhoneResultControls(unittest.TestCase):
     def test_reviewed_environment_commands_and_two_new_owner_controls_are_all_required(self):
         expected = phone.inventory(ROOT)["p2pkit-rpc-phone-tests"]
         owner = {name for name in expected if name.startswith("RpcPhoneRunOwnerTests/")}
-        self.assertEqual(len(owner), 81)
+        self.assertEqual(len(owner), 82)
         self.assertTrue({"RpcPhoneRunOwnerTests/" + name + "()" for name in (
             "testUsedOrInterruptedRuntimeOutputsAreRefusedBeforeReusingAUsbRun",
             "testDebugCampaignAndNextInputsRequireSealsAndCannotBeReplayedIntoANewFileOwner",

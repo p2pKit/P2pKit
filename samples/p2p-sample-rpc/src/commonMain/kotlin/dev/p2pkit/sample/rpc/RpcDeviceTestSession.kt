@@ -196,6 +196,11 @@ public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcR
     public val activeTests: List<RpcDeviceTestProgress> get() = running.value.values.toList()
     public val activeTestChanges = running.asStateFlow()
     public val anyTestRunning: Boolean get() = running.value.isNotEmpty()
+    private val safetyStop = MutableStateFlow<String?>(null)
+    /** OS memory-pressure notifications interrupt existing tests; they never start a role. */
+    public fun signalMemoryPressure() {
+        if (anyTestRunning) { safetyStop.value = "MemoryPressureSignal"; runtime.value?.cancel() }
+    }
     public var multiDeviceMode: Boolean = false
         private set
     public var smartSettings: RpcSmartTestSettings = RpcSmartTestSettings()
@@ -411,6 +416,7 @@ public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcR
 
     internal fun release(value: DeviceTestRuntime) { runtime.compareAndSet(value, null) }
     internal fun publish(value: RpcDeviceTestProgress) {
+        if (value.running && !anyTestRunning) safetyStop.value = null
         latest.value = value
         if (value.running && value.runId.isNotEmpty()) running.update { it + (value.runId to value) }
     }
@@ -418,6 +424,7 @@ public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcR
         running.update { it - runId }
         latest.update { if (it.runId == runId) RpcDeviceTestProgress() else it }
     }
+    internal val safetyStopReason: String? get() = safetyStop.value
     /** Called only after the platform has durably removed this exact immutable result. */
     @Throws(Exception::class)
     public fun forgetDeletedResult(runId: String) {
@@ -607,8 +614,9 @@ internal class DeviceTestRuntime(
         val metadata = run.begin
         val resources = session.finishResources(run.command.runId)
         val thermal = resources?.thermalStopped == true
-        return emptyDeviceTestReport(run.command, if (thermal) "Interrupted" else status,
-            if (thermal) "ThermalStop" else code).copy(clientPlatform = metadata?.clientPlatform ?: "Unknown",
+        val safety = session.safetyStopReason
+        return emptyDeviceTestReport(run.command, if (thermal || safety != null) "Interrupted" else status,
+            if (thermal) "ThermalStop" else safety ?: code).copy(clientPlatform = metadata?.clientPlatform ?: "Unknown",
             hostPlatform = session.platformName, startedAtEpochMillis = metadata?.startedAtEpochMillis ?: 0,
             endedAtEpochMillis = Clock.System.now().toEpochMilliseconds(),
             initiatedBy = metadata?.initiatedBy ?: "Host", observations = hostObservations(run),
@@ -905,6 +913,11 @@ internal class DeviceTestRuntime(
             }
             val resources = session.finishResources(command.runId)
             if (resources?.thermalStopped == true) { status = "Interrupted"; failureCode = "ThermalStop" }
+            session.safetyStopReason?.let { reason ->
+                status = "Interrupted"
+                failureCode = reason
+                smartResult = smartResult?.copy(stopReason = reason)
+            }
             val report = RpcDeviceTestReport(command.runId, command.phase, command.sourceSha, status, calls, correct,
                 if (initialized) measured.elapsedNow().inWholeMilliseconds else 0,
                 if (initialized) initializationMillis else initialization.elapsedNow().inWholeMilliseconds, missed,

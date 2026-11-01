@@ -299,7 +299,7 @@ class RpcDeviceTestSessionTest {
             many.save(report)
             many.confirmArchived(report.runId)
         }
-        assertTrue(many.exportJson().toByteArray().size <= 262_115, "Recent index fits one encrypted vault record")
+        assertTrue(many.exportJson().toByteArray().size <= 262_100, "Recent index fits one encrypted vault record")
     }
 
 }

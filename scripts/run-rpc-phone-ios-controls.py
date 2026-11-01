@@ -24,8 +24,8 @@ import xml.etree.ElementTree as ET
 SCOPE = "SUPPLEMENTAL_RPC_PHONE_APP_NOT_PHYSICAL_OR_CAPACITY_QUALIFICATION"
 TARGETS = {
     "p2pkit-rpc-phone-tests": (
-        # Original77,2 sealed-input/used-slot and2 prepared foreground/cancellation regressions.
-        ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 81),
+        # Original77,2 sealed-input/used-slot,2 foreground/cancellation and1 active-test app-switch regression.
+        ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 82),
         ("Tests/RpcPhoneEnvironmentSamplerTests.swift", "RpcPhoneEnvironmentSamplerTests", 5),
         ("Tests/RpcPhoneUsbDeveloperCommandTests.swift", "RpcPhoneUsbDeveloperCommandTests", 6),
     ),
