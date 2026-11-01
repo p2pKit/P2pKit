@@ -1,5 +1,119 @@
 # Physical Mac RPC campaign: preparation checkpoint, 2026-10-30
 
+## November 1 latest: corrected controls installed; separate Mac profile open
+
+Android and iPhone have been updated for the owner's manual Device tests
+workflow. The iPhone Host, Client and Stop buttons now have explicit SwiftUI
+styles so tapping Client dispatches only Client. Android observes current role
+and connection state; the whole test-permission row is clickable once the
+selected trusted Host is Ready. Permission still rechecks the current owner,
+foreground state and approved Host at the action boundary.
+
+The Mac is running a separate empty test-profile directory. The owner chooses
+a new 12–128-character passphrase in **Create profile** after selecting a role.
+No default passphrase was assigned, and the existing profile was preserved.
+
+All three replacement products bind exactly to commit
+`3231b843d7603003ee1339e60c74d88da65349e7`, tree
+`ce0aeb32d0cc98b17566050850d2b0cc2b162483`, prepared from clean source.
+Main was checked again and remains `eb6ba5da6c06a440de852477cf485264b2ab3dd3`.
+The subsequent test-inventory/report commit does not relabel these products.
+
+| Prepared product | SHA-256 |
+| --- | --- |
+| Android APK | `f781c41abd71251fe4dba477ef8d284c44f21001422bc506a27d9ac3daefd600` |
+| Signed iPhone executable | `40028222755ebf2ccb09ef9a3505a65f4fd1088e0423c332667bf61095f1051c` |
+| Signed iPhone debug dylib | `0deaf740d19c6aa936c8ddaf0a576bfbbc9d1f18070f2a9e00dff0197a5bc9d7` |
+| Complete signed-app inventory, 7 files | `074f42f65cc4a8890f608b5f33a82e01a228222eae44468cc240bfd35c768a87` |
+| iPhone ARM64 framework binary | `9940b6cfac90a02de5be1d677131ec6c8f7bb7cf33caf65d81b0c878c56fb32b` |
+| Simulator framework binary | `3aae5edc50ae3e958009f09f3a32739702cf82e1478968a615b3a7a60f1926e9` |
+| Complete framework/provenance inventory | `209e6f789d79de542d8900dc122f1c08854d7c1861a0097631f6698e392234b9` |
+| Mac driver manifest | `cbb3ea09c85c52acffcc5dce7bf9a92e639fd6cb3a1606227814179c02d13dfe` |
+| Mac driver JAR | `990cf9b0bd77cbb886629ba155d4c4ad044aa4a1d68f292391329efa18698f2d` |
+| Complete prepared JVM inventory | `41be7498d7b56eadc402af668162fd987fba26514b7dd44403ccabe7d239ec34` |
+| Mac native library | `7d44a7812730f105b06a7c57b24f116528653f17f85338df30cc8ea3683ac2dc` |
+| Mac native manifest JAR | `92fcf2517ff0198341d6730250effda24cbb49d072d2f2704c5dc500743d7e75` |
+| Prepared Mac desktop manifest | `c6f1dbfe45937cc95416d98ceef4f52923d11f3bf8e86aff7933c71ef5d33275` |
+| Prepared Mac desktop launcher | `6e7ccbf55e5970876dba142621a40d89c57d7137c4a07000587dc9c60ba260d2` |
+
+Inventory hashes use the same prefix-stripped label-to-`{bytes,sha256}`
+mapping defined in the earlier manual-workspace checkpoint. All prepared files
+also have a complete immutable, independently verified private archive.
+
+Exact-source preparation passed **680 JVM tests and 398 Android unit tests**,
+with zero failures, errors or skips. Original preparation, signing verification
+and desktop staging finalized with product/final/Stop zero and no owned Mac
+survivors. Offline launcher controls passed 12 tests; phone-control policy
+passed 27 tests. The iPhone role-button XCTest method passed on a fresh owned
+simulator: it tapped each button and verified only the selected role's event.
+The enclosing helper remained FAIL because Xcode reordered the XCFramework's
+two-library metadata array. A separate review verified identical plist semantics
+and every other prepared product, retained the reordered bytes and restored the
+exact archived metadata. Full manifest verification then passed. The original
+failure was preserved; the passed method was not rerun or called a full suite.
+
+Android's old Client was still active after an earlier operator Stop reply.
+The actual observed Stop control was used; **Stopped; owned RPC cleanup
+completed** was observed before the idle process was retired. The installed
+old APK hash matched its receipt. The update preserved app data and approvals;
+installed APK readback matched the replacement hash. Device tests was opened,
+with no workload started. Its private ADB server and copied host keys retired.
+Android screen protection remains enabled. Permission-row operation on a live
+paired connection still needs the owner's button-driven exercise.
+
+The old iPhone debugger attempt failed to read its owner and failed to detach;
+it remains failed evidence. The owner then used Stop on the main RPC screen.
+A fresh source-bound screenshot independently showed **No active role**,
+**Stopped; owned RPC cleanup completed**, and disabled Stop. That supports
+ordinary idle-app replacement, not a capacity resource-drain qualification.
+Two later installer attempts refused before installation: an existing evidence
+directory, then screenshot metadata permissions. Both original native results
+were failure with Stop zero and no owned survivors. A fresh directory and
+private permissions preserved the sealed bytes. The successful attempt retired
+only the exact stopped old app process, verified absence, installed the signed
+replacement over the paired wireless development connection, launched it and
+captured its idle screen. Its original native result was product/final/Stop zero
+with no errors or owned survivors. Installed executable readback and physical
+role-button startup remain unmeasured; no qualified ready record was invented.
+The captured iPhone battery level was 77%, with no current charging or thermal
+sensor series. This is not battery-discharge evidence.
+
+The private build worker was explicitly retired after checking absent phone
+pending leases. The owner-started apps remain available. The Mac test-profile
+process was observed running; profile creation awaits the owner's chosen
+passphrase. The older Mac profile and its process were preserved.
+
+| Phone Host | Capacity | Corrected-source capacity phases | Separate measured steady | Workload/resource measurements |
+| --- | ---: | --- | --- | --- |
+| Android | 128 | Unrun | 0/1800s | Unavailable |
+| Android | 256 | Unrun | 0/1800s | Unavailable |
+| iPhone | 128 | Unrun | 0/1800s | Unavailable |
+| iPhone | 256 | Unrun | 0/1800s | Unavailable |
+
+The original failed qualification attempts below remain failures. No capacity
+connection/correctness/throughput/p95/p99/scheduling or CPU/RSS/thread comparison,
+connected-idle or post-Stop drain result exists for the replacement source.
+Manual role-matrix results, simultaneous 255 Mac clients plus one phone,
+genuine socket backpressure, long mixed faults, authorization/revocation,
+fairness and reviewed unplugged discharge remain pending. #525 stays open with
+no new acceptance item checked. No version was tagged or published, and the
+cancelled audit and deferred #520 investigation were not resumed.
+
+Product-source [CI 41269593379](https://github.com/p2pKit/P2pKit/actions/runs/41269593379)
+failed its source component. A local focused run independently reproduced a
+stale seven-method UI inventory assertion after the eighth role-button test
+was added. The correction expects all eight and explicitly requires the new
+method. Original hosted failure evidence remains encrypted/private; its
+decryption key is unavailable on this Mac, so the hosted underlying cause is
+not asserted from public logs alone. Other required components and the new
+head's complete gate still require completion. The prior source's macos-shared
+and complete-gate failures below also remain retained.
+
+Focused verification for the inventory/report change:
+`python3 -B scripts/tests/check-rpc-scalable-io-test.py -v` passed all 10 tests;
+`bash scripts/tests/check-markdown-links.sh` passed relative-link, embedded
+declaration and supporting control checks; `git diff --check` passed.
+
 ## October31 latest: signed preparation complete; both startup gates failed
 
 **No physical acceptance criterion has passed. All four measured steady runs

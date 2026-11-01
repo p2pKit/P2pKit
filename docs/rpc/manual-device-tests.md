@@ -57,7 +57,8 @@ default profile.
 ## Screenshots
 
 The Mac image is an idle UI render fixture from the prepared source. The iPhone
-image shows the newly installed app's Device tests entry with no active role.
+image shows source `3231b843` installed on the physical iPhone, with its Device
+tests entry and no active role.
 Neither image is workload evidence. Android's protected screen refused automated
 capture; its private UI observation verified the page and all five buttons.
 
