@@ -108,6 +108,7 @@ internal class DesktopRpcRuntime private constructor(
     }
 
     private fun saveTests() {
+        if (vault == null) return
         val text = application.deviceTests.exportJson()
         if (text != savedTests) {
             checkNotNull(vault).replace("device-test-results-v1", text.toByteArray())

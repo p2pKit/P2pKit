@@ -135,7 +135,7 @@ public class RpcDesktopPanel(
         accessibleContext.accessibleName = "RPC outcome and network setup guidance"
     }
     private val workspaceScroll = JScrollPane()
-    private lateinit var mainPage: JComponent
+    private val mainPage: JComponent
     private val testPage = DesktopRpcColumn()
     private var showingTests = false
     private val testPeers = JComboBox<RpcKnownDevice>().apply {
@@ -294,6 +294,7 @@ public class RpcDesktopPanel(
             }
         } } }
         mainPage = workspaceScroll.viewport.view as JComponent
+        testPeers.addActionListener { renderButtons() }
         testPage.apply {
             add(JButton("Back to RPC").apply { addActionListener { requestBack() } })
             add(DesktopRpcAppearance.heading("Device tests"))
@@ -590,6 +591,7 @@ public class RpcDesktopPanel(
                 testProgress.text = "Cancel the test and wait for its saved result before returning."
                 return
             }
+            if (closing) return
             owner.current()?.allowTests(false)
             allowTests.isSelected = false
             showingTests = false

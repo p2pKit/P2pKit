@@ -289,7 +289,7 @@ public class RpcPhoneLab private constructor(
     public fun beginDeviceTest(
         phase: RpcDeviceTestPhase, selectedPeer: String?, onComplete: (String?) -> Unit,
     ): RpcPhoneOperation = startPhoneOperation(scope, callBusy, { "Cancelled; partial result saved" },
-        { "Test failed or interrupted; result saved" }, onComplete) {
+        { "Test failed or interrupted; result saved" }, onComplete, operationFailures) {
         check(mobileRun == null && nearbyMode)
         checkNotNull(deviceTests).run(phase, selectedPeer)
         null

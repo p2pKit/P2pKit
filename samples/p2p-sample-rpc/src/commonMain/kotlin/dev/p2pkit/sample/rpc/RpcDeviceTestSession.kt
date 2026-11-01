@@ -21,6 +21,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -247,12 +248,14 @@ internal class DeviceTestRuntime(
                     withContext(NonCancellable) { host.tryNotify(pin, DeviceTestContract.cancel, command.runId) }
                 }
             }
+        } catch (_: TimeoutCancellationException) {
+            session.save(emptyDeviceTestReport(command, "Failed", "ClientAcknowledgementOrResultTimeout"))
         } catch (cancelled: CancellationException) {
             session.save(emptyDeviceTestReport(command, "Cancelled", "CallerCancelled"))
             throw cancelled
         } catch (_: Exception) {
             session.save(emptyDeviceTestReport(command, "Failed", "ClientUnarmedBusyOrUnavailable"))
-            throw IllegalStateException("Test did not complete; saved failed result")
+
         } finally {
             active.compareAndSet(job, null)
             withContext(NonCancellable) {
@@ -404,12 +407,17 @@ internal fun validDeviceTestReport(value: RpcDeviceTestReport): Boolean =
         value.scope == "INTERACTIVE_CONNECTED_DEVICE_RPC" && value.measuredClientCount == 1 &&
         value.latencySamples in 0..value.correctResponses && value.latencyBucketMicros == 1_000 && value.status in setOf("Completed", "Failed", "Cancelled", "Interrupted") &&
         value.calls in 0..100_000 && value.correctResponses in 0..value.calls &&
-        value.elapsedMillis in 0..1_850_000 && value.initializationMillis in 0..30_100 &&
+        value.elapsedMillis in 0..1_850_000 && value.initializationMillis in 0..1_850_000 &&
         value.missedSchedules in 0..18_500 && value.p95Micros in 0..30_001_000 &&
         value.p99Micros in value.p95Micros..30_001_000 && value.deliberateDisconnects in 0..5 &&
         value.expectedDeadlines in 0..1 && value.callerCancellations in 0..1 &&
         (value.failureCode?.length ?: 0) <= 128 &&
-        (value.status != "Completed" || value.correctResponses == value.calls) &&
+        (value.status != "Completed" || (value.correctResponses == value.calls && value.calls >= when (value.phase) {
+            RpcDeviceTestPhase.Large -> 3
+            RpcDeviceTestPhase.Correctness -> 12
+            RpcDeviceTestPhase.Reconnect -> 5
+            RpcDeviceTestPhase.Steady, RpcDeviceTestPhase.Deadlines -> 1
+        })) &&
         (value.status != "Completed" || value.phase != RpcDeviceTestPhase.Steady || value.elapsedMillis >= 1_800_000)
 
 internal fun emptyDeviceTestReport(command: DeviceTestCommand, status: String, failure: String): RpcDeviceTestReport =
