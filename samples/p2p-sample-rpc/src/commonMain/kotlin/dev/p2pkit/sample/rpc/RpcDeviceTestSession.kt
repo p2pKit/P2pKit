@@ -100,7 +100,8 @@ public data class RpcDeviceTestReport(
         appendLine("Source: $sourceSha")
         appendLine("Initialization ${initializationMillis} ms · measured ${elapsedMillis} ms")
         appendLine("$correctResponses correct / $calls attempted · $failedResponses failed · $missedSchedules missed")
-        appendLine(if (latencySamples > 0) "p50 ${p50Micros / 1_000} ms · p95 ${p95Micros / 1_000} ms · " +
+        appendLine(if (latencySamples > 0) (if (p50Micros > 0) "p50 ${p50Micros / 1_000} ms" else "p50 unavailable") +
+            " · p95 ${p95Micros / 1_000} ms · " +
             "p99 ${p99Micros / 1_000} ms" else "Latency unavailable")
         failureCode?.let { appendLine("Outcome: $it") }
         clientResources?.let { appendLine("Client: ${it.title}"); appendLine(it.environmentTitle) }
@@ -141,7 +142,8 @@ public data class RpcDeviceTestProgress(
 ) {
     public val monitorText: String get() = "$direction · $title · $stage\n" +
         "${elapsedSeconds}s · $calls correct / $attempts attempts · $failures failed · $inFlight in flight\n" +
-        "p50 ${p50Micros / 1_000} ms · p95 ${p95Micros / 1_000} ms · p99 ${p99Micros / 1_000} ms" +
+        (if (p95Micros > 0) "p50 ${p50Micros / 1_000} ms · p95 ${p95Micros / 1_000} ms · " +
+            "p99 ${p99Micros / 1_000} ms" else "Latency samples unavailable") +
         (if (targetRps > 0) " · target $targetRps/s · concurrency $concurrency" else "")
 }
 

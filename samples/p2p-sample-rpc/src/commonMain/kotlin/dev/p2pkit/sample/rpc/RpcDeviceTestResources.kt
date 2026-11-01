@@ -46,8 +46,8 @@ public data class RpcDeviceTestResources(
 ) {
     public val cpuPercentOfOneCore: Double? get() = if (sampledMillis > 0)
         cpuDeltaNanos.toDouble() / (sampledMillis * 10_000.0) else null
-    public val title: String get() = "${peakMemoryBytes / 1_048_576} MiB ($memoryKind) · " +
-        "$peakThreads threads ($threadKind) · $samples samples · " +
+    public val title: String get() = "Peak ${peakMemoryBytes / 1_048_576} MiB ($memoryKind) · " +
+        "peak $peakThreads threads ($threadKind) · $samples samples · " +
         (cpuPercentOfOneCore?.let { "${(it * 10).toLong() / 10.0}% of one CPU core" } ?: "CPU interval unavailable")
     public val thermalStopped: Boolean get() = thermalStates.any { it == "serious" || it == "critical" }
     public val environmentTitle: String get() = "Battery " +

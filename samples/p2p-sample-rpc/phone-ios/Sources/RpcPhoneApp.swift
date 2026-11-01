@@ -278,7 +278,7 @@ struct RpcPhoneView: View {
                             Text("Host: " + host.title).font(.footnote)
                             Text(host.environmentTitle).font(.footnote)
                         }
-                        Button("Cancel this test") { model.cancelTest(progress.runId) }
+                        Button("Cancel this test") { model.cancelTest(progress.runId) }.buttonStyle(.borderless)
                     }
                 }
                 if model.deviceTestRunning { Button("Cancel all tests") { model.cancelOperation() } }
@@ -307,7 +307,7 @@ struct RpcPhoneView: View {
                                 .formatted()).font(.footnote)
                         }
                         Button("Delete this output…", role: .destructive) { deletingTest = report.runId }
-                            .disabled(model.deviceTestRunning || model.actionBusy)
+                            .buttonStyle(.borderless).disabled(model.deviceTestRunning || model.actionBusy)
                     }
                 }
             }

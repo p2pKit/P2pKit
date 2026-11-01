@@ -700,7 +700,8 @@ public class RpcDesktopPanel(
             appendLine("Correct ${report.correctResponses} / attempted ${report.calls} · " +
                 "failed ${report.calls - report.correctResponses} · missed ${report.missedSchedules}")
             if (report.latencySamples > 0) {
-                appendLine("p50 ${report.p50Micros / 1_000} ms · p95 ${report.p95Micros / 1_000} ms · " +
+                appendLine((if (report.p50Micros > 0) "p50 ${report.p50Micros / 1_000} ms" else "p50 unavailable") +
+                    " · p95 ${report.p95Micros / 1_000} ms · " +
                     "p99 ${report.p99Micros / 1_000} ms (${report.latencySamples} samples)")
             } else appendLine("No workload latency samples")
             report.clientResources?.let { appendLine("Client process: ${it.title}"); appendLine(it.environmentTitle) }
