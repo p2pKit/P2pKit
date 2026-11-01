@@ -162,13 +162,12 @@ default profile.
 
 ## Screenshots
 
-The Mac image is an idle UI render fixture from prepared source `840a09da`,
-including the Live test activity panel and permanent-archive explanation. The iPhone
-image shows source `840a09da` installed on the physical iPhone, with its Device
-tests entry and no active role.
-Neither image is workload evidence. Android's protected screen refused automated
-capture; its private UI observation verified the page and all five buttons.
+These Mac and iPhone images are idle UI fixtures from prepared source `5683c28c`.
+The iPhone image comes from the successfully finalized native simulator UI suite.
+Neither image is physical workload or capacity evidence. The controls are disabled
+until the devices connect and explicitly permit the test. Android screen
+protection remains enabled; private UI inspection is used during installation.
 
-![Mac Device tests page, idle UI fixture](images/manual-device-tests-mac.png)
+![Mac Multi-device tests and monitor, idle fixture](images/multi-device-tests-mac.png)
 
-![Installed iPhone Device tests entry](images/manual-device-tests-iphone.png)
+![iPhone Multi-device phases and monitor, idle native UI fixture](images/multi-device-tests-iphone.png)
