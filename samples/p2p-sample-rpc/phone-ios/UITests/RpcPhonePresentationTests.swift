@@ -1,14 +1,20 @@
+import CoreGraphics
 import XCTest
 
 final class RpcPhonePresentationTests: XCTestCase {
     @MainActor
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, up: Bool) {
-        // Navigate to the actual control, never tap an offscreen guess.
+        // Disabled controls can be inspected when visible, but cannot be tapped.
+        func visible() -> Bool {
+            guard element.exists else { return false }
+            return element.isHittable || (!element.isEnabled && !element.frame.isEmpty &&
+                app.frame.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)))
+        }
         for _ in 0..<8 {
-            if element.exists && element.isHittable { return }
+            if visible() { return }
             if up { app.swipeUp() } else { app.swipeDown() }
         }
-        XCTAssertTrue(element.exists && element.isHittable, "Required control was not reachable")
+        XCTAssertTrue(visible(), "Required control was not reachable")
     }
     @MainActor
     private func expand(_ title: String, in app: XCUIApplication) {
