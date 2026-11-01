@@ -182,7 +182,7 @@ final class RpcPhonePresentationTests: XCTestCase {
             XCTAssertTrue(explanation.exists)
             XCTAssertTrue(explanation.label.contains("No role was started"))
             alert.buttons["OK"].tap()
-            reveal(app.buttons["rpc.stop"], in: app, up: false)
+            reveal(app.buttons["rpc.stop"], in: app, up: true)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
             reveal(app.buttons["rpc.host"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
@@ -229,7 +229,7 @@ final class RpcPhonePresentationTests: XCTestCase {
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
             reveal(app.buttons["rpc.client"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
-            reveal(app.buttons["rpc.stop"], in: app, up: false)
+            reveal(app.buttons["rpc.stop"], in: app, up: true)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
         }
     }
