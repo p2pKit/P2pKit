@@ -76,6 +76,7 @@ struct RpcPhoneView: View {
                 } else {
                 Section {
                     Button("Device tests") { showingDeviceTests = true; model.refreshDeviceTests() }
+                        .disabled(model.mobileConfig != nil || model.actionBusy)
                         .accessibilityIdentifier("rpc.deviceTests")
                     VStack(alignment: .leading, spacing: 10) {
                         Label("LOCAL API WORKSPACE", systemImage: "network")
@@ -150,8 +151,8 @@ struct RpcPhoneView: View {
             }
             .navigationTitle(showingDeviceTests ? "Device tests" : "P2pKit RPC")
             .toolbar {
-                if showingDeviceTests {
-                    ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if showingDeviceTests {
                         Button("Back to RPC") {
                             guard !model.deviceTestRunning else { return }
                             model.setAllowHostTests(false)

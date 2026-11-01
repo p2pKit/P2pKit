@@ -565,6 +565,7 @@ internal class RpcLabController(
         invitationClipboard.retire()
         closing = true
         busy = true
+        allowHostTests = false
         val previousAction = action
         previousAction?.cancel()
         pendingOwner?.creator?.takeIf { it !== previousAction }?.cancel()

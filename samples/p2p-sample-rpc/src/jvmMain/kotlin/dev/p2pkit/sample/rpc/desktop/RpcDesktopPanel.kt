@@ -351,6 +351,7 @@ public class RpcDesktopPanel(
         // On Windows this is the fixed installed provider, not an OS-name permission or a POSIX fallback.
         // The owned unlock task publishes only a profile with no unresolved acquisition cleanup.
         if (unlocked == null) { unlockProfile { startRole(host) }; return }
+        allowTests.isSelected = false
         clearSensitive()
         outcome.text = "Starting selected role on the freshly observed eligible private LAN."
         owner.start(if (host) "Host" else "Client", {

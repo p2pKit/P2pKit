@@ -1041,7 +1041,9 @@ final class RpcPhoneModel: ObservableObject {
 
     func setAllowHostTests(_ enabled: Bool) {
         allowHostTests = enabled && canAct && !hostRole && nearbyMode
-        owner.runtime?.allowDeviceTestsFromHost(enabled: allowHostTests)
+        if let lab = owner.runtime, lab.applicationAvailable {
+            lab.allowDeviceTestsFromHost(enabled: allowHostTests)
+        }
     }
 
     func refreshDeviceTests() {
