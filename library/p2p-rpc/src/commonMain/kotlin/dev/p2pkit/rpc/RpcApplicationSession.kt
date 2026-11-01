@@ -105,6 +105,29 @@ public class RpcAuthorizationContext internal constructor(
     public val scope: RpcAuthorizationScope,
     public val operation: RpcAuthorizationOperation,
 ) {
+    private var originalPhysical: RpcPhysicalSession? = null
+    private var operationPhysical: RpcPhysicalSession? = null
+
+    /** Original request connection; null for a notification without an explicit origin. */
+    public val originalPhysicalSession: RpcPhysicalSession? get() = originalPhysical
+
+    /**
+     * Actual connection for this operation: original for Invoke/Execute, requesting connection for
+     * Duplicate/Status/Cancel/Receipt, selected destination for disclosures and notifications. Fresh
+     * writer authorization retains this exact destination; it never substitutes a newer connection.
+     */
+    public val physicalSession: RpcPhysicalSession? get() = operationPhysical
+
+    // Preserve the old constructor ABI; install immutable associations only during construction.
+    internal constructor(
+        peer: PeerIdentity, requestId: RpcRequestId, procedureName: String, procedureVersion: Int,
+        hostIncarnation: String, scope: RpcAuthorizationScope, operation: RpcAuthorizationOperation,
+        originalPhysicalSession: RpcPhysicalSession?, physicalSession: RpcPhysicalSession,
+    ) : this(peer, requestId, procedureName, procedureVersion, hostIncarnation, scope, operation) {
+        originalPhysical = originalPhysicalSession
+        operationPhysical = physicalSession
+    }
+
     override fun toString(): String = "RpcAuthorizationContext(authorization data omitted)"
 }
 

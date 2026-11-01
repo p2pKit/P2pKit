@@ -64,7 +64,7 @@ def check_policy(inputs)
         "with" => {"persist-credentials" => false, "fetch-depth" => 0},
     }
     raise "cache home must be job-owned before setup" unless one_step(job, HOME) == {"name" => HOME, "run" => HOME_COMMAND}
-    [[DAEMON, "${{ inputs.component == 'desktop-windows' && '21.0.12+101.0' || '21' }}"], [LAUNCHER, "17"]].each do |label, version|
+    [[DAEMON, "${{ inputs.component == 'desktop-windows' && '21.0.12+101.0.LTS' || '21' }}"], [LAUNCHER, "17"]].each do |label, version|
         raise "pinned unconditional JDK setup/order changed" unless one_step(job, label) == {
             "name" => label, "uses" => JAVA_ACTION, "with" => {"distribution" => "temurin", "java-version" => version},
         }
@@ -133,6 +133,9 @@ end
 end
 {"persist-credentials" => true, "ref" => "other"}.each do |key, value|
     mutations["checkout #{key}"] = ->(v) { one_step(v[:worker]["jobs"]["run"], CHECKOUT)["with"][key] = value }
+end
+mutations["incomplete Windows supplier identifier"] = ->(v) do
+    one_step(v[:worker]["jobs"]["run"], DAEMON)["with"]["java-version"].sub!("21.0.12+101.0.LTS", "21.0.12+101.0")
 end
 mutations["shared home"] = ->(v) { one_step(v[:worker]["jobs"]["run"], HOME)["run"] = HOME_COMMAND.sub("$RUNNER_TEMP", "$HOME") }
 mutations["cache write on PR"] = ->(v) { one_step(v[:worker]["jobs"]["run"], CACHE)["with"]["cache-read-only"] = false }

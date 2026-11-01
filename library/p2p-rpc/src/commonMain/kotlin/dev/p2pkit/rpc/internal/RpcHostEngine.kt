@@ -7,6 +7,7 @@ import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.security.payloadSha256
 import dev.p2pkit.rpc.RpcApplicationSession
+import dev.p2pkit.rpc.RpcAuthenticationContext
 import dev.p2pkit.rpc.RpcAuthorizationContext
 import dev.p2pkit.rpc.RpcAuthorizationOperation
 import dev.p2pkit.rpc.RpcAuthorizationScope
@@ -18,6 +19,7 @@ import dev.p2pkit.rpc.RpcFailurePhase
 import dev.p2pkit.rpc.RpcLimits
 import dev.p2pkit.rpc.RpcNotification
 import dev.p2pkit.rpc.RpcNotifyResult
+import dev.p2pkit.rpc.RpcPhysicalSession
 import dev.p2pkit.rpc.RpcRequestId
 import dev.p2pkit.rpc.RpcRetrySafety
 import kotlinx.coroutines.CancellationException
@@ -75,6 +77,7 @@ internal class RpcHostEngine(
         var stage: Stage,
         val authorizationScope: RpcAuthorizationScope? = null,
         val authorizationAllowance: PayloadLease? = null,
+        val physicalSession: RpcPhysicalSession? = null,
     ) {
         val executionBegan = MutableStateFlow(false)
         val cancelRequested = MutableStateFlow(false)
@@ -199,6 +202,8 @@ internal class RpcHostEngine(
         requestId: String,
         authorizationScope: RpcAuthorizationScope,
         operation: RpcAuthorizationOperation,
+        originalPhysicalSession: RpcPhysicalSession?,
+        physicalSession: RpcPhysicalSession,
         remainingMillis: Long = AUTHORIZATION_TIMEOUT_MILLIS,
     ): Boolean {
         val pin = identity.fingerprint ?: return false
@@ -208,7 +213,8 @@ internal class RpcHostEngine(
         return try {
             withTimeoutOrNull(minOf(remainingMillis, AUTHORIZATION_TIMEOUT_MILLIS)) {
                 procedure.authorize(RpcAuthorizationContext(identity, RpcRequestId(requestId),
-                    procedure.name, procedure.version, incarnation, authorizationScope, operation)) &&
+                    procedure.name, procedure.version, incarnation, authorizationScope, operation,
+                    originalPhysicalSession, physicalSession)) &&
                     trusted(pin) && authorizationScope.session.isActive
             } == true
         } catch (cancelled: CancellationException) {
@@ -217,25 +223,28 @@ internal class RpcHostEngine(
     }
 
     private suspend fun allowedRecord(
-        record: Record, identity: PeerIdentity, operation: RpcAuthorizationOperation,
+        record: Record, physicalSession: RpcPhysicalSession, operation: RpcAuthorizationOperation,
         remainingMillis: Long = AUTHORIZATION_TIMEOUT_MILLIS,
     ): Boolean = record.authorizationScope?.let {
-        allowedScope(record.procedure, identity, record.key.id, it, operation, remainingMillis)
+        allowedScope(record.procedure, physicalSession.peer, record.key.id, it, operation,
+            record.physicalSession, physicalSession, remainingMillis)
     } ?: error("Scoped authorization requires original facts")
 
     private suspend fun scopedDuplicate(link: RpcLink, message: WireMessage, record: Record, deadline: Long) {
-        if (!allowedRecord(record, link.identity, RpcAuthorizationOperation.Duplicate, deadline - clock.now())) {
-            refuse(link, message, WireFailure.AccessRevoked, record.procedure, record.authorizationScope)
+        if (!allowedRecord(record, link.physicalSession, RpcAuthorizationOperation.Duplicate, deadline - clock.now())) {
+            refuse(link, message, WireFailure.AccessRevoked, record.procedure,
+                record.authorizationScope, record.physicalSession)
             return
         }
         val snapshot = lock.withLock {
             stats.update { it.copy(duplicateRequests = it.duplicateRequests + 1) }
             if (records[record.key] === record) snapshotResult(record) else failure(message, WireFailure.UnknownOutcome)
         }
-        sendOwned(link, snapshot, record.procedure, record.authorizationScope)
+        sendOwned(link, snapshot, record.procedure, record.authorizationScope, record.physicalSession)
     }
 
     private suspend fun invoke(link: RpcLink, message: WireMessage, pin: PeerFingerprint) {
+        val physicalSession = link.physicalSession // Capture before any lock or application suspension.
         val firstDeadline = clock.now() + message.budgetMillis
         val body = checkNotNull(message.body)
         val digest = payloadSha256(body.bytes)
@@ -264,7 +273,7 @@ internal class RpcHostEngine(
             authorizationScope = try {
                 if (!trusted(pin) || firstDeadline <= clock.now()) null else
                     withTimeoutOrNull(minOf(firstDeadline - clock.now(), AUTHORIZATION_TIMEOUT_MILLIS)) {
-                        procedure.authenticate(link.identity, body, budget)
+                        procedure.authenticate(RpcAuthenticationContext(link.identity, physicalSession), body, budget)
                     }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -272,7 +281,7 @@ internal class RpcHostEngine(
             val captured = authorizationScope
             if (captured == null || captured.session.peer != pin || !allowedScope(
                     procedure, link.identity, message.id, captured, RpcAuthorizationOperation.Invoke,
-                    firstDeadline - clock.now(),
+                    physicalSession, physicalSession, firstDeadline - clock.now(),
                 )
             ) {
                 // Authentication may have suspended while another invocation admitted this ID.
@@ -282,7 +291,7 @@ internal class RpcHostEngine(
                     if (!matches(raced, message, digest)) protocolFailure(link)
                     scopedDuplicate(link, message, raced, firstDeadline)
                 } else refuse(link, message, WireFailure.AccessRevoked,
-                    procedure, captured?.takeIf { it.session.peer == pin })
+                    procedure, captured?.takeIf { it.session.peer == pin }, physicalSession)
                 return
             }
         } else if (!allowed(procedure, link, firstDeadline - clock.now())) {
@@ -317,7 +326,7 @@ internal class RpcHostEngine(
         }
         if (clock.now() >= firstDeadline) {
             refuse(link, message, if (procedure.scoped) WireFailure.AccessRevoked else WireFailure.DeadlineBeforeStart,
-                procedure, authorizationScope)
+                procedure, authorizationScope, physicalSession)
             return
         }
         if (body.size > procedure.requestLimit) { refuse(link, message, WireFailure.InvalidPayload); return }
@@ -353,7 +362,7 @@ internal class RpcHostEngine(
                         val resultBytes = RpcBodyCodec.encodingAllowance(procedure.resultLimit)
                         val decodeBytes = 4L * body.size + 32_768
                         val authorizationBytes = authorizationScope?.let {
-                            256L + 2L * (it.session.principal.length + it.session.sessionId.length + it.resource.length)
+                            512L + 2L * (it.session.principal.length + it.session.sessionId.length + it.resource.length)
                         } ?: 0L
                         reclaimResultsFor(resultBytes + decodeBytes + authorizationBytes)
                         val authorizationAllowance = if (authorizationScope == null) null else
@@ -371,7 +380,8 @@ internal class RpcHostEngine(
                         }
                         val stage = if (running < limits.runningCalls) Stage.Running else Stage.Queued
                         val record = Record(key, link.identity, procedure, digest, body.retain(), decodeAllowance,
-                            resultAllowance, firstDeadline, clock.now(), stage, authorizationScope, authorizationAllowance)
+                            resultAllowance, firstDeadline, clock.now(), stage, authorizationScope,
+                            authorizationAllowance, physicalSession.takeIf { authorizationScope != null })
                         records[key] = record // Dedup record precedes every possible handler start.
                         recordsPerPeer[pin] = (recordsPerPeer[pin] ?: 0) + 1
                         activePerPeer[pin] = (activePerPeer[pin] ?: 0) + 1
@@ -395,11 +405,13 @@ internal class RpcHostEngine(
             if (mismatch) protocolFailure(link)
             racedOriginal?.let { scopedDuplicate(link, message, it, firstDeadline) }
             duplicate?.let { send(link, it) }
-            if (scopeRevoked) refuse(link, message, WireFailure.AccessRevoked, procedure, authorizationScope)
+            if (scopeRevoked) refuse(link, message, WireFailure.AccessRevoked,
+                procedure, authorizationScope, physicalSession)
             else if (deadlineExpired) refuse(link, message,
                 if (procedure.scoped) WireFailure.AccessRevoked else WireFailure.DeadlineBeforeStart,
-                procedure, authorizationScope)
-            else if (rejected) refuse(link, message, WireFailure.Overloaded, procedure, authorizationScope)
+                procedure, authorizationScope, physicalSession)
+            else if (rejected) refuse(link, message, WireFailure.Overloaded,
+                procedure, authorizationScope, physicalSession)
         } finally {
             // Also covers cancellation while leaving the non-cancellable admission transaction.
             duplicate?.release()
@@ -466,8 +478,9 @@ internal class RpcHostEngine(
             WireKind.Receipt -> RpcAuthorizationOperation.Receipt
             else -> error("Not a control operation")
         }
-        if (!allowedRecord(record, link.identity, operation)) {
-            refuse(link, message, WireFailure.AccessRevoked, procedure, record.authorizationScope)
+        if (!allowedRecord(record, link.physicalSession, operation)) {
+            refuse(link, message, WireFailure.AccessRevoked, procedure,
+                record.authorizationScope, record.physicalSession)
             return
         }
         var response: WireMessage? = null
@@ -489,14 +502,15 @@ internal class RpcHostEngine(
             }
         }
         if (!committed) {
-            refuse(link, message, WireFailure.AccessRevoked, procedure, record.authorizationScope)
+            refuse(link, message, WireFailure.AccessRevoked, procedure,
+                record.authorizationScope, record.physicalSession)
             return
         }
         if (cancel) {
             completeQueued(record, WireFailure.CancelledBeforeStart)
             record.job.value?.cancel()
         }
-        response?.let { sendOwned(link, it, procedure, record.authorizationScope) }
+        response?.let { sendOwned(link, it, procedure, record.authorizationScope, record.physicalSession) }
     }
 
     private fun matches(record: Record, message: WireMessage, digest: ByteArray): Boolean =
@@ -527,13 +541,13 @@ internal class RpcHostEngine(
                         record.procedure.execute(
                             record.authorizationScope?.let {
                                 RpcCallContext(record.identity, RpcRequestId(record.key.id), remaining,
-                                    incarnation, record.observationId, it)
+                                    incarnation, record.observationId, it, checkNotNull(record.physicalSession))
                             } ?: RpcCallContext(record.identity, RpcRequestId(record.key.id), remaining,
                                 incarnation, record.observationId), record.request,
                             budget, record.decodeAllowance, record.resultAllowance
                         ) {
                             val captured = record.authorizationScope
-                            if (captured != null && !allowedRecord(record, record.identity,
+                            if (captured != null && !allowedRecord(record, checkNotNull(record.physicalSession),
                                     RpcAuthorizationOperation.Execute, record.deadline - clock.now())
                             ) throw RpcFailure(RpcFailureKind.Unauthorized, RpcFailurePhase.Admission)
                             val executionContext = currentCoroutineContext()
@@ -600,7 +614,7 @@ internal class RpcHostEngine(
                 links[record.key.peer]?.takeIf { it in ready && it.admission == PeerAdmission.Trusted }
             }
             val authorized = candidate != null && try {
-                if (record.authorizationScope != null) allowedRecord(record, candidate.identity,
+                if (record.authorizationScope != null) allowedRecord(record, candidate.physicalSession,
                     disclosureOperation(terminal.kind))
                 else if (authorizeResult) allowed(record.procedure, candidate) else trusted(record.key.peer)
             } catch (_: CancellationException) {
@@ -647,7 +661,7 @@ internal class RpcHostEngine(
                 publishLocked()
             }
             next?.let(::launchRecord)
-            target?.let { send(it, terminal, record.procedure, record.authorizationScope) }
+            target?.let { send(it, terminal, record.procedure, record.authorizationScope, record.physicalSession) }
             authorizationFailure?.let { throw it }
         } finally {
             terminal.release()
@@ -687,13 +701,25 @@ internal class RpcHostEngine(
         notification: RpcNotification<T>,
         value: T,
         authorize: suspend (RpcAuthorizationContext) -> Boolean,
+    ): RpcNotifyResult = tryNotifyScopedFrom(null, authorizationScope, notification, value, authorize)
+
+    suspend fun <T> tryNotifyScopedFrom(
+        originalPhysicalSession: RpcPhysicalSession?,
+        authorizationScope: RpcAuthorizationScope,
+        notification: RpcNotification<T>,
+        value: T,
+        authorize: suspend (RpcAuthorizationContext) -> Boolean,
     ): RpcNotifyResult {
         val session = authorizationScope.session
+        require(originalPhysicalSession == null || originalPhysicalSession.peer.fingerprint == session.peer) {
+            "Notification origin must belong to the application's authenticated peer"
+        }
         if (!session.isActive || !trusted(session.peer)) return RpcNotifyResult.NotAuthorized
         val link = trustedLink(session.peer) ?: return RpcNotifyResult.NotConnected
         val id = newWireId()
         val context = RpcAuthorizationContext(link.identity, RpcRequestId(id), notification.name,
-            notification.version, incarnation, authorizationScope, RpcAuthorizationOperation.Notification)
+            notification.version, incarnation, authorizationScope, RpcAuthorizationOperation.Notification,
+            originalPhysicalSession, link.physicalSession)
         suspend fun permitted(): Boolean {
             if (!session.isActive || !trusted(session.peer)) return false
             return try {
@@ -808,13 +834,14 @@ internal class RpcHostEngine(
     private suspend fun refuse(
         link: RpcLink, message: WireMessage, reason: WireFailure,
         procedure: RegisteredProcedure? = null, authorizationScope: RpcAuthorizationScope? = null,
+        physicalSession: RpcPhysicalSession? = null,
     ) {
         stats.update { it.copy(refusedCalls = it.refusedCalls + 1) }
         if (message.kind == WireKind.Invoke) lock.withLock {
             requestRecorder.refuse(message.id, checkNotNull(link.identity.fingerprint).value,
                 message.name, message.version, reason)
         }
-        send(link, failure(message, reason), procedure, authorizationScope)
+        send(link, failure(message, reason), procedure, authorizationScope, physicalSession)
     }
 
     private fun disclosureOperation(kind: WireKind): RpcAuthorizationOperation = when (kind) {
@@ -828,12 +855,13 @@ internal class RpcHostEngine(
     private suspend fun send(
         link: RpcLink, message: WireMessage,
         procedure: RegisteredProcedure? = null, authorizationScope: RpcAuthorizationScope? = null,
+        physicalSession: RpcPhysicalSession? = null,
     ) {
         try {
             val authorization = authorizationScope?.let { captured ->
                 RpcSendAuthorization(captured.session, stillAllowed = { trusted(captured.session.peer) }) {
                     allowedScope(checkNotNull(procedure), link.identity, message.id, captured,
-                        disclosureOperation(message.kind))
+                        disclosureOperation(message.kind), physicalSession, link.physicalSession)
                 }
             }
             if (link.offer(message, clock.now() + 10_000, authorization = authorization) != null) return
@@ -853,8 +881,9 @@ internal class RpcHostEngine(
     private suspend fun sendOwned(
         link: RpcLink, message: WireMessage,
         procedure: RegisteredProcedure? = null, authorizationScope: RpcAuthorizationScope? = null,
+        physicalSession: RpcPhysicalSession? = null,
     ) {
-        try { send(link, message, procedure, authorizationScope) } finally { message.release() }
+        try { send(link, message, procedure, authorizationScope, physicalSession) } finally { message.release() }
     }
 
     private suspend fun protocolFailure(link: RpcLink): Nothing {

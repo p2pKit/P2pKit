@@ -12,6 +12,10 @@ not the immutable rc7 artifacts. Consume matching official Core/LAN/RPC versions
 before deploying this contract. Library qualification is not qualification of a
 consumer's credential verifier or employee boundary.
 
+For the additive **unreleased** exact-connection capability, see
+[physical-session provenance and closure](physical-session-provenance.md). It
+adds a separate physical boundary without changing this original-login contract.
+
 ## Validate credentials and capture the original login
 
 The application validates credentials in its typed, bounded request. RPC never

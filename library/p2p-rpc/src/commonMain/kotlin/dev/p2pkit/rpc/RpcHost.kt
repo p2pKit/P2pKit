@@ -209,6 +209,23 @@ public class RpcHost private constructor(
     }
 
     /**
+     * A private update associated with an explicitly captured request connection. The authorizer sees
+     * that original capability and the actual destination separately, including at writer commitment.
+     * Origin is application-selected SDK evidence, not inferred from a request ID or current peer map.
+     */
+    @Throws(Exception::class)
+    public suspend fun <T> tryNotifyScopedFrom(
+        originalPhysicalSession: RpcPhysicalSession,
+        authorizationScope: RpcAuthorizationScope,
+        notification: RpcNotification<T>,
+        value: T,
+        authorize: suspend (RpcAuthorizationContext) -> Boolean = { false },
+    ): RpcNotifyResult {
+        require(notificationDescriptors[notification.key] === notification) { "Register and reuse this notification" }
+        return engine.tryNotifyScopedFrom(originalPhysicalSession, authorizationScope, notification, value, authorize)
+    }
+
+    /**
      * Fence this application's original login, then request cancellation of matching owned work.
      * Await before switching employees/policy. Does not close the shared device's authenticated link.
      * Already committed output or noncooperative business effects still need application cleanup.

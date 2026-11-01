@@ -78,7 +78,7 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         self.assertIn('rootProject.layout.buildDirectory.file("reports/rpc-windows-runtime/supplier.json")', BUILD)
         self.assertIn("--report-glob 'build/reports/**/*'", (ROOT / '.github/workflows/ci-component.yml').read_text())
         workflow = (ROOT / '.github/workflows/ci-component.yml').read_text()
-        self.assertIn("inputs.component == 'desktop-windows' && '21.0.12+101.0' || '21'", workflow)
+        self.assertIn("inputs.component == 'desktop-windows' && '21.0.12+101.0.LTS' || '21'", workflow)
         setup = (ROOT / 'scripts/setup-ci-component.sh').read_text()
         block = setup[setup.index('if [[ "$component" == desktop-windows ]]; then'):setup.index(
             '# Hosted images differ;')]

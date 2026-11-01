@@ -627,7 +627,7 @@ class RpcApplicationSessionAuthorizationTest {
         try {
             f.host.deliver(f.link, invoke(f.budget)); runCurrent(); f.link.clearSent()
             f.host.deliver(f.link, control(f.budget, WireKind.Receipt))
-            assertEquals(256L + 2L * (original.principal.length + original.sessionId.length + "sale-17".length),
+            assertEquals(512L + 2L * (original.principal.length + original.sessionId.length + "sale-17".length),
                 f.budget.retainedBytes.value)
             f.host.deliver(f.link, invoke(f.budget))
             assertEquals(WireFailure.ResultUnavailable.code, f.link.sent.single().code)
@@ -654,7 +654,7 @@ class RpcApplicationSessionAuthorizationTest {
         try {
             f.host.deliver(f.link, invoke(f.budget)); runCurrent()
             val requestBytes = "\"credential\"".length
-            val authority = 256L + 2L * (original.principal.length + original.sessionId.length + grant.resource.length)
+            val authority = 512L + 2L * (original.principal.length + original.sessionId.length + grant.resource.length)
             val expected = requestBytes + 256L + RpcBodyCodec.encodingAllowance(procedure.responseLimitBytes) +
                 4L * requestBytes + 32_768 + authority
             assertEquals(expected, observedBudget)

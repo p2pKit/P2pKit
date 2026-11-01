@@ -9,7 +9,8 @@ internal class RpcSendAuthorization(
     private val authorize: suspend () -> Boolean,
 ) {
     // Bounded authority/context retained by a queued ticket, charged separately from its payload.
-    val allowanceBytes: Long = 2_048
+    // Includes the original and destination physical capabilities held by policy closures.
+    val allowanceBytes: Long = 2_560
 
     suspend fun begin(ticket: SendTicket, transportReady: () -> Boolean): Boolean {
         if (!transportReady() || !session.isActive || !stillAllowed() || !authorize()) return false

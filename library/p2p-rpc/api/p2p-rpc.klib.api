@@ -173,6 +173,19 @@ final enum class dev.p2pkit.rpc/RpcPairingOrigin : kotlin/Enum<dev.p2pkit.rpc/Rp
     final fun values(): kotlin/Array<dev.p2pkit.rpc/RpcPairingOrigin> // dev.p2pkit.rpc/RpcPairingOrigin.values|values#static(){}[0]
 }
 
+final enum class dev.p2pkit.rpc/RpcPhysicalSessionClosure : kotlin/Enum<dev.p2pkit.rpc/RpcPhysicalSessionClosure> { // dev.p2pkit.rpc/RpcPhysicalSessionClosure|null[0]
+    enum entry Closed // dev.p2pkit.rpc/RpcPhysicalSessionClosure.Closed|null[0]
+    enum entry Closing // dev.p2pkit.rpc/RpcPhysicalSessionClosure.Closing|null[0]
+    enum entry Incomplete // dev.p2pkit.rpc/RpcPhysicalSessionClosure.Incomplete|null[0]
+    enum entry Open // dev.p2pkit.rpc/RpcPhysicalSessionClosure.Open|null[0]
+
+    final val entries // dev.p2pkit.rpc/RpcPhysicalSessionClosure.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.rpc/RpcPhysicalSessionClosure> // dev.p2pkit.rpc/RpcPhysicalSessionClosure.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.rpc/RpcPhysicalSessionClosure // dev.p2pkit.rpc/RpcPhysicalSessionClosure.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.rpc/RpcPhysicalSessionClosure> // dev.p2pkit.rpc/RpcPhysicalSessionClosure.values|values#static(){}[0]
+}
+
 final enum class dev.p2pkit.rpc/RpcRetryAdvice : kotlin/Enum<dev.p2pkit.rpc/RpcRetryAdvice> { // dev.p2pkit.rpc/RpcRetryAdvice|null[0]
     enum entry ApplicationIdempotencyRequired // dev.p2pkit.rpc/RpcRetryAdvice.ApplicationIdempotencyRequired|null[0]
     enum entry Never // dev.p2pkit.rpc/RpcRetryAdvice.Never|null[0]
@@ -281,13 +294,26 @@ final class dev.p2pkit.rpc/RpcApplicationSession { // dev.p2pkit.rpc/RpcApplicat
     final suspend fun revoke() // dev.p2pkit.rpc/RpcApplicationSession.revoke|revoke(){}[0]
 }
 
+final class dev.p2pkit.rpc/RpcAuthenticationContext { // dev.p2pkit.rpc/RpcAuthenticationContext|null[0]
+    final val peer // dev.p2pkit.rpc/RpcAuthenticationContext.peer|{}peer[0]
+        final fun <get-peer>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.rpc/RpcAuthenticationContext.peer.<get-peer>|<get-peer>(){}[0]
+    final val physicalSession // dev.p2pkit.rpc/RpcAuthenticationContext.physicalSession|{}physicalSession[0]
+        final fun <get-physicalSession>(): dev.p2pkit.rpc/RpcPhysicalSession // dev.p2pkit.rpc/RpcAuthenticationContext.physicalSession.<get-physicalSession>|<get-physicalSession>(){}[0]
+
+    final fun toString(): kotlin/String // dev.p2pkit.rpc/RpcAuthenticationContext.toString|toString(){}[0]
+}
+
 final class dev.p2pkit.rpc/RpcAuthorizationContext { // dev.p2pkit.rpc/RpcAuthorizationContext|null[0]
     final val hostIncarnation // dev.p2pkit.rpc/RpcAuthorizationContext.hostIncarnation|{}hostIncarnation[0]
         final fun <get-hostIncarnation>(): kotlin/String // dev.p2pkit.rpc/RpcAuthorizationContext.hostIncarnation.<get-hostIncarnation>|<get-hostIncarnation>(){}[0]
     final val operation // dev.p2pkit.rpc/RpcAuthorizationContext.operation|{}operation[0]
         final fun <get-operation>(): dev.p2pkit.rpc/RpcAuthorizationOperation // dev.p2pkit.rpc/RpcAuthorizationContext.operation.<get-operation>|<get-operation>(){}[0]
+    final val originalPhysicalSession // dev.p2pkit.rpc/RpcAuthorizationContext.originalPhysicalSession|{}originalPhysicalSession[0]
+        final fun <get-originalPhysicalSession>(): dev.p2pkit.rpc/RpcPhysicalSession? // dev.p2pkit.rpc/RpcAuthorizationContext.originalPhysicalSession.<get-originalPhysicalSession>|<get-originalPhysicalSession>(){}[0]
     final val peer // dev.p2pkit.rpc/RpcAuthorizationContext.peer|{}peer[0]
         final fun <get-peer>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.rpc/RpcAuthorizationContext.peer.<get-peer>|<get-peer>(){}[0]
+    final val physicalSession // dev.p2pkit.rpc/RpcAuthorizationContext.physicalSession|{}physicalSession[0]
+        final fun <get-physicalSession>(): dev.p2pkit.rpc/RpcPhysicalSession? // dev.p2pkit.rpc/RpcAuthorizationContext.physicalSession.<get-physicalSession>|<get-physicalSession>(){}[0]
     final val procedureName // dev.p2pkit.rpc/RpcAuthorizationContext.procedureName|{}procedureName[0]
         final fun <get-procedureName>(): kotlin/String // dev.p2pkit.rpc/RpcAuthorizationContext.procedureName.<get-procedureName>|<get-procedureName>(){}[0]
     final val procedureVersion // dev.p2pkit.rpc/RpcAuthorizationContext.procedureVersion|{}procedureVersion[0]
@@ -320,6 +346,8 @@ final class dev.p2pkit.rpc/RpcCallContext { // dev.p2pkit.rpc/RpcCallContext|nul
         final fun <get-hostObservationId>(): kotlin/Long? // dev.p2pkit.rpc/RpcCallContext.hostObservationId.<get-hostObservationId>|<get-hostObservationId>(){}[0]
     final val peer // dev.p2pkit.rpc/RpcCallContext.peer|{}peer[0]
         final fun <get-peer>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.rpc/RpcCallContext.peer.<get-peer>|<get-peer>(){}[0]
+    final val physicalSession // dev.p2pkit.rpc/RpcCallContext.physicalSession|{}physicalSession[0]
+        final fun <get-physicalSession>(): dev.p2pkit.rpc/RpcPhysicalSession? // dev.p2pkit.rpc/RpcCallContext.physicalSession.<get-physicalSession>|<get-physicalSession>(){}[0]
     final val remainingMillis // dev.p2pkit.rpc/RpcCallContext.remainingMillis|{}remainingMillis[0]
         final fun <get-remainingMillis>(): kotlin/Long // dev.p2pkit.rpc/RpcCallContext.remainingMillis.<get-remainingMillis>|<get-remainingMillis>(){}[0]
     final val requestId // dev.p2pkit.rpc/RpcCallContext.requestId|{}requestId[0]
@@ -498,6 +526,7 @@ final class dev.p2pkit.rpc/RpcHost { // dev.p2pkit.rpc/RpcHost|null[0]
 
     final suspend fun <#A1: kotlin/Any?> tryNotify(dev.p2pkit.core/PeerFingerprint, dev.p2pkit.rpc/RpcNotification<#A1>, #A1): dev.p2pkit.rpc/RpcNotifyResult // dev.p2pkit.rpc/RpcHost.tryNotify|tryNotify(dev.p2pkit.core.PeerFingerprint;dev.p2pkit.rpc.RpcNotification<0:0>;0:0){0§<kotlin.Any?>}[0]
     final suspend fun <#A1: kotlin/Any?> tryNotifyScoped(dev.p2pkit.rpc/RpcAuthorizationScope, dev.p2pkit.rpc/RpcNotification<#A1>, #A1, kotlin.coroutines/SuspendFunction1<dev.p2pkit.rpc/RpcAuthorizationContext, kotlin/Boolean> = ...): dev.p2pkit.rpc/RpcNotifyResult // dev.p2pkit.rpc/RpcHost.tryNotifyScoped|tryNotifyScoped(dev.p2pkit.rpc.RpcAuthorizationScope;dev.p2pkit.rpc.RpcNotification<0:0>;0:0;kotlin.coroutines.SuspendFunction1<dev.p2pkit.rpc.RpcAuthorizationContext,kotlin.Boolean>){0§<kotlin.Any?>}[0]
+    final suspend fun <#A1: kotlin/Any?> tryNotifyScopedFrom(dev.p2pkit.rpc/RpcPhysicalSession, dev.p2pkit.rpc/RpcAuthorizationScope, dev.p2pkit.rpc/RpcNotification<#A1>, #A1, kotlin.coroutines/SuspendFunction1<dev.p2pkit.rpc/RpcAuthorizationContext, kotlin/Boolean> = ...): dev.p2pkit.rpc/RpcNotifyResult // dev.p2pkit.rpc/RpcHost.tryNotifyScopedFrom|tryNotifyScopedFrom(dev.p2pkit.rpc.RpcPhysicalSession;dev.p2pkit.rpc.RpcAuthorizationScope;dev.p2pkit.rpc.RpcNotification<0:0>;0:0;kotlin.coroutines.SuspendFunction1<dev.p2pkit.rpc.RpcAuthorizationContext,kotlin.Boolean>){0§<kotlin.Any?>}[0]
     final suspend fun close() // dev.p2pkit.rpc/RpcHost.close|close(){}[0]
     final suspend fun endpoint(): dev.p2pkit.rpc/RpcEndpoint // dev.p2pkit.rpc/RpcHost.endpoint|endpoint(){}[0]
     final suspend fun revokeApplicationSession(dev.p2pkit.rpc/RpcApplicationSession) // dev.p2pkit.rpc/RpcHost.revokeApplicationSession|revokeApplicationSession(dev.p2pkit.rpc.RpcApplicationSession){}[0]
@@ -548,6 +577,7 @@ final class dev.p2pkit.rpc/RpcHostConfiguration : dev.p2pkit.rpc/RpcConfiguratio
 
     final fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> register(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, kotlin.coroutines/SuspendFunction1<dev.p2pkit.core/PeerIdentity, kotlin/Boolean> = ..., kotlin.coroutines/SuspendFunction2<dev.p2pkit.rpc/RpcCallContext, #A1, dev.p2pkit.rpc/RpcReply<#B1, #C1>>) // dev.p2pkit.rpc/RpcHostConfiguration.register|register(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;kotlin.coroutines.SuspendFunction1<dev.p2pkit.core.PeerIdentity,kotlin.Boolean>;kotlin.coroutines.SuspendFunction2<dev.p2pkit.rpc.RpcCallContext,0:0,dev.p2pkit.rpc.RpcReply<0:1,0:2>>){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
     final fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> registerScoped(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, kotlin.coroutines/SuspendFunction2<dev.p2pkit.core/PeerIdentity, #A1, dev.p2pkit.rpc/RpcAuthorizationScope?>, kotlin.coroutines/SuspendFunction1<dev.p2pkit.rpc/RpcAuthorizationContext, kotlin/Boolean> = ..., kotlin.coroutines/SuspendFunction2<dev.p2pkit.rpc/RpcCallContext, #A1, dev.p2pkit.rpc/RpcReply<#B1, #C1>>) // dev.p2pkit.rpc/RpcHostConfiguration.registerScoped|registerScoped(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;kotlin.coroutines.SuspendFunction2<dev.p2pkit.core.PeerIdentity,0:0,dev.p2pkit.rpc.RpcAuthorizationScope?>;kotlin.coroutines.SuspendFunction1<dev.p2pkit.rpc.RpcAuthorizationContext,kotlin.Boolean>;kotlin.coroutines.SuspendFunction2<dev.p2pkit.rpc.RpcCallContext,0:0,dev.p2pkit.rpc.RpcReply<0:1,0:2>>){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
+    final fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> registerScopedWithPhysicalSession(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, kotlin.coroutines/SuspendFunction2<dev.p2pkit.rpc/RpcAuthenticationContext, #A1, dev.p2pkit.rpc/RpcAuthorizationScope?>, kotlin.coroutines/SuspendFunction1<dev.p2pkit.rpc/RpcAuthorizationContext, kotlin/Boolean> = ..., kotlin.coroutines/SuspendFunction2<dev.p2pkit.rpc/RpcCallContext, #A1, dev.p2pkit.rpc/RpcReply<#B1, #C1>>) // dev.p2pkit.rpc/RpcHostConfiguration.registerScopedWithPhysicalSession|registerScopedWithPhysicalSession(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;kotlin.coroutines.SuspendFunction2<dev.p2pkit.rpc.RpcAuthenticationContext,0:0,dev.p2pkit.rpc.RpcAuthorizationScope?>;kotlin.coroutines.SuspendFunction1<dev.p2pkit.rpc.RpcAuthorizationContext,kotlin.Boolean>;kotlin.coroutines.SuspendFunction2<dev.p2pkit.rpc.RpcCallContext,0:0,dev.p2pkit.rpc.RpcReply<0:1,0:2>>){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
 }
 
 final class dev.p2pkit.rpc/RpcHostRequests { // dev.p2pkit.rpc/RpcHostRequests|null[0]
@@ -638,6 +668,20 @@ final class dev.p2pkit.rpc/RpcPeerConnection { // dev.p2pkit.rpc/RpcPeerConnecti
         final fun <get-peer>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.rpc/RpcPeerConnection.peer.<get-peer>|<get-peer>(){}[0]
     final val state // dev.p2pkit.rpc/RpcPeerConnection.state|{}state[0]
         final fun <get-state>(): dev.p2pkit.core/ConnectionState // dev.p2pkit.rpc/RpcPeerConnection.state.<get-state>|<get-state>(){}[0]
+}
+
+final class dev.p2pkit.rpc/RpcPhysicalSession { // dev.p2pkit.rpc/RpcPhysicalSession|null[0]
+    final val closure // dev.p2pkit.rpc/RpcPhysicalSession.closure|{}closure[0]
+        final fun <get-closure>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.rpc/RpcPhysicalSessionClosure> // dev.p2pkit.rpc/RpcPhysicalSession.closure.<get-closure>|<get-closure>(){}[0]
+    final val generation // dev.p2pkit.rpc/RpcPhysicalSession.generation|{}generation[0]
+        final fun <get-generation>(): kotlin/Long // dev.p2pkit.rpc/RpcPhysicalSession.generation.<get-generation>|<get-generation>(){}[0]
+    final val isConnected // dev.p2pkit.rpc/RpcPhysicalSession.isConnected|{}isConnected[0]
+        final fun <get-isConnected>(): kotlin/Boolean // dev.p2pkit.rpc/RpcPhysicalSession.isConnected.<get-isConnected>|<get-isConnected>(){}[0]
+    final val peer // dev.p2pkit.rpc/RpcPhysicalSession.peer|{}peer[0]
+        final fun <get-peer>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.rpc/RpcPhysicalSession.peer.<get-peer>|<get-peer>(){}[0]
+
+    final fun toString(): kotlin/String // dev.p2pkit.rpc/RpcPhysicalSession.toString|toString(){}[0]
+    final suspend fun close() // dev.p2pkit.rpc/RpcPhysicalSession.close|close(){}[0]
 }
 
 final class dev.p2pkit.rpc/RpcPlatform { // dev.p2pkit.rpc/RpcPlatform|null[0]

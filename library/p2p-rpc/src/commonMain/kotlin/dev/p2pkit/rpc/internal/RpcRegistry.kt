@@ -3,6 +3,7 @@ package dev.p2pkit.rpc.internal
 import dev.p2pkit.core.PayloadBudget
 import dev.p2pkit.core.PayloadLease
 import dev.p2pkit.core.PeerIdentity
+import dev.p2pkit.rpc.RpcAuthenticationContext
 import dev.p2pkit.rpc.RpcAuthorizationContext
 import dev.p2pkit.rpc.RpcAuthorizationScope
 import dev.p2pkit.rpc.RpcCallContext
@@ -23,8 +24,9 @@ internal interface RegisteredProcedure {
     val resultLimit: Int
     val retrySafety: RpcRetrySafety
     val scoped: Boolean get() = false
-    suspend fun authenticate(identity: PeerIdentity, request: OwnedBytes, budget: PayloadBudget): RpcAuthorizationScope? =
-        null
+    suspend fun authenticate(
+        context: RpcAuthenticationContext, request: OwnedBytes, budget: PayloadBudget,
+    ): RpcAuthorizationScope? = null
     suspend fun authorize(context: RpcAuthorizationContext): Boolean = false
     suspend fun authorize(identity: PeerIdentity): Boolean
     suspend fun execute(
@@ -85,11 +87,20 @@ internal fun <Q, R, E> registeredScopedProcedure(
     authenticate: suspend (PeerIdentity, Q) -> RpcAuthorizationScope?,
     authorize: suspend (RpcAuthorizationContext) -> Boolean,
     handler: suspend (RpcCallContext, Q) -> RpcReply<R, E>,
+): RegisteredProcedure = registeredPhysicalScopedProcedure(
+    procedure, { context, request -> authenticate(context.peer, request) }, authorize, handler,
+)
+
+internal fun <Q, R, E> registeredPhysicalScopedProcedure(
+    procedure: RpcProcedure<Q, R, E>,
+    authenticate: suspend (RpcAuthenticationContext, Q) -> RpcAuthorizationScope?,
+    authorize: suspend (RpcAuthorizationContext) -> Boolean,
+    handler: suspend (RpcCallContext, Q) -> RpcReply<R, E>,
 ): RegisteredProcedure = object : RegisteredProcedure by registeredProcedure(procedure, { false }, handler) {
     override val scoped: Boolean = true
     override suspend fun authorize(context: RpcAuthorizationContext): Boolean = authorize.invoke(context)
     override suspend fun authenticate(
-        identity: PeerIdentity, request: OwnedBytes, budget: PayloadBudget,
+        context: RpcAuthenticationContext, request: OwnedBytes, budget: PayloadBudget,
     ): RpcAuthorizationScope? {
         val allowance = budget.tryReserve(4L * request.size + 32_768)
             ?: throw RpcFailure(
@@ -99,7 +110,7 @@ internal fun <Q, R, E> registeredScopedProcedure(
             val decoded = RpcBodyCodec.decode(
                 procedure.request, request, requestLimit, budget, allowance, releaseReservation = false,
             )
-            authenticate.invoke(identity, decoded)
+            authenticate.invoke(context, decoded)
         } finally { allowance.release() }
     }
 }

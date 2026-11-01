@@ -15,10 +15,12 @@ import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.rpc.RpcApplicationSession
 import dev.p2pkit.rpc.RpcLimits
+import dev.p2pkit.rpc.RpcPhysicalSessionClosure
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -30,6 +32,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.io.RawSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -72,11 +75,107 @@ private class LinkTestSession(index: Int = 0) : P2pSession {
         name: String, sizeBytes: Long, mimeType: String?, source: RawSource,
     ): P2pFileTransfer = error("File-transfer bypass")
 
-    override suspend fun close() { state.value = ConnectionState.Closed }
+    var closeCalls = 0
+    var closeGate: CompletableDeferred<Unit>? = null
+    var closeFailure: Throwable? = null
+    override suspend fun close() {
+        closeCalls++
+        state.value = ConnectionState.Closed
+        closeGate?.await()
+        closeFailure?.let { throw it }
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionRpcLinkTest {
+    @Test
+    fun exactPhysicalCloseWaitsForCleanupNotJustTerminalTransportState() = runTest {
+        val session = LinkTestSession()
+        session.closeGate = CompletableDeferred()
+        val budget = PayloadBudget(4096)
+        val link = SessionRpcLink(session, backgroundScope, budget, PayloadBudget(1024), RpcClock { 0 })
+        val ticket = assertNotNull(link.offer(WireMessage(WireKind.Hello, TEST_REQUEST), 10_000))
+        val first = async { link.physicalSession.close() }
+        runCurrent()
+        assertEquals(ConnectionState.Closed, session.state.value)
+        assertEquals(RpcPhysicalSessionClosure.Closing, link.physicalSession.closure.value)
+        assertFalse(first.isCompleted)
+        assertFalse(link.physicalSession.isConnected)
+        assertFalse(ticket.completion.await())
+        val second = async { link.close() }
+        runCurrent()
+        assertFalse(second.isCompleted)
+        assertEquals(1, session.closeCalls)
+        session.closeGate?.complete(Unit)
+        first.await(); second.await()
+        assertEquals(RpcPhysicalSessionClosure.Closed, link.physicalSession.closure.value)
+        link.physicalSession.close()
+        assertEquals(1, session.closeCalls)
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun exactPhysicalCloseRetainsFailureAndNeverClaimsTerminalStateIsSuccessfulCleanup() = runTest {
+        // Extra state prevents JVM coroutine stack recovery from copying the fixture exception.
+        // Identity assertions then verify that cleanup never replaces the original failure.
+        val failures = listOf(
+            object : IllegalStateException("incomplete") { val owner = Any() },
+            object : AssertionError("fatal") { val owner = Any() },
+            object : CancellationException("core close cancelled") { val owner = Any() },
+        )
+        for (failure in failures) {
+            val session = LinkTestSession()
+            session.closeFailure = failure
+            val budget = PayloadBudget(4096)
+            val link = SessionRpcLink(session, backgroundScope, budget, PayloadBudget(1024), RpcClock { 0 })
+            repeat(2) {
+                assertSame(failure, assertFailsWith<Throwable> { link.physicalSession.close() })
+                assertEquals(ConnectionState.Closed, session.state.value)
+                assertEquals(RpcPhysicalSessionClosure.Incomplete, link.physicalSession.closure.value)
+                assertFalse(link.physicalSession.isConnected)
+                assertNull(link.offer(WireMessage(WireKind.Hello, TEST_REQUEST), 10_000))
+            }
+            assertEquals(2, session.closeCalls)
+            assertEquals(0L, budget.retainedBytes.value)
+        }
+    }
+
+    @Test
+    fun cancellingPhysicalCloseWaiterDoesNotAbandonOwnedCleanup() = runTest {
+        val session = LinkTestSession()
+        session.closeGate = CompletableDeferred()
+        val budget = PayloadBudget(4096)
+        val link = SessionRpcLink(session, backgroundScope, budget, PayloadBudget(1024), RpcClock { 0 })
+        val waiter = async { link.physicalSession.close() }
+        runCurrent()
+        waiter.cancel(); runCurrent()
+        assertEquals(RpcPhysicalSessionClosure.Closing, link.physicalSession.closure.value)
+        session.closeGate?.complete(Unit)
+        waiter.join()
+        assertEquals(RpcPhysicalSessionClosure.Closed, link.physicalSession.closure.value)
+        assertEquals(1, session.closeCalls)
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun callbackCanAwaitItsExactPhysicalCloseWithoutJoiningItself() = runTest {
+        val session = LinkTestSession()
+        val budget = PayloadBudget(4096)
+        val link = SessionRpcLink(session, backgroundScope, budget, PayloadBudget(1024), RpcClock { 0 })
+        var detached = 0
+        link.start(onMessage = {
+            link.physicalSession.close()
+        }, onClosed = { detached++ })
+        session.incoming.emit(P2pMessage.Binary(RpcWire.encode(WireMessage(WireKind.Hello, TEST_REQUEST))))
+        runCurrent()
+        // Closing cancels the reader; cancellation may be reported at close's return boundary.
+        assertEquals(RpcPhysicalSessionClosure.Closed, link.physicalSession.closure.value)
+        assertEquals(0, session.incoming.subscriptionCount.value)
+        assertEquals(1, detached)
+        assertEquals(1, session.closeCalls)
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
     @Test
     fun scopedWriterRechecksRevocationExpiryAndGenerationAfterSuspendedPolicy() = runTest {
         for (change in listOf("revoke", "session-expiry", "ticket-expiry", "generation", "disconnect", "trust")) {

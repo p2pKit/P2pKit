@@ -8,6 +8,7 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.SessionConnectionInfo
 import dev.p2pkit.rpc.RpcFailureKind
+import dev.p2pkit.rpc.RpcPhysicalSession
 import kotlinx.coroutines.flow.MutableStateFlow
 
 // Test-only identity/channel seams. Production factories never expose these or accept arbitrary kits.
@@ -49,7 +50,13 @@ internal class RpcTestLink(index: Int = 0, override val admission: PeerAdmission
     }
 
     fun clearSent() { sent.forEach { it.release() }; sent.clear() }
-    override suspend fun close() {
+    var closeCalls = 0
+    override val physicalSession = RpcPhysicalSession(identity, generation.value.generation, transportState) {
+        closeTransport()
+    }
+    override suspend fun close() = physicalSession.close()
+    private suspend fun closeTransport() {
+        closeCalls++
         transportState.value = ConnectionState.Closed
         queued.forEach { it.cancelQueued() }
         queued.clear()

@@ -11,6 +11,7 @@ import dev.p2pkit.core.SessionConnectionInfo
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcFailureKind
 import dev.p2pkit.rpc.RpcFailurePhase
+import dev.p2pkit.rpc.RpcPhysicalSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +34,7 @@ import kotlinx.coroutines.withContext
 /** Internal seam for deterministic tests, never an injectable public transport/security bypass. */
 internal interface RpcLink {
     val identity: PeerIdentity
+    val physicalSession: RpcPhysicalSession
     val admission: PeerAdmission
     val transportState: StateFlow<ConnectionState>
     val generation: StateFlow<SessionConnectionInfo>
@@ -106,7 +108,6 @@ internal class SessionRpcLink(
     private val closed = MutableStateFlow(false)
     private val started = MutableStateFlow(false)
     private val lock = Mutex()
-    private val closeLock = Mutex()
     private val priority = ArrayDeque<SendTicket>()
     private val notifications = ArrayDeque<SendTicket>()
     private var priorityBytes = 0L
@@ -120,6 +121,10 @@ internal class SessionRpcLink(
     override val admission: PeerAdmission get() = session.admission
     override val transportState: StateFlow<ConnectionState> get() = session.state
     override val generation: StateFlow<SessionConnectionInfo> get() = session.connectionInfo
+
+    override val physicalSession = RpcPhysicalSession(identity, generation.value.generation, transportState) {
+        closeTransport()
+    }
 
     fun start(onMessage: suspend (WireMessage) -> Unit, onClosed: suspend () -> Unit) {
         check(started.compareAndSet(false, true))
@@ -265,22 +270,20 @@ internal class SessionRpcLink(
         ticket
     }
 
-    override suspend fun close() {
+    override suspend fun close() = physicalSession.close()
+
+    private suspend fun closeTransport() {
         closed.value = true
-        withContext(NonCancellable) {
-            closeLock.withLock {
-                lock.withLock {
-                    priority.forEach { it.cancelQueued() }
-                    notifications.forEach { it.cancelQueued() }
-                    priority.clear()
-                    notifications.clear()
-                    priorityBytes = 0
-                    notificationBytes = 0
-                }
-                // Repeated closes reobserve core's retained native cleanup instead of claiming
-                // success solely because this facade was sealed by an earlier failed close.
-                try { session.close() } finally { scope.cancel() }
-            }
+        // RpcPhysicalSession serializes callers and makes this owned cleanup non-cancellable.
+        lock.withLock {
+            priority.forEach { it.cancelQueued() }
+            notifications.forEach { it.cancelQueued() }
+            priority.clear()
+            notifications.clear()
+            priorityBytes = 0
+            notificationBytes = 0
         }
+        // Repeated failures reobserve core's retained native cleanup and original deadline.
+        try { session.close() } finally { scope.cancel() }
     }
 }
