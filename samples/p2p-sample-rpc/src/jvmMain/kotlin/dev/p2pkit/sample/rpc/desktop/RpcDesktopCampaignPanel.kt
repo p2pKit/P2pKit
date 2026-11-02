@@ -28,6 +28,7 @@ internal class RpcDesktopCampaignPanel(
     val running: Boolean get() = active
     private val profiles = JComboBox<DesktopRpcCampaignProfile>()
     private val recoveryMode = JComboBox(arrayOf("large", "correctness", "churn", "steady"))
+    private val reportJson = Json { prettyPrint = true }
     private val status = DesktopRpcWrappedLabel("Attach the prepared campaign folder to enable its phase buttons.")
     private val details = JTextArea(12, 54).apply {
         isEditable = false; lineWrap = true; wrapStyleWord = true
@@ -107,7 +108,7 @@ internal class RpcDesktopCampaignPanel(
                 val elapsed = result["elapsedSeconds"]?.jsonPrimitive?.content?.let { "$it seconds" }.orEmpty()
                 status.showText("$state · $elapsed")
                 if (selected.lastResult != null) {
-                    details.text = Json { prettyPrint = true }.encodeToString(checkNotNull(selected.lastResult))
+                    details.text = reportJson.encodeToString(checkNotNull(selected.lastResult))
                 }
                 renderButtons()
             }
