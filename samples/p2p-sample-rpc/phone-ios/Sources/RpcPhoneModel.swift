@@ -118,8 +118,8 @@ final class RpcPhoneModel: ObservableObject {
 
     init(wifi: RpcPhoneWifiObserving? = nil, invitationClipboard: RpcPhoneInvitationClipboard? = nil,
          shareWindow: RpcPhoneShareWindow? = nil, diagnosticClipboard: UIPasteboard = .general,
-         deviceTestFile: URL? = nil) {
-        self.deviceTestFile = deviceTestFile ?? FileManager.default
+         deviceTestFile testResultsFile: URL? = nil) {
+        self.deviceTestFile = testResultsFile ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("rpc-device-tests.json")
         self.diagnosticClipboard = diagnosticClipboard
