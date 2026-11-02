@@ -136,6 +136,10 @@ public class RpcDesktopPanel(
         accessibleContext.accessibleName = "RPC outcome and network setup guidance"
     }
     private val workspaceScroll = JScrollPane()
+    private val campaignPage by lazy { RpcDesktopCampaignPanel(scope, {
+        !closing && windowActive && !applicationSession.deviceTests.anyTestRunning &&
+            owner.snapshot().stage in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)
+    }) { workspaceScroll.setViewportView(physicalPage) } }
     private val mainPage: JComponent
     private val testPage = DesktopRpcColumn()
     private var showingTests = false
@@ -144,7 +148,10 @@ public class RpcDesktopPanel(
     private val physicalPage by lazy { RpcDesktopPhysicalTests(applicationSession.deviceTests,
         ::mutatePhysicalTest, { showDeviceTests(showingMultiTests) }, { exportPhysicalEvidence() },
         ::browsePhysicalEvidence, { runId -> exportPhysicalEvidence(true, runId) },
-        { outcome.text }, ::requestBack) }
+        { outcome.text }, ::requestBack,
+        if (System.getProperty("os.name").startsWith("Mac")) {
+            { workspaceScroll.setViewportView(campaignPage) }
+        } else null) }
     private val testHeading = DesktopRpcAppearance.heading("Device tests")
     private val testModeDescription = DesktopRpcWrappedLabel("Run one test on one connected Client.")
     private val groupPeersModel = DefaultListModel<RpcKnownDevice>()
@@ -227,6 +234,11 @@ public class RpcDesktopPanel(
                 add(JButton("Test Center · all physical tests").apply { addActionListener {
                     if (!closing) { showingTests = true; workspaceScroll.setViewportView(physicalPage); physicalPage.render() }
                 } })
+                if (System.getProperty("os.name").startsWith("Mac")) {
+                    add(JButton("Phone capacity · prepared Mac campaign").apply { addActionListener {
+                        if (!closing) workspaceScroll.setViewportView(campaignPage)
+                    } })
+                }
                 add(DesktopRpcAppearance.hero())
                 add(DesktopRpcAppearance.heading("Connect"))
                 add(DesktopRpcWrappedLabel("Choose Host on one device and Client on the other. " +
@@ -544,7 +556,7 @@ public class RpcDesktopPanel(
     }
 
     private fun startRole(host: Boolean) {
-        if (closing || unlocking || physicalWrite?.isActive == true || unlockCleanupFailure != null || !windowActive ||
+        if (closing || campaignPage.running || unlocking || physicalWrite?.isActive == true || unlockCleanupFailure != null || !windowActive ||
             owner.snapshot().stage !in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
         val unlocked = profile
         // On Windows this is the fixed installed provider, not an OS-name permission or a POSIX fallback.
@@ -968,6 +980,8 @@ public class RpcDesktopPanel(
             attempt { statusUpdates?.join() }
             phase("test evidence writer")
             attempt { physicalWrite?.join() }
+            phase("phone capacity campaign")
+            attempt { campaignPage.retire() }
             // Do not cancel a native unlock or lose its successful late profile. No role can start while closing.
             phase("profile unlock")
             attempt { unlockTask?.join() }

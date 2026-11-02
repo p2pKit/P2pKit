@@ -14,6 +14,8 @@ struct RpcPhysicalTestView: View {
     @State private var archivePage: RpcTestArchivePage?
     @State private var archiveTask: Task<Void, Never>?
     @State private var archiveBusy = false
+    @State private var choosingCase = false
+    @State private var caseFilter = ""
 
     private var center: RpcPhysicalTestSession { model.applicationSession.deviceTests.physicalTests }
     private var test: RpcPhysicalTestCase {
@@ -25,11 +27,8 @@ struct RpcPhysicalTestView: View {
             Form {
                 Section {
                     Text("Run built-in tests or follow a physical procedure. External tools and hardware remain required where shown.")
-                    Picker("Physical test", selection: $selected) {
-                        ForEach(RpcPhysicalTestCatalog.shared.cases, id: \.id) { item in
-                            Text(item.summary).tag(item.id).accessibilityIdentifier("rpc.case." + item.id)
-                        }
-                    }.disabled(center.progress != nil).accessibilityIdentifier("rpc.physicalCase")
+                    Button("Physical test: " + test.summary) { choosingCase = true }
+                        .disabled(center.progress != nil).accessibilityIdentifier("rpc.physicalCase")
                     Text(test.equipment)
                     Text("Method: \(test.tool)")
                 }
@@ -109,6 +108,26 @@ struct RpcPhysicalTestView: View {
             .navigationTitle("Test Center")
             .toolbar { Button("Done") { dismiss() } }
             .sheet(isPresented: $shareExport) { if let file = exportFile { RpcTestEvidenceShare(file: file) } }
+            .sheet(isPresented: $choosingCase) {
+                NavigationView {
+                    List {
+                        ForEach(RpcPhysicalTestCatalog.shared.cases.filter {
+                            caseFilter.isEmpty || $0.summary.localizedCaseInsensitiveContains(caseFilter)
+                                || $0.id.localizedCaseInsensitiveContains(caseFilter)
+                        }, id: \.id) { item in
+                            Button(item.summary) {
+                                selected = item.id
+                                reference = ""
+                                notes = ""
+                                choosingCase = false
+                            }.accessibilityIdentifier("rpc.case." + item.id)
+                        }
+                    }
+                    .searchable(text: $caseFilter, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a test")
+                    .navigationTitle("Choose a test")
+                    .toolbar { Button("Cancel") { choosingCase = false } }
+                }
+            }
             .onDisappear { archiveTask?.cancel() }
         }
     }

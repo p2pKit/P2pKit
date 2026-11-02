@@ -30,13 +30,53 @@ technical identifiers. The new controls use visible text for accessible names,
 native checkbox state and platform text direction. Localized production UI and
 physical assistive-technology checks are not claimed by this source change.
 
-Remaining engineering: direct Mac cohort launch/control with source-matched
-preparation; mixed physical-phone plus 255 Mac-client coordination; genuine
+Remaining engineering: mixed physical-phone plus 255 Mac-client coordination; genuine
 socket-read backpressure; coordinated long faults; reviewed unplugged recorder;
 controlled native callback/storage/packet fixtures; authoritative independent
 peer inputs; imported external evidence reconciliation. Hardware/OS/backup/Windows matrix
 execution and independent review remain required. The catalog does not supply
 these prerequisites or close their issues.
+
+## Start the prepared phone capacity phases from Mac
+
+An engineer prepares one source-matched campaign with the maintained runner and
+creates its private Android/iPhone 128/256 settings using actual device/LAN
+values. In the same admitted ordinary-user test session, start:
+
+```bash
+python3 -B scripts/run-rpc-mac-campaign.py serve --state "$STATE" \
+  --settings "$ANDROID_128_SETTINGS" --settings "$ANDROID_256_SETTINGS" \
+  --settings "$IPHONE_128_SETTINGS" --settings "$IPHONE_256_SETTINGS"
+```
+
+Omit profiles that are not prepared. Open **Test Center → Phone capacity ·
+prepared Mac campaign** in the matching Mac app. Select **Attach prepared
+campaign folder** and choose `$STATE/private/test-center` once. Choose the
+phone/capacity, then press **Large**, **Correctness**, **Churn** or **Steady ·
+30 minutes**. Each click creates a new run ID, immutable request and separate
+private outcome. Original campaign logs/receipts remain in the session. The
+app profile is separate from the campaign's independent protected identities.
+
+This is an owner-only local file mailbox, not a network server or RPC tunnel.
+It supplies no endpoints, shell commands or keys. The original native campaign
+supervisor owns all phone control, deadlines and process retirement. Source,
+prepared-product and settings bindings are checked again before dispatch.
+First-time device consent and unresolved prior installations still require
+the maintained ownership procedure; an app button cannot bypass them.
+
+**Cancel campaign phase** asks only the original controller to cancel. Wait for
+its final outcome; a cancellation request is not verified cleanup. If the app
+shows **RecoveryRequired**, select the original phone, capacity and phase and
+press **Verify original cleanup**. This rechecks the original retirement and
+retains the failure. It cannot repair missing closure evidence or reinstall a
+phone to hide uncertainty. A worker restart never replays a started request.
+The Mac UI blocks another local role while its campaign request is pending,
+and closing waits for the original worker's outcome. Worker disappearance or
+unverified cleanup remains a failure requiring recovery.
+
+Xcode controls retain test assertions, explicit screenshots and the original
+XCTest result bundle. Automatic verbose system-diagnostic collection is disabled
+for this supplemental UI run; no execution deadline or required test is changed.
 
 Saved archive controls load newest-first pages of 20 original records, including
 records older than the recent window. Export one selected output or the complete

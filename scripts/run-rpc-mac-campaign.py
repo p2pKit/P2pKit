@@ -22,6 +22,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 
@@ -545,7 +546,18 @@ class Session:
             child = subprocess.Popen(command, cwd=ROOT, env=self.env, stdin=subprocess.DEVNULL,
                                      stdout=output, stderr=subprocess.STDOUT)
             try:
-                code = child.wait()  # The maintained supervisor owns all deadlines, children and cleanup.
+                cancel_requested = getattr(self, "cancel_requested", None)
+                if cancel_requested is None:
+                    code = child.wait()  # The maintained supervisor owns all deadlines, children and cleanup.
+                else:
+                    cancellation_sent = False
+                    while child.poll() is None:
+                        if cancel_requested() and not cancellation_sent:
+                            import signal
+                            child.send_signal(signal.SIGINT)  # Only this original native controller.
+                            cancellation_sent = True
+                        time.sleep(0.25)
+                    code = child.returncode
             except BaseException:
                 # Interrupt the ORIGINAL controller, not a guessed PID/group or a phone application.
                 # Its signal handler requests cancellation and drains its own native scope.
@@ -803,7 +815,7 @@ class Session:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("doctor", "prepare", "verify", "run", "settings", "recover"):
+    for name in ("doctor", "prepare", "verify", "run", "settings", "recover", "serve"):
         command = sub.add_parser(name)
         command.add_argument("--state", type=Path, required=True, help="Private canonical path OUTSIDE the checkout")
         if name in ("doctor", "prepare"):
@@ -825,6 +837,9 @@ def main():
         if name == "recover":
             command.add_argument("--platform", choices=("android", "ios"), required=True,
                                  help="Inspect/reuse only an exact failed attempt whose original retirement is verified")
+        if name == "serve":
+            command.add_argument("--settings", type=Path, action="append", required=True,
+                                 help="Prepared private schema2 profile; repeat for every phone/capacity")
     analyze = sub.add_parser("analyze")
     analyze.add_argument("--result", type=Path, required=True)
     analyze.add_argument("--output", type=Path, required=True, help="NEW private summary, never overwrites original evidence")
@@ -856,6 +871,8 @@ def main():
         print("SETTINGS_TEMPLATE_WRITTEN: " + str(args.output) + "; replace deliberately invalid device/network placeholders")
     elif args.action == "recover":
         session.recover(args.platform)
+    elif args.action == "serve":
+        module("mac_campaign_test_center", "rpc_test_center.py").serve(session, sys.modules[__name__], args.settings)
     else:
         session.run(args)
 

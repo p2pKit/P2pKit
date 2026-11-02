@@ -27,6 +27,7 @@ internal class RpcDesktopPhysicalTests(
     exportArchive: (String?) -> Unit,
     private val status: () -> String,
     back: () -> Unit,
+    campaign: (() -> Unit)? = null,
 ) : DesktopRpcColumn() {
     private val cases = JComboBox(RpcPhysicalTestCatalog.cases.toTypedArray()).apply {
         accessibleContext.accessibleName = "Physical test case"
@@ -76,6 +77,9 @@ internal class RpcDesktopPhysicalTests(
         add(DesktopRpcAppearance.heading("Test Center"))
         add(DesktopRpcWrappedLabel("Run built-in tests or follow a physical procedure. " +
             "Required external tools and hardware are listed for each case."))
+        campaign?.let { open ->
+            add(JButton("Phone capacity · prepared Mac campaign").apply { addActionListener { open() } })
+        }
         add(cases); add(description); add(steps); add(timing); add(run); add(start)
         add(DesktopRpcWrappedLabel("Private evidence reference / saved run IDs (up to 1024 UTF-8 bytes)"))
         add(reference)

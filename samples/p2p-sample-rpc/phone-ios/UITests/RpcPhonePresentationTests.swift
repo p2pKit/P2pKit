@@ -12,7 +12,11 @@ final class RpcPhonePresentationTests: XCTestCase {
         }
         for _ in 0..<8 {
             if visible() { return }
-            if up { app.swipeUp() } else { app.swipeDown() }
+            let collection = app.collectionViews.firstMatch
+            let table = app.tables.firstMatch
+            let scroll = app.scrollViews.firstMatch
+            let container = collection.exists ? collection : (table.exists ? table : (scroll.exists ? scroll : app))
+            if up { container.swipeUp() } else { container.swipeDown() }
         }
         XCTAssertTrue(visible(), "Required control was not reachable")
     }
@@ -354,8 +358,12 @@ final class RpcPhonePresentationTests: XCTestCase {
         let picker = app.buttons["rpc.physicalCase"]
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         picker.tap()
-        let fileCase = app.staticTexts["rpc.case.core-files"]
-        reveal(fileCase, in: app, up: true)
+        XCTAssertTrue(app.navigationBars["Choose a test"].waitForExistence(timeout: 5))
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("core-files")
+        let fileCase = app.buttons["rpc.case.core-files"]
+        XCTAssertTrue(fileCase.waitForExistence(timeout: 5))
         fileCase.tap()
         let start = app.buttons["rpc.observationStart"]
         reveal(start, in: app, up: true)

@@ -345,6 +345,7 @@ def main():
             "-scheme", "p2pkit-rpc-phone-controls", "-configuration", "Debug", "-sdk", "iphonesimulator",
             "-destination", "platform=iOS Simulator,id=" + simulator, "-derivedDataPath", str(work / "simulator-derived"),
             "-resultBundlePath", str(bundle), "-parallel-testing-enabled", "NO",
+            "-collect-test-diagnostics", "never",
             "-maximum-concurrent-test-simulator-destinations", "1", "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "test"],
             timeout=7200, required=False)
         if bundle.is_dir():
