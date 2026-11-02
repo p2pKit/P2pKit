@@ -14,11 +14,13 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current source selects **`0.8.0-rc9`** for the additive exact RPC
+The current source selects **`0.8.0-rc10`** for the additive exact RPC
 physical-session APIs merged in #534. It is not yet published. Its own qualified
 main source, four application artifacts, dry run and protected publication are
 required; rc8 evidence and the separate ongoing phone campaign cannot substitute
 for those results. `LATEST_PUBLISHED_VERSION` remains rc8 until remote verification.
+The immutable [rc9 attempt](../releases/0.8.0-rc9.md) failed before signing/upload
+because its release PR lacked the required pre-merge owner approval comment.
 
 The latest verified library publication is **`0.8.0-rc8`**, from exact source
 `6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Its
@@ -282,6 +284,13 @@ reselecting after Maven.
 2. Pass PR checks and obtain the owner's exact-head PR authorization. Use the
    protected history-preserving merge process. The actual main merge message
    must contain case-sensitive **`[release ci]`** for publication.
+   After every required PR check passes and before merge, the owner must post a
+   new, unedited comment on that PR containing exactly
+   `/p2pkit approve-pr <full-final-head-SHA>`. `approved_pull()` in
+   [`publish-sample-release.py`](../../scripts/publish-sample-release.py) checks
+   the author, exact head and timestamps. Chat authorization or a post-merge
+   comment cannot substitute for this recorded event. The dry run verifies
+   qualification/identity but does not check this publication admission rule.
 3. Qualify that exact main commit. Build and inspect APK, Windows x64 MSI,
    macOS ARM64 DMG and Linux x64 DEB from the same source/version. Use the existing
    [canonical package encoding](application-versions.md), not release titles or

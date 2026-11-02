@@ -3,7 +3,7 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc9 — development release candidate (not yet published)
+## 0.8.0-rc10 — development release candidate (not yet published)
 
 - Add opt-in exact RPC physical-session provenance for application integration
   (#531, #534). `registerScopedWithPhysicalSession()` exposes the authenticated
@@ -27,6 +27,16 @@ publication. The installed manual-test applications and their saved results
 remain bound to their separate lab source. Physical 128/256-client qualification
 in #525, battery/thermal measurements and other existing external validation
 remain incomplete. This is a development prerelease, not stable/production READY.
+
+## 0.8.0-rc9 — unpublished attempt (2026-11-02)
+
+The immutable rc9 tag retains the API changes selected for rc10 above. Its
+publisher stopped at `freeze-applications` with `Missing manual owner PR
+authorization`, before signing or upload. The required unedited owner comment
+must follow successful PR checks and precede merge; it cannot be supplied
+retroactively. Retain the tag, original failed attempt and successful main-source
+qualification separately. See the [attempt record](docs/releases/0.8.0-rc9.md).
+Rc10 requires fresh source/version qualification and approval.
 
 ## 0.8.0-rc8 — development release candidate (2026-10-30)
 
