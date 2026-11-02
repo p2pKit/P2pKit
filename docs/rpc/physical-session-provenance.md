@@ -1,6 +1,6 @@
 # RPC physical-session provenance and exact closure
 
-This additive API is selected for the **unpublished `0.8.0-rc9` candidate** and
+This additive API is selected for the **unpublished `0.8.0-rc10` candidate** and
 addresses [#531](https://github.com/p2pKit/P2pKit/issues/531).
 It is not present in the immutable `0.8.0-rc8` artifacts. It supplements
 [application-session authorization](application-session-authorization.md);
