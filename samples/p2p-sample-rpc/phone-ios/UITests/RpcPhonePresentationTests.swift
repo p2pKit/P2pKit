@@ -332,4 +332,58 @@ final class RpcPhonePresentationTests: XCTestCase {
         XCTAssertTrue(app.buttons["Show synthetic approval"].exists)
         XCTAssertFalse(approve.exists)
     }
+
+    @MainActor
+    func testTestCenterKeepsObservationsSeparateFromRpcAndRetainsArchivedResultsAfterReopen() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--rpc-ui-network-unavailable"]
+        app.launch()
+        defer { app.terminate() }
+        let entry = app.buttons["Test Center · all physical tests"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["Test Center"].waitForExistence(timeout: 5))
+        let controls = app.buttons["Open RPC test controls"]
+        reveal(controls, in: app, up: true)
+        controls.tap()
+        XCTAssertTrue(app.navigationBars["Device tests"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["rpc.testStop"].isEnabled)
+        app.buttons["Back to RPC"].tap()
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+        app.buttons["Test Center · all physical tests"].tap()
+        let picker = app.buttons["rpc.physicalCase"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.tap()
+        let fileCase = app.staticTexts["rpc.case.core-files"]
+        reveal(fileCase, in: app, up: true)
+        fileCase.tap()
+        let start = app.buttons["rpc.observationStart"]
+        reveal(start, in: app, up: true)
+        XCTAssertTrue(start.isEnabled)
+        start.tap()
+        reveal(app.buttons["Save for review"], in: app, up: true)
+        app.buttons["Save for review"].tap()
+        XCTAssertTrue(app.staticTexts["Check steps, duration, evidence reference and storage status. Nothing was marked passed."].exists)
+        let end = app.buttons["rpc.observationEnd"]
+        reveal(end, in: app, up: true)
+        XCTAssertTrue(end.isEnabled)
+        end.tap()
+        let load = app.buttons["Load newest saved results"]
+        reveal(load, in: app, up: true)
+        load.tap()
+        let outcome = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Files, consent and cleanup · Interrupted")).firstMatch
+        XCTAssertTrue(outcome.waitForExistence(timeout: 5))
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Test Center — synthetic interrupted observation and separate archive"
+        image.lifetime = .keepAlways
+        add(image)
+        app.terminate()
+        app.launch()
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+        app.buttons["Test Center · all physical tests"].tap()
+        reveal(app.buttons["Load newest saved results"], in: app, up: true)
+        app.buttons["Load newest saved results"].tap()
+        XCTAssertTrue(outcome.waitForExistence(timeout: 5), "Original evidence must survive a full process reopen")
+        XCTAssertFalse(app.buttons["rpc.observationEnd"].exists, "A process reopen cannot resume an observation")
+    }
 }

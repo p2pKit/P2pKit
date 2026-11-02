@@ -27,9 +27,9 @@ struct RpcPhysicalTestView: View {
                     Text("Run built-in tests or follow a physical procedure. External tools and hardware remain required where shown.")
                     Picker("Physical test", selection: $selected) {
                         ForEach(RpcPhysicalTestCatalog.shared.cases, id: \.id) { item in
-                            Text(item.summary).tag(item.id)
+                            Text(item.summary).tag(item.id).accessibilityIdentifier("rpc.case." + item.id)
                         }
-                    }.disabled(center.progress != nil)
+                    }.disabled(center.progress != nil).accessibilityIdentifier("rpc.physicalCase")
                     Text(test.equipment)
                     Text("Method: \(test.tool)")
                 }
@@ -50,7 +50,7 @@ struct RpcPhysicalTestView: View {
                     } else {
                         Button("Start guided observation") {
                             action { try center.start(caseId: test.id, source: model.compiledSource, platform: "iPhone") }
-                        }.disabled(center.progress != nil)
+                        }.disabled(center.progress != nil).accessibilityIdentifier("rpc.observationStart")
                     }
                 }
                 if center.progress != nil {
@@ -63,7 +63,7 @@ struct RpcPhysicalTestView: View {
                         Button("Save for review") { finish("AwaitingReview") }
                         Button("Record failure") { finish("Failed") }
                         Button("Record missing setup") { finish("Blocked") }
-                        Button("End observation") { finish("Interrupted") }
+                        Button("End observation") { finish("Interrupted") }.accessibilityIdentifier("rpc.observationEnd")
                     }
                 }
                 Section("Monitor") {

@@ -152,6 +152,43 @@ class Preparation(unittest.TestCase):
     def test_absent_dependency_cache_keeps_normal_resolution(self):
         self.assertIsNone(self.validate_cache())
 
+    def test_additional_test_index_seeds_only_a_new_private_cache_and_preserves_originals(self):
+        original, _, _, manifest = self.dependency_cache()
+        cache = original.with_name("gradle-ro-test-dependencies")
+        original.rename(cache)
+        for relative, entry in manifest["artifacts"].items():
+            entry["path"] = str(cache / "modules-2" / relative)
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        state = self.root / "state"
+        state.mkdir(mode=0o700)
+        (state / "private").mkdir(mode=0o700)
+        with patch.object(m, "ROOT", self.root), patch.object(m.subprocess, "run"), \
+                patch.object(m.subprocess, "check_output", side_effect=self.cache_git):
+            selected = m.stage_external_test_dependencies(state)
+            self.assertEqual(selected["path"], str(cache))
+            for relative, expected in manifest["artifacts"].items():
+                source = cache / "modules-2" / relative
+                target = state / "gradle-home/caches/modules-2" / relative
+                self.assertEqual(target.read_bytes(), source.read_bytes())
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o400)
+                self.assertEqual(m.artifact(target)["sha256"], expected["sha256"])
+            with self.assertRaises(ValueError):
+                m.stage_external_test_dependencies(state)
+            proof = m.private_json(state / "private/test-dependency-seed.json")
+            self.assertTrue(proof["strictDependencyVerificationRequired"])
+            self.assertEqual(proof["scope"], "EXTERNAL_DEPENDENCY_SEED_NOT_COMPILED_PROJECT_PRODUCTS")
+
+    def test_external_seed_rejects_an_unreviewed_namespace(self):
+        for name in ("../escape", "/tmp/cache", "gradle-home", ""):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                m.read_only_dependency_cache(self.root / "state", name)
+
+    def test_absent_external_test_index_does_not_allocate_a_writable_cache(self):
+        state = self.root / "state"
+        self.assertIsNone(m.stage_external_test_dependencies(state))
+        self.assertFalse(state.exists())
+
     def test_sealed_external_cache_has_a_separate_manifest_binding(self):
         cache, _, _, _ = self.dependency_cache()
         selected = self.validate_cache()

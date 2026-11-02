@@ -48,7 +48,8 @@ internal class RpcTestArchiveFiles(private val directory: File) {
                 val name = path.fileName.toString()
                 if (name.matches(Regex("[a-f0-9]{32}\\.json"))) {
                     val runId = name.removeSuffix(".json")
-                    if (!File(directory, "$runId.deleted").exists()) accept(runId, read(path.toFile()))
+                    val marker = File(directory, "$runId.deleted")
+                    if (marker.exists()) check(read(marker) == runId) else accept(runId, read(path.toFile()))
                 }
             }
         }
@@ -68,7 +69,8 @@ internal class RpcTestArchiveFiles(private val directory: File) {
             visit(writer::append)
         } else {
             require(runId.matches(Regex("[a-f0-9]{32}")))
-            check(!File(directory, "$runId.deleted").exists())
+            val marker = File(directory, "$runId.deleted")
+            if (marker.exists()) { check(read(marker) == runId); error("Selected output was deleted") }
             writer.append(runId, read(File(directory, "$runId.json")))
         }
         writer.finish()

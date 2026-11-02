@@ -256,9 +256,10 @@ def verify_android_campaign_identity(raw):
          "Only the separate debuggable RPC campaign package may enter preparation")
 
 
-def read_only_dependency_cache(state):
+def read_only_dependency_cache(state, cache_name="gradle-ro-dependencies"):
     """Only sealed external inputs from a finalized local producer; never compiled project outputs."""
-    cache = state.parent / "tool-cache/gradle-ro-dependencies"
+    need(cache_name in ("gradle-ro-dependencies", "gradle-ro-test-dependencies"), "Reviewed cache namespace required")
+    cache = state.parent / "tool-cache" / cache_name
     if not cache.exists() and not cache.is_symlink():
         return None
     private(cache)
@@ -341,6 +342,59 @@ def read_only_dependency_cache(state):
                 "Only original Gradle module metadata is admitted; no locks, transforms or scripts")
     need(actual_files == set(entries), "Missing or additional cache files")
     return dict(path=str(cache), manifest=artifact(manifest_path), producerReceipt=producer)
+
+
+def stage_external_test_dependencies(state):
+    """Seed one new writable resolver cache, never transforms or compiled P2pKit outputs.
+
+    Gradle supports one read-only repository index. A producer that used that
+    index may have only its additional test dependencies in its writable index.
+    Keep both original indexes; do not splice their binary records together.
+    """
+    name = "gradle-ro-test-dependencies"
+    cache = read_only_dependency_cache(state, name)
+    if cache is None:
+        return None
+    source_cache = Path(cache["path"]) / "modules-2"
+    inventory = private_json(Path(cache["path"]) / "manifest.json")["artifacts"]
+    private(state)
+    destination = state
+    for part in ("gradle-home", "caches"):
+        destination = destination / part
+        destination.mkdir(mode=0o700, exist_ok=True)
+        private(destination)
+    destination = destination / "modules-2"
+    need(not destination.exists() and not destination.is_symlink(), "Seed only a NEW writable dependency cache")
+    destination.mkdir(mode=0o700)
+    for relative, expected in sorted(inventory.items()):
+        path = source_cache / relative
+        target = destination / relative
+        need(path == path.resolve(strict=True) and target.is_relative_to(destination), "Canonical cache slot required")
+        parent = destination
+        for part in Path(relative).parts[:-1]:
+            parent = parent / part
+            parent.mkdir(mode=0o700, exist_ok=True)
+            private(parent)
+        digest = hashlib.sha256()
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as original:
+            with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as output:
+                remaining = expected["bytes"]
+                while remaining:
+                    block = original.read(min(remaining, 65536))
+                    need(block, "External cache input ended early")
+                    output.write(block)
+                    digest.update(block)
+                    remaining -= len(block)
+                need(original.read(1) == b"" and digest.hexdigest() == expected["sha256"], "External input changed")
+                output.flush()
+                os.fsync(output.fileno())
+    need(read_only_dependency_cache(state, name) == cache, "External cache changed during staging")
+    new_json(state / "private/test-dependency-seed.json", dict(
+        schema=1, scope="EXTERNAL_DEPENDENCY_SEED_NOT_COMPILED_PROJECT_PRODUCTS", cache=cache,
+        files=len(inventory), bytes=sum(entry["bytes"] for entry in inventory.values()),
+        strictDependencyVerificationRequired=True,
+    ))
+    return cache
 
 
 def bound_attempt_result(attempt, result):
@@ -436,6 +490,8 @@ class Session:
         need(context["source"] == self.source and context["root"] == str(ROOT), "Session binds another source")
         self.env = campaign_environment(os.environ, self.state)
         self.dependency_cache = read_only_dependency_cache(self.state)
+        self.test_dependency_cache = (stage_external_test_dependencies(self.state) if initialize
+            else read_only_dependency_cache(self.state, "gradle-ro-test-dependencies"))
         if self.dependency_cache is not None:
             self.env["GRADLE_RO_DEP_CACHE"] = self.dependency_cache["path"]
         else:
@@ -505,6 +561,8 @@ class Session:
         self.checker.validate(proof, code, label, ROOT, ROOT / "gradlew", list(map(str, argv)))
         need(read_only_dependency_cache(self.state) == self.dependency_cache,
              "Read-only dependency inputs changed during the original native invocation")
+        need(read_only_dependency_cache(self.state, "gradle-ro-test-dependencies") ==
+             getattr(self, "test_dependency_cache", None), "External test inputs changed during the native invocation")
         need((code == 0 or not require_success) and proof["sourceBefore"] == proof["sourceAfter"] == self.source and
              not proof["errors"] and not proof["ownedSurvivors"] and proof["stopExitCode"] == 0,
              "Command failed; retained private receipt: " + str(receipt))

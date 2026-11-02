@@ -6,6 +6,13 @@ struct RpcTestArchiveFiles {
     enum Failure: Error { case invalidArchive }
     let directory: URL
 
+    private func deleted(_ runId: String) throws -> Bool {
+        let marker = directory.appendingPathComponent(runId + ".deleted")
+        if !FileManager.default.fileExists(atPath: marker.path) { return false }
+        guard try read(marker) == runId else { throw Failure.invalidArchive }
+        return true
+    }
+
     private func read(_ file: URL) throws -> String {
         var before = stat()
         guard lstat(file.path, &before) == 0, before.st_mode & S_IFMT == S_IFREG,
@@ -51,7 +58,7 @@ struct RpcTestArchiveFiles {
             let name = file.lastPathComponent
             guard name.range(of: "^[a-f0-9]{32}\\.json$", options: .regularExpression) != nil else { continue }
             let runId = String(name.dropLast(5))
-            if !FileManager.default.fileExists(atPath: directory.appendingPathComponent(runId + ".deleted").path) {
+            if try !deleted(runId) {
                 try accept(runId, read(file))
             }
         }
@@ -68,7 +75,7 @@ struct RpcTestArchiveFiles {
         let writer = RpcTestEvidenceWriter(recentOnly: false, appendLine: append)
         if let id = runId {
             guard id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil,
-                !FileManager.default.fileExists(atPath: directory.appendingPathComponent(id + ".deleted").path) else {
+                try !deleted(id) else {
                 throw Failure.invalidArchive
             }
             try writer.append(runId: id, text: read(directory.appendingPathComponent(id + ".json")))

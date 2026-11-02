@@ -34,7 +34,7 @@ Remaining engineering: direct Mac cohort launch/control with source-matched
 preparation; mixed physical-phone plus 255 Mac-client coordination; genuine
 socket-read backpressure; coordinated long faults; reviewed unplugged recorder;
 controlled native callback/storage/packet fixtures; authoritative independent
-peer inputs; full archive browsing/export. Hardware/OS/backup/Windows matrix
+peer inputs; imported external evidence reconciliation. Hardware/OS/backup/Windows matrix
 execution and independent review remain required. The catalog does not supply
 these prerequisites or close their issues.
 
@@ -51,3 +51,10 @@ iPhone sharing and Mac export run away from the UI thread. Stop workloads before
 archive operations. Private exports are plaintext evidence; share them only with
 the intended reviewer. They contain no profile secrets, but notes may contain
 private operator information.
+
+Mac preparation can reuse a separately verified external test-dependency index
+alongside its original read-only dependency cache. Each new source session copies
+only source-pinned external dependencies and Gradle resolver metadata from the
+finalized producer into a new private writable cache. It retains the source,
+policy, receipt and checksum checks; compiled P2pKit products are rebuilt for the
+selected source. Existing cache indexes are never spliced together.
