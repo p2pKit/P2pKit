@@ -17,8 +17,9 @@ boundaries. The latest completed publication is
 passed with its original PUBLISHED deployment, 242-file remote comparison and
 complete isolated consumer builds. Its publication-build SBOM contains 88
 components; independent public-signature inspection verified 121 signed originals
-across 21 coordinates. Public sample delivery awaits separate owner evidence
-review/approval. The [unpublished rc9 attempt](../releases/0.8.0-rc9.md) and
+across 21 coordinates. Separately approved sample delivery published the frozen
+applications; independent complete anonymous downloads verified all seven
+original hashes. The [unpublished rc9 attempt](../releases/0.8.0-rc9.md) and
 [verified rc8 release](../releases/0.8.0-rc8.md) retain their historical scope.
 Later source requires its own qualification and protected approvals.
 

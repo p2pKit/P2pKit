@@ -15,10 +15,11 @@ supports Android, JVM/Desktop, and iOS through one transport-independent API.
 It adds opt-in [exact RPC physical-session provenance and awaited
 closure](docs/rpc/physical-session-provenance.md). The
 [release record](docs/releases/0.8.0-rc10.md) binds the verified source, signed
-Maven files and four original application packages. Public sample delivery
-awaits its separate owner evidence approval; the
-[rc8 development samples](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8)
-retain their original source and bytes. The ongoing phone tests use their own
+Maven files and four original application packages. Separately approved
+[rc10 development samples](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc10)
+provide the matching APK/MSI/ARM64-DMG/DEB; all seven complete anonymous downloads
+match their original hashes. Earlier samples retain their own source and bytes.
+The ongoing phone tests use their own
 lab builds. The [rc9 attempt](docs/releases/0.8.0-rc9.md) stopped before signing or upload.
 
 This is a release candidate, not a production-audit or physical-device pass.
@@ -342,9 +343,9 @@ Protected publisher [41391027354/1](https://github.com/p2pKit/P2pKit/actions/run
 passed. Independent public-signature inspection verified all 121 originals
 across 21 coordinates. Its original remote gate matched 242 files against the
 signed bundle and completed isolated consumer builds. The publication-build
-SBOM contains 88 components. Public delivery of its frozen APK/MSI/ARM64-DMG/DEB
-awaits a separate owner evidence approval. Those packages have not been installed
-by this release operation.
+SBOM contains 88 components. The separately approved sample publisher delivered
+the frozen APK/MSI/ARM64-DMG/DEB. All seven complete anonymous downloads matched
+their original hashes. Those packages have not been installed by this release operation.
 
 The [unpublished rc9 attempt](docs/releases/0.8.0-rc9.md) retains its original
 ARM64 runner/evidence-upload failure and publisher refusal before signing/upload.

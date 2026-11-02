@@ -23,7 +23,9 @@ main components, four application packages, dry run and protected Maven
 The original publisher passed 242-file remote comparison and complete isolated
 consumer builds. Independent inspection verified 121 signatures across 21
 coordinates; its publication-build SBOM contains 88 components.
-Public sample delivery awaits its separate owner evidence review/approval.
+Separately approved [sample delivery](https://github.com/p2pKit/P2pKit/actions/runs/41394743465)
+published the frozen applications at the same source. Independent complete
+anonymous downloads verified all seven original hashes, without rebuilding.
 `LATEST_PUBLISHED_VERSION` and the retained source version are rc10; no next
 snapshot is selected. The installed phone campaign remains separate.
 

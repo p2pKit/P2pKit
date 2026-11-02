@@ -17,8 +17,10 @@ passed 242-file byte comparison and complete isolated consumer builds. Independe
 inspection verified 121 signatures across 21 coordinates. The publication-build
 SBOM contains 88 components. Inner consumer command/result captures were not
 retained; completion and cleanup evidence is the original successful maintained
-step and marker. Public sample delivery awaits separate owner evidence approval.
-These results do not qualify the installed phone tests or other physical scope.
+step and marker. Separately approved sample delivery published the frozen
+applications; all seven complete anonymous downloads, 365,031,689 bytes, matched
+the original approved hashes. These results do not qualify the installed phone
+tests or other physical scope.
 
 The [rc9 attempt](../releases/0.8.0-rc9.md) preserves its original runner failure,
 missing private failure artifact and publisher refusal before signing/upload.

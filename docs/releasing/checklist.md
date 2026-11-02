@@ -10,8 +10,10 @@ passed all fourteen components and four application producers. Protected Maven
 [41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354)
 passed 242-file remote comparison and complete isolated consumer builds.
 Independent inspection verified all 121 signatures across 21 coordinates.
-Public sample delivery awaits its separate owner evidence review/approval;
-installation and physical-device scope remain governed by their own campaigns.
+Separately approved [sample delivery](https://github.com/p2pKit/P2pKit/actions/runs/41394743465)
+passed, publishing the frozen applications at the same source. Independent full
+anonymous downloads verified all seven original hashes; installation and
+physical-device scope remain governed by their own campaigns.
 The [rc9 attempt](../releases/0.8.0-rc9.md) failed before signing/upload; its
 missing pre-merge approval cannot be supplied retroactively.
 
