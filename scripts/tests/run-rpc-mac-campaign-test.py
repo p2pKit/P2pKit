@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -22,6 +23,15 @@ spec.loader.exec_module(m)
 
 
 class Preparation(unittest.TestCase):
+    def test_apk_identity_rejects_canonical_foreign_duplicate_or_non_debuggable_products(self):
+        good = b"package: name='dev.p2pkit.sample.android.rpclab' versionCode='1'\napplication-debuggable\n"
+        m.verify_android_campaign_identity(good)
+        for wrong in (good.replace(b'.rpclab', b''), good.replace(b'.rpclab', b'.other'),
+                      good.replace(b'application-debuggable\n', b''), good + good,
+                      good + b'application-debuggable\n', b'', b'\xff', None):
+            with self.subTest(raw=wrong), self.assertRaises((ValueError, UnicodeDecodeError)):
+                m.verify_android_campaign_identity(wrong)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -40,6 +50,195 @@ class Preparation(unittest.TestCase):
         driver = self.file("samples/p2p-sample-rpc/build/capacity-lab/manifest.json")
         return dict(schema=1, scope=m.SCOPE, source=self.source, iosApp=None,
                     artifacts={"android-apk": m.artifact(apk), "jvm-manifest": m.artifact(driver)})
+
+    def wrapper_cache(self, checksum=None, url="https\\://services.gradle.org/distributions/gradle-9.7.0-bin.zip"):
+        for helper in ("run-rpc-capacity-lab.py", "run-audit-command.py"):
+            self.file("scripts/" + helper, (ROOT / "scripts" / helper).read_bytes())
+        data = b"OFFLINE_SYNTHETIC_ARCHIVE; THE_REAL_WRAPPER_MUST_VALIDATE_ZIP_FORMAT"
+        archive = self.file("tool-cache/gradle-distribution.zip", data)
+        archive.parent.chmod(0o700)
+        checksum = checksum or hashlib.sha256(data).hexdigest()
+        self.file("gradle/wrapper/gradle-wrapper.properties", (
+            "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\n" +
+            "zipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n" +
+            "validateDistributionUrl=true\ndistributionUrl=" + url + "\ndistributionSha256Sum=" + checksum + "\n"
+        ).encode())
+        return archive
+
+    def test_wrapper_archive_cache_keeps_original_verification_without_completion_markers(self):
+        archive = self.wrapper_cache()
+        state = self.root / "state"
+        state.mkdir(mode=0o700)
+        (state / "private").mkdir(mode=0o700)
+        with patch.object(m, "ROOT", self.root):
+            m.stage_pinned_wrapper_archive(state)
+        copies = list((state / "gradle-home").rglob("*.zip"))
+        self.assertEqual(len(copies), 1)
+        self.assertEqual(copies[0].read_bytes(), archive.read_bytes())
+        self.assertEqual(list(state.rglob("*.ok")), [])
+        proof = m.private_json(state / "private/wrapper-cache.json")
+        self.assertTrue(proof["wrapperVerificationRequired"])
+        self.assertFalse(proof["completionMarkerCreated"])
+        with patch.object(m, "ROOT", self.root), self.assertRaises(FileExistsError):
+            m.stage_pinned_wrapper_archive(state)
+
+    def test_wrapper_cache_checksum_failure_retains_input_and_stages_nothing(self):
+        archive = self.wrapper_cache(checksum="f" * 64)
+        before = archive.read_bytes()
+        with patch.object(m, "ROOT", self.root), self.assertRaises(ValueError):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+        self.assertEqual(archive.read_bytes(), before)
+        self.assertFalse((self.root / "state").exists())
+
+    def test_wrapper_cache_refuses_linked_archive_and_unsupported_distribution_origin(self):
+        archive = self.wrapper_cache(url="https\\://unapproved.invalid/gradle-9.7.0-bin.zip")
+        with patch.object(m, "ROOT", self.root), self.assertRaises(ValueError):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+        self.wrapper_cache()
+        original = archive.with_suffix(".original")
+        archive.rename(original)
+        archive.symlink_to(original)
+        with patch.object(m, "ROOT", self.root), self.assertRaises(ValueError):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+
+    def test_absent_wrapper_archive_retains_normal_bootstrap_path(self):
+        with patch.object(m, "ROOT", self.root):
+            m.stage_pinned_wrapper_archive(self.root / "state")
+        self.assertFalse((self.root / "state").exists())
+
+    def dependency_cache(self, data=b"OFFLINE_EXTERNAL_DEPENDENCY_NOT_REAL_BYTECODE"):
+        for helper in ("run-rpc-capacity-lab.py", "run-audit-command.py", "check-audit-receipt.py"):
+            self.file("scripts/" + helper, (ROOT / "scripts" / helper).read_bytes())
+        slot = format(int(hashlib.sha1(data).hexdigest(), 16), "x")
+        cache = self.root / "tool-cache/gradle-ro-dependencies"
+        relative = "files-2.1/test.vendor/example/1/" + slot + "/example-1.jar"
+        dependency = self.file("tool-cache/gradle-ro-dependencies/modules-2/" + relative, data)
+        metadata = self.file("tool-cache/gradle-ro-dependencies/modules-2/metadata-2.107/module-metadata.bin",
+                             b"OFFLINE_OPAQUE_METADATA_NOT_GRADLE_EXECUTION_EVIDENCE")
+        for path in (cache, cache / "modules-2"):
+            path.chmod(0o700)
+        for path in (dependency, metadata):
+            path.chmod(0o400)
+        policies = {}
+        xml = ('<verification-metadata xmlns="https://schema.gradle.org/dependency-verification"><components>'
+               '<component group="test.vendor" name="example" version="1"><artifact name="example-1.jar">'
+               '<sha256 value="' + hashlib.sha256(data).hexdigest() + '"/></artifact></component>'
+               '</components></verification-metadata>')
+        for name, raw in (("gradle/verification-metadata.xml", xml.encode()),
+                          ("gradle/plugin-provenance-policy.txt", b"OFFLINE_POLICY"),
+                          ("gradle/wrapper/gradle-wrapper.properties", b"OFFLINE_WRAPPER_POLICY")):
+            policies[name] = m.artifact(self.file(name, raw))["sha256"]
+        source = self.source | dict(status="", diffSha256=hashlib.sha256(b"").hexdigest())
+        proof = dict(schema=1, id="offline", purpose="prepare-products", kind="gradle", cwd=str(self.root),
+                     wrapper=str(self.root / "gradlew"), requestedArgv=["OFFLINE_NOT_A_BUILD"],
+                     productExitCode=0, finalExitCode=0, stopExitCode=0, errors=[], ownedSurvivors=[],
+                     sourceUnchanged=True, sourceBefore=source, sourceAfter=source)
+        producer = self.file("s-old/commands/prepare-products-aabbccdd.json", json.dumps(proof).encode())
+        producer.parent.chmod(0o700)
+        manifest = dict(schema=1, scope="SEALED_LOCAL_EXTERNAL_DEPENDENCIES_NOT_CAMPAIGN_PRODUCTS", policies=policies,
+                        producerReceipt=m.artifact(producer), artifacts={relative: m.artifact(dependency),
+                        "metadata-2.107/module-metadata.bin": m.artifact(metadata)})
+        self.file("tool-cache/gradle-ro-dependencies/manifest.json", json.dumps(manifest).encode())
+        return cache, dependency, producer, manifest
+
+    def cache_git(self, argv, **kwargs):
+        return (self.root / argv[2].split(":", 1)[1]).read_bytes()
+
+    def validate_cache(self):
+        with patch.object(m, "ROOT", self.root), patch.object(m.subprocess, "run"), \
+                patch.object(m.subprocess, "check_output", side_effect=self.cache_git):
+            return m.read_only_dependency_cache(self.root / "state")
+
+    def test_absent_dependency_cache_keeps_normal_resolution(self):
+        self.assertIsNone(self.validate_cache())
+
+    def test_sealed_external_cache_has_a_separate_manifest_binding(self):
+        cache, _, _, _ = self.dependency_cache()
+        selected = self.validate_cache()
+        self.assertEqual(selected["path"], str(cache))
+        self.assertEqual(selected["manifest"], m.artifact(cache / "manifest.json"))
+
+    def test_gradle_slot_omits_leading_zeroes_without_relaxing_integrity(self):
+        data = next(str(n).encode() for n in range(1000) if hashlib.sha1(str(n).encode()).hexdigest().startswith("0"))
+        _, dependency, _, _ = self.dependency_cache(data)
+        self.assertLess(len(dependency.parent.name), 40)
+        self.assertIsNotNone(self.validate_cache())
+
+    def test_failed_native_producer_cannot_seed_a_qualified_cache(self):
+        cache, _, producer, manifest = self.dependency_cache()
+        proof = json.loads(producer.read_text())
+        proof.update(productExitCode=1, finalExitCode=1)
+        producer.write_text(json.dumps(proof))
+        manifest["producerReceipt"] = m.artifact(producer)
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_requires_current_policy_and_original_source_pins(self):
+        cache, dependency, _, manifest = self.dependency_cache()
+        original = dependency.read_bytes()
+        dependency.chmod(0o600)
+        dependency.write_bytes(b"UNPINNED_REPLACEMENT")
+        dependency.chmod(0o400)
+        relative = dependency.relative_to(cache / "modules-2").as_posix()
+        manifest["artifacts"][relative] = m.artifact(dependency)
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+        dependency.chmod(0o600)
+        dependency.write_bytes(original)
+        dependency.chmod(0o400)
+        manifest["artifacts"][relative] = m.artifact(dependency)
+        manifest["policies"]["gradle/verification-metadata.xml"] = "f" * 64
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_rejects_writable_and_additional_inputs(self):
+        cache, dependency, _, _ = self.dependency_cache()
+        dependency.chmod(0o600)
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+        dependency.chmod(0o400)
+        extra = self.file("tool-cache/gradle-ro-dependencies/modules-2/extra.bin")
+        extra.chmod(0o400)
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_rejects_an_invented_gradle_content_slot(self):
+        cache, dependency, _, manifest = self.dependency_cache()
+        relative = dependency.relative_to(cache / "modules-2").as_posix()
+        moved = dependency.parent.parent / ("0" * 40) / dependency.name
+        moved.parent.mkdir()
+        dependency.rename(moved)
+        manifest["artifacts"].pop(relative)
+        manifest["artifacts"][moved.relative_to(cache / "modules-2").as_posix()] = m.artifact(moved)
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_cache_cannot_admit_a_link_even_with_an_inventory_entry(self):
+        _, dependency, _, _ = self.dependency_cache()
+        original = dependency.with_suffix(".original")
+        dependency.rename(original)
+        dependency.symlink_to(original)
+        with self.assertRaises(ValueError):
+            self.validate_cache()
+
+    def test_p2pkit_products_cannot_enter_the_external_cache(self):
+        cache, dependency, _, manifest = self.dependency_cache()
+        files = cache / "modules-2/files-2.1"
+        (files / "test.vendor").rename(files / "dev.p2pkit")
+        moved = files / "dev.p2pkit" / dependency.relative_to(files / "test.vendor")
+        relative = dependency.relative_to(cache / "modules-2").as_posix()
+        manifest["artifacts"].pop(relative)
+        manifest["artifacts"][moved.relative_to(cache / "modules-2").as_posix()] = m.artifact(moved)
+        xml = self.root / "gradle/verification-metadata.xml"
+        xml.write_text(xml.read_text().replace("test.vendor", "dev.p2pkit"))
+        manifest["policies"]["gradle/verification-metadata.xml"] = m.artifact(xml)["sha256"]
+        (cache / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            self.validate_cache()
 
     def test_hash_binds_actual_owned_file_and_detects_mutation(self):
         path = self.file("owned.bin")
@@ -152,6 +351,62 @@ class Preparation(unittest.TestCase):
 
 
 class Toolchain(unittest.TestCase):
+    def doctor_fixture(self, root, *, download_fails=False):
+        sdk = root / "sdk"
+        for item in ("platforms/android-36", "platforms/android-37.0", "ndk/29.0.14206865", "platform-tools/adb"):
+            (sdk / item).mkdir(parents=True)
+        environment = {"ANDROID_HOME": str(sdk)}
+        for major, key in ((17, "JAVA_HOME"), (21, "P2PKIT_AUDIT_JDK21")):
+            home = root / ("jdk" + str(major))
+            (home / "bin").mkdir(parents=True)
+            for binary in ("java", "javac"):
+                (home / "bin" / binary).touch()
+            environment[key] = str(home)
+        session = object.__new__(m.Session)
+        session.state = root / "session"
+        calls = []
+        ready = False
+
+        def command(label, argv, timeout=120, *, gradle=False):
+            nonlocal ready
+            calls.append((label, list(argv), timeout, gradle))
+            if list(argv) == ["--version"] and gradle:
+                if download_fails:
+                    raise ValueError("OFFLINE_WRAPPER_DOWNLOAD_FAILURE")
+                ready = True
+            # Model the actual finalizer dependency: a cold wrapper cannot
+            # finalize a plain tool command within the Stop-only budget.
+            if not ready:
+                raise ValueError("OFFLINE_COLD_WRAPPER_STOP_FAILURE")
+            directory = session.state / "evidence" / label
+            directory.mkdir(parents=True)
+            major = label.removeprefix("doctor-jdk")
+            (directory / "product.stderr.log").write_text(
+                "    java.specification.version = " + major + "\n    os.arch = aarch64\n")
+            return {"id": label}
+
+        session.command = command
+        return session, environment, calls
+
+    def test_new_home_downloads_wrapper_before_plain_tools_need_its_finalizer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session, environment, calls = self.doctor_fixture(Path(temporary).resolve())
+            with patch.dict(m.os.environ, environment), patch.object(m.shutil, "which", return_value="/tools/xcodegen"):
+                session.doctor()
+            self.assertTrue(any(label == "doctor-jdk21" for label, *_ in calls))
+            self.assertEqual(calls[0][:2], ("doctor-wrapper", ["--version"]))
+            self.assertTrue(calls[0][3])
+            self.assertGreater(calls[0][2], 120)
+            self.assertTrue(all(timeout == 120 and not gradle for _, _, timeout, gradle in calls[1:]))
+
+    def test_failed_wrapper_download_does_not_dispatch_tool_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session, environment, calls = self.doctor_fixture(Path(temporary).resolve(), download_fails=True)
+            with patch.dict(m.os.environ, environment), patch.object(m.shutil, "which", return_value="/tools/xcodegen"):
+                with self.assertRaisesRegex(ValueError, "OFFLINE_WRAPPER_DOWNLOAD_FAILURE"):
+                    session.doctor()
+            self.assertEqual(len(calls), 1)
+
     def test_doctor_requires_actual_native_17_and_21_reports(self):
         for major in (17, 21):
             good = ("Property settings:\n    java.specification.version = " + str(major) +
@@ -373,6 +628,68 @@ class Recovery(unittest.TestCase):
                 (session.state / "evidence" / proof["id"] / "receipt.json").write_text(json.dumps(changed))
                 with session.phone_lock("ios"), self.assertRaises(ValueError):
                     session.retire_pending("ios", attempt, result, changed)
+                self.assertTrue((session.state / "private/ios-pending.json").exists())
+                self.assertFalse((session.state / "private/ios-latest.json").exists())
+
+    def untouched(self, root):
+        session, attempt, result, proof = self.session(root)
+        for key in ("inboxSha256", "phoneCleanup"):
+            result.pop(key)
+        result.update(deviceControlStarted=False, usbCommands=[], phoneSamples=[])
+        control = session.state / "work/mobile-control-failed-01"
+        control.mkdir(parents=True, mode=0o700)
+        for directory in (control / "usb", control / "commands", session.state / "work/mobile-client-failed-01"):
+            directory.mkdir(parents=True, mode=0o700)
+        return session, attempt, result, proof, control
+
+    def test_untouched_prerequisite_failure_releases_lease_without_inventing_installed_continuation(self):
+        for previous in (False, True):
+            with self.subTest(previous=previous), tempfile.TemporaryDirectory() as directory:
+                session, attempt, result, proof, _ = self.untouched(Path(directory).resolve())
+                latest = session.state / "private/ios-latest.json"
+                if previous:
+                    m.new_json(latest, dict(scope="ORIGINAL_CLOSED_INSTALLATION"))
+                saved = latest.read_bytes() if previous else None
+                with session.phone_lock("ios"):
+                    session.retire_pending("ios", attempt, result, proof)
+                self.assertFalse((session.state / "private/ios-pending.json").exists())
+                if previous:
+                    self.assertEqual(latest.read_bytes(), saved)
+                else:
+                    self.assertFalse(latest.exists())
+                retained = m.private_json(session.state / "private/undispatched-ios-failed-01.json")
+                self.assertEqual(retained["originalStatus"], "FAIL")
+                self.assertFalse(retained["physicalQualified"])
+
+    def test_flag_alone_cannot_erase_device_dispatch_or_unqualified_native_cleanup(self):
+        for mutation in ("marker", "linked-marker", "command", "phone-file", "client-file", "inbox", "installation",
+                         "phone-sample", "command-series", "native-failure", "thermal"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                session, attempt, result, proof, control = self.untouched(Path(directory).resolve())
+                if mutation == "marker":
+                    m.new_json(control / "device-control-started.json", {})
+                elif mutation == "linked-marker":
+                    (control / "device-control-started.json").symlink_to(control / "absent")
+                elif mutation in ("command", "phone-file", "client-file"):
+                    path = {"command": control / "commands/original.json", "phone-file": control / "usb/original.json",
+                            "client-file": session.state / "work/mobile-client-failed-01/config.txt"}[mutation]
+                    path.write_text("ORIGINAL_DISPATCH_EVIDENCE")
+                elif mutation == "inbox":
+                    result["inboxSha256"] = "8" * 64
+                elif mutation == "installation":
+                    result["installationAccepted"] = False
+                elif mutation == "phone-sample":
+                    result["phoneSamples"] = [{}]
+                elif mutation == "command-series":
+                    result["usbCommands"] = [{}]
+                elif mutation == "thermal":
+                    result["thermalAbort"] = {}
+                else:
+                    proof = proof | dict(stopExitCode=1)
+                    Path(attempt["receipt"]).write_text(json.dumps(proof))
+                    (session.state / "evidence" / proof["id"] / "receipt.json").write_text(json.dumps(proof))
+                with session.phone_lock("ios"), self.assertRaises(ValueError):
+                    session.retire_pending("ios", attempt, result, proof)
                 self.assertTrue((session.state / "private/ios-pending.json").exists())
                 self.assertFalse((session.state / "private/ios-latest.json").exists())
 

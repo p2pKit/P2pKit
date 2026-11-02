@@ -20,10 +20,12 @@ public enum class RpcApplicationExample { GetUser, ListItems, SendMessage, Busin
 /** Shared business examples and UI history; this owner is not a connection, identity store, or diagnostics sink. */
 public class RpcApplicationSession {
     public val history: RpcRequestHistory = RpcRequestHistory()
+    public val deviceTests: RpcDeviceTestSession = RpcDeviceTestSession(history)
     private val service = RpcExampleService()
 
     /** The supplied application policy is still rechecked by RPC on admission AND result delivery. */
     public fun register(configuration: RpcHostConfiguration, authorize: suspend (PeerIdentity) -> Boolean) {
+        deviceTests.register(configuration)
         configuration.requestHistoryCapacity = 100
         configuration.register(RpcApplicationContract.getUser, authorize) { context, request ->
             handle(RpcApplicationContract.getUser, context, request) { service.getUser(request) }

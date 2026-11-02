@@ -13,6 +13,8 @@ import android.view.WindowManager
 import dalvik.system.BaseDexClassLoader
 import dev.p2pkit.sample.android.MainActivity
 import dev.p2pkit.sample.android.SAMPLE_OPEN_RPC_ACTION
+import dev.p2pkit.sample.android.SampleProcessOwner
+import dev.p2pkit.sample.android.SampleProcessOwnership
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.rpc.RpcFailure
@@ -50,6 +52,8 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
     private var lab: RpcPhoneLab? = null
     private var fixtureRoot: File? = null
     private var fixtureAlias: String? = null
+    private var capacityTrustFixtureRoot: File? = null
+    private var capacityTrustFixtureAlias: String? = null
     private var capacityFixture: File? = null
 
     override fun onCreate(arguments: Bundle?) {
@@ -157,6 +161,13 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
 
         stage = "namespace-and-approval-validation"
         store.replace(appId, clientPurpose, setOf(pinB))
+        val capacityRoot = File(targetContext.noBackupFilesDir.canonicalFile, "rpc-phone-lab-capacity-trust-$token")
+        val capacityAlias = "dev.p2pkit.rpc.phone-lab.capacity-trust.v1-$token"
+        check(!capacityRoot.exists() && !keys.containsAlias(capacityAlias))
+        capacityTrustFixtureRoot = capacityRoot
+        capacityTrustFixtureAlias = capacityAlias
+        val capacityStore = AndroidRpcLabTrustStore(targetContext, token, mobileCapacity = true)
+        check(capacityStore.load(appId, hostPurpose).isEmpty())
         check(store.load(appId, hostPurpose) == setOf(pinA) && store.load(appId, clientPurpose) == setOf(pinB))
         check(runCatching { store.load(AppId("not.the.synthetic.app"), hostPurpose) }.isFailure)
         val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
@@ -169,6 +180,13 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
             store.replace(appId, hostPurpose, approved)
             check(AndroidRpcLabTrustStore(targetContext, token).load(appId, hostPurpose) == approved)
             check(store.load(appId, clientPurpose) == setOf(pinB))
+            capacityStore.replace(appId, hostPurpose, approved)
+            check(keys.getKey(capacityAlias, null).encoded == null)
+            check(AndroidRpcLabTrustStore(targetContext, token, mobileCapacity = true)
+                .load(appId, hostPurpose) == approved)
+            capacityStore.replace(appId, hostPurpose, emptySet())
+            check(capacityStore.load(appId, hostPurpose).isEmpty())
+            check(store.load(appId, hostPurpose) == approved && store.load(appId, clientPurpose) == setOf(pinB))
         }
         check(runCatching { store.replace(appId, hostPurpose, tooMany) }.isFailure)
         check(store.load(appId, hostPurpose) == tooMany.take(256).toSet())
@@ -236,6 +254,9 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         activity = created
         waitForIdleSync()
         check(created is MainActivity && !created.isFinishing)
+        withTimeout(5_000) {
+            while (SampleProcessOwnership.owner.state.value?.lane != SampleProcessOwner.Lane.RpcSection) delay(10)
+        }
         check(created.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         runOnMainSync { created.finish() }
         withTimeout(10_000) { while (!created.isDestroyed) delay(50) }
@@ -267,10 +288,21 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.publish("ready.txt", "ready=false\n") }.isFailure)
         check(files.read("ready.txt") == "ready=true\n")
+        val appData = targetContext.noBackupFilesDir.parentFile!!.canonicalPath
+        check(RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "ready.txt").decodeToString() == "ready=true\n")
+        check(runCatching { RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "failed.txt") }.isFailure)
+        check(runCatching { RpcLabFdStat.readRecordAt(appData, "../unowned", "ready.txt") }.isFailure)
+        check(runCatching { RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "inbox.txt") }.isFailure)
+        val readyFile = File(capacityRoot, "ready.txt")
+        Os.chmod(readyFile.path, 0x1b6)
+        try { check(runCatching { RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "ready.txt") }.isFailure) }
+        finally { Os.chmod(readyFile.path, 0x180) }
+
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         files.publish("telemetry.txt", "sequence=1\n")
         files.publish("telemetry.txt", "sequence=2\n")
         check(files.read("telemetry.txt") == "sequence=2\n")
+        check(RpcLabFdStat.readRecordAt(appData, capacityRoot.name, "telemetry.txt").decodeToString() == "sequence=2\n")
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.read("../unowned") }.isFailure)
         check(runCatching { files.publish("failed.txt", "x=" + "a".repeat(16_384)) }.isFailure)
@@ -444,10 +476,10 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
             }
             check(root.delete())
         }
-        fixtureAlias?.let { alias ->
+        listOfNotNull(capacityTrustFixtureAlias, fixtureAlias).forEach { alias ->
             KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(alias) }
         }
-        fixtureRoot?.let { root ->
+        listOfNotNull(capacityTrustFixtureRoot, fixtureRoot).forEach { root ->
             val known = RpcTrustPurpose.entries.map { "${it.name}.aesgcm" }.toSet() + "trust.lock"
             for (file in checkNotNull(root.listFiles())) {
                 val metadata = Os.lstat(file.path)

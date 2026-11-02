@@ -7,7 +7,9 @@ import dev.p2pkit.rpc.RpcHostCallState
 import dev.p2pkit.rpc.RpcHostRequests
 import kotlinx.coroutines.flow.MutableStateFlow
 
+@kotlinx.serialization.Serializable
 public enum class RpcRequestSide { Host, Client }
+@kotlinx.serialization.Serializable
 public enum class RpcRequestOutcome {
     Queued, Running, Succeeded, BusinessError, RpcError, Cancelled, TimedOut, LocalError,
 }

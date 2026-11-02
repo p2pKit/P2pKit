@@ -20,11 +20,14 @@ final class RpcPhoneModel: ObservableObject {
         var connection: RpcDiscoveryConnectionStatus? = nil
         var networkActivity: String = "Idle"
         var metrics: [RpcMetricCard] = []
+        var testRevision: String = ""
+        var testProgress: RpcDeviceTestProgress? = nil
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.summary == rhs.summary && lhs.historyRevision == rhs.historyRevision &&
                 lhs.nearby == rhs.nearby && lhs.trusted == rhs.trusted && lhs.connection == rhs.connection &&
                 lhs.networkActivity == rhs.networkActivity && lhs.metrics == rhs.metrics &&
+                lhs.testRevision == rhs.testRevision && lhs.testProgress == rhs.testProgress &&
                 lhs.requests.count == rhs.requests.count &&
                 zip(lhs.requests, rhs.requests).allSatisfy {
                     $0.requestId == $1.requestId && $0.fingerprint == $1.fingerprint
@@ -34,7 +37,28 @@ final class RpcPhoneModel: ObservableObject {
 
     private enum LiveReadError: Error { case unavailable }
     private let liveObserver = RpcPhoneLiveObservation<RpcPhoneLab, LiveValue>()
-    let applicationSession = RpcApplicationSession()
+    // The sample history owner is disambiguated from the RPC authorization session in the exported framework.
+    let applicationSession = RpcApplicationSession_()
+    @Published private(set) var deviceTestReports: [RpcDeviceTestReport] = []
+    @Published private(set) var deviceTestProgress: RpcDeviceTestProgress?
+    @Published private(set) var deviceTestActivity: [RpcDeviceTestObservation] = []
+    @Published private(set) var activeDeviceTests: [RpcDeviceTestProgress] = []
+    @Published private(set) var liveTestResources: RpcDeviceLiveResources?
+    @Published private(set) var multiTests = false
+    @Published var selectedTestPeers: Set<String> = []
+    @Published var smartP95 = "1000"
+    @Published var smartP99 = "2000"
+    @Published var smartMemory = "512"
+    @Published var smartSeconds = "600"
+    @Published private(set) var deviceTestStorageIssue: String?
+    @Published var selectedTestPeer: String = ""
+    @Published var allowHostTests = false
+    private var savedDeviceTests = ""
+    private let testEnvironment = RpcPhoneEnvironmentSampler()
+    private var deviceTestFile: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("rpc-device-tests.json")
+    }
     @Published private(set) var requestEntries: [RpcRequestEntry] = []
     @Published private(set) var requestMetrics: [RpcMetricCard] = []
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
@@ -51,6 +75,9 @@ final class RpcPhoneModel: ObservableObject {
     #if DEBUG
         private var usbDeveloperMonitor: Task<Void, Never>?
         private var usbDeveloperGeneration: UUID?
+        private var usbDeveloperLaunchConsumed = false
+        private var usbDeveloperWaiting = false
+        private var usbDeveloperPreparedFiles: RpcPhoneCapacityFiles?
     #endif
     private let wifi: RpcPhoneWifiObserving
     private var wifiGeneration: UUID?
@@ -98,11 +125,48 @@ final class RpcPhoneModel: ObservableObject {
         self.shareWindow = shareWindow ?? RpcPhoneShareWindow()
         self.wifi = wifi ?? RpcPhoneWifiObserver()
         self.invitationClipboard = invitationClipboard ?? RpcPhoneInvitationClipboard()
+        do {
+            try applicationSession.deviceTests.configureDeviceName(value: "iPhone")
+            if FileManager.default.fileExists(atPath: deviceTestFile.path) {
+                let attributes = try FileManager.default.attributesOfItem(atPath: deviceTestFile.path)
+                guard ((attributes[.size] as? NSNumber)?.intValue ?? 8_388_609) <= 8_388_608 else {
+                    throw LiveReadError.unavailable
+                }
+                let data = try Data(contentsOf: deviceTestFile)
+                guard data.count <= 8_388_608, let text = String(data: data, encoding: .utf8) else {
+                    throw LiveReadError.unavailable
+                }
+                try applicationSession.deviceTests.restoreJson(text: text)
+                savedDeviceTests = text
+                for report in applicationSession.deviceTests.reports {
+                    let marker = deviceTestFile.deletingLastPathComponent()
+                        .appendingPathComponent("rpc-test-archive/" + report.runId + ".deleted")
+                    if FileManager.default.fileExists(atPath: marker.path) {
+                        let attributes = try FileManager.default.attributesOfItem(atPath: marker.path)
+                        guard attributes[.type] as? FileAttributeType == .typeRegular,
+                            (attributes[.size] as? NSNumber)?.intValue == 32,
+                            try String(contentsOf: marker, encoding: .utf8) == report.runId
+                            else { throw LiveReadError.unavailable }
+                        applicationSession.deviceTests.confirmArchived(runId: report.runId)
+                        try applicationSession.deviceTests.forgetDeletedResult(runId: report.runId)
+                    }
+                }
+                deviceTestReports = applicationSession.deviceTests.reports
+            }
+        } catch { deviceTestStorageIssue = "Saved results could not be read; original file retained." }
         changes = owner.$phase.sink { [weak self] phase in
             self?.objectWillChange.send()
-            // Only this foreground lab's active role prevents idle sleep; no background entitlement is requested.
-            UIApplication.shared.isIdleTimerDisabled = phase == .running
+            self?.updateIdleTimer(phase: phase)
         }
+    }
+
+    private func updateIdleTimer(phase: RpcPhoneRunOwner<RpcPhoneLab>.Phase? = nil) {
+        var awake = (phase ?? owner.phase) == .running
+        #if DEBUG
+            awake = awake || usbDeveloperWaiting
+        #endif
+        // Only a foreground role or bounded, explicitly prepared developer wait stays awake.
+        UIApplication.shared.isIdleTimerDisabled = foreground && awake
     }
 
     var isForeground: Bool { foreground }
@@ -134,8 +198,8 @@ final class RpcPhoneModel: ObservableObject {
     var compiledSource: String { RpcPhoneIos.shared.compiledSource }
     var detectedWifi: RpcPhoneWifiNetwork? { wifiObservation.network }
     var wifiChecked: Bool { wifiObservation != .checking }
-    var canRefreshWifi: Bool { canStart && !manualNetworkSetup && mobileConfig == nil }
-    var canConfirmWifi: Bool { canRefreshWifi && detectedWifi != nil && !wifiApproved }
+    var canRefreshWifi: Bool { canStart && mobileConfig == nil }
+    var canConfirmWifi: Bool { canRefreshWifi && !manualNetworkSetup && detectedWifi != nil && !wifiApproved }
     var wifiApproved: Bool {
         guard let network = approvedWifi else { return false }
         return network == detectedWifi && !manualNetworkSetup && subnets == network.subnet &&
@@ -166,28 +230,35 @@ final class RpcPhoneModel: ObservableObject {
                     status = owner.phase == .running ? "Returned to the same RPC role. Continue pairing." : status
                 } else { startWifiObservation() }
             } else { startWifiObservation() }
-            UIApplication.shared.isIdleTimerDisabled = owner.phase == .running
+            updateIdleTimer()
             startLiveObservation()
         } else {
-            stopLiveObservation()
             UIApplication.shared.isIdleTimerDisabled = false
             revealInvitation = false // Conceal secrets in the app switcher; preserve only the bounded transfer state.
             if UIApplication.shared.isProtectedDataAvailable, !manualNetworkSetup, wifiApproved,
                RpcPhoneShareWindow.eligible(running: owner.phase == .running, actionBusy: actionBusy,
-                operationBusy: operationBusy, cleanupPending: retirement != nil,
+                operationBusy: operationBusy, manualTestRunning: applicationSession.deviceTests.anyTestRunning,
+                cleanupPending: retirement != nil,
                 capacitySession: mobileConfig != nil || !capacityPins.isEmpty || approveImport),
                shareWindow.leave(expired: { [weak self] in self?.expireAppSwitch() }) {
-                status = "Return within 25 seconds to keep this role. iOS may end background time sooner."
+                status = "Return within 25 seconds to keep this role and test. iOS may end background time sooner."
             } else { expireAppSwitch() }
         }
         objectWillChange.send()
+    }
+
+    func testMemoryPressure() {
+        guard applicationSession.deviceTests.anyTestRunning else { return }
+        applicationSession.deviceTests.signalMemoryPressure()
+        status = "Test interrupted by an iOS memory-pressure warning; partial results are retained."
+        stop()
     }
 
     func protectedDataUnavailable() { expireAppSwitch() }
 
     private func expireAppSwitch() {
         #if DEBUG
-            usbDeveloperMonitor?.cancel()
+            cancelUsbDeveloperPreparation(reason: "ForegroundLostBeforeStart")
             if owner.hasOwner || actionBusy { mobileFailed = mobileConfig != nil }
         #endif
         stopLiveObservation()
@@ -221,7 +292,8 @@ final class RpcPhoneModel: ObservableObject {
         clearWifiApproval()
         wifiObservation = .checking
         startProblem = nil
-        status = "Rechecking Wi-Fi. Confirm it again before choosing a role; nothing has started."
+        status = manualNetworkSetup ? "Rechecking live Wi-Fi; your manual settings are unchanged." :
+            "Rechecking Wi-Fi. Confirm it again before choosing a role; nothing has started."
         startWifiObservation()
     }
 
@@ -464,7 +536,7 @@ final class RpcPhoneModel: ObservableObject {
     func clearMobile() {
         guard canStart else { return }
         #if DEBUG
-            usbDeveloperMonitor?.cancel()
+            cancelUsbDeveloperPreparation(reason: "LocalCampaignCancelledBeforeStart")
         #endif
         clearMobileSettings()
     }
@@ -479,16 +551,22 @@ final class RpcPhoneModel: ObservableObject {
     #if DEBUG
         /// An explicit developer launch creates one private slot; only sealed, exact-source commands may start it.
         func beginUsbDeveloperCampaign(arguments: [String]) {
-            guard arguments.contains("--rpc-usb-prepare"), usbDeveloperMonitor == nil else { return }
+            guard arguments.contains("--rpc-usb-prepare"), usbDeveloperMonitor == nil,
+                  !usbDeveloperLaunchConsumed else { return }
             do {
                 guard canStart, mobileConfig == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
                 let request = try RpcPhoneUsbDeveloperPrepare(arguments: arguments)
                 try request.verify(compiledSource: compiledSource, installedArtifact: RpcPhoneProcessSampler.installedArtifact())
+                // A foreground return must never recreate an abandoned create-only slot.
+                usbDeveloperLaunchConsumed = true
                 usbRunLabel = request.runLabel
                 let count = request.clientCount
                 let firstFiles = try prepareMobileSlot(clientCount: count)
                 let token = UUID()
                 usbDeveloperGeneration = token
+                usbDeveloperPreparedFiles = firstFiles
+                usbDeveloperWaiting = true
+                updateIdleTimer()
                 usbDeveloperMonitor = Task { @MainActor in
                     defer {
                         if self.usbDeveloperGeneration == token {
@@ -500,6 +578,21 @@ final class RpcPhoneModel: ObservableObject {
                     var selectedCount = count
                     do {
                         while !Task.isCancelled {
+                            var selectedWifi: RpcPhoneWifiNetwork?
+                            if request.discoverWifi {
+                                let deadline = ProcessInfo.processInfo.systemUptime + 20
+                                while selectedWifi == nil {
+                                    guard self.canStart, ProcessInfo.processInfo.systemUptime < deadline else {
+                                        throw RpcPhoneCapacityIOError.invalidRecord
+                                    }
+                                    self.receiveWifi(self.wifi.currentObservation())
+                                    selectedWifi = self.detectedWifi
+                                    if selectedWifi == nil { try await Task.sleep(nanoseconds: 100_000_000) }
+                                }
+                                guard let observed = selectedWifi else { throw RpcPhoneCapacityIOError.invalidRecord }
+                                try files.publish("network.txt", request.wifiRecord(
+                                    network: observed, runLabel: self.usbRunLabel, clientCount: selectedCount))
+                            }
                             let text = try await self.waitForUsbCommand("campaign.txt", files: files)
                             guard self.canStart, self.mobileConfig == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
                             let command = try RpcPhoneUsbDeveloperStart(record: text)
@@ -509,6 +602,15 @@ final class RpcPhoneModel: ObservableObject {
                                 }
                                 try command.verify(config: config, inbox: input, compiledSource: self.compiledSource,
                                                    installedArtifact: artifact)
+                                if let selectedWifi {
+                                    guard self.wifi.currentObservation().network == selectedWifi,
+                                          config.settings.localAddress == selectedWifi.localAddress,
+                                          config.settings.interfaceName == selectedWifi.interfaceName,
+                                          config.settings.subnets.split(separator: ",").contains(
+                                            Substring(selectedWifi.subnet)) else {
+                                        throw RpcPhoneCapacityIOError.invalidRecord
+                                    }
+                                }
                             }
                             self.approveImport = true
                             self.start(host: true)
@@ -538,10 +640,14 @@ final class RpcPhoneModel: ObservableObject {
                             files = nextFiles
                         }
                     } catch is CancellationError {
-                        // Foreground/lifecycle Stop owns the active runtime; do not invent a successful receipt.
+                        // The synchronous lifecycle path records a pre-start cancellation.
+                        // Active-runtime Stop remains responsible for its real closure.
                     } catch {
                         self.mobileFailed = true
-                        do { try files.publish("failed.txt", "failed=true\nphase=mobile-start\n") }
+                        do {
+                            let reason = self.eventLog.lastFailure ?? "LocalOrProtocolFailure"
+                            try files.publish("failed.txt", "failed=true\nphase=mobile-start\nreason=\(reason)\n")
+                        }
                         catch { self.status = "USB start failed; no capacity qualification." }
                         if self.owner.hasOwner || self.actionBusy { self.stop() }
                     }
@@ -550,12 +656,45 @@ final class RpcPhoneModel: ObservableObject {
         }
 
         private func waitForUsbCommand(_ name: String, files: RpcPhoneCapacityFiles) async throws -> String {
+            let deadline = ProcessInfo.processInfo.systemUptime + 600
+            usbDeveloperWaiting = true
+            usbDeveloperPreparedFiles = name == "campaign.txt" ? files : nil
+            updateIdleTimer()
+            defer {
+                usbDeveloperWaiting = false
+                usbDeveloperPreparedFiles = nil
+                updateIdleTimer()
+            }
             while !Task.isCancelled {
                 guard foreground else { throw CancellationError() }
-                if let record = try files.read(name, optional: true) { return record }
+                guard ProcessInfo.processInfo.systemUptime < deadline else {
+                    throw RpcPhoneCapacityIOError.resourceObservation
+                }
+                if let record = try files.read(name, optional: true) {
+                    guard ProcessInfo.processInfo.systemUptime < deadline else {
+                        throw RpcPhoneCapacityIOError.resourceObservation
+                    }
+                    return record
+                }
                 try await Task.sleep(nanoseconds: 500_000_000)
             }
             throw CancellationError()
+        }
+
+        private func cancelUsbDeveloperPreparation(reason: String) {
+            usbDeveloperMonitor?.cancel()
+            if let files = usbDeveloperPreparedFiles, !owner.hasOwner, !actionBusy, mobileConfig == nil {
+                mobileFailed = true
+                do {
+                    try files.publish("failed.txt", "failed=true\nphase=mobile-start\nreason=\(reason)\n")
+                    status = "Prepared campaign cancelled before startup. Review the retained failure; no qualification claim."
+                } catch {
+                    status = "Prepared campaign cancellation could not be recorded; no qualification claim."
+                }
+            }
+            usbDeveloperPreparedFiles = nil
+            usbDeveloperWaiting = false
+            updateIdleTimer()
         }
     #endif
 
@@ -620,6 +759,9 @@ final class RpcPhoneModel: ObservableObject {
             self.mobileMonitor = nil
             let completed = await self.owner.stop()
             self.requestEntries = self.applicationSession.history.entries()
+            self.refreshDeviceTests()
+            self.testEnvironment.retire()
+            self.allowHostTests = false
             self.eventLog.append(.stopped(clean: completed))
             if completed {
                 self.operation = nil
@@ -637,6 +779,7 @@ final class RpcPhoneModel: ObservableObject {
 
     func cancelOperation() {
         operation?.cancel()
+        owner.runtime?.cancelDeviceTest()
         // Native close is the completion barrier. Never infer remote rollback from cancel().
         if operation != nil {
             eventLog.append(.cancellationRequested)
@@ -645,10 +788,18 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     private func canObserve(_ lab: RpcPhoneLab) -> Bool {
-        foreground && retirement == nil && owner.accepts(lab)
+        (foreground || shareWindow.pending) && UIApplication.shared.isProtectedDataAvailable &&
+            retirement == nil && owner.accepts(lab)
     }
 
     private func readLive(_ lab: RpcPhoneLab) throws -> LiveValue {
+        testEnvironment.acquire()
+        let environment = try testEnvironment.sample()
+        let resources = try RpcPhoneProcessSampler.sample(environment: environment)
+        try applicationSession.deviceTests.observeResources(cpuNanos: resources.cpuNanos,
+            memoryBytes: resources.residentBytes, memoryKind: "RESIDENT_BYTES", threads: resources.nativeThreads,
+            threadKind: "NATIVE_THREADS", environment: environment)
+        if environment.requiresThermalStop { stop(); throw LiveReadError.unavailable }
         let requests = hostRole && mobileConfig == nil ? try lab.pending() : []
         let diagnostics = lab.diagnostics
         return LiveValue(summary: .init(host: hostRole, state: lab.state,
@@ -656,10 +807,13 @@ final class RpcPhoneModel: ObservableObject {
             completed: Int64(diagnostics.completedCalls), queued: Int64(diagnostics.queuedCalls)), requests: requests,
             historyRevision: applicationSession.history.revision,
             nearby: lab.nearbyHosts(), trusted: lab.trustedDevices(), connection: lab.discoveryConnection,
-            networkActivity: lab.networkActivity, metrics: lab.requestMetrics)
+            networkActivity: lab.networkActivity, metrics: lab.requestMetrics,
+            testRevision: applicationSession.deviceTests.exportJson(),
+            testProgress: applicationSession.deviceTests.progress)
     }
 
     private func publishLive(_ value: LiveValue) {
+        refreshDeviceTests()
         requestEntries = applicationSession.history.entries()
         liveIssue = nil
         nearbyHosts = value.nearby
@@ -912,6 +1066,163 @@ final class RpcPhoneModel: ObservableObject {
         } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
     }
 
+    var deviceTestRunning: Bool { applicationSession.deviceTests.anyTestRunning || operationBusy }
+
+    var testSummary: String {
+        let saved = applicationSession.deviceTests.reports
+        return "Running \(activeDeviceTests.count) · completed \(saved.filter { $0.status == "Completed" }.count) · " +
+            "failed \(saved.filter { $0.status == "Failed" }.count) · interrupted/cancelled " +
+            "\(saved.filter { $0.status == "Interrupted" || $0.status == "Cancelled" }.count) (recent runs)"
+    }
+
+    func setTestMode(_ multi: Bool) {
+        guard foreground, !deviceTestRunning, !actionBusy else { return }
+        do { try applicationSession.deviceTests.setMultiDeviceMode(enabled: multi); multiTests = multi }
+        catch { report(error) }
+    }
+
+    func clearTestDisplay() {
+        applicationSession.deviceTests.clearDisplayedActivity()
+        refreshDeviceTests()
+    }
+
+    func showSavedTests() {
+        applicationSession.deviceTests.showSavedResults()
+        refreshDeviceTests()
+    }
+
+    func applySmartSafety() {
+        guard canAct, !deviceTestRunning, let p95 = Int32(smartP95), let p99 = Int32(smartP99),
+            let memory = Int32(smartMemory), let seconds = Int32(smartSeconds) else { return }
+        do {
+            try applicationSession.deviceTests.configureSmartSafety(p95Millis: p95, p99Millis: p99,
+                memoryMiB: memory, durationSeconds: seconds)
+            status = "Smart safety settings saved."
+        } catch { status = "Invalid safety settings; previous settings kept." }
+    }
+
+    func cancelTest(_ runId: String) { owner.runtime?.cancelDeviceTestRun(runId: runId) }
+
+    func deleteTest(_ runId: String) {
+        guard foreground, !deviceTestRunning, !actionBusy, deviceTestStorageIssue == nil else { return }
+        refreshDeviceTests()
+        let tests = applicationSession.deviceTests
+        guard let result = tests.reports.first(where: { $0.runId == runId }) else { return }
+        actionBusy = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var reserved = false
+            var deleted = false
+            do {
+                reserved = try await tests.beginResultDeletion(runId: runId).boolValue
+                guard reserved else { self.actionBusy = false; return }
+                let archive = self.deviceTestFile.deletingLastPathComponent()
+                    .appendingPathComponent("rpc-test-archive", isDirectory: true)
+                let attributes = try FileManager.default.attributesOfItem(atPath: archive.path)
+                guard attributes[.type] as? FileAttributeType == .typeDirectory else { throw LiveReadError.unavailable }
+                let target = archive.appendingPathComponent(runId + ".json")
+                let item = try FileManager.default.attributesOfItem(atPath: target.path)
+                guard item[.type] as? FileAttributeType == .typeRegular,
+                    ((item[.size] as? NSNumber)?.intValue ?? 65_537) <= 65_536,
+                    let text = String(data: try Data(contentsOf: target), encoding: .utf8),
+                    tests.archivedResultMatchesForDeletion(report: result, text: text)
+                    else { throw LiveReadError.unavailable }
+                let marker = archive.appendingPathComponent(runId + ".deleted")
+                try Data(runId.utf8).write(to: marker, options: [.atomic, .completeFileProtection])
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+                deleted = true
+                try FileManager.default.removeItem(at: target)
+                self.status = "Selected output deleted on this device."
+            } catch { self.deviceTestStorageIssue = "Output deletion incomplete; retained records need review." }
+            if reserved { try? tests.finishResultDeletion(runId: runId, deleted: deleted) }
+            self.actionBusy = false
+            self.refreshDeviceTests()
+        }
+    }
+
+    func startDeviceTestRole(host: Bool) {
+        guard canStart, mobileConfig == nil, capacityPins.isEmpty else { return }
+        setManualNetworkSetup(false)
+        start(host: host, automatic: true)
+    }
+
+    func setAllowHostTests(_ enabled: Bool) {
+        allowHostTests = enabled && canAct && !hostRole && nearbyMode
+        if let lab = owner.runtime, lab.applicationAvailable {
+            lab.allowDeviceTestsFromHost(enabled: allowHostTests)
+        }
+    }
+
+    func refreshDeviceTests() {
+        deviceTestReports = applicationSession.deviceTests.displayedReports
+        activeDeviceTests = applicationSession.deviceTests.activeTests
+        liveTestResources = applicationSession.deviceTests.liveResources
+        deviceTestProgress = applicationSession.deviceTests.progress
+        deviceTestActivity = applicationSession.deviceTests.activity
+        let text = applicationSession.deviceTests.exportJson()
+        guard text != savedDeviceTests || !applicationSession.deviceTests.unarchivedReports.isEmpty,
+            deviceTestStorageIssue == nil else { return }
+        do {
+            let directory = deviceTestFile.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let archive = directory.appendingPathComponent("rpc-test-archive", isDirectory: true)
+            try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            for report in applicationSession.deviceTests.unarchivedReports {
+                let data = Data(applicationSession.deviceTests.reportJson(report: report).utf8)
+                guard data.count <= 65_536 else { throw LiveReadError.unavailable }
+                let target = archive.appendingPathComponent(report.runId + ".json")
+                if FileManager.default.fileExists(atPath: target.path) {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+                    guard attributes[.type] as? FileAttributeType == .typeRegular,
+                        ((attributes[.size] as? NSNumber)?.intValue ?? 65_537) <= 65_536,
+                        let retained = String(data: try Data(contentsOf: target), encoding: .utf8),
+                        applicationSession.deviceTests.archiveMatches(report: report, json: retained)
+                        else { throw LiveReadError.unavailable }
+                } else {
+                    try data.write(to: target, options: [.atomic, .completeFileProtection])
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+                }
+                try applicationSession.deviceTests.hydrateArchived(report: report,
+                    json: String(contentsOf: target, encoding: .utf8))
+                applicationSession.deviceTests.confirmArchived(runId: report.runId)
+            }
+            deviceTestReports = applicationSession.deviceTests.displayedReports
+            try Data(text.utf8).write(to: deviceTestFile, options: [.atomic, .completeFileProtection])
+            savedDeviceTests = text
+        } catch { deviceTestStorageIssue = "Saving results failed; results remain in this session." }
+    }
+
+    func runDeviceTest(_ phase: RpcDeviceTestPhase) {
+        guard canAct, nearbyMode, deviceTestStorageIssue == nil, applicationSession.deviceTests.archiveAvailable,
+            let lab = owner.runtime, lab.applicationAvailable else { return }
+        let id = UUID()
+        operationID = id
+        operationBusy = true
+        do {
+            let completed: (String?) -> Void = { [weak self, lab] error in
+                DispatchQueue.main.async {
+                    guard let self, self.operationID == id else { return }
+                    self.operation = nil
+                    self.operationID = nil
+                    self.operationBusy = false
+                    self.refreshDeviceTests()
+                    if self.owner.accepts(lab) {
+                        self.status = error ?? "Test finished; inspect the saved result below."
+                    }
+                }
+            }
+            if multiTests && hostRole {
+                let selected = trustedDevices.filter { $0.presence == "Connected" && selectedTestPeers.contains($0.fingerprint) }
+                    .map { $0.fingerprint }
+                operation = try lab.beginMultiDeviceTests(phase: phase, selectedPeers: selected, onComplete: completed)
+            } else {
+                operation = try lab.beginDeviceTest(phase: phase,
+                    selectedPeer: hostRole ? selectedTestPeer : nil, onComplete: completed)
+            }
+        } catch { operationBusy = false; operationID = nil; report(error) }
+    }
+
     func runExample(_ example: RpcApplicationExample) {
         guard canAct, !hostRole, let lab = owner.runtime, lab.applicationAvailable else { return }
         let id = UUID()
@@ -975,6 +1286,9 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     private func failure(_ error: Error) -> RpcPhoneEventLog.Failure {
+        if (error as NSError).kotlinException is RpcPhoneCapacityTrustOccupied {
+            return RpcPhoneEventLog.Failure(callback: "CapacityApprovalsRetained")
+        }
         if let failure = (error as NSError).kotlinException as? RpcFailure {
             return RpcPhoneEventLog.Failure(callback:
                 "\(failure.kind.name)/\(failure.phase.name)/\(failure.executionEvidence.name)")
@@ -984,6 +1298,9 @@ final class RpcPhoneModel: ObservableObject {
 
     private func safeError(_ error: Error) -> String {
         let code = failure(error).code
+        if code == "CapacityApprovalsRetained" {
+            return "Existing capacity approvals were preserved. Verify the earlier run’s cleanup before retrying."
+        }
         return code == "LocalOrProtocolFailure" ? "Invalid setup or local operation failed; no qualification claim." : code
     }
 

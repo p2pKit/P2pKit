@@ -54,6 +54,9 @@ struct RpcPhoneApp: App {
                     if $0 == .active { model.beginUsbDeveloperCampaign(arguments: ProcessInfo.processInfo.arguments) }
                 #endif
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                model.testMemoryPressure()
+            }
             .onReceive(
                 NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)
             ) { _ in
@@ -65,12 +68,23 @@ struct RpcPhoneApp: App {
 struct RpcPhoneView: View {
     @ObservedObject var model: RpcPhoneModel
     @State private var showAdvanced = false
+    @State private var showingDeviceTests = false
+    @State private var deletingTest: String?
     @StateObject private var presentation = RpcPhoneDecisionPresentation()
 
     var body: some View {
         NavigationView {
             Form {
+                if showingDeviceTests {
+                    deviceTests
+                } else {
                 Section {
+                    Button("Device tests") { model.setTestMode(false); showingDeviceTests = true; model.refreshDeviceTests() }
+                        .disabled(model.mobileConfig != nil || model.actionBusy)
+                        .accessibilityIdentifier("rpc.deviceTests")
+                    Button("Multi-device tests") {
+                        model.setTestMode(true); showingDeviceTests = true; model.refreshDeviceTests()
+                    }.disabled(model.mobileConfig != nil || model.actionBusy || model.deviceTestRunning)
                     VStack(alignment: .leading, spacing: 10) {
                         Label("LOCAL API WORKSPACE", systemImage: "network")
                             .font(.caption.weight(.semibold)).foregroundColor(.secondary)
@@ -140,8 +154,20 @@ struct RpcPhoneView: View {
                 if model.mobileConfig == nil { requestHistory }
                 diagnosticControls
                 advancedControls
+                }
             }
-            .navigationTitle("P2pKit RPC")
+            .navigationTitle(showingDeviceTests ? (model.multiTests ? "Multi-device tests" : "Device tests") : "P2pKit RPC")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if showingDeviceTests {
+                        Button("Back to RPC") {
+                            guard !model.deviceTestRunning else { return }
+                            model.setAllowHostTests(false)
+                            showingDeviceTests = false
+                        }.disabled(model.deviceTestRunning)
+                    }
+                }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .tint(Color(red: 0.125, green: 0.369, blue: 0.651))
         }
@@ -165,6 +191,141 @@ struct RpcPhoneView: View {
                 }
             #endif
         }
+    }
+
+    private var deviceTests: some View {
+        Group {
+            Section("Test section") {
+                HStack {
+                    Button("Two devices") { model.setTestMode(false) }
+                    Button("Multiple devices") { model.setTestMode(true) }
+                }.buttonStyle(.borderless).disabled(model.deviceTestRunning || model.actionBusy)
+                Text(model.multiTests ? "Several trusted Clients → one Host. Each run is saved separately." :
+                    "One Client → one Host. The Client sends requests and the Host replies.").font(.footnote)
+            }
+            Section("Connect devices automatically") {
+                Text(model.status).accessibilityIdentifier("rpc.testStatus")
+                Text("Use the same private Wi-Fi. Approve fingerprints and enable test permission on each Client.")
+                HStack {
+                    Button("Host here") { model.startDeviceTestRole(host: true) }
+                        .buttonStyle(.borderedProminent).disabled(!model.canStart)
+                        .accessibilityIdentifier("rpc.testHost")
+                    Button("Client here") { model.startDeviceTestRole(host: false) }
+                        .buttonStyle(.bordered).disabled(!model.canStart)
+                        .accessibilityIdentifier("rpc.testClient")
+                    Button("Stop") { model.stop() }
+                        .buttonStyle(.borderless).disabled(!model.owner.hasOwner)
+                        .accessibilityIdentifier("rpc.testStop")
+                }
+                Text("For a brief app switch, return within 25 seconds. iOS may end background time sooner.")
+                    .font(.footnote)
+            }
+            if model.nearbyMode {
+                Section("Your device identity · compare on the other device") {
+                    Text(model.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                }
+                RpcPhoneNearbyView(model: model, presentation: presentation)
+                Section(model.hostRole ? "Select connected Clients" : "Test permission") {
+                    if model.hostRole {
+                        ForEach(model.trustedDevices.filter { $0.presence == "Connected" }, id: \.fingerprint) { device in
+                            Button((testPeerSelected(device.fingerprint) ? "✓ " : "") +
+                                device.name + " · " + device.fingerprint.suffix(8)) {
+                                if model.multiTests {
+                                    if model.selectedTestPeers.contains(device.fingerprint) {
+                                        model.selectedTestPeers.remove(device.fingerprint)
+                                    } else if model.selectedTestPeers.count < 16 {
+                                        model.selectedTestPeers.insert(device.fingerprint)
+                                    }
+                                } else { model.selectedTestPeer = device.fingerprint }
+                            }.disabled(model.deviceTestRunning || model.actionBusy)
+                        }
+                        if model.multiTests { Text("Up to 16 connected Clients per group.").font(.footnote) }
+                    } else {
+                        Toggle("Allow selected Host to start tests while this screen is open", isOn: Binding(
+                            get: { model.allowHostTests }, set: { model.setAllowHostTests($0) }))
+                            .disabled(!model.canAct || model.deviceTestRunning)
+                    }
+                }
+            }
+            Section(model.multiTests ? "Start a test on the selected Clients" : "Run a test") {
+                Text("Smart Test searches this connected path. Safety ceilings are not a discovered Host capacity.")
+                    .font(.footnote)
+                ForEach([RpcDeviceTestPhase.large, .correctness, .reconnect, .steady, .deadlines, .adaptive], id: \.name) { phase in
+                    Button(phase.title) { model.runDeviceTest(phase) }
+                        .disabled(!model.canAct || model.deviceTestRunning || !model.nearbyMode ||
+                            (model.hostRole ? !model.trustedDevices.contains {
+                                testPeerSelected($0.fingerprint) && $0.presence == "Connected"
+                            } : model.owner.runtime?.state != "Ready"))
+                }
+                DisclosureGroup("Smart safety settings · automatic defaults") {
+                    TextField("p95 limit (ms)", text: $model.smartP95).keyboardType(.numberPad)
+                    TextField("p99 limit (ms)", text: $model.smartP99).keyboardType(.numberPad)
+                    TextField("Memory safety limit (MiB)", text: $model.smartMemory).keyboardType(.numberPad)
+                    TextField("Time safety budget (seconds)", text: $model.smartSeconds).keyboardType(.numberPad)
+                    Button("Apply safety settings") { model.applySmartSafety() }
+                }.disabled(!model.canAct || model.deviceTestRunning)
+            }
+            Section("Monitor") {
+                Text(model.testSummary)
+                if let resources = model.liveTestResources {
+                    Text(resources.title).monospacedDigit()
+                    Text(resources.environmentTitle).font(.footnote)
+                } else { Text("Resource sample unavailable") }
+                ForEach(model.activeDeviceTests, id: \.runId) { progress in
+                    VStack(alignment: .leading) {
+                        Text(progress.monitorText).monospacedDigit()
+                        if let host = progress.hostResources {
+                            Text("Host: " + host.title).font(.footnote)
+                            Text(host.environmentTitle).font(.footnote)
+                        }
+                        Button("Cancel this test") { model.cancelTest(progress.runId) }.buttonStyle(.borderless)
+                    }
+                }
+                if model.deviceTestRunning { Button("Cancel all tests") { model.cancelOperation() } }
+            }
+            Section("Live test activity") {
+                HStack {
+                    Button("Clear displayed logs") { model.clearTestDisplay() }
+                    Button("Show saved results") { model.showSavedTests() }
+                }.buttonStyle(.borderless)
+                Text("Clearing this display keeps all saved output.").font(.footnote)
+                ForEach(Array(model.deviceTestActivity.reversed().enumerated()), id: \.offset) { _, activity in
+                    Text(activity.title).font(.footnote)
+                }
+            }
+            Section("Saved results · separate output per run") {
+                Text(model.deviceTestStorageIssue ?? "Recent list: 100. Older outputs remain saved privately.")
+                ForEach(model.deviceTestReports.reversed(), id: \.runId) { report in
+                    DisclosureGroup(report.title) {
+                        Text(report.detail).font(.footnote).textSelection(.enabled)
+                        if report.startedAtEpochMillis > 0 {
+                            Text("Started: " + Date(timeIntervalSince1970: Double(report.startedAtEpochMillis) / 1000)
+                                .formatted()).font(.footnote)
+                        }
+                        if report.endedAtEpochMillis > 0 {
+                            Text("Ended: " + Date(timeIntervalSince1970: Double(report.endedAtEpochMillis) / 1000)
+                                .formatted()).font(.footnote)
+                        }
+                        Button("Delete this output…", role: .destructive) { deletingTest = report.runId }
+                            .buttonStyle(.borderless).disabled(model.deviceTestRunning || model.actionBusy)
+                    }
+                }
+            }
+        }
+        .alert("Delete this test output?", isPresented: Binding(
+            get: { deletingTest != nil }, set: { if !$0 { deletingTest = nil } })) {
+                Button("Delete output", role: .destructive) {
+                    if let runId = deletingTest { model.deleteTest(runId) }
+                    deletingTest = nil
+                }
+                Button("Keep output", role: .cancel) { deletingTest = nil }
+            } message: {
+                Text("Permanently deletes only the selected run on this iPhone. Other devices keep their copies.")
+            }
+    }
+
+    private func testPeerSelected(_ fingerprint: String) -> Bool {
+        model.multiTests ? model.selectedTestPeers.contains(fingerprint) : model.selectedTestPeer == fingerprint
     }
 
     private var liveControls: some View {
@@ -255,25 +416,25 @@ struct RpcPhoneView: View {
             } else {
                 Text(model.detectedWifi == nil ? model.wifiExplanation : "Wi-Fi ready · network selected automatically")
                     .accessibilityIdentifier("rpc.wifiStatus")
-                DisclosureGroup("Network details") {
-                    if let network = model.detectedWifi {
-                        Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
-                        Text("Private network: \(network.subnet) · \(network.interfaceName)").font(
-                            .caption.monospaced())
-                    }
-                    Button("Check Wi-Fi again") { model.refreshWifi() }
-                        .buttonStyle(.borderless)
-                        .disabled(!model.canRefreshWifi)
-                        .accessibilityIdentifier("rpc.refreshWifi")
-                        .accessibilityHint("Only re-reads the connection. Does not approve a network or start RPC.")
-                    DisclosureGroup("Wi-Fi check details") {
-                        Text(model.wifiObservation.details).font(.caption)
-                            .accessibilityIdentifier("rpc.wifiDetails")
-                        Text(
-                            "These are this app's observations, not proof of peer connectivity or multicast. "
-                                + "Advanced offers manual setup for independently verified approved networks."
-                        ).font(.footnote)
-                    }
+            }
+            DisclosureGroup("Network details") {
+                if let network = model.detectedWifi {
+                    Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
+                    Text("Private network: \(network.subnet) · \(network.interfaceName)").font(
+                        .caption.monospaced())
+                }
+                Button("Check Wi-Fi again") { model.refreshWifi() }
+                    .buttonStyle(.borderless)
+                    .disabled(!model.canRefreshWifi)
+                    .accessibilityIdentifier("rpc.refreshWifi")
+                    .accessibilityHint("Only re-reads the connection. Does not approve a network or start RPC.")
+                DisclosureGroup("Wi-Fi check details") {
+                    Text(model.wifiObservation.details).font(.caption)
+                        .accessibilityIdentifier("rpc.wifiDetails")
+                    Text(
+                        "These are this app's observations, not proof of peer connectivity or multicast. "
+                            + "Advanced offers manual setup for independently verified approved networks."
+                    ).font(.footnote)
                 }
             }
         }

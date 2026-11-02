@@ -24,13 +24,13 @@ import xml.etree.ElementTree as ET
 SCOPE = "SUPPLEMENTAL_RPC_PHONE_APP_NOT_PHYSICAL_OR_CAPACITY_QUALIFICATION"
 TARGETS = {
     "p2pkit-rpc-phone-tests": (
-        # Original77 owner/lifecycle methods plus2 sealed-input/used-slot regressions.
-        ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 79),
+        # Original77,2 sealed-input/used-slot,2 foreground/cancellation and1 active-test app-switch regression.
+        ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 82),
         ("Tests/RpcPhoneEnvironmentSamplerTests.swift", "RpcPhoneEnvironmentSamplerTests", 5),
         ("Tests/RpcPhoneUsbDeveloperCommandTests.swift", "RpcPhoneUsbDeveloperCommandTests", 6),
     ),
     "p2pkit-rpc-phone-uitests": (
-        ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 7),
+        ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 9),
     ),
 }
 LIMIT = 256 * 1024 * 1024

@@ -320,13 +320,41 @@ def context_at(value: str) -> tuple[Path, dict[str, Any]]:
     return state, context
 
 
-def gradle_arguments(original: list[str], *, reuse_xcframework: bool = False) -> list[str]:
+def mobile_offline_argv(original: list[str], purpose: str) -> bool:
+    regressions = [":p2p-sample-rpc:jvmTest", ":p2p-sample-android:testDebugUnitTest",
+                   "--dependency-verification=strict", "--console=plain", "--no-parallel", "--max-workers=2"]
+    products = [":p2p-sample-rpc:prepareRpcCapacityLab", ":p2p-sample-android:assembleDebug",
+                "-Pp2pkitRpcCampaign=true"]
+    expected = {"prepare-phone-regressions": [regressions], "prepare-products": [products, products +
+                [":p2p-sample-rpc:verifyP2pKitRpcExampleDebugXCFrameworkProvenance"]]}
+    return original.count("--offline") == 1 and original[-1:] == ["--offline"] and \
+        original[:-1] in expected.get(purpose, [])
+
+
+def sealed_mobile_offline_binding(state: Path, context: dict, root: Path, original: list[str], purpose: str) -> dict:
+    require(context.get("host") == host_role() == "macos-arm64" and mobile_offline_argv(original, purpose),
+            "Offline execution is restricted to exact native Mac mobile preparation commands")
+    require(source_snapshot(root) == context["source"], "Offline cache requires the exact clean preparation source")
+    spec = importlib.util.spec_from_file_location("native_sealed_mobile_offline", root / "scripts/run-rpc-mac-campaign.py")
+    campaign = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(campaign)
+    cache = campaign.read_only_dependency_cache(state)
+    require(cache is not None and os.environ.get("GRADLE_RO_DEP_CACHE") == cache["path"],
+            "Offline preparation needs the verified sealed local dependency cache")
+    return cache
+
+
+def gradle_arguments(original: list[str], *, reuse_xcframework: bool = False, sealed_mobile_offline: bool = False) -> list[str]:
     require(original and all(isinstance(arg, str) and "\0" not in arg for arg in original), "Missing Gradle argv")
     require(not reuse_xcframework or original in XCFRAMEWORK_ARGV,
             "Only the exact XCFramework verifier may reuse outputs")
     forbidden = {"daemon", "parallel", "build-cache", "configuration-cache", "continuous", "t",
                  "offline", "refresh-keys", "write-verification-metadata", "M", "F", "gradle-user-home", "g",
                  "include-build", "project-cache-dir"}
+    if sealed_mobile_offline:
+        require(any(mobile_offline_argv(original, purpose) for purpose in
+                    ("prepare-phone-regressions", "prepare-products")), "Only exact mobile preparation may run offline")
+        forbidden.remove("offline")
     allowed_values = {"dependency-verification": "strict", "max-workers": "2", "console": "plain"}
     allowed_properties = {"org.gradle.jvmargs": JVM_ARGUMENTS, "org.gradle.parallel": "false",
                           "org.gradle.workers.max": "2", "org.gradle.caching": "false",
@@ -1029,6 +1057,7 @@ def execute(args: argparse.Namespace) -> int:
     started = False
     baseline: dict[str, Any] = {}
     xcframework_reuse = None
+    mobile_offline = None
     report_arguments = original if args.kind == "gradle" else []
     context_hash = digest((state / "context.json").read_bytes())
     monotonic_start = time.monotonic()
@@ -1053,7 +1082,10 @@ def execute(args: argparse.Namespace) -> int:
         stop_timeout = finite_local_number(stop_timeout, "Stop timeout")
         require(0.1 <= product_timeout <= 24 * 60 * 60 and 0.1 <= stop_timeout <= 300,
                 "Invalid bounded command/stop timeout")
-        actual = gradle_arguments(original) if args.kind == "gradle" else original
+        if args.kind == "gradle" and "--offline" in original:
+            mobile_offline = sealed_mobile_offline_binding(state, context, root, original, args.purpose)
+            receipt["sealedMobileOfflineCache"] = mobile_offline
+        actual = gradle_arguments(original, sealed_mobile_offline=mobile_offline is not None) if args.kind == "gradle" else original
         env = ownership_environment(dict(os.environ), context["id"], invocation, str(state), context["gradleHome"])
         # Environment JVM arguments can affect even the wrapper stop and unchanged
         # platform driver; don't silently shadow a caller's competing resource flags.
@@ -1194,6 +1226,13 @@ def execute(args: argparse.Namespace) -> int:
                 receipt["xcframeworkReuseUnchanged"] = True
             except BaseException as error:
                 record_error("XCFramework reuse finalization failed: ", error)
+        if mobile_offline is not None:
+            try:
+                require(sealed_mobile_offline_binding(state, context, root, original, args.purpose) == mobile_offline,
+                        "Sealed preparation inputs changed during offline execution")
+                receipt["sealedMobileOfflineCacheUnchanged"] = True
+            except BaseException as error:
+                record_error("Offline preparation finalization failed: ", error)
         if scope is not None:
             try:
                 scope.close()

@@ -76,7 +76,9 @@ internal class DesktopRpcProfile private constructor(
             var acquisitionStarted = false
             try {
                 require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
+                val configuredDirectory = System.getProperty("dev.p2pkit.rpc.profileDir")
                 if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                    require(configuredDirectory == null) { "Windows uses its installed native profile directory" }
                     // Refuse missing boot-module/runtime inputs before native Desktop preparation. These
                     // observations never authorize the DLL: openInstalled still runs the original loader.
                     WindowsProfileInstalledProvider.requireInstalledEntry()
@@ -87,7 +89,9 @@ internal class DesktopRpcProfile private constructor(
                         WindowsProfileFiles.openInstalled()
                     }
                 }
-                val directory = Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop")
+                val directory = desktopRpcProfileDirectory(
+                    if (configuredDirectory == null) System.getProperty("user.home") else "", configuredDirectory,
+                )
                 acquisitionStarted = true
                 return openAttempt(directory, password)
             } catch (failure: Throwable) {
@@ -235,6 +239,14 @@ internal class DesktopRpcProfile private constructor(
             } finally { password.fill('\u0000') }
         }
     }
+}
+
+/** Explicit separate POSIX profiles use the same protected files, encryption and ownership checks. */
+internal fun desktopRpcProfileDirectory(home: String, configuredDirectory: String?): Path {
+    if (configuredDirectory == null) return Path.of(home, ".p2pkit-rpc-desktop")
+    val directory = Path.of(configuredDirectory)
+    require(directory.isAbsolute && directory.normalize() == directory) { "Absolute profile directory required" }
+    return directory
 }
 
 /**
