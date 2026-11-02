@@ -14,6 +14,12 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
+The current source selects **`0.8.0-rc9`** for the additive exact RPC
+physical-session APIs merged in #534. It is not yet published. Its own qualified
+main source, four application artifacts, dry run and protected publication are
+required; rc8 evidence and the separate ongoing phone campaign cannot substitute
+for those results. `LATEST_PUBLISHED_VERSION` remains rc8 until remote verification.
+
 The latest verified library publication is **`0.8.0-rc8`**, from exact source
 `6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Its
 [release record](../releases/0.8.0-rc8.md) binds the original source and artifacts.
