@@ -1193,6 +1193,15 @@ final class RpcPhoneModel: ObservableObject {
         } catch { deviceTestStorageIssue = "Saving results failed; results remain in this session." }
     }
 
+    func physicalTestAction(_ work: () throws -> Void) throws {
+        guard foreground, !actionBusy, deviceTestStorageIssue == nil, mobileConfig == nil else {
+            throw LiveReadError.unavailable
+        }
+        try work()
+        objectWillChange.send()
+        refreshDeviceTests()
+    }
+
     func runDeviceTest(_ phase: RpcDeviceTestPhase) {
         guard canAct, nearbyMode, deviceTestStorageIssue == nil, applicationSession.deviceTests.archiveAvailable,
             let lab = owner.runtime, lab.applicationAvailable else { return }

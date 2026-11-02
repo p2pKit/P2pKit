@@ -118,8 +118,8 @@ internal class DesktopRpcRuntime private constructor(
         )
     }
 
-    private fun saveTests() {
-        if (vault == null) return
+    private fun saveTests() = synchronized(application.deviceTests) {
+        if (vault == null) return@synchronized
         val tests = application.deviceTests
         val archive = DesktopRpcTestArchive(checkNotNull(vault))
         tests.unarchivedReports.forEach { archive.retain(tests, it) }

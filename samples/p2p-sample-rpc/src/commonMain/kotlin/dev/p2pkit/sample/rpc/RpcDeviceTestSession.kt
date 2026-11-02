@@ -52,6 +52,7 @@ import kotlin.time.TimeSource
 public enum class RpcDeviceTestPhase(public val title: String) {
     Large("Large data"), Correctness("Correctness"), Reconnect("Disconnect / reconnect"),
     Steady("Steady · 30 minutes"), Deadlines("Cancellation / deadline"), Adaptive("Smart · find stable load"),
+    Observation("Physical test observation"),
 }
 
 @Serializable
@@ -90,11 +91,13 @@ public data class RpcDeviceTestReport(
     public val failedResponses: Long = 0,
     public val smart: RpcSmartTestResult? = null,
     public val telemetryMessages: Long = 0,
+    public val physicalObservation: RpcPhysicalTestObservation? = null,
 ) {
     public val direction: String get() = "$clientPlatform → $hostPlatform"
-    public val title: String get() = "$direction · ${phase.title}: $status · " +
+    public val title: String get() = physicalObservation?.let { "$clientPlatform · ${it.title}" } ?: "$direction · ${phase.title}: $status · " +
         "$correctResponses responses · ${elapsedMillis / 1_000}s"
     public val detail: String get() = buildString {
+        physicalObservation?.let { appendLine(it.detail) }
         appendLine("$mode · started by $initiatedBy · run $runId")
         if (groupId.isNotEmpty()) appendLine("Group: $groupId")
         appendLine("Source: $sourceSha")
@@ -188,6 +191,7 @@ internal object DeviceTestContract {
 
 /** Bounded results outlive a role. Platform screens persist the immutable JSON in their private app storage. */
 public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcRequestHistory()) {
+    public val physicalTests: RpcPhysicalTestSession = RpcPhysicalTestSession(this)
     private val records = MutableStateFlow<List<RpcDeviceTestReport>>(emptyList())
     public val reports: List<RpcDeviceTestReport> get() = records.value
     private val latest = MutableStateFlow(RpcDeviceTestProgress())
@@ -269,6 +273,21 @@ public class RpcDeviceTestSession(internal val history: RpcRequestHistory = RpcR
     }
 
     public fun reportJson(report: RpcDeviceTestReport): String = Json.encodeToString(report)
+
+    /** Bounded record-at-a-time private export. Older archives are explicitly outside this recent snapshot. */
+    @Throws(Exception::class)
+    public fun writeRecentEvidence(appendLine: (String) -> Unit) {
+        val snapshot = reports
+        require(snapshot.size <= 100)
+        appendLine("{\"format\":\"p2pkit-private-test-evidence\",\"schema\":1,\"recentOnly\":true}")
+        snapshot.forEach { report ->
+            require(validDeviceTestReport(report))
+            val line = reportJson(report)
+            require(line.encodeToByteArray().size <= 65_536)
+            appendLine(line)
+        }
+        appendLine("{\"exportComplete\":true,\"records\":${snapshot.size}}")
+    }
     public fun archivedResultMatchesForDeletion(report: RpcDeviceTestReport, text: String): Boolean {
         if (text.encodeToByteArray().size > 65_536) return false
         val archived = try { Json.decodeFromString<RpcDeviceTestReport>(text) } catch (_: Exception) { return false }
@@ -800,6 +819,7 @@ internal class DeviceTestRuntime(
                 }
             }
             when (command.phase) {
+                RpcDeviceTestPhase.Observation -> error("Operator observations cannot execute through RPC")
                 RpcDeviceTestPhase.Adaptive -> {
                     val output = runSmartTest(command.smartSettings ?: session.smartSettings, call = {
                         val started = TimeSource.Monotonic.markNow()
@@ -983,7 +1003,8 @@ internal class DeviceTestRuntime(
 }
 
 internal fun validDeviceTestCommand(command: DeviceTestCommand): Boolean =
-    command.runId.matches(Regex("[a-f0-9]{32}")) && command.sourceSha.matches(Regex("[a-f0-9]{40}")) &&
+    command.phase != RpcDeviceTestPhase.Observation &&
+        command.runId.matches(Regex("[a-f0-9]{32}")) && command.sourceSha.matches(Regex("[a-f0-9]{40}")) &&
         command.mode in setOf("Pair", "Multi") &&
         (command.groupId.isEmpty() || command.mode == "Multi" && command.groupId.matches(Regex("[a-f0-9]{32}"))) &&
         (command.smartSettings == null || command.phase == RpcDeviceTestPhase.Adaptive && command.smartSettings.valid())
@@ -1027,6 +1048,9 @@ internal fun matchesDeviceTestResult(receivedPeer: String?, expectedPeer: String
         matchesObservedMetadata(report, begin, hostPlatform)
 
 internal fun validDeviceTestReport(value: RpcDeviceTestReport): Boolean =
+    if (value.physicalObservation != null) validPhysicalTestReport(value) else validInteractiveDeviceTestReport(value)
+
+private fun validInteractiveDeviceTestReport(value: RpcDeviceTestReport): Boolean =
     validDeviceTestCommand(DeviceTestCommand(value.runId, value.sourceSha, value.phase, value.mode, value.groupId)) &&
         value.clientPlatform in deviceTestPlatforms && value.hostPlatform in deviceTestPlatforms &&
         value.startedAtEpochMillis in 0..4_102_444_800_000 && value.initiatedBy in setOf("Host", "Client") &&
@@ -1059,6 +1083,7 @@ internal fun validDeviceTestReport(value: RpcDeviceTestReport): Boolean =
             RpcDeviceTestPhase.Reconnect -> 5
             RpcDeviceTestPhase.Steady, RpcDeviceTestPhase.Deadlines -> 1
             RpcDeviceTestPhase.Adaptive -> 1
+            RpcDeviceTestPhase.Observation -> error("Operator observation is not an interactive result")
         })) &&
         (value.status != "Completed" || value.phase != RpcDeviceTestPhase.Steady || value.elapsedMillis >= 1_800_000)
 

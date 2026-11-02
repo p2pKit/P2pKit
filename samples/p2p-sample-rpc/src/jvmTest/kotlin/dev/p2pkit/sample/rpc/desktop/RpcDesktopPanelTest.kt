@@ -88,7 +88,7 @@ class RpcDesktopPanelTest {
             assertEquals(1, descendants(panel).filterIsInstance<JTextArea>().count {
                 it.accessibleContext.accessibleName == "Live test activity: requests, replies and execution outcomes"
             })
-            RpcDeviceTestPhase.entries.forEach { phase ->
+            RpcDeviceTestPhase.entries.filter { it != RpcDeviceTestPhase.Observation }.forEach { phase ->
                 assertEquals(1, buttons.count { it.text == phase.title })
                 assertTrue(!buttons.single { it.text == phase.title }.isEnabled)
             }

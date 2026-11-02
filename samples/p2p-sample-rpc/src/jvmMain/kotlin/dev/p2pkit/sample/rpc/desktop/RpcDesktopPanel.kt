@@ -140,6 +140,11 @@ public class RpcDesktopPanel(
     private val testPage = DesktopRpcColumn()
     private var showingTests = false
     private var showingMultiTests = false
+    private var physicalWrite: Job? = null
+    private val physicalPage by lazy { RpcDesktopPhysicalTests(applicationSession.deviceTests,
+        ::mutatePhysicalTest, { phase -> showDeviceTests(showingMultiTests)
+            testButtons.firstOrNull { it.second == phase }?.first?.doClick() }, ::exportPhysicalEvidence,
+        { outcome.text }, ::requestBack) }
     private val testHeading = DesktopRpcAppearance.heading("Device tests")
     private val testModeDescription = DesktopRpcWrappedLabel("Run one test on one connected Client.")
     private val groupPeersModel = DefaultListModel<RpcKnownDevice>()
@@ -163,7 +168,8 @@ public class RpcDesktopPanel(
         }
     }
     private val testDiscovery = DesktopRpcDiscoveryPanel(::selectNearby, ::forgetNearby)
-    private val testButtons = RpcDeviceTestPhase.entries.map { JButton(it.title) to it }
+    private val testButtons = RpcDeviceTestPhase.entries.filter { it != RpcDeviceTestPhase.Observation }
+        .map { JButton(it.title) to it }
     private val allowTests = JCheckBox("Allow selected Host to start tests while this page is open")
     private val testIdentity = JTextArea(2, 54).apply { isEditable = false; lineWrap = true }
     private val testProgress = JTextArea("No test running", 5, 54).apply {
@@ -218,6 +224,9 @@ public class RpcDesktopPanel(
                 add(JButton("Back to samples").apply { addActionListener { requestBack() } })
                 add(JButton("Device tests").apply { addActionListener { showDeviceTests() } })
                 add(JButton("Multi-device tests").apply { addActionListener { showDeviceTests(true) } })
+                add(JButton("Test Center · all physical tests").apply { addActionListener {
+                    if (!closing) { showingTests = true; workspaceScroll.setViewportView(physicalPage); physicalPage.render() }
+                } })
                 add(DesktopRpcAppearance.hero())
                 add(DesktopRpcAppearance.heading("Connect"))
                 add(DesktopRpcWrappedLabel("Choose Host on one device and Client on the other. " +
@@ -424,6 +433,65 @@ public class RpcDesktopPanel(
         refreshNetworks()
     }
 
+    private fun exportPhysicalEvidence() {
+        if (closing || physicalWrite?.isActive == true || !windowActive || applicationSession.deviceTests.anyTestRunning) return
+        val chooser = javax.swing.JFileChooser().apply { selectedFile = java.io.File("p2pkit-recent-tests.jsonl") }
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION || closing) return
+        val destination = chooser.selectedFile.toPath()
+        physicalWrite = scope.launch {
+            try {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    java.nio.channels.FileChannel.open(destination, java.nio.file.StandardOpenOption.CREATE_NEW,
+                        java.nio.file.StandardOpenOption.WRITE).use { channel ->
+                        val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
+                            java.nio.channels.Channels.newOutputStream(channel), Charsets.UTF_8))
+                        applicationSession.deviceTests.writeRecentEvidence { line -> writer.write(line); writer.newLine() }
+                        writer.flush()
+                        channel.force(true)
+                    }
+                }
+                withContext(DesktopRpcEdt) { outcome.text = "Recent private evidence exported. Older archives remain in the profile." }
+            } catch (_: Exception) {
+                withContext(DesktopRpcEdt) { outcome.text = "Export incomplete or destination already exists; " +
+                    "original archives are unchanged. An incomplete external file may remain." }
+            }
+        }
+    }
+
+    private fun mutatePhysicalTest(work: () -> Unit) {
+        if (closing || physicalWrite?.isActive == true || unlocking || !windowActive || unlockCleanupFailure != null) return
+        val unlocked = profile
+        if (unlocked == null) { unlockProfile { mutatePhysicalTest(work) }; return }
+        physicalWrite = scope.launch {
+            try {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    synchronized(applicationSession.deviceTests) {
+                        if (applicationSession.deviceTests.reports.isEmpty()) {
+                            unlocked.vault.read("device-test-results-v1")?.let { bytes ->
+                                try { applicationSession.deviceTests.restoreJson(bytes.decodeToString()) }
+                                finally { bytes.fill(0) }
+                            }
+                        }
+                    }
+                }
+                withContext(DesktopRpcEdt) { check(!closing); work(); physicalPage.render() }
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    synchronized(applicationSession.deviceTests) {
+                        val tests = applicationSession.deviceTests
+                        val archive = DesktopRpcTestArchive(unlocked.vault)
+                        tests.unarchivedReports.forEach { archive.retain(tests, it) }
+                        val bytes = tests.exportJson().toByteArray()
+                        try { unlocked.vault.replace("device-test-results-v1", bytes) } finally { bytes.fill(0) }
+                    }
+                }
+                withContext(DesktopRpcEdt) { outcome.text = "Observation archived privately; evidence review remains required." }
+            } catch (_: Exception) {
+                withContext(DesktopRpcEdt) { outcome.text = "Observation could not be saved. Check steps, duration, " +
+                    "evidence reference and storage; pending records remain retained." }
+            }
+        }
+    }
+
     private fun showDeviceTests(multi: Boolean = false) {
         if (closing) return
         if (applicationSession.deviceTests.anyTestRunning || owner.snapshot().stage == DesktopRpcRunOwner.Stage.Working) {
@@ -444,7 +512,7 @@ public class RpcDesktopPanel(
     }
 
     private fun startRole(host: Boolean) {
-        if (closing || unlocking || unlockCleanupFailure != null || !windowActive ||
+        if (closing || unlocking || physicalWrite?.isActive == true || unlockCleanupFailure != null || !windowActive ||
             owner.snapshot().stage !in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
         val unlocked = profile
         // On Windows this is the fixed installed provider, not an OS-name permission or a POSIX fallback.
@@ -862,6 +930,8 @@ public class RpcDesktopPanel(
             attempt { networkRefresh?.cancelAndJoin() }
             phase("status observer")
             attempt { statusUpdates?.join() }
+            phase("test evidence writer")
+            attempt { physicalWrite?.join() }
             // Do not cancel a native unlock or lose its successful late profile. No role can start while closing.
             phase("profile unlock")
             attempt { unlockTask?.join() }

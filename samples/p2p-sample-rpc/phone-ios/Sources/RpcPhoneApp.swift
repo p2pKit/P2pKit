@@ -69,6 +69,7 @@ struct RpcPhoneView: View {
     @ObservedObject var model: RpcPhoneModel
     @State private var showAdvanced = false
     @State private var showingDeviceTests = false
+    @State private var showingTestCenter = false
     @State private var deletingTest: String?
     @StateObject private var presentation = RpcPhoneDecisionPresentation()
 
@@ -82,6 +83,8 @@ struct RpcPhoneView: View {
                     Button("Device tests") { model.setTestMode(false); showingDeviceTests = true; model.refreshDeviceTests() }
                         .disabled(model.mobileConfig != nil || model.actionBusy)
                         .accessibilityIdentifier("rpc.deviceTests")
+                    Button("Test Center · all physical tests") { showingTestCenter = true }
+                        .disabled(model.mobileConfig != nil || model.actionBusy)
                     Button("Multi-device tests") {
                         model.setTestMode(true); showingDeviceTests = true; model.refreshDeviceTests()
                     }.disabled(model.mobileConfig != nil || model.actionBusy || model.deviceTestRunning)
@@ -157,6 +160,7 @@ struct RpcPhoneView: View {
                 }
             }
             .navigationTitle(showingDeviceTests ? (model.multiTests ? "Multi-device tests" : "Device tests") : "P2pKit RPC")
+            .sheet(isPresented: $showingTestCenter) { RpcPhysicalTestView(model: model) }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     if showingDeviceTests {

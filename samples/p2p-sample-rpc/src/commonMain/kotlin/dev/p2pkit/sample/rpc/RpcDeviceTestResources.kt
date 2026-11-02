@@ -85,9 +85,10 @@ internal data class DeviceResourceWindow(
     }
 }
 
-internal fun validDeviceResources(value: RpcDeviceTestResources?): Boolean = value == null ||
-    (value.samples in 1..3_000 && value.sampledMillis in 0..1_850_000 &&
-        value.cpuDeltaNanos in 0..100_000_000_000_000 &&
+internal fun validDeviceResources(value: RpcDeviceTestResources?, longObservation: Boolean = false): Boolean = value == null ||
+    (value.samples in 1..(if (longObservation) 100_000 else 3_000) &&
+        value.sampledMillis in 0..(if (longObservation) 86_400_000L else 1_850_000L) &&
+        value.cpuDeltaNanos in 0..(if (longObservation) 11_059_200_000_000_000L else 100_000_000_000_000L) &&
         value.peakMemoryBytes in 1..68_719_476_736 && value.memoryKind in setOf("RESIDENT_BYTES", "JVM_HEAP_BYTES") &&
         value.peakThreads in 1..100_000 && value.threadKind in setOf("NATIVE_THREADS", "JVM_THREADS") &&
         (value.firstBatteryPercentMilli == null || value.firstBatteryPercentMilli in 0..100_000) &&

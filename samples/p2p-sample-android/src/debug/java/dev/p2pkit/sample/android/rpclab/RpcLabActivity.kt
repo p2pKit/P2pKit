@@ -152,6 +152,7 @@ internal class RpcLabController(
         }
     }
     private var deviceTestScreen by mutableStateOf(false)
+    private var testCenterScreen by mutableStateOf(false)
     private var selectedTestPeer by mutableStateOf<String?>(null)
     private var multiTests by mutableStateOf(false)
     private var selectedTestPeers by mutableStateOf<Set<String>>(emptySet())
@@ -669,7 +670,16 @@ internal class RpcLabController(
     fun Content() {
         Column {
             TextButton(::requestLeave) { Text(if (deviceTestScreen) "Back to RPC" else "Back to Room") }
-            if (deviceTestScreen) DeviceTests() else Controls()
+            if (deviceTestScreen && testCenterScreen) RpcLabPage {
+                RpcPhysicalTestPanel(applicationSession.deviceTests,
+                    enabled = interactive && !busy && !closing && testStorageIssue == null,
+                    run = { phase -> openDeviceTests(multiTests); runDeviceTest(phase) },
+                    changed = { ui.launch { persistDeviceTests() } })
+                applicationSession.deviceTests.liveResources?.let { Text(it.title); Text(it.environmentTitle) }
+                testStorageIssue?.let { Text(it) }
+                Button({ exportTestEvidence() }, enabled = interactive && !busy && !closing &&
+                    !applicationSession.deviceTests.anyTestRunning) { Text("Share recent test evidence (up to 100 runs)") }
+            } else if (deviceTestScreen) DeviceTests() else Controls()
         }
         when (leave.phase) {
             RpcLabLeaveGate.Phase.Confirm, RpcLabLeaveGate.Phase.Failed -> AlertDialog(
@@ -739,10 +749,27 @@ internal class RpcLabController(
         }
     }
 
+    private fun exportTestEvidence() {
+        if (!interactive || busy || closing || applicationSession.deviceTests.anyTestRunning) return
+        ui.launch {
+            busy = true
+            try {
+                persistDeviceTests()
+                check(testStorageIssue == null)
+                val intent = withContext(Dispatchers.IO) {
+                    exportRecentRpcEvidence(applicationContext, applicationSession.deviceTests)
+                }
+                if (interactive && !closing) activity.startActivity(Intent.createChooser(intent, "Share private test evidence"))
+            } catch (_: Exception) { status = "Export incomplete; original test archives remain retained." }
+            finally { busy = false }
+        }
+    }
+
     private fun openDeviceTests(multi: Boolean) {
         if (!interactive || closing || applicationSession.deviceTests.anyTestRunning) return
         applicationSession.deviceTests.setMultiDeviceMode(multi)
         multiTests = multi
+        testCenterScreen = false
         deviceTestScreen = true
     }
 
@@ -837,7 +864,7 @@ internal class RpcLabController(
                     catch (_: Exception) { status = "Invalid safety settings; previous settings kept." }
                 }, enabled = available) { Text("Apply safety settings") }
             }
-            RpcDeviceTestPhase.entries.forEach { phase ->
+            RpcDeviceTestPhase.entries.filter { it != RpcDeviceTestPhase.Observation }.forEach { phase ->
                 val selected = if (multiTests) clients.filter { it.fingerprint in selectedTestPeers }
                     else clients.filter { it.fingerprint == selectedTestPeer }
                 Button({ runDeviceTest(phase) }, enabled = available && lab?.nearbyMode == true &&
@@ -1310,6 +1337,8 @@ internal class RpcLabController(
                 TextButton({ openDeviceTests(true) }, enabled = mobileConfig == null && !closing &&
                     !applicationSession.deviceTests.anyTestRunning) { Text("Multi-device tests") }
             }
+            Button({ deviceTestScreen = true; testCenterScreen = true },
+                enabled = mobileConfig == null && !closing) { Text("Test Center · all physical tests") }
             RpcLabSectionHeading("Overview", "Host an API or connect to a nearby device")
             if (lab != null) {
                 Text(if (hostRole) "Active role: Host" else "Active role: Client",
