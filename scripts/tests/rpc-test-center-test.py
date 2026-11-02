@@ -39,7 +39,7 @@ class Requests(unittest.TestCase):
             (state / "work").mkdir(mode=0o700)
             directory = state / "private/test-center"
             directory.mkdir(mode=0o700)
-            for name in ("requests", "results", "cancel"):
+            for name in ("requests", "results", "cancel", "ready", "cancel-ready"):
                 (directory / name).mkdir(mode=0o700)
 
             def new(path, value):
@@ -71,6 +71,9 @@ class Requests(unittest.TestCase):
             profile = {("android", 128): (settings, {"sha256": "c" * 64})}
             value = dict(schema=1, sourceSha="a" * 40, id="b" * 32, platform="android", clients=128, mode="large", action="run")
             new(directory / "requests" / (value["id"] + ".json"), value)
+            def ready(identifier):
+                marker = directory / "ready" / (identifier + ".json")
+                marker.touch(mode=0o600)
             cleanup = dict(runtimeClosed=True, clientPinsRemoved=True, controlHealthy=True)
 
             def serve_once():
@@ -82,6 +85,11 @@ class Requests(unittest.TestCase):
                      patch.object(m.time, "sleep", side_effect=sleep):
                     m.serve(session, campaign, [settings], lifetime_seconds=1000)
 
+            # A complete but unpublished request (and a transient writer file) cannot dispatch.
+            (directory / "requests/.lab-transient.tmp").write_text("PARTIAL_OFFLINE_REQUEST")
+            serve_once()
+            self.assertEqual(calls, [])
+            ready(value["id"])
             serve_once()
             outcome_path = directory / "results" / (value["id"] + ".json")
             original = outcome_path.read_bytes()
@@ -92,6 +100,7 @@ class Requests(unittest.TestCase):
             self.assertEqual(outcome_path.read_bytes(), original)
             interrupted = value | {"id": "d" * 32}
             new(directory / "requests" / (interrupted["id"] + ".json"), interrupted)
+            ready(interrupted["id"])
             new(directory / (interrupted["id"] + ".started.json"), interrupted)
             serve_once()
             self.assertEqual(len(calls), 1)

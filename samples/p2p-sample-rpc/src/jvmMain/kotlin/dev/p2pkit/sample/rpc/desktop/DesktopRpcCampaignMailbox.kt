@@ -15,6 +15,7 @@ import kotlinx.serialization.json.put
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.UUID
 
 internal data class DesktopRpcCampaignProfile(val platform: String, val clients: Int) {
@@ -39,7 +40,9 @@ internal class DesktopRpcCampaignMailbox(private val directory: Path, private va
     init {
         require(source.matches(Regex("[a-f0-9]{40}")))
         LabFiles.privateDirectory(directory)
-        listOf("requests", "cancel", "results").forEach { LabFiles.privateDirectory(directory.resolve(it)) }
+        listOf("requests", "cancel", "results", "ready", "cancel-ready").forEach {
+            LabFiles.privateDirectory(directory.resolve(it))
+        }
         require(context.getValue("sourceSha").jsonPrimitive.content == source)
     }
 
@@ -67,6 +70,7 @@ internal class DesktopRpcCampaignMailbox(private val directory: Path, private va
         LabFiles.write(directory.resolve("requests/$id.json"), body.toString().toByteArray())
         activeId = id
         lastResult = null
+        publishReady("ready", id)
         return id
     }
 
@@ -90,10 +94,22 @@ internal class DesktopRpcCampaignMailbox(private val directory: Path, private va
         if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
             val existing = read("cancel/$id.json")
             require(existing.getValue("id").jsonPrimitive.content == id)
+            publishReady("cancel-ready", id)
             return
         }
         val body = buildJsonObject { put("schema", 1); put("sourceSha", source); put("id", id) }
         LabFiles.write(path, body.toString().toByteArray())
+        publishReady("cancel-ready", id)
+    }
+
+    /** Empty create-only marker is published only after the complete request and temporary inode have drained. */
+    private fun publishReady(folder: String, id: String) {
+        val path = directory.resolve("$folder/$id.json")
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            Files.createFile(path, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+            LabFiles.syncDirectory(path.parent)
+        }
+        require(LabFiles.read(path, 1).isEmpty())
     }
 
     /** Wait for the original worker's outcome; do not signal guessed processes or infer phone closure. */

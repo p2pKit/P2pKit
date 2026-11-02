@@ -30,6 +30,13 @@ def request(value, source_sha):
     return value
 
 
+def ready_marker(path):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size != 0):
+        raise ValueError("Original private ready marker required")
+
+
 def safe_summary(value, campaign):
     summary = campaign.result_summary(value)
     # Only selected observations cross the UI boundary; no device/path/pin/log fields.
@@ -74,7 +81,7 @@ def serve(session, campaign, settings, *, lifetime_seconds=43_200):
     directory = session.state / "private/test-center"
     directory.mkdir(mode=0o700, exist_ok=True)
     campaign.private(directory)
-    for name in ("requests", "results", "cancel"):
+    for name in ("requests", "results", "cancel", "ready", "cancel-ready"):
         (directory / name).mkdir(mode=0o700, exist_ok=True)
         campaign.private(directory / name)
     descriptor = os.open(directory / "worker.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
@@ -104,7 +111,9 @@ def serve(session, campaign, settings, *, lifetime_seconds=43_200):
         deadline = time.monotonic() + lifetime_seconds
         status(dict(state="Idle"))
         while time.monotonic() < deadline:
-            for path in sorted((directory / "requests").iterdir()):
+            for marker in sorted((directory / "ready").iterdir()):
+                ready_marker(marker)
+                path = directory / "requests" / marker.name
                 if path.name in seen:
                     continue
                 if not re.fullmatch(r"[a-f0-9]{32}\.json", path.name):
@@ -134,8 +143,10 @@ def serve(session, campaign, settings, *, lifetime_seconds=43_200):
                         status(dict(state="Running", id=value["id"], platform=value["platform"],
                                     clients=value["clients"], mode=value["mode"],
                                     elapsedSeconds=int(time.monotonic() - started)))
-                        if not cancel_path.exists():
+                        marker = directory / "cancel-ready" / path.name
+                        if not marker.exists():
                             return False
+                        ready_marker(marker)
                         cancel = campaign.private_json(cancel_path)
                         if cancel != dict(schema=1, id=value["id"], sourceSha=session.source["commit"]):
                             raise ValueError("Foreign cancellation; ownership retained")

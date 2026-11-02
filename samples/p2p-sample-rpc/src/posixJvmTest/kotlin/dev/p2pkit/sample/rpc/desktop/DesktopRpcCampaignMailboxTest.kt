@@ -23,6 +23,8 @@ class DesktopRpcCampaignMailboxTest {
         mailbox.cancel(); mailbox.cancel()
         assertNotNull(mailbox.activeId)
         assertTrue(Files.exists(directory.resolve("cancel/$id.json")))
+        assertTrue(Files.exists(directory.resolve("ready/$id.json")))
+        assertTrue(Files.exists(directory.resolve("cancel-ready/$id.json")))
         LabFiles.write(directory.resolve("results/$id.json"),
             """{"schema":1,"sourceSha":"${"a".repeat(40)}","id":"$id","state":"RecoveryRequired","cleanupVerified":false}""".toByteArray())
         mailbox.poll()
@@ -45,7 +47,9 @@ class DesktopRpcCampaignMailboxTest {
         try {
             root.toFile().setReadable(false, false); root.toFile().setWritable(false, false); root.toFile().setExecutable(false, false)
             root.toFile().setReadable(true, true); root.toFile().setWritable(true, true); root.toFile().setExecutable(true, true)
-            listOf("requests", "results", "cancel").forEach { LabFiles.newDirectory(root, it) }
+            listOf("requests", "results", "cancel", "ready", "cancel-ready").forEach {
+                LabFiles.newDirectory(root, it)
+            }
             LabFiles.write(root.resolve("context.json"),
                 """{"schema":1,"sourceSha":"${"a".repeat(40)}","profiles":[{"platform":"android","clients":128}]}""".toByteArray())
             LabFiles.write(root.resolve("status.json"),

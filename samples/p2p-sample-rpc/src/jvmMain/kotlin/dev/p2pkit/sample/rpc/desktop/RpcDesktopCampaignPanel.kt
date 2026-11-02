@@ -25,6 +25,7 @@ internal class RpcDesktopCampaignPanel(
     private var mailbox: DesktopRpcCampaignMailbox? = null
     private var io: Job? = null
     @Volatile private var active = false
+    @Volatile private var retiring = false
     val running: Boolean get() = active
     private val profiles = JComboBox<DesktopRpcCampaignProfile>()
     private val recoveryMode = JComboBox(arrayOf("large", "correctness", "churn", "steady"))
@@ -40,7 +41,7 @@ internal class RpcDesktopCampaignPanel(
             isEnabled = false
             addActionListener {
                 val profile = profiles.selectedItem as? DesktopRpcCampaignProfile ?: return@addActionListener
-                if (!canRun() || active || io?.isActive == true) return@addActionListener
+                if (retiring || !canRun() || active || io?.isActive == true) return@addActionListener
                 active = true // Reserve before scheduling; another role cannot race a queued campaign request.
                 perform {
                     mailbox?.start(profile, mode) ?: error("Prepare and attach the campaign first")
@@ -54,7 +55,7 @@ internal class RpcDesktopCampaignPanel(
         add(DesktopRpcWrappedLabel("Choose the phone and capacity, then run one phase at a time. " +
             "Steady measures 30 minutes after setup. The worker keeps private evidence and verifies cleanup."))
         add(JButton("Attach prepared campaign folder").apply { addActionListener {
-            if (active || io?.isActive == true || !canRun()) return@addActionListener
+            if (retiring || active || io?.isActive == true || !canRun()) return@addActionListener
             val chooser = JFileChooser().apply { fileSelectionMode = JFileChooser.DIRECTORIES_ONLY }
             if (chooser.showOpenDialog(this@RpcDesktopCampaignPanel) != JFileChooser.APPROVE_OPTION) {
                 return@addActionListener
@@ -75,12 +76,13 @@ internal class RpcDesktopCampaignPanel(
         add(recoveryMode)
         add(JButton("Verify original cleanup").apply { addActionListener {
             val profile = profiles.selectedItem as? DesktopRpcCampaignProfile ?: return@addActionListener
-            if (!canRun() || active || io?.isActive == true) return@addActionListener
+            if (retiring || !canRun() || active || io?.isActive == true) return@addActionListener
+            val mode = recoveryMode.selectedItem as String
             active = true
-            perform { mailbox?.start(profile, recoveryMode.selectedItem as String, "recover") }
+            perform { mailbox?.start(profile, mode, "recover") }
         } })
         add(JButton("Cancel campaign phase").apply { addActionListener {
-            if (active && io?.isActive != true) perform { mailbox?.cancel() }
+            if (!retiring && active && io?.isActive != true) perform { mailbox?.cancel() }
         } })
         add(status); add(JScrollPane(details))
         add(DesktopRpcWrappedLabel("Use the matching prepared source on every device. This panel starts the " +
@@ -98,7 +100,7 @@ internal class RpcDesktopCampaignPanel(
         }
     }
     private fun refresh() {
-        if (io?.isActive == true) return
+        if (retiring || io?.isActive == true) return
         val selected = mailbox ?: return
         perform {
             val result = selected.poll()
@@ -116,6 +118,7 @@ internal class RpcDesktopCampaignPanel(
     }
     private fun renderButtons() { buttons.forEach { it.isEnabled = mailbox != null && !active && canRun() } }
     suspend fun retire() = withContext(Dispatchers.IO) {
+        retiring = true
         io?.join()
         mailbox?.retire()
         active = false
