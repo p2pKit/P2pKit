@@ -91,7 +91,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         add(screenshot)
         reveal(app.staticTexts["rpc.activeRole"], in: app, up: false)
         XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
-        reveal(app.buttons["rpc.stop"], in: app, up: false)
+        reveal(app.buttons["rpc.stop"], in: app, up: true)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
     }
 
@@ -229,9 +229,9 @@ final class RpcPhonePresentationTests: XCTestCase {
             reveal(nearbyStatus, in: app, up: true)
             XCTAssertTrue(nearbyStatus.label.contains("Invalid setup"))
             // Form virtualizes offscreen rows; reveal each control before asserting its state.
-            reveal(app.buttons["rpc.host"], in: app, up: false)
+            reveal(app.buttons["rpc.host"], in: app, up: true)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
-            reveal(app.buttons["rpc.client"], in: app, up: false)
+            reveal(app.buttons["rpc.client"], in: app, up: true)
             XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
             reveal(app.buttons["rpc.stop"], in: app, up: true)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
@@ -371,15 +371,18 @@ final class RpcPhonePresentationTests: XCTestCase {
         start.tap()
         reveal(app.buttons["Save for review"], in: app, up: true)
         app.buttons["Save for review"].tap()
-        XCTAssertTrue(app.staticTexts["Check steps, duration, evidence reference and storage status. Nothing was marked passed."].exists)
+        let rejected = app.staticTexts["Check steps, duration, evidence reference and storage status. Nothing was marked passed."]
+        reveal(rejected, in: app, up: true)
+        XCTAssertTrue(rejected.exists)
         let end = app.buttons["rpc.observationEnd"]
-        reveal(end, in: app, up: true)
+        reveal(end, in: app, up: false)
         XCTAssertTrue(end.isEnabled)
         end.tap()
         let load = app.buttons["Load newest saved results"]
         reveal(load, in: app, up: true)
         load.tap()
-        let outcome = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Files, consent and cleanup · Interrupted")).firstMatch
+        let outcome = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Files, consent and cleanup · Interrupted")).firstMatch
+        reveal(outcome, in: app, up: true)
         XCTAssertTrue(outcome.waitForExistence(timeout: 5))
         let image = XCTAttachment(screenshot: app.screenshot())
         image.name = "Test Center — synthetic interrupted observation and separate archive"
@@ -391,6 +394,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         app.buttons["Test Center · all physical tests"].tap()
         reveal(app.buttons["Load newest saved results"], in: app, up: true)
         app.buttons["Load newest saved results"].tap()
+        reveal(outcome, in: app, up: true)
         XCTAssertTrue(outcome.waitForExistence(timeout: 5), "Original evidence must survive a full process reopen")
         XCTAssertFalse(app.buttons["rpc.observationEnd"].exists, "A process reopen cannot resume an observation")
     }

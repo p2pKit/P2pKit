@@ -4,6 +4,38 @@ import XCTest
 @testable import P2pKitRpcPhone
 
 final class RpcTestArchiveFilesTests: XCTestCase {
+    @MainActor
+    func testModelObservationFinishesAndReopensItsOriginalArchive() throws {
+        let (root, _) = try fixture()
+        let file = root.appendingPathComponent("model-results.json")
+        let model = RpcPhoneModel(wifi: RpcPhoneUnavailableTestWifi(), deviceTestFile: file)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        let center = model.applicationSession.deviceTests.physicalTests
+        try model.physicalTestAction {
+            try center.start(caseId: "core-files", source: model.compiledSource, platform: "iPhone")
+        }
+        XCTAssertNil(model.deviceTestStorageIssue)
+        XCTAssertThrowsError(try model.physicalTestAction {
+            try center.finish(outcome: "AwaitingReview", evidenceReference: "", notes: "")
+        })
+        XCTAssertNotNil(center.progress)
+        try model.physicalTestAction {
+            try center.finish(outcome: "Interrupted", evidenceReference: "synthetic-record", notes: "Test fixture")
+        }
+        XCTAssertNil(center.progress)
+        XCTAssertNil(model.deviceTestStorageIssue)
+        let original = model.applicationSession.deviceTests.reports
+        XCTAssertEqual(original.count, 2)
+        XCTAssertEqual(original.last?.physicalObservation?.outcome, "Interrupted")
+        XCTAssertEqual(Set(try RpcTestArchiveFiles(directory: root.appendingPathComponent("rpc-test-archive"))
+            .browse().reports.map(\.runId)), Set(original.map(\.runId)))
+        let reopened = RpcPhoneModel(wifi: RpcPhoneUnavailableTestWifi(), deviceTestFile: file)
+        XCTAssertNil(reopened.deviceTestStorageIssue)
+        XCTAssertNil(reopened.applicationSession.deviceTests.physicalTests.progress)
+        XCTAssertEqual(reopened.applicationSession.deviceTests.reports, original)
+    }
+
     private func fixture() throws -> (URL, RpcDeviceTestSession) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("rpc-archive-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,

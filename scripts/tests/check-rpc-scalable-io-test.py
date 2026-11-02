@@ -37,7 +37,20 @@ class ReceiptTest(unittest.TestCase):
         self.assertFalse(any("-only-testing" in item or "-skip-testing" in item for item in command))
         expected = ios.phone.inventory(ROOT)
         self.assertEqual({target: len(tests) for target, tests in expected.items()},
-                         {"p2pkit-rpc-phone-tests": 93, "p2pkit-rpc-phone-uitests": 9})
+                         {"p2pkit-rpc-phone-tests": 99, "p2pkit-rpc-phone-uitests": 10})
+        self.assertIn("RpcPhonePresentationTests/" +
+                      "testTestCenterKeepsObservationsSeparateFromRpcAndRetainsArchivedResultsAfterReopen()",
+                      expected["p2pkit-rpc-phone-uitests"])
+        self.assertEqual({case for case in expected["p2pkit-rpc-phone-tests"]
+                          if case.startswith("RpcTestArchiveFilesTests/")},
+                         {"RpcTestArchiveFilesTests/" + name + "()" for name in (
+                             "testModelObservationFinishesAndReopensItsOriginalArchive",
+                             "testBrowseAndExportRetainSeparateOriginalRecords",
+                             "testSelectedExportContainsOnlyThatRun",
+                             "testTruncatedOriginalRefusesAndIsRetained",
+                             "testLinkedRecordAndTraversalSelectionRefuse",
+                             "testDeletionMarkerMustIdentifyTheExactRecord",
+                         )})
         self.assertIn("RpcPhonePresentationTests/" +
                       "testMultiDeviceSectionAndDisplayControlsNeverStartAnUnconnectedRole()",
                       expected["p2pkit-rpc-phone-uitests"])

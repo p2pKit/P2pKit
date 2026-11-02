@@ -28,7 +28,7 @@ TARGETS = {
         ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 82),
         ("Tests/RpcPhoneEnvironmentSamplerTests.swift", "RpcPhoneEnvironmentSamplerTests", 5),
         ("Tests/RpcPhoneUsbDeveloperCommandTests.swift", "RpcPhoneUsbDeveloperCommandTests", 6),
-        ("Tests/RpcTestArchiveFilesTests.swift", "RpcTestArchiveFilesTests", 5),
+        ("Tests/RpcTestArchiveFilesTests.swift", "RpcTestArchiveFilesTests", 6),
     ),
     "p2pkit-rpc-phone-uitests": (
         ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 10),

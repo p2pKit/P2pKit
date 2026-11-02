@@ -55,10 +55,7 @@ final class RpcPhoneModel: ObservableObject {
     @Published var allowHostTests = false
     private var savedDeviceTests = ""
     private let testEnvironment = RpcPhoneEnvironmentSampler()
-    private var deviceTestFile: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("rpc-device-tests.json")
-    }
+    private let deviceTestFile: URL
     @Published private(set) var requestEntries: [RpcRequestEntry] = []
     @Published private(set) var requestMetrics: [RpcMetricCard] = []
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
@@ -120,7 +117,11 @@ final class RpcPhoneModel: ObservableObject {
     @Published var startProblem: StartProblem?
 
     init(wifi: RpcPhoneWifiObserving? = nil, invitationClipboard: RpcPhoneInvitationClipboard? = nil,
-         shareWindow: RpcPhoneShareWindow? = nil, diagnosticClipboard: UIPasteboard = .general) {
+         shareWindow: RpcPhoneShareWindow? = nil, diagnosticClipboard: UIPasteboard = .general,
+         deviceTestFile: URL? = nil) {
+        self.deviceTestFile = deviceTestFile ?? FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("rpc-device-tests.json")
         self.diagnosticClipboard = diagnosticClipboard
         self.shareWindow = shareWindow ?? RpcPhoneShareWindow()
         self.wifi = wifi ?? RpcPhoneWifiObserver()
