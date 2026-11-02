@@ -136,7 +136,7 @@ public class RpcDesktopPanel(
         accessibleContext.accessibleName = "RPC outcome and network setup guidance"
     }
     private val workspaceScroll = JScrollPane()
-    private val campaignPage by lazy { RpcDesktopCampaignPanel(scope, {
+    private val campaignPage: RpcDesktopCampaignPanel by lazy { RpcDesktopCampaignPanel(scope, {
         !closing && windowActive && !applicationSession.deviceTests.anyTestRunning &&
             owner.snapshot().stage in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)
     }) { workspaceScroll.setViewportView(physicalPage) } }
@@ -145,7 +145,7 @@ public class RpcDesktopPanel(
     private var showingTests = false
     private var showingMultiTests = false
     private var physicalWrite: Job? = null
-    private val physicalPage by lazy { RpcDesktopPhysicalTests(applicationSession.deviceTests,
+    private val physicalPage: RpcDesktopPhysicalTests by lazy { RpcDesktopPhysicalTests(applicationSession.deviceTests,
         ::mutatePhysicalTest, { showDeviceTests(showingMultiTests) }, { exportPhysicalEvidence() },
         ::browsePhysicalEvidence, { runId -> exportPhysicalEvidence(true, runId) },
         { outcome.text }, ::requestBack,
