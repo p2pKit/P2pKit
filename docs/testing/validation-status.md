@@ -4,7 +4,29 @@
 
 Use [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) and its immutable
 [release record](../README.md#test-and-release) for published evidence. The latest
-verified record is [`0.8.0-rc8`](../releases/0.8.0-rc8.md), release source
+verified record is [`0.8.0-rc10`](../releases/0.8.0-rc10.md), source
+`c22762af6c9a62728528d49ccca1fa4b28089712`, tree
+`4f5f6d27b9aa0c0729bd5be30e033e361edc0d12`.
+Original main [41386131129/1](https://github.com/p2pKit/P2pKit/actions/runs/41386131129)
+passed all fourteen mandatory components, 125 declared commands and four
+application producers with closed captures and known cleanup. Its 3,000 report
+entries are hash-bound metadata, not unique or decrypted test counts.
+Protected Maven
+[41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354)
+passed 242-file byte comparison and complete isolated consumer builds. Independent
+inspection verified 121 signatures across 21 coordinates. The publication-build
+SBOM contains 88 components. Inner consumer command/result captures were not
+retained; completion and cleanup evidence is the original successful maintained
+step and marker. Public sample delivery awaits separate owner evidence approval.
+These results do not qualify the installed phone tests or other physical scope.
+
+The [rc9 attempt](../releases/0.8.0-rc9.md) preserves its original runner failure,
+missing private failure artifact and publisher refusal before signing/upload.
+Rc10's success does not retroactively approve or reclassify that attempt.
+
+### Historical rc8 publication boundary
+
+The historical verified record is [`0.8.0-rc8`](../releases/0.8.0-rc8.md), release source
 `6c85fdc2977386e572830c243f9aa8bb17d84ec3`, tree
 `87d0eac4969dccb978207fa9be85882f1d22339a`.
 Aggregate [41028216266/1](https://github.com/p2pKit/P2pKit/actions/runs/41028216266)
@@ -108,8 +130,8 @@ native ARM64/Intel simulator components retain their own source-bound reports.
 `complete-gate` requires their actual successful aggregation, including on
 ordinary documentation PRs. A focused component pass is not complete qualification.
 
-The recorded rc8 selection has actual same-source results for all fourteen
-components, with the original/replacement identities above. They must not be
+The recorded rc10 selection has actual same-source results for all fourteen
+components, all from the original main attempt recorded above. They must not be
 reused as a pass for changed source. Deterministic callbacks, loopback TCP and
 hosted multicast still do not establish physical-network coverage.
 Release rc8 implements known-route protection for #120, not fair unknown-peer
@@ -127,7 +149,7 @@ execution. See [platform execution evidence](local.md#platform-execution-evidenc
 
 ### Historical rc7 testcase inventory (not rc8 counts)
 
-These previously retained counts describe rc7 only. Current rc8 evidence is
+These previously retained counts describe rc7 only. Historical rc8 evidence is
 summarized above without decrypting or inventing private testcase counts.
 
 | Target / suite | Historical rc7 scope and remaining limitation |

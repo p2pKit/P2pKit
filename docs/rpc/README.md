@@ -4,7 +4,8 @@ RPC is published under `io.github.apdelrahman1911:p2p-rpc`. Use
 [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) consistently for RPC, core
 and LAN; the [release records](../README.md#test-and-release) bind each immutable
 source, hosted qualification and published application set. The example below
-uses the verified rc8 publication, not source from a later bookkeeping commit.
+uses the verified rc10 publication. Later bookkeeping commits do not replace
+its original source or artifacts.
 
 Windows sample Host/Client and productive profile loading are implemented.
 Complete installed-standard-user, protected-profile and physical-LAN qualification
@@ -76,13 +77,18 @@ revocation-versus-commitment fence. Legacy registrations/notifications intention
 Credential validation, current employee/resource policy and durable business recovery remain the app's
 responsibility. These APIs are included in rc8; immutable rc7 artifacts do not include them.
 
+Release rc10 adds opt-in [exact physical-session provenance and awaited
+closure](physical-session-provenance.md). Applications can capture the
+authenticated incoming connection during login verification, preserve the
+original connection through scoped operations, and await its exact cleanup.
+
 ## Dependency and source-workspace integration
 
 Use the matching published core/LAN/RPC version from Maven Central:
 
 ```kotlin
 commonMain.dependencies {
-    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc8")
+    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc10")
 }
 ```
 

@@ -11,20 +11,16 @@ protected approval and the final pre-upload check revalidate its original
 identity and retention. See the [exact-source release procedure](release-foundation.md)
 for owner challenge comments, post-Maven application delivery and partial-failure
 boundaries. The latest completed publication is
-[`0.8.0-rc8`](../releases/0.8.0-rc8.md), from exact source
-`6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Protected Maven
-[41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149)
-passed with a PUBLISHED deployment, complete remote-consumer verification and
-242 byte-matching remote files (121 original artifacts plus their signatures).
-Its actual publication-build SBOM contains 88 components. Separate sample
-delivery [41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810)
-passed and published the [sample prerelease](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8)
-at the same source. All seven complete public downloads were independently
-verified anonymously against their original approved hashes; the four
-applications were not rebuilt. Public delivery does not establish installed
-execution or physical-device qualification.
-Later source needs its own qualification and protected publication; source
-controls alone do not establish readiness for a subsequent release.
+[`0.8.0-rc10`](../releases/0.8.0-rc10.md), source
+`c22762af6c9a62728528d49ccca1fa4b28089712`. Protected Maven
+[41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354)
+passed with its original PUBLISHED deployment, 242-file remote comparison and
+complete isolated consumer builds. Its publication-build SBOM contains 88
+components; independent public-signature inspection verified 121 signed originals
+across 21 coordinates. Public sample delivery awaits separate owner evidence
+review/approval. The [unpublished rc9 attempt](../releases/0.8.0-rc9.md) and
+[verified rc8 release](../releases/0.8.0-rc8.md) retain their historical scope.
+Later source requires its own qualification and protected approvals.
 
 Required secrets and variables remain in the GitHub Environment and must never
 be printed or committed. The workflow checks authenticated namespace-query access,
@@ -151,11 +147,11 @@ ordinary exact-source complete consumer gate used during publication.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
-record. See [`0.8.0-rc8`](../releases/0.8.0-rc8.md) for the latest completed
-library publication, and the [rc7](../releases/0.8.0-rc7.md),
+record. See [`0.8.0-rc10`](../releases/0.8.0-rc10.md) for the latest completed
+library publication, and the [rc8](../releases/0.8.0-rc8.md), [rc7](../releases/0.8.0-rc7.md),
 [rc6](../releases/0.8.0-rc6.md) and [0.7 RC3](../releases/0.7.0-rc3.md) records
 for immutable history. The rc6 final evidence-upload failure and successful
-separate read-only recovery remain rc6 facts, not an inferred rc8 recovery.
+separate read-only recovery remain rc6 facts, not an inferred rc10 recovery.
 If an irreversible upload succeeds but verification fails, do not rerun the
 publisher. Follow the separately protected [read-only recovery procedure](release-foundation.md#partial-failure-and-recovery)
 using the original signed quartet, deployment receipt and frozen applications.
