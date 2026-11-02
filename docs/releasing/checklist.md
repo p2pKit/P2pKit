@@ -2,18 +2,23 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest verified library publication is
-[`0.8.0-rc8`](../releases/0.8.0-rc8.md), from exact source
-`6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Maven
-[41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149)
-passed, including complete remote consumers and byte comparison of 242 remote
-files (121 original artifacts plus their signatures). Separate sample delivery
-[41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810)
-passed and published the [sample prerelease](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8)
-at the same source. Independent, complete anonymous downloads verified all seven
-public assets against the approved original application and supporting-file
-hashes, without rebuilding the four applications. This verifies delivery, not
-installed execution or physical-device qualification.
+[`0.8.0-rc10`](../releases/0.8.0-rc10.md), source
+`c22762af6c9a62728528d49ccca1fa4b28089712`.
+Original main qualification
+[41386131129/1](https://github.com/p2pKit/P2pKit/actions/runs/41386131129)
+passed all fourteen components and four application producers. Protected Maven
+[41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354)
+passed 242-file remote comparison and complete isolated consumer builds.
+Independent inspection verified all 121 signatures across 21 coordinates.
+Separately approved [sample delivery](https://github.com/p2pKit/P2pKit/actions/runs/41394743465)
+passed, publishing the frozen applications at the same source. Independent full
+anonymous downloads verified all seven original hashes; installation and
+physical-device scope remain governed by their own campaigns.
+The [rc9 attempt](../releases/0.8.0-rc9.md) failed before signing/upload; its
+missing pre-merge approval cannot be supplied retroactively.
 
+Historical [rc8](../releases/0.8.0-rc8.md) retains its verified library and sample
+publication with complete anonymous-download hashes.
 The rc8 aggregate
 [41028216266/1](https://github.com/p2pKit/P2pKit/actions/runs/41028216266)
 passed all fourteen components and 125 commands, retaining all four original

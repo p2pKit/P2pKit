@@ -3,7 +3,7 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc10 — development release candidate (not yet published)
+## 0.8.0-rc10 — development release candidate (2026-11-02)
 
 - Add opt-in exact RPC physical-session provenance for application integration
   (#531, #534). `registerScopedWithPhysicalSession()` exposes the authenticated
@@ -22,9 +22,15 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
   and its owned-JDK regression guard, retaining the same supplier archive and
   checksum.
 
-This candidate requires its own main-source qualification and protected Maven
-publication. The installed manual-test applications and their saved results
-remain bound to their separate lab source. Physical 128/256-client qualification
+Published and verified from immutable `v0.8.0-rc10`, source
+`c22762af6c9a62728528d49ccca1fa4b28089712`. All fourteen original main components,
+four application packages, the dry run and protected Maven publication passed.
+Remote verification matched 242 files and completed the isolated consumer gate;
+see the [release record](docs/releases/0.8.0-rc10.md). Separately approved delivery
+published the frozen sample apps, with all seven complete anonymous downloads
+matching the original hashes. The installed manual-test
+applications and their saved results remain bound to their separate lab source.
+Physical 128/256-client qualification
 in #525, battery/thermal measurements and other existing external validation
 remain incomplete. This is a development prerelease, not stable/production READY.
 

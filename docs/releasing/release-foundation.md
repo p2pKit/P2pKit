@@ -14,30 +14,35 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The current source selects **`0.8.0-rc10`** for the additive exact RPC
-physical-session APIs merged in #534. It is not yet published. Its own qualified
-main source, four application artifacts, dry run and protected publication are
-required; rc8 evidence and the separate ongoing phone campaign cannot substitute
-for those results. `LATEST_PUBLISHED_VERSION` remains rc8 until remote verification.
+The latest verified library publication is **`0.8.0-rc10`**, source
+`c22762af6c9a62728528d49ccca1fa4b28089712`, tree
+`4f5f6d27b9aa0c0729bd5be30e033e361edc0d12`. Its
+[release record](../releases/0.8.0-rc10.md) binds all fourteen successful original
+main components, four application packages, dry run and protected Maven
+[41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354).
+The original publisher passed 242-file remote comparison and complete isolated
+consumer builds. Independent inspection verified 121 signatures across 21
+coordinates; its publication-build SBOM contains 88 components.
+Separately approved [sample delivery](https://github.com/p2pKit/P2pKit/actions/runs/41394743465)
+published the frozen applications at the same source. Independent complete
+anonymous downloads verified all seven original hashes, without rebuilding.
+`LATEST_PUBLISHED_VERSION` and the retained source version are rc10; no next
+snapshot is selected. The installed phone campaign remains separate.
+
 The immutable [rc9 attempt](../releases/0.8.0-rc9.md) failed before signing/upload
 because its release PR lacked the required pre-merge owner approval comment.
+Rc10's exact comment was posted under explicit human authorization after checks
+passed and before merge, then independently admitted by the maintained validator.
+The old tag and failure remain unchanged.
 
-The latest verified library publication is **`0.8.0-rc8`**, from exact source
-`6c85fdc2977386e572830c243f9aa8bb17d84ec3`. Its
-[release record](../releases/0.8.0-rc8.md) binds the original source and artifacts.
-Protected Maven
-[41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149)
-passed with complete remote-consumer verification, 242 byte-matching remote
-files (121 original artifacts plus their signatures), and an actual
-publication-build SBOM containing 88 components. Separately approved sample
-delivery [41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810)
-passed and published [sample prerelease 428864578](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8)
-on 2026-10-30 at `09:49:01Z`, with the sample tag at the same source. Independent
-complete anonymous downloads verified all seven assets (365,258,462 bytes)
-against the original approved four applications, notices, manifest and
-`SHA256SUMS`. No application was rebuilt or substituted. This proves public
-delivery and hash agreement, not installed execution or physical-device
-qualification.
+The historical [rc8 record](../releases/0.8.0-rc8.md) binds source
+`6c85fdc2977386e572830c243f9aa8bb17d84ec3` and its successful Maven
+[41028814149/1](https://github.com/p2pKit/P2pKit/actions/runs/41028814149).
+Separately approved delivery
+[41035118810/1](https://github.com/p2pKit/P2pKit/actions/runs/41035118810)
+published its [sample prerelease](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc8).
+All seven complete public downloads matched the original hashes. Those are rc8
+delivery facts, not an rc10 delivery or physical-device result.
 
 The rc8 aggregate
 [41028216266/1](https://github.com/p2pKit/P2pKit/actions/runs/41028216266)
