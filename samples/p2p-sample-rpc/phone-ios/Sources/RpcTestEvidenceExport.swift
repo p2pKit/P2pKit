@@ -7,6 +7,10 @@ enum RpcTestEvidenceExport {
     enum Failure: Error { case unavailable }
 
     static func write(_ session: RpcDeviceTestSession) throws -> URL {
+        try write { append in try session.writeRecentEvidence(appendLine: append) }
+    }
+
+    static func write(produce: (@escaping (String) -> Void) throws -> Void) throws -> URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         var directory = root.appendingPathComponent("rpc-export-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
@@ -22,7 +26,7 @@ enum RpcTestEvidenceExport {
         let handle = try FileHandle(forWritingTo: partial)
         var writeFailure: Error?
         do {
-            try session.writeRecentEvidence { line in
+            try produce { line in
                 guard writeFailure == nil else { return }
                 do { try handle.write(contentsOf: Data((line + "\n").utf8)) }
                 catch { writeFailure = error }
@@ -31,7 +35,7 @@ enum RpcTestEvidenceExport {
             try handle.synchronize()
             try handle.close()
         } catch { try? handle.close(); throw error }
-        let target = directory.appendingPathComponent("recent-results.jsonl")
+        let target = directory.appendingPathComponent("test-results.jsonl")
         try FileManager.default.moveItem(at: partial, to: target)
         return target
     }

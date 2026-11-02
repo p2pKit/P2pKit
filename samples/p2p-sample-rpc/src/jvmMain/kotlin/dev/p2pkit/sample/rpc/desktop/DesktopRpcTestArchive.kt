@@ -2,6 +2,10 @@ package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.sample.rpc.RpcDeviceTestReport
 import dev.p2pkit.sample.rpc.RpcDeviceTestSession
+import dev.p2pkit.sample.rpc.RpcTestArchivePage
+import dev.p2pkit.sample.rpc.RpcTestArchiveScan
+import dev.p2pkit.sample.rpc.RpcTestEvidenceWriter
+import dev.p2pkit.sample.rpc.readRpcTestEvidence
 import dev.p2pkit.sample.rpc.lab.LabVault
 import kotlinx.serialization.json.Json
 
@@ -89,8 +93,33 @@ internal class DesktopRpcTestArchive(private val vault: LabVault) {
             val ids = page(number)
             check(ids.size == minOf(100, total - number * 100))
             ids.forEach {
-                if (read("device-test-deleted-$it") == null) visit(checkNotNull(read("device-test-$it")))
+                if (read("device-test-deleted-$it") == null) {
+                    val text = checkNotNull(read("device-test-$it"))
+                    readRpcTestEvidence(it, text)
+                    visit(text)
+                }
             }
         }
+    }
+
+    fun browse(beforeMillis: Long = Long.MAX_VALUE, beforeRunId: String = ""): RpcTestArchivePage {
+        val scan = RpcTestArchiveScan(beforeMillis, beforeRunId)
+        visitRecords { text ->
+            val report = Json.decodeFromString<RpcDeviceTestReport>(text)
+            scan.accept(report.runId, text)
+        }
+        return scan.finish()
+    }
+
+    fun export(appendLine: (String) -> Unit, runId: String? = null) {
+        val writer = RpcTestEvidenceWriter(false, appendLine)
+        if (runId != null) {
+            check(read("device-test-deleted-$runId") == null)
+            writer.append(runId, checkNotNull(read("device-test-$runId")))
+        } else visitRecords { text ->
+            val report = Json.decodeFromString<RpcDeviceTestReport>(text)
+            writer.append(report.runId, text)
+        }
+        writer.finish()
     }
 }

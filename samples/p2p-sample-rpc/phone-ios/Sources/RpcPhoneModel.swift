@@ -1202,6 +1202,36 @@ final class RpcPhoneModel: ObservableObject {
         refreshDeviceTests()
     }
 
+    func browseTestArchive(beforeMillis: Int64 = Int64.max, beforeRunId: String = "") async throws -> RpcTestArchivePage {
+        guard foreground, !actionBusy, !deviceTestRunning, deviceTestStorageIssue == nil else {
+            throw LiveReadError.unavailable
+        }
+        refreshDeviceTests()
+        guard deviceTestStorageIssue == nil else { throw LiveReadError.unavailable }
+        actionBusy = true
+        defer { actionBusy = false }
+        let files = RpcTestArchiveFiles(directory: deviceTestFile.deletingLastPathComponent()
+            .appendingPathComponent("rpc-test-archive", isDirectory: true))
+        let reader = Task.detached(priority: .utility) { try files.browse(beforeMillis: beforeMillis, beforeRunId: beforeRunId) }
+        return try await withTaskCancellationHandler(operation: { try await reader.value }, onCancel: { reader.cancel() })
+    }
+
+    func exportTestArchive(runId: String? = nil) async throws -> URL {
+        guard foreground, !actionBusy, !deviceTestRunning, deviceTestStorageIssue == nil else {
+            throw LiveReadError.unavailable
+        }
+        refreshDeviceTests()
+        guard deviceTestStorageIssue == nil else { throw LiveReadError.unavailable }
+        actionBusy = true
+        defer { actionBusy = false }
+        let files = RpcTestArchiveFiles(directory: deviceTestFile.deletingLastPathComponent()
+            .appendingPathComponent("rpc-test-archive", isDirectory: true))
+        let writer = Task.detached(priority: .utility) {
+            try RpcTestEvidenceExport.write { append in try files.export(append, runId: runId) }
+        }
+        return try await withTaskCancellationHandler(operation: { try await writer.value }, onCancel: { writer.cancel() })
+    }
+
     func runDeviceTest(_ phase: RpcDeviceTestPhase) {
         guard canAct, nearbyMode, deviceTestStorageIssue == nil, applicationSession.deviceTests.archiveAvailable,
             let lab = owner.runtime, lab.applicationAvailable else { return }

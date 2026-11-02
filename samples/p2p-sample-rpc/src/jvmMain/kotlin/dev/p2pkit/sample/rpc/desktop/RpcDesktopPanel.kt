@@ -143,7 +143,8 @@ public class RpcDesktopPanel(
     private var physicalWrite: Job? = null
     private val physicalPage by lazy { RpcDesktopPhysicalTests(applicationSession.deviceTests,
         ::mutatePhysicalTest, { phase -> showDeviceTests(showingMultiTests)
-            testButtons.firstOrNull { it.second == phase }?.first?.doClick() }, ::exportPhysicalEvidence,
+            testButtons.firstOrNull { it.second == phase }?.first?.doClick() }, { exportPhysicalEvidence() },
+        ::browsePhysicalEvidence, { runId -> exportPhysicalEvidence(true, runId) },
         { outcome.text }, ::requestBack) }
     private val testHeading = DesktopRpcAppearance.heading("Device tests")
     private val testModeDescription = DesktopRpcWrappedLabel("Run one test on one connected Client.")
@@ -433,9 +434,35 @@ public class RpcDesktopPanel(
         refreshNetworks()
     }
 
-    private fun exportPhysicalEvidence() {
+    private fun browsePhysicalEvidence(beforeMillis: Long, beforeRunId: String) {
+        if (closing || physicalWrite?.isActive == true || unlocking || !windowActive ||
+            applicationSession.deviceTests.anyTestRunning) return
+        val unlocked = profile
+        if (unlocked == null) { unlockProfile { browsePhysicalEvidence(beforeMillis, beforeRunId) }; return }
+        physicalWrite = scope.launch {
+            try {
+                val page = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    synchronized(applicationSession.deviceTests) {
+                        val tests = applicationSession.deviceTests
+                        val archive = DesktopRpcTestArchive(unlocked.vault)
+                        tests.unarchivedReports.forEach { archive.retain(tests, it) }
+                        archive.browse(beforeMillis, beforeRunId)
+                    }
+                }
+                withContext(DesktopRpcEdt) { physicalPage.renderArchive(page) }
+            } catch (_: Exception) {
+                withContext(DesktopRpcEdt) { outcome.text = "Archive could not be read; original outputs remain retained." }
+            }
+        }
+    }
+
+    private fun exportPhysicalEvidence(fullArchive: Boolean = false, runId: String? = null) {
         if (closing || physicalWrite?.isActive == true || !windowActive || applicationSession.deviceTests.anyTestRunning) return
-        val chooser = javax.swing.JFileChooser().apply { selectedFile = java.io.File("p2pkit-recent-tests.jsonl") }
+        val unlocked = profile
+        if (fullArchive && unlocked == null) { unlockProfile { exportPhysicalEvidence(fullArchive, runId) }; return }
+        val name = runId?.let { "p2pkit-test-$it.jsonl" } ?: if (fullArchive) "p2pkit-all-tests.jsonl"
+            else "p2pkit-recent-tests.jsonl"
+        val chooser = javax.swing.JFileChooser().apply { selectedFile = java.io.File(name) }
         if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION || closing) return
         val destination = chooser.selectedFile.toPath()
         physicalWrite = scope.launch {
@@ -445,12 +472,18 @@ public class RpcDesktopPanel(
                         java.nio.file.StandardOpenOption.WRITE).use { channel ->
                         val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
                             java.nio.channels.Channels.newOutputStream(channel), Charsets.UTF_8))
-                        applicationSession.deviceTests.writeRecentEvidence { line -> writer.write(line); writer.newLine() }
+                        val append: (String) -> Unit = { line -> writer.write(line); writer.newLine() }
+                        if (fullArchive) synchronized(applicationSession.deviceTests) {
+                            val tests = applicationSession.deviceTests
+                            val archive = DesktopRpcTestArchive(checkNotNull(unlocked).vault)
+                            tests.unarchivedReports.forEach { archive.retain(tests, it) }
+                            archive.export(append, runId)
+                        } else applicationSession.deviceTests.writeRecentEvidence(append)
                         writer.flush()
                         channel.force(true)
                     }
                 }
-                withContext(DesktopRpcEdt) { outcome.text = "Recent private evidence exported. Older archives remain in the profile." }
+                withContext(DesktopRpcEdt) { outcome.text = "Private evidence exported; original archives remain in the profile." }
             } catch (_: Exception) {
                 withContext(DesktopRpcEdt) { outcome.text = "Export incomplete or destination already exists; " +
                     "original archives are unchanged. An incomplete external file may remain." }
@@ -1001,7 +1034,7 @@ private object DesktopRpcEdt : CoroutineDispatcher() {
     override fun dispatch(context: CoroutineContext, block: Runnable) = SwingUtilities.invokeLater(block)
 }
 
-private fun JLabel.showText(value: String) {
+internal fun JLabel.showText(value: String) {
     if (text != value) text = value
 }
 

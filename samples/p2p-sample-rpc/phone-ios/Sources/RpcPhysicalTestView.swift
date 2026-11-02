@@ -10,6 +10,9 @@ struct RpcPhysicalTestView: View {
     @State private var message = ""
     @State private var exportFile: URL?
     @State private var shareExport = false
+    @State private var archivePage: RpcTestArchivePage?
+    @State private var archiveTask: Task<Void, Never>?
+    @State private var archiveBusy = false
 
     private var center: RpcPhysicalTestSession { model.applicationSession.deviceTests.physicalTests }
     private var test: RpcPhysicalTestCase {
@@ -79,16 +82,60 @@ struct RpcPhysicalTestView: View {
                     if let issue = model.deviceTestStorageIssue { Text(issue) }
                     Text("Marked steps are operator observations. Only reviewed evidence establishes qualification.")
                 }
+                Section("Saved test archive") {
+                    Button("Load newest saved results") { browseArchive() }
+                        .disabled(archiveBusy || model.deviceTestRunning)
+                    if let page = archivePage {
+                        ForEach(page.reports, id: \.runId) { report in
+                            DisclosureGroup(report.title) {
+                                Text(report.detail).textSelection(.enabled)
+                                Button("Share this output") { exportArchive(report.runId) }
+                                    .disabled(archiveBusy || model.deviceTestRunning)
+                            }
+                        }
+                        if page.reports.isEmpty { Text("No saved outputs.") }
+                        if page.olderAvailable {
+                            Button("Older results") { browseArchive(page.beforeMillis, page.beforeRunId) }
+                                .disabled(archiveBusy || model.deviceTestRunning)
+                        }
+                    }
+                    Button("Share all saved outputs") { exportArchive(nil) }
+                        .disabled(archiveBusy || model.deviceTestRunning)
+                    if archiveBusy { ProgressView("Reading saved outputs…") }
+                }
             }
             .buttonStyle(.borderless)
             .navigationTitle("Test Center")
             .toolbar { Button("Done") { dismiss() } }
             .sheet(isPresented: $shareExport) { if let file = exportFile { RpcTestEvidenceShare(file: file) } }
+            .onDisappear { archiveTask?.cancel() }
         }
     }
 
     private func finish(_ outcome: String) {
         action { try center.finish(outcome: outcome, evidenceReference: reference, notes: notes) }
+    }
+
+    private func browseArchive(_ beforeMillis: Int64 = Int64.max, _ beforeRunId: String = "") {
+        guard !archiveBusy else { return }
+        archiveBusy = true
+        archiveTask = Task { @MainActor in
+            defer { archiveBusy = false }
+            do { archivePage = try await model.browseTestArchive(beforeMillis: beforeMillis, beforeRunId: beforeRunId) }
+            catch { message = "Archive could not be read; original outputs remain retained." }
+        }
+    }
+
+    private func exportArchive(_ runId: String?) {
+        guard !archiveBusy else { return }
+        archiveBusy = true
+        archiveTask = Task { @MainActor in
+            defer { archiveBusy = false }
+            do {
+                exportFile = try await model.exportTestArchive(runId: runId)
+                shareExport = true
+            } catch { message = "Export incomplete; original outputs remain retained." }
+        }
     }
 
     private func action(_ work: () throws -> Void) {

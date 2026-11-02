@@ -5,6 +5,8 @@ import dev.p2pkit.sample.rpc.RpcDeviceTestSession
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import dev.p2pkit.sample.rpc.RpcPhysicalTestCase
 import dev.p2pkit.sample.rpc.RpcPhysicalTestCatalog
+import dev.p2pkit.sample.rpc.RpcDeviceTestReport
+import dev.p2pkit.sample.rpc.RpcTestArchivePage
 import java.awt.Component
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
@@ -13,12 +15,16 @@ import javax.swing.JComboBox
 import javax.swing.JList
 import javax.swing.JTextArea
 import javax.swing.JTextField
+import javax.swing.DefaultListModel
+import javax.swing.JScrollPane
 
 internal class RpcDesktopPhysicalTests(
     private val tests: RpcDeviceTestSession,
     private val mutate: (() -> Unit) -> Unit,
     private val workload: (RpcDeviceTestPhase) -> Unit,
     export: () -> Unit,
+    private val browse: (Long, String) -> Unit,
+    exportArchive: (String?) -> Unit,
     private val status: () -> String,
     back: () -> Unit,
 ) : DesktopRpcColumn() {
@@ -43,6 +49,27 @@ internal class RpcDesktopPhysicalTests(
     private val timer = javax.swing.Timer(1_000) { renderMonitor() }
     private val start = JButton("Start guided observation")
     private val run = JButton("Run on connected devices")
+    private val archiveModel = DefaultListModel<RpcDeviceTestReport>()
+    private val archived = JList(archiveModel).apply {
+        visibleRowCount = 5
+        accessibleContext.accessibleName = "Saved test archive page"
+        cellRenderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int,
+                selected: Boolean, focus: Boolean): Component = super.getListCellRendererComponent(list,
+                (value as? RpcDeviceTestReport)?.title ?: "", index, selected, focus)
+        }
+    }
+    private val archiveDetails = JTextArea(8, 54).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        accessibleContext.accessibleName = "Selected archived test details"
+    }
+    private var archivePage: RpcTestArchivePage? = null
+    private val older = JButton("Older results").apply {
+        isEnabled = false
+        addActionListener { archivePage?.let { browse(it.beforeMillis, it.beforeRunId) } }
+    }
 
     init {
         add(JButton("Back to RPC").apply { addActionListener { back() } })
@@ -64,6 +91,16 @@ internal class RpcDesktopPhysicalTests(
         }
         add(resources); add(message)
         add(JButton("Export recent test evidence (up to 100 runs)").apply { addActionListener { export() } })
+        add(DesktopRpcAppearance.heading("Saved test archive"))
+        add(JButton("Load newest saved results").apply { addActionListener { browse(Long.MAX_VALUE, "") } })
+        add(older)
+        add(JScrollPane(archived))
+        add(JScrollPane(archiveDetails))
+        archived.addListSelectionListener { archiveDetails.text = archived.selectedValue?.detail.orEmpty() }
+        add(JButton("Export selected output").apply { addActionListener {
+            archived.selectedValue?.let { exportArchive(it.runId) }
+        } })
+        add(JButton("Export all saved outputs").apply { addActionListener { exportArchive(null) } })
         add(DesktopRpcWrappedLabel("Observations are archived separately and require independent evidence review. " +
             "This screen cannot turn missing tooling or checked steps into a qualification PASS."))
         cases.addActionListener { render() }
@@ -102,6 +139,14 @@ internal class RpcDesktopPhysicalTests(
         timing.showText("Minimum observation ${selected().minimumSeconds}s · elapsed ${tests.physicalTests.elapsedMillis / 1_000}s")
         resources.showText(tests.liveResources?.let { it.title + "\n" + it.environmentTitle }
             ?: "No live resource sample available.")
+    }
+
+    fun renderArchive(page: RpcTestArchivePage) {
+        archivePage = page
+        archiveModel.clear()
+        page.reports.forEach(archiveModel::addElement)
+        older.isEnabled = page.olderAvailable
+        if (!archiveModel.isEmpty) archived.selectedIndex = 0 else archiveDetails.text = "No saved outputs."
     }
     override fun addNotify() { super.addNotify(); timer.start() }
     override fun removeNotify() { timer.stop(); super.removeNotify() }

@@ -13,6 +13,10 @@ import java.util.UUID
 
 /** User-requested private sharing, without exporting identities, trust stores or deleting archived runs. */
 internal fun exportRecentRpcEvidence(context: Context, session: RpcDeviceTestSession): Intent {
+    return exportRpcEvidence(context, session::writeRecentEvidence)
+}
+
+internal fun exportRpcEvidence(context: Context, produce: ((String) -> Unit) -> Unit): Intent {
     val root = File(context.cacheDir, "test-evidence")
     check(root.isDirectory || root.mkdir())
     check(OsConstants.S_ISDIR(Os.lstat(root.path).st_mode))
@@ -23,13 +27,13 @@ internal fun exportRecentRpcEvidence(context: Context, session: RpcDeviceTestSes
     check(partial.createNewFile())
     Os.chmod(partial.path, 0x180)
     FileOutputStream(partial).use { output ->
-        session.writeRecentEvidence { line ->
+        produce { line ->
             val bytes = (line + "\n").toByteArray(Charsets.UTF_8)
             try { output.write(bytes) } finally { bytes.fill(0) }
         }
         output.fd.sync()
     }
-    val target = File(directory, "recent-results.jsonl")
+    val target = File(directory, "test-results.jsonl")
     check(!target.exists() && partial.renameTo(target))
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.test-evidence", target)
     return Intent(Intent.ACTION_SEND).apply {

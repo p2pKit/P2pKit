@@ -153,6 +153,7 @@ internal class RpcLabController(
     }
     private var deviceTestScreen by mutableStateOf(false)
     private var testCenterScreen by mutableStateOf(false)
+    private var archivePage by mutableStateOf<dev.p2pkit.sample.rpc.RpcTestArchivePage?>(null)
     private var selectedTestPeer by mutableStateOf<String?>(null)
     private var multiTests by mutableStateOf(false)
     private var selectedTestPeers by mutableStateOf<Set<String>>(emptySet())
@@ -679,6 +680,11 @@ internal class RpcLabController(
                 testStorageIssue?.let { Text(it) }
                 Button({ exportTestEvidence() }, enabled = interactive && !busy && !closing &&
                     !applicationSession.deviceTests.anyTestRunning) { Text("Share recent test evidence (up to 100 runs)") }
+                RpcTestArchivePanel(archivePage, interactive && !busy && !closing &&
+                    !applicationSession.deviceTests.anyTestRunning && android.os.Build.VERSION.SDK_INT >= 26,
+                    ::browseTestArchive, { runId -> exportTestEvidence(true, runId) })
+                if (android.os.Build.VERSION.SDK_INT < 26) Text(
+                    "On Android 7, use recent sharing or the computer collector for older outputs.")
             } else if (deviceTestScreen) DeviceTests() else Controls()
         }
         when (leave.phase) {
@@ -749,7 +755,23 @@ internal class RpcLabController(
         }
     }
 
-    private fun exportTestEvidence() {
+    private fun browseTestArchive(beforeMillis: Long, beforeRunId: String) {
+        if (!interactive || busy || closing || applicationSession.deviceTests.anyTestRunning) return
+        ui.launch {
+            busy = true
+            try {
+                persistDeviceTests()
+                check(testStorageIssue == null)
+                archivePage = withContext(Dispatchers.IO) { testResultLock.withLock {
+                    RpcTestArchiveFiles(java.io.File(applicationContext.filesDir, "rpc-test-archive"))
+                        .browse(beforeMillis, beforeRunId)
+                } }
+            } catch (_: Exception) { status = "Archive could not be read; original outputs remain retained." }
+            finally { busy = false }
+        }
+    }
+
+    private fun exportTestEvidence(fullArchive: Boolean = false, runId: String? = null) {
         if (!interactive || busy || closing || applicationSession.deviceTests.anyTestRunning) return
         ui.launch {
             busy = true
@@ -757,7 +779,10 @@ internal class RpcLabController(
                 persistDeviceTests()
                 check(testStorageIssue == null)
                 val intent = withContext(Dispatchers.IO) {
-                    exportRecentRpcEvidence(applicationContext, applicationSession.deviceTests)
+                    if (fullArchive) testResultLock.withLock {
+                        val archive = RpcTestArchiveFiles(java.io.File(applicationContext.filesDir, "rpc-test-archive"))
+                        exportRpcEvidence(applicationContext) { append -> archive.export(append, runId) }
+                    } else exportRecentRpcEvidence(applicationContext, applicationSession.deviceTests)
                 }
                 if (interactive && !closing) activity.startActivity(Intent.createChooser(intent, "Share private test evidence"))
             } catch (_: Exception) { status = "Export incomplete; original test archives remain retained." }
