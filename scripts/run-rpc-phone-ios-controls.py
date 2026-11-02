@@ -98,6 +98,16 @@ def project_generation_argv(root, xcodegen, project_parent):
             "--project", str(project_parent)]
 
 
+def new_controls_project(root):
+    """Keep each supplemental attempt's generated project; never reuse or overwrite another producer."""
+    parent = root / "samples/p2p-sample-rpc/build"
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    need(not parent.is_symlink() and parent.resolve(strict=True) == parent, "Canonical generated project parent required")
+    project = parent / ("phone-controls-" + uuid.uuid4().hex)
+    project.mkdir(mode=0o700)
+    return project
+
+
 def inventory(root):
     result = {}
     for target, rosters in TARGETS.items():
@@ -291,8 +301,8 @@ def main():
         need(len(selected) == 1, "Required runtime is not installed and available")
         result["runtimeVersion"] = selected[0]["version"]
         result["runtimeBuild"] = selected[0]["buildversion"]
-        project_parent = root / "samples/p2p-sample-rpc/build/phone-ios"
-        project_parent.mkdir(mode=0o700, parents=True)
+        project_parent = new_controls_project(root)
+        result["generatedProjectDirectory"] = str(project_parent)
         run("project-generation", project_generation_argv(root, xcodegen, project_parent))
         project = project_parent / "p2pkit-rpc-phone.xcodeproj"
         run("project-reference-inspection", ["/usr/bin/plutil", "-convert", "json", "-o", "-",
