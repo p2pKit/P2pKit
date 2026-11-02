@@ -160,7 +160,10 @@ struct RpcPhoneView: View {
                 }
             }
             .navigationTitle(showingDeviceTests ? (model.multiTests ? "Multi-device tests" : "Device tests") : "P2pKit RPC")
-            .sheet(isPresented: $showingTestCenter) { RpcPhysicalTestView(model: model) }
+            .sheet(isPresented: $showingTestCenter) { RpcPhysicalTestView(model: model) {
+                showingDeviceTests = true
+                model.refreshDeviceTests()
+            } }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     if showingDeviceTests {

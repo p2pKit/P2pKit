@@ -68,7 +68,7 @@ internal fun RpcPhysicalTestPanel(tests: RpcDeviceTestSession, enabled: Boolean,
         Text("Minimum observation ${test.minimumSeconds}s · elapsed ${if (active != null) seconds else 0}s")
         val phase = test.phase
         if (phase != null) {
-            Button({ run(phase) }, enabled = enabled && active == null) { Text("Run on connected devices") }
+            Button({ run(phase) }, enabled = enabled && active == null) { Text("Open RPC test controls") }
         } else {
             Button({ action { center.start(test.id, RpcPhoneLab.compiledSource, "Android") } },
                 enabled = enabled && active == null) { Text("Start guided observation") }

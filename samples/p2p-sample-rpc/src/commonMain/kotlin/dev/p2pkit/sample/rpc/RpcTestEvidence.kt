@@ -57,9 +57,12 @@ public class RpcTestEvidenceWriter(recentOnly: Boolean, private val appendLine: 
     private var count = 0
     private var finished = false
     private var failed = false
+    private val budget = RpcTestEvidenceBudget()
 
     init {
-        appendLine("{\"format\":\"p2pkit-private-test-evidence\",\"schema\":1,\"recentOnly\":$recentOnly}")
+        val header = "{\"format\":\"p2pkit-private-test-evidence\",\"schema\":1,\"recentOnly\":$recentOnly}"
+        budget.add(header.encodeToByteArray().size + 1)
+        appendLine(header)
     }
 
     @Throws(Exception::class)
@@ -68,7 +71,11 @@ public class RpcTestEvidenceWriter(recentOnly: Boolean, private val appendLine: 
         try {
             val report = readRpcTestEvidence(runId, text)
             // Re-encode to guarantee one JSON object per line even for older pretty-printed files.
-            appendLine(Json.encodeToString(report))
+            val line = Json.encodeToString(report)
+            val bytes = line.encodeToByteArray().size
+            require(bytes <= 65_536)
+            budget.add(bytes + 1)
+            appendLine(line)
             count++
         } catch (failure: Exception) {
             failed = true
@@ -80,6 +87,17 @@ public class RpcTestEvidenceWriter(recentOnly: Boolean, private val appendLine: 
     public fun finish() {
         check(!finished && !failed)
         finished = true
-        appendLine("{\"exportComplete\":true,\"records\":$count}")
+        val footer = "{\"exportComplete\":true,\"records\":$count}"
+        budget.add(footer.encodeToByteArray().size + 1)
+        appendLine(footer)
+    }
+}
+
+/** Keep a private export below 256 MiB; choose individual outputs if the complete archive exceeds it. */
+internal class RpcTestEvidenceBudget(private val maximumBytes: Long = 268_435_456) {
+    private var bytes = 0L
+    fun add(count: Int) {
+        require(count > 0 && count <= maximumBytes - bytes) { "Export too large; choose individual test outputs" }
+        bytes += count
     }
 }

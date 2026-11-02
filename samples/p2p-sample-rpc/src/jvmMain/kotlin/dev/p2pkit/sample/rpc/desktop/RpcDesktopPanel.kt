@@ -142,8 +142,7 @@ public class RpcDesktopPanel(
     private var showingMultiTests = false
     private var physicalWrite: Job? = null
     private val physicalPage by lazy { RpcDesktopPhysicalTests(applicationSession.deviceTests,
-        ::mutatePhysicalTest, { phase -> showDeviceTests(showingMultiTests)
-            testButtons.firstOrNull { it.second == phase }?.first?.doClick() }, { exportPhysicalEvidence() },
+        ::mutatePhysicalTest, { showDeviceTests(showingMultiTests) }, { exportPhysicalEvidence() },
         ::browsePhysicalEvidence, { runId -> exportPhysicalEvidence(true, runId) },
         { outcome.text }, ::requestBack) }
     private val testHeading = DesktopRpcAppearance.heading("Device tests")
@@ -787,6 +786,10 @@ public class RpcDesktopPanel(
 
     private fun renderSelectedTest() {
         val report = testResultList.selectedValue
+        if (report?.physicalObservation != null) {
+            testResults.text = report.detail
+            return
+        }
         testResults.text = if (report == null) "Select a saved run to inspect its separate result. " +
             "Clearing this display keeps archived data." else buildString {
             appendLine(report.title)

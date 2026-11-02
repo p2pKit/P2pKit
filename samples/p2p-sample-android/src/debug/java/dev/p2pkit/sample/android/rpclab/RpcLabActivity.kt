@@ -674,7 +674,7 @@ internal class RpcLabController(
             if (deviceTestScreen && testCenterScreen) RpcLabPage {
                 RpcPhysicalTestPanel(applicationSession.deviceTests,
                     enabled = interactive && !busy && !closing && testStorageIssue == null,
-                    run = { phase -> openDeviceTests(multiTests); runDeviceTest(phase) },
+                    run = { openDeviceTests(multiTests) },
                     changed = { ui.launch { persistDeviceTests() } })
                 applicationSession.deviceTests.liveResources?.let { Text(it.title); Text(it.environmentTitle) }
                 testStorageIssue?.let { Text(it) }

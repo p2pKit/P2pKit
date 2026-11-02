@@ -92,7 +92,8 @@ internal class DesktopRpcTestArchive(private val vault: LabVault) {
         for (number in 0 until (total + 99) / 100) {
             val ids = page(number)
             check(ids.size == minOf(100, total - number * 100))
-            ids.forEach {
+            ids.forEachIndexed { offset, it ->
+                check(read("device-test-archive-slot-$it")?.toInt() == number * 100 + offset)
                 if (read("device-test-deleted-$it") == null) {
                     val text = checkNotNull(read("device-test-$it"))
                     readRpcTestEvidence(it, text)
@@ -114,6 +115,7 @@ internal class DesktopRpcTestArchive(private val vault: LabVault) {
     fun export(appendLine: (String) -> Unit, runId: String? = null) {
         val writer = RpcTestEvidenceWriter(false, appendLine)
         if (runId != null) {
+            require(runId.matches(Regex("[a-f0-9]{32}")))
             check(read("device-test-deleted-$runId") == null)
             writer.append(runId, checkNotNull(read("device-test-$runId")))
         } else visitRecords { text ->

@@ -58,4 +58,13 @@ class RpcTestEvidenceTest {
         assertFailsWith<IllegalStateException> { failing.append(report.runId, Json.encodeToString(report)) }
         assertFailsWith<IllegalStateException> { failing.finish() }
     }
+
+    @Test fun exportBudgetRejectsOneByteOverWithoutConsumingTheRemainingAllowance() {
+        val budget = RpcTestEvidenceBudget(1_024)
+        budget.add(1_000)
+        assertFailsWith<IllegalArgumentException> { budget.add(25) }
+        budget.add(24)
+        assertFailsWith<IllegalArgumentException> { budget.add(1) }
+        assertFailsWith<IllegalArgumentException> { budget.add(-1) }
+    }
 }

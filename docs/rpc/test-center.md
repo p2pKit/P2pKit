@@ -37,3 +37,17 @@ controlled native callback/storage/packet fixtures; authoritative independent
 peer inputs; full archive browsing/export. Hardware/OS/backup/Windows matrix
 execution and independent review remain required. The catalog does not supply
 these prerequisites or close their issues.
+
+Saved archive controls load newest-first pages of 20 original records, including
+records older than the recent window. Export one selected output or the complete
+archive to JSON Lines; archive exports declare `recentOnly=false`. Reading never
+replays a test or changes its original source/direction. Tombstoned outputs are
+omitted. The complete export is bounded to 256 MiB; if it exceeds that limit,
+export individual outputs. Original archives remain untouched on error.
+
+Full on-device archive enumeration needs Android 8/API 26 or later; Android 7
+retains recent sharing and requires the computer collector for older files.
+iPhone sharing and Mac export run away from the UI thread. Stop workloads before
+archive operations. Private exports are plaintext evidence; share them only with
+the intended reviewer. They contain no profile secrets, but notes may contain
+private operator information.

@@ -48,7 +48,7 @@ internal class RpcDesktopPhysicalTests(
     private val message = DesktopRpcWrappedLabel("")
     private val timer = javax.swing.Timer(1_000) { renderMonitor() }
     private val start = JButton("Start guided observation")
-    private val run = JButton("Run on connected devices")
+    private val run = JButton("Open RPC test controls")
     private val archiveModel = DefaultListModel<RpcDeviceTestReport>()
     private val archived = JList(archiveModel).apply {
         visibleRowCount = 5

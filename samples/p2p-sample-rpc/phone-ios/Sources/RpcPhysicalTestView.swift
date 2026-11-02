@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RpcPhysicalTestView: View {
     @ObservedObject var model: RpcPhoneModel
+    let openWorkload: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selected = RpcPhysicalTestCatalog.shared.cases[0].id
     @State private var reference = ""
@@ -43,9 +44,9 @@ struct RpcPhysicalTestView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         Text("Minimum \(test.minimumSeconds)s · observed \(center.elapsedMillis / 1_000)s")
                     }
-                    if let phase = test.phase {
-                        Button("Run on connected devices") { model.runDeviceTest(phase) }
-                            .disabled(center.progress != nil || !model.canAct)
+                    if test.phase != nil {
+                        Button("Open RPC test controls") { dismiss(); openWorkload() }
+                            .disabled(center.progress != nil || model.deviceTestRunning)
                     } else {
                         Button("Start guided observation") {
                             action { try center.start(caseId: test.id, source: model.compiledSource, platform: "iPhone") }
