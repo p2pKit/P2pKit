@@ -122,6 +122,7 @@ public final class dev/p2pkit/rpc/RpcClient {
 	public final fun getDiscoveredPeers ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getDiscoveryState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getLocalIdentity ()Ldev/p2pkit/rpc/RpcLocalIdentity;
 	public final fun getPermissions ()Ldev/p2pkit/core/permission/P2pPermissionManager;
 	public final fun getRequestTotals ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
@@ -148,11 +149,13 @@ public final class dev/p2pkit/rpc/RpcClientConfiguration : dev/p2pkit/rpc/RpcCon
 
 public class dev/p2pkit/rpc/RpcConfiguration {
 	public final fun getAppId-5LUHY74 ()Ljava/lang/String;
+	public final fun getDeviceName ()Ljava/lang/String;
 	public final fun getLan ()Ldev/p2pkit/transport/lan/OrganizationLan;
 	public final fun getLimits ()Ldev/p2pkit/rpc/RpcLimits;
 	public final fun getTrustStore ()Ldev/p2pkit/rpc/RpcTrustStore;
 	public final fun notification (Ldev/p2pkit/rpc/RpcNotification;)V
 	public final fun setAppId-6QwJUv8 (Ljava/lang/String;)V
+	public final fun setDeviceName (Ljava/lang/String;)V
 	public final fun setLan (Ldev/p2pkit/transport/lan/OrganizationLan;)V
 	public final fun setLimits (Ldev/p2pkit/rpc/RpcLimits;)V
 	public final fun setTrustStore (Ldev/p2pkit/rpc/RpcTrustStore;)V
@@ -282,6 +285,7 @@ public final class dev/p2pkit/rpc/RpcHost {
 	public final fun getConnections ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getDiagnostics ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getLocalIdentity ()Ldev/p2pkit/rpc/RpcLocalIdentity;
 	public final fun getPairing ()Ldev/p2pkit/rpc/RpcPairing;
 	public final fun getPermissions ()Ldev/p2pkit/core/permission/P2pPermissionManager;
 	public final fun getRequests ()Lkotlinx/coroutines/flow/StateFlow;
@@ -395,6 +399,14 @@ public final class dev/p2pkit/rpc/RpcLimits {
 public final class dev/p2pkit/rpc/RpcLimits$Companion {
 	public final fun host128 ()Ldev/p2pkit/rpc/RpcLimits;
 	public final fun host256 ()Ldev/p2pkit/rpc/RpcLimits;
+}
+
+public final class dev/p2pkit/rpc/RpcLocalIdentity {
+	public final fun getAppId-1XHUZfw ()Ljava/lang/String;
+	public final fun getDeviceName ()Ljava/lang/String;
+	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getPairingQr ()Ljava/lang/String;
+	public final fun getPeerId-F_t_xv8 ()Ljava/lang/String;
 }
 
 public final class dev/p2pkit/rpc/RpcNotification {

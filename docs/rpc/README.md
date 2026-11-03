@@ -25,6 +25,10 @@ do not advertise, accept other clients, select a leader, forward requests, or
 form a mesh. Both roles have JVM 17, Android API 24+, and iOS 14+ source targets.
 Mobile hosting is foreground-first, not a promise of continuous background service.
 
+The rc11 source adds [read-only local public identity](local-identity.md) on both
+roles and optional device-name preservation. This is available after creation
+without starting discovery, advertising, enrollment or a connection.
+
 ## Architecture and reuse
 
 The interactive Android, iOS and Desktop previews are being evolved together; see

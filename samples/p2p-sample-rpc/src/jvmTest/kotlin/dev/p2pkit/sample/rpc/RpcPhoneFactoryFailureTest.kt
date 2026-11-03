@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.PeerFingerprint
+import dev.p2pkit.core.PeerPairingQr
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.rpc.RpcPlatform
@@ -131,7 +132,13 @@ class RpcPhoneFactoryFailureTest {
         private val kit = Proxy.newProxyInstance(P2pKit::class.java.classLoader, arrayOf(P2pKit::class.java)) {
                 _, method, _ ->
             when (method.name) {
-                "getLocalPairingQr" -> "synthetic-unused-qr"
+                "getAppId-1XHUZfw" -> "rpc-phone-inert-factory-test"
+                "getLocalPeerId-F_t_xv8" -> "p2id2-" + "a".repeat(52)
+                "getLocalFingerprint-5J9nGDo" -> "p2f1-" + "a".repeat(52)
+                "getLocalDeviceName" -> "Inert factory fixture"
+                "getLocalPairingQr" -> PeerPairingQr(
+                    "p2a1-" + "a".repeat(52), PeerFingerprint("p2f1-" + "a".repeat(52)),
+                ).encode()
                 "getIncomingSessions" -> incoming
                 "getSessions" -> MutableStateFlow(emptyList<P2pSession>())
                 "getPermissions" -> permissions

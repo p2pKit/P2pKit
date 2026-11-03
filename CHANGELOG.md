@@ -3,6 +3,22 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc11 — unpublished development release candidate (2026-11-03)
+
+- Expose immutable `RpcHost.localIdentity` and `RpcClient.localIdentity` from the
+  actual factory-owned authenticated-v2 Kit (#540): AppId, local PeerId,
+  fingerprint, canonical pairing QR and actual local device name. Readback is
+  available after creation without discovery, advertising, enrollment or connection.
+- Add optional `deviceName` configuration for both roles so applications can
+  preserve a retained display name alongside their protected identity store.
+  Preserve the existing role defaults, factory signatures, authentication,
+  encryption, admission limits, capacity profiles and Apple deployment baseline.
+- The snapshot contains public facts only. It grants no trust or application
+  authority and does not replace native/SDK association verification.
+
+Not published yet. The installed phone-test applications and their saved results
+remain bound to their existing lab source. Physical qualification remains separate.
+
 ## 0.8.0-rc10 — development release candidate (2026-11-02)
 
 - Add opt-in exact RPC physical-session provenance for application integration
