@@ -225,6 +225,13 @@ if [[ "${1:-}" == "--latest-published" ]]; then
             LAN_METADATA_COROUTINES_VERSION="1.11.0"
             LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.8"
             ;;
+        0.8.0-rc11)
+            CURRENT_SOURCE_CONSUMER=1
+            # Immutable f4685604b726 producer, verified by Maven run 41599454261/1.
+            LAN_METADATA_KOTLIN_VERSION="2.4.20"
+            LAN_METADATA_COROUTINES_VERSION="1.11.0"
+            LAN_PRIVATE_JMDNS_VERSION="3.6.3-p2pkit.410.8"
+            ;;
         *)
             echo "FAIL: unsupported latest-published consumer contract: $VERSION" >&2
             exit 2
