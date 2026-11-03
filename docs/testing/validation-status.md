@@ -4,23 +4,24 @@
 
 Use [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) and its immutable
 [release record](../README.md#test-and-release) for published evidence. The latest
-verified record is [`0.8.0-rc10`](../releases/0.8.0-rc10.md), source
-`c22762af6c9a62728528d49ccca1fa4b28089712`, tree
-`4f5f6d27b9aa0c0729bd5be30e033e361edc0d12`.
-Original main [41386131129/1](https://github.com/p2pKit/P2pKit/actions/runs/41386131129)
+verified record is [`0.8.0-rc11`](../releases/0.8.0-rc11.md), source
+`f4685604b726c0896711d437383accded235cba2`, tree
+`4077d61d6ffab9aab49941b31a1c0da3f6579b93`.
+Original main [41594928408/1](https://github.com/p2pKit/P2pKit/actions/runs/41594928408)
 passed all fourteen mandatory components, 125 declared commands and four
-application producers with closed captures and known cleanup. Its 3,000 report
+application producers with closed captures and known cleanup. Its 3,003 report
 entries are hash-bound metadata, not unique or decrypted test counts.
 Protected Maven
-[41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354)
-passed 242-file byte comparison and complete isolated consumer builds. Independent
-inspection verified 121 signatures across 21 coordinates. The publication-build
-SBOM contains 88 components. Inner consumer command/result captures were not
-retained; completion and cleanup evidence is the original successful maintained
-step and marker. Separately approved sample delivery published the frozen
-applications; all seven complete anonymous downloads, 365,031,689 bytes, matched
-the original approved hashes. These results do not qualify the installed phone
-tests or other physical scope.
+[41599454261/1](https://github.com/p2pKit/P2pKit/actions/runs/41599454261)
+passed original signed-bundle validation, 242-file byte comparison and complete
+isolated consumer builds. Read-only archive inspection checked all 726 file
+hashes; original publisher validation covers the 121 signatures across 21
+coordinates. The publication-build SBOM contains 88 components. Frozen sample
+delivery awaits separate owner evidence review. These results do not qualify
+the installed phone tests or other physical scope.
+
+The historical [rc10 record](../releases/0.8.0-rc10.md) retains its separately
+approved sample delivery and complete anonymous-download verification.
 
 The [rc9 attempt](../releases/0.8.0-rc9.md) preserves its original runner failure,
 missing private failure artifact and publisher refusal before signing/upload.
@@ -132,7 +133,7 @@ native ARM64/Intel simulator components retain their own source-bound reports.
 `complete-gate` requires their actual successful aggregation, including on
 ordinary documentation PRs. A focused component pass is not complete qualification.
 
-The recorded rc10 selection has actual same-source results for all fourteen
+The recorded rc11 selection has actual same-source results for all fourteen
 components, all from the original main attempt recorded above. They must not be
 reused as a pass for changed source. Deterministic callbacks, loopback TCP and
 hosted multicast still do not establish physical-network coverage.

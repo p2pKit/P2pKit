@@ -1,6 +1,6 @@
 # P2pKit
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.apdelrahman1911/p2p-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.apdelrahman1911/p2p-core/0.8.0-rc10)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.apdelrahman1911/p2p-core?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.apdelrahman1911/p2p-core/0.8.0-rc11)
 [![CI](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/p2pKit/P2pKit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -8,23 +8,18 @@ P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
 messaging, and durable file transfer over a reachable local network. It
 supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
-**Current source version:** `0.8.0-rc11` (unpublished development release candidate).
-**Latest published version:** `0.8.0-rc10`.
+**Current source version:** `0.8.0-rc11` (development release candidate).
+**Latest published version:** `0.8.0-rc11`.
 
-The rc11 source adds [RPC local public identity and device-name
-preservation](docs/rpc/local-identity.md) (#540). Publication requires its own
-completed source qualification and protected release approvals.
-
-`0.8.0-rc10` is available from Maven Central under `io.github.apdelrahman1911`.
-It adds opt-in [exact RPC physical-session provenance and awaited
-closure](docs/rpc/physical-session-provenance.md). The
-[release record](docs/releases/0.8.0-rc10.md) binds the verified source, signed
-Maven files and four original application packages. Separately approved
-[rc10 development samples](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc10)
-provide the matching APK/MSI/ARM64-DMG/DEB; all seven complete anonymous downloads
-match their original hashes. Earlier samples retain their own source and bytes.
-The ongoing phone tests use their own
-lab builds. The [rc9 attempt](docs/releases/0.8.0-rc9.md) stopped before signing or upload.
+`0.8.0-rc11` is available from Maven Central under `io.github.apdelrahman1911`.
+It adds [RPC local public identity and device-name preservation](docs/rpc/local-identity.md)
+(#540), with the existing defaults and security behavior preserved. The
+[release record](docs/releases/0.8.0-rc11.md) binds the exact source, signed
+Maven files, completed release checks and four original application packages.
+Frozen sample delivery awaits its separate owner evidence review. Earlier
+[rc10 samples](https://github.com/p2pKit/P2pKit/releases/tag/samples-v0.8.0-rc10)
+keep their original source and bytes. The ongoing phone tests use their own
+lab builds; this release does not replace them.
 
 This is a release candidate, not a production-audit or physical-device pass.
 Campaign status remains governed by the
@@ -62,7 +57,7 @@ selected authenticated host, dial-only clients, registered typed procedures,
 bounded recovery, administrator pairing and best-effort notifications. It
 reuses core/LAN rather than changing ordinary P2P defaults.
 
-RPC is included in the `0.8.0-rc10` Maven publication and integrated as a section
+RPC is included in the `0.8.0-rc11` Maven publication and integrated as a section
 in the existing samples. **Published rc3 Windows RPC Host/Client remains
 unavailable**; its public-provider and start-gate refusals are part of those
 immutable binaries.
@@ -92,11 +87,11 @@ end-to-end SDK integration; see the [Java interop limitations](docs/compatibilit
 
 | Published module | Purpose |
 | --- | --- |
-| `io.github.apdelrahman1911:p2p-core:0.8.0-rc10` | Public API, protocol, security, sessions, and file transfer |
-| `io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc10` | Multiplatform LAN discovery and TCP transport |
-| `io.github.apdelrahman1911:p2p-rpc:0.8.0-rc10` | Optional typed organization-LAN RPC |
-| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.8.0-rc10` | Optional Android provisioning sidecar |
-| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc10` | Optional JVM/Desktop manual-endpoint sidecar |
+| `io.github.apdelrahman1911:p2p-core:0.8.0-rc11` | Public API, protocol, security, sessions, and file transfer |
+| `io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc11` | Multiplatform LAN discovery and TCP transport |
+| `io.github.apdelrahman1911:p2p-rpc:0.8.0-rc11` | Optional typed organization-LAN RPC |
+| `io.github.apdelrahman1911:p2p-network-provisioning-android:0.8.0-rc11` | Optional Android provisioning sidecar |
+| `io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc11` | Optional JVM/Desktop manual-endpoint sidecar |
 
 ### Kotlin Multiplatform
 
@@ -104,8 +99,8 @@ end-to-end SDK integration; see the [Java interop limitations](docs/compatibilit
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.apdelrahman1911:p2p-core:0.8.0-rc10")
-            implementation("io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc10")
+            implementation("io.github.apdelrahman1911:p2p-core:0.8.0-rc11")
+            implementation("io.github.apdelrahman1911:p2p-transport-lan:0.8.0-rc11")
         }
     }
 }
@@ -115,9 +110,9 @@ kotlin {
 
 ```kotlin
 dependencies {
-    implementation("io.github.apdelrahman1911:p2p-transport-lan-android:0.8.0-rc10")
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-android:0.8.0-rc11")
     // Optional hotspot/Wi-Fi provisioning:
-    implementation("io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.8.0-rc10")
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-android-android:0.8.0-rc11")
 }
 ```
 
@@ -125,15 +120,15 @@ dependencies {
 
 ```kotlin
 dependencies {
-    implementation("io.github.apdelrahman1911:p2p-transport-lan-jvm:0.8.0-rc10")
+    implementation("io.github.apdelrahman1911:p2p-transport-lan-jvm:0.8.0-rc11")
     // Optional manual-endpoint provisioning:
-    implementation("io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc10")
+    implementation("io.github.apdelrahman1911:p2p-network-provisioning-desktop:0.8.0-rc11")
 }
 ```
 
 Kotlin Multiplatform root coordinates select their platform variants. The
 complete 21-coordinate publication set is recorded in the
-[`0.8.0-rc10` release record](docs/releases/0.8.0-rc10.md).
+[`0.8.0-rc11` release record](docs/releases/0.8.0-rc11.md).
 
 ### Direct Swift application
 
@@ -147,7 +142,7 @@ application builds `P2pKitShared.xcframework` from this repository:
 The maintained Swift sample and provenance-checked integration live under
 [`samples/iosApp`](samples/iosApp).
 
-The `0.8.0-rc10` release uses Kotlin 2.4.20,
+The `0.8.0-rc11` release uses Kotlin 2.4.20,
 with the iOS 14 library floor retained explicitly. Kotlin Multiplatform
 applications that link their own Apple binary must apply the iOS 14 Kotlin/Native
 override documented in
@@ -333,23 +328,22 @@ and [RPC/Windows limitations](docs/rpc/windows-release-scope.md).
 
 ## Validation status
 
-The [`0.8.0-rc10` release record](docs/releases/0.8.0-rc10.md) binds immutable
-source `c22762af6c9a62728528d49ccca1fa4b28089712` to all fourteen mandatory
+The [`0.8.0-rc11` release record](docs/releases/0.8.0-rc11.md) binds immutable
+source `f4685604b726c0896711d437383accded235cba2` to all fourteen mandatory
 components in original main run
-[41386131129/1](https://github.com/p2pKit/P2pKit/actions/runs/41386131129).
-All 125 declared command outcomes passed with completed captures and known
-cleanup. The 3,000 hash-bound report entries are metadata, not a count of unique
-or independently decrypted tests. Coverage includes API/ABI, strict Dokka,
-dependencies/SBOM, publication shape, isolated consumers, Swift/XCFramework
-checks and native ARM64/Intel execution.
+[41594928408/1](https://github.com/p2pKit/P2pKit/actions/runs/41594928408).
+All 125 declared command outcomes passed with closed captures and known cleanup.
+The 3,003 hash-bound report entries are metadata, not unique or decrypted test
+counts. Coverage includes API/ABI, strict Dokka, dependencies/SBOM, publication
+shape, isolated consumers, Swift/XCFramework and native ARM64/Intel execution.
 
-Protected publisher [41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354)
-passed. Independent public-signature inspection verified all 121 originals
-across 21 coordinates. Its original remote gate matched 242 files against the
-signed bundle and completed isolated consumer builds. The publication-build
-SBOM contains 88 components. The separately approved sample publisher delivered
-the frozen APK/MSI/ARM64-DMG/DEB. All seven complete anonymous downloads matched
-their original hashes. Those packages have not been installed by this release operation.
+Protected publisher [41599454261/1](https://github.com/p2pKit/P2pKit/actions/runs/41599454261)
+passed. Its original validator checked 121 signed originals across 21 coordinates;
+independent archive inspection verified all 726 file hashes. Remote comparison
+matched 242 files against the signed bundle and completed isolated consumer
+builds. The publication-build SBOM contains 88 components. Frozen application
+delivery awaits separate owner evidence review. The installed phone-test apps
+and results remain bound to their own lab source.
 
 The [unpublished rc9 attempt](docs/releases/0.8.0-rc9.md) retains its original
 ARM64 runner/evidence-upload failure and publisher refusal before signing/upload.

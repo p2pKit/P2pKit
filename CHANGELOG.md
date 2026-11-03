@@ -3,7 +3,7 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc11 — unpublished development release candidate (2026-11-03)
+## 0.8.0-rc11 — development release candidate (2026-11-03)
 
 - Expose immutable `RpcHost.localIdentity` and `RpcClient.localIdentity` from the
   actual factory-owned authenticated-v2 Kit (#540): AppId, local PeerId,
@@ -16,8 +16,13 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 - The snapshot contains public facts only. It grants no trust or application
   authority and does not replace native/SDK association verification.
 
-Not published yet. The installed phone-test applications and their saved results
-remain bound to their existing lab source. Physical qualification remains separate.
+Published and verified from immutable `v0.8.0-rc11`, source
+`f4685604b726c0896711d437383accded235cba2`. All fourteen original main components,
+four application producers, the dry run and protected Maven publication passed.
+Remote verification matched 242 files and completed the isolated consumer gate;
+see the [release record](docs/releases/0.8.0-rc11.md). Frozen application delivery
+awaits its separate owner evidence review. The installed phone-test applications
+and saved results retain their existing lab source. Physical qualification remains separate.
 
 ## 0.8.0-rc10 — development release candidate (2026-11-02)
 
