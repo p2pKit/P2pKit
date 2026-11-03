@@ -21,10 +21,12 @@ internal class RpcKitSettings(
     val role: LanRole,
     val profile: P2pSessionProfile,
     val transportReconnect: Boolean = true,
+    val deviceName: String? = null,
 ) {
     fun configure(builder: P2pKitBuilder) = with(builder) {
         appId = this@RpcKitSettings.appId
-        deviceName = if (role == LanRole.Host) "P2pKit RPC host" else "P2pKit RPC client"
+        deviceName = this@RpcKitSettings.deviceName ?:
+            if (role == LanRole.Host) "P2pKit RPC host" else "P2pKit RPC client"
         sessionProfile = profile
         security { mode = SecurityMode.AuthenticatedV2() }
         lifecycle {

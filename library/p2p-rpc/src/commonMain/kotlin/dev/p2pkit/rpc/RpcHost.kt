@@ -73,10 +73,12 @@ public class RpcHost private constructor(
     /** Explicit administrator metadata, not diagnostic export or proof of remote delivery. */
     public val requests: StateFlow<RpcHostRequests> = engine.requests
     public val permissions: P2pPermissionManager get() = kit.permissions
-    public val fingerprint: PeerFingerprint get() = checkNotNull(kit.localFingerprint)
+    /** Actual owned Kit public identity; reading it does not start networking or enrollment. */
+    public val localIdentity: RpcLocalIdentity = kit.rpcLocalIdentity()
+    public val fingerprint: PeerFingerprint get() = localIdentity.fingerprint
     private val notificationBudget = engine.notificationBudget
     public val pairing: RpcPairing = RpcPairing(scope, trust, clock, gate, engine.incarnation,
-        checkNotNull(kit.localPairingQr), ::endpoint, allowNearbyPairing)
+        localIdentity.pairingQr, ::endpoint, allowNearbyPairing)
 
     init {
         engine.onPairRequest = pairing::onRequest
@@ -279,7 +281,10 @@ public class RpcHost private constructor(
                     else -> PeerAdmission.Rejected
                 }
             }, payloadBudget = budget, maxTrustedSessions = limits.trustedClients)
-            val kit = rpcBoundary { platform.createKit(RpcKitSettings(appId, lan, LanRole.Host, profile)) }
+            val kit = rpcBoundary {
+                platform.createKit(RpcKitSettings(appId, lan, LanRole.Host, profile,
+                    deviceName = configuration.deviceName))
+            }
             val scope = CoroutineScope(
                 applicationScope.coroutineContext + SupervisorJob(applicationScope.coroutineContext[Job]),
             )

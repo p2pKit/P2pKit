@@ -66,7 +66,9 @@ public class RpcClient private constructor(
     public val requestTotals: StateFlow<RpcRequestTotals> = engine.requestTotals
     public val state: StateFlow<RpcConnectionState> = engine.state
     public val permissions: P2pPermissionManager get() = kit.permissions
-    public val fingerprint: PeerFingerprint get() = checkNotNull(kit.localFingerprint)
+    /** Actual owned Kit public identity; reading it does not start networking or enrollment. */
+    public val localIdentity: RpcLocalIdentity = kit.rpcLocalIdentity()
+    public val fingerprint: PeerFingerprint get() = localIdentity.fingerprint
     /** Discovery is advisory only; connecting always pins a cryptographic identity. */
     public val discoveredPeers: StateFlow<List<Peer>> get() = kit.peers
     public val discoveryState: StateFlow<FeatureState> get() = kit.discoveryState
@@ -316,7 +318,7 @@ public class RpcClient private constructor(
             }, payloadBudget = budget, maxTrustedSessions = 1, maxEnrollmentSessions = 0)
             val kit = rpcBoundary {
                 platform.createKit(RpcKitSettings(appId, lan, LanRole.DialOnly, profile,
-                    configuration.transportReconnect))
+                    configuration.transportReconnect, configuration.deviceName))
             }
             val scope = CoroutineScope(
                 applicationScope.coroutineContext + SupervisorJob(applicationScope.coroutineContext[Job]),

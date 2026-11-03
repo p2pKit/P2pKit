@@ -11,6 +11,12 @@ import dev.p2pkit.transport.lan.OrganizationLan
 /** No raw P2pKit/security/transport customization that could bypass the RPC profile. */
 public open class RpcConfiguration internal constructor() {
     public var appId: AppId? = null
+    /**
+     * Optional exact local display name, validated by Core at creation. Null retains the existing
+     * role default. Persist this separately from secure identity storage and supply it on recreation
+     * to preserve the name; changing it does not rotate the key, fingerprint or authenticated PeerId.
+     */
+    public var deviceName: String? = null
     public var lan: OrganizationLan? = null
     public var trustStore: RpcTrustStore? = null
     public var limits: RpcLimits = RpcLimits.host128()
