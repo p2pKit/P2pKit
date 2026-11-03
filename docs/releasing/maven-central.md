@@ -11,15 +11,18 @@ protected approval and the final pre-upload check revalidate its original
 identity and retention. See the [exact-source release procedure](release-foundation.md)
 for owner challenge comments, post-Maven application delivery and partial-failure
 boundaries. The latest completed publication is
-[`0.8.0-rc10`](../releases/0.8.0-rc10.md), source
-`c22762af6c9a62728528d49ccca1fa4b28089712`. Protected Maven
-[41391027354/1](https://github.com/p2pKit/P2pKit/actions/runs/41391027354)
-passed with its original PUBLISHED deployment, 242-file remote comparison and
-complete isolated consumer builds. Its publication-build SBOM contains 88
-components; independent public-signature inspection verified 121 signed originals
-across 21 coordinates. Separately approved sample delivery published the frozen
-applications; independent complete anonymous downloads verified all seven
-original hashes. The [unpublished rc9 attempt](../releases/0.8.0-rc9.md) and
+[`0.8.0-rc11`](../releases/0.8.0-rc11.md), source
+`f4685604b726c0896711d437383accded235cba2`. Protected Maven
+[41599454261/1](https://github.com/p2pKit/P2pKit/actions/runs/41599454261)
+passed with its original PUBLISHED deployment, signed-original validation,
+242-file remote comparison and complete isolated consumer builds. Its
+publication-build SBOM contains 88 components. Frozen sample delivery awaits
+separate owner evidence review; installed phone tests remain bound to their
+existing lab products.
+
+The [rc10 record](../releases/0.8.0-rc10.md) retains its separately approved
+sample delivery and all seven complete download hashes. The
+[unpublished rc9 attempt](../releases/0.8.0-rc9.md) and
 [verified rc8 release](../releases/0.8.0-rc8.md) retain their historical scope.
 Later source requires its own qualification and protected approvals.
 
@@ -148,7 +151,7 @@ ordinary exact-source complete consumer gate used during publication.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
-record. See [`0.8.0-rc10`](../releases/0.8.0-rc10.md) for the latest completed
+record. See [`0.8.0-rc11`](../releases/0.8.0-rc11.md) for the latest completed
 library publication, and the [rc8](../releases/0.8.0-rc8.md), [rc7](../releases/0.8.0-rc7.md),
 [rc6](../releases/0.8.0-rc6.md) and [0.7 RC3](../releases/0.7.0-rc3.md) records
 for immutable history. The rc6 final evidence-upload failure and successful
