@@ -27,11 +27,12 @@ internal class RpcTestLink(index: Int = 0, override val admission: PeerAdmission
     override suspend fun offer(
         message: WireMessage, expiresAt: Long, notification: Boolean, onStart: () -> Unit,
         authorization: RpcSendAuthorization?,
+        canStart: () -> Boolean,
     ): SendTicket? {
         if (transportState.value != ConnectionState.Connected) return null
         val ticket = SendTicket(
             message.retained(), expiresAt, generation.value.generation, notification,
-            onStart = { beforeStart(); onStart() }, authorization = authorization,
+            onStart = { beforeStart(); onStart() }, authorization = authorization, canStart = canStart,
         )
         if (paused) queued += ticket else deliver(ticket)
         return ticket

@@ -45,6 +45,7 @@ internal interface RpcLink {
         notification: Boolean = false,
         onStart: () -> Unit = {},
         authorization: RpcSendAuthorization? = null,
+        canStart: () -> Boolean = { true },
     ): SendTicket?
     suspend fun close()
 }
@@ -59,6 +60,7 @@ internal class SendTicket(
     private val onStart: () -> Unit = {},
     private val onRelease: () -> Unit = {},
     private val authorization: RpcSendAuthorization? = null,
+    private val canStart: () -> Boolean = { true },
 ) {
     private val state = MutableStateFlow(0)
     val completion = CompletableDeferred<Boolean>()
@@ -69,7 +71,7 @@ internal class SendTicket(
         authorization?.begin(this, transportReady) ?: (transportReady() && begin())
 
     fun begin(): Boolean {
-        if (!state.compareAndSet(0, 1)) return false
+        if (!canStart() || !state.compareAndSet(0, 1)) return false
         onStart()
         return true
     }
@@ -226,6 +228,7 @@ internal class SessionRpcLink(
         notification: Boolean,
         onStart: () -> Unit,
         authorization: RpcSendAuthorization?,
+        canStart: () -> Boolean,
     ): SendTicket? = lock.withLock {
         if (closed.value || session.state.value != ConnectionState.Connected || expiresAt <= clock.now()) {
             return@withLock null
@@ -258,6 +261,7 @@ internal class SessionRpcLink(
         val ticket = SendTicket(
             message.retained(), expiresAt, session.connectionInfo.value.generation, notification, allowance, onStart,
             authorization = authorization,
+            canStart = canStart,
             onRelease = {
                 authorizationAllowance?.release()
                 peerAllowance?.release()

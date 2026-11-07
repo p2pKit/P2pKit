@@ -18,6 +18,7 @@ import dev.p2pkit.rpc.RpcProcedure
 import dev.p2pkit.rpc.RpcReply
 import dev.p2pkit.rpc.RpcRequestId
 import dev.p2pkit.rpc.RpcRequestTotals
+import dev.p2pkit.rpc.RpcResultAcceptance
 import dev.p2pkit.rpc.RpcRetry
 import dev.p2pkit.rpc.RpcRetryAdvice
 import dev.p2pkit.rpc.RpcRetrySafety
@@ -282,6 +283,7 @@ internal class RpcClientEngine(
         timeout: Duration,
         retry: RpcRetry,
         observation: RpcCallObservation? = null,
+        accept: (suspend (RpcResultAcceptance<R, E>) -> Unit)? = null,
     ): RpcCallDetails<R, E> {
         require(timeout >= 1.milliseconds && timeout <= 30.seconds)
         require(retry !is RpcRetry.Idempotent || procedure.retrySafety == RpcRetrySafety.Idempotent) {
@@ -306,6 +308,7 @@ internal class RpcClientEngine(
         var terminalKind: RpcFailureKind? = null
         var terminalPhase: RpcFailurePhase? = null
         var callerCancelled = false
+        var acceptingResult = false
         try {
             val details = withTimeout(timeout.inWholeMilliseconds) {
                 val (owner, initial) = lock.withLock {
@@ -410,7 +413,26 @@ internal class RpcClientEngine(
                                     )
                                 )
                                 businessError = outcome.kind == WireKind.ApplicationError
-                                sendControl(selected, active, checkNotNull(digest), WireKind.Receipt)
+                                if (accept == null) {
+                                    sendControl(selected, active, checkNotNull(digest), WireKind.Receipt)
+                                } else {
+                                    val decoded = RpcCallDetails(
+                                        active.id, reply, (clock.now() - started).coerceAtLeast(0),
+                                    )
+                                    val generation = selected.generation.value.generation
+                                    currentCoroutineContext().ensureActive()
+                                    observation?.change(RpcCallStage.AwaitingResponse, clock.now() - started,
+                                        active.evidence.value)
+                                    acceptingResult = true
+                                    accept(RpcResultAcceptance(decoded,
+                                        checkNotNull(selected.identity.fingerprint), initial.incarnation,
+                                        procedure.name, procedure.version))
+                                    acceptingResult = false
+                                    // Reject cancellation swallowed by the callback, including NonCancellable work.
+                                    currentCoroutineContext().ensureActive()
+                                    if (clock.now() >= deadline) throw failure(active, RpcFailureKind.DeadlineExceeded)
+                                    sendAcceptedReceipt(active, checkNotNull(digest), generation, deadline)
+                                }
                                 return@withTimeout RpcCallDetails(
                                     active.id, reply, (clock.now() - started).coerceAtLeast(0),
                                 )
@@ -470,6 +492,8 @@ internal class RpcClientEngine(
             throw call?.let { failure(it, RpcFailureKind.DeadlineExceeded) }
                 ?: RpcFailure(RpcFailureKind.DeadlineExceeded, RpcFailurePhase.Encoding)
         } catch (caught: RpcFailure) {
+            // Application acceptance can call other RPCs. Their identity/advice do not belong to this call.
+            if (acceptingResult) throw caught
             terminalKind = caught.kind
             terminalPhase = caught.phase
             val active = call
@@ -597,6 +621,34 @@ internal class RpcClientEngine(
             // Best-effort controls cannot overwrite a completed reply or the caller's original failure.
             currentCoroutineContext().ensureActive()
         } finally { message.release() }
+    }
+
+    private suspend fun sendAcceptedReceipt(call: Pending, digest: OwnedBytes, generation: Long, deadline: Long) {
+        val owner = call.owner
+        val current = owner.link
+        val context = currentCoroutineContext()
+        val canStart = {
+            val ready = owner.ready.value
+            context.isActive && clock.now() < deadline && owner.active.value && current.failure.value == null &&
+                ready?.admission == PeerAdmission.Trusted && ready.incarnation == call.incarnation &&
+                ready.generation == generation && current.generation.value.generation == generation
+        }
+        if (!canStart()) return // Acceptance survives a disconnect; do not transfer Receipt to a replacement.
+        val message = WireMessage(WireKind.Receipt, call.id.value, call.incarnation, call.name, call.version,
+            body = digest.retain())
+        var ticket: SendTicket? = null
+        try {
+            // Bound acknowledgement queueing independently, without extending the total call deadline.
+            withTimeoutOrNull(1_000) {
+                ticket = current.offer(message, clock.now() + 1_000, canStart = canStart)
+                ticket?.completion?.await()
+            }
+        } catch (_: Exception) {
+            context.ensureActive() // Best effort cannot replace an accepted result, but cancellation propagates.
+        } finally {
+            ticket?.cancelQueued()
+            message.release()
+        }
     }
 
     private fun failure(

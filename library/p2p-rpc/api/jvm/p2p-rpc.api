@@ -109,6 +109,8 @@ public final class dev/p2pkit/rpc/RpcClient {
 	public static final field Companion Ldev/p2pkit/rpc/RpcClient$Companion;
 	public final fun call-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun call-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun callWithAcceptance-SYHnMyU (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Ldev/p2pkit/rpc/RpcCallObservation;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun callWithAcceptance-SYHnMyU$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Ldev/p2pkit/rpc/RpcCallObservation;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun callWithDetails-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun callWithDetails-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun callWithObservation-gwCluXo (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;Ldev/p2pkit/rpc/RpcCallObservation;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -558,6 +560,15 @@ public final class dev/p2pkit/rpc/RpcRequestTotals {
 	public final fun getSucceeded ()J
 	public final fun getTimedOut ()J
 	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcResultAcceptance {
+	public final fun getDetails ()Ldev/p2pkit/rpc/RpcCallDetails;
+	public final fun getHostFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getHostIncarnation ()Ljava/lang/String;
+	public final fun getProcedureName ()Ljava/lang/String;
+	public final fun getProcedureVersion ()I
 	public fun toString ()Ljava/lang/String;
 }
 

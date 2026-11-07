@@ -14,6 +14,7 @@ durable queue, database, cloud dependency or arbitrary remote code execution.
 
 - [API quick start and architecture](../../docs/rpc/README.md)
 - [Reliability and limits](../../docs/rpc/reliability.md)
+- [Durable result acceptance before Receipt (rc12 source candidate)](../../docs/rpc/durable-result-acceptance.md)
 - [Security and deployment](../../docs/rpc/security-and-deployment.md)
 - [Protocol](../../docs/rpc/protocol.md)
 - [Verification requirements and blockers](../../docs/rpc/qualification.md)

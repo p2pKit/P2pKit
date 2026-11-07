@@ -8,8 +8,12 @@ P2pKit is a Kotlin Multiplatform library for authenticated peer discovery,
 messaging, and durable file transfer over a reachable local network. It
 supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
-**Current source version:** `0.8.0-rc11` (development release candidate).
+**Current source version:** `0.8.0-rc12` (unpublished development release candidate).
 **Latest published version:** `0.8.0-rc11`.
+
+The rc12 source candidate adds [durable RPC result acceptance before Receipt](docs/rpc/durable-result-acceptance.md)
+(#543). Existing automatic-Receipt APIs remain available. Maven publication
+requires a qualified merge on `main`; the implementation PR remains unmerged.
 
 `0.8.0-rc11` is available from Maven Central under `io.github.apdelrahman1911`.
 It adds [RPC local public identity and device-name preservation](docs/rpc/local-identity.md)
