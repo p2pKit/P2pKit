@@ -272,6 +272,27 @@ public class RpcClient private constructor(
         timeout: Duration = 10.seconds, retry: RpcRetry = RpcRetry.RecoverOnly(),
     ): RpcCallDetails<R, E> = engine.callWithDetails(procedure, request, timeout, retry, observation)
 
+    /**
+     * Opt-in terminal-result acceptance before Receipt. [accept] runs once, in the caller's coroutine,
+     * after decoding a Success or ApplicationError and within the existing total [timeout]. Validate
+     * the result and await its durable transaction before returning normally. Throwing or cancellation
+     * before acceptance completes sends no Receipt; acceptance failures are never automatically retried.
+     * A typed ApplicationError may be accepted as a durable business rejection, or rejected by throwing.
+     *
+     * Receipt is best effort, tied to this result and physical connection generation. A failed/lost Receipt
+     * cannot undo local persistence. Cancellation after acceptance may race a Receipt already sent.
+     * Retained results remain subject to the Host's existing cache/expiry and authorization rules.
+     * This adds no durable queue, cross-process resume or exactly-once application storage guarantee.
+     * Existing call APIs continue to send automatic Receipts after decoding.
+     */
+    @Throws(Exception::class)
+    public suspend fun <Q, R, E> callWithAcceptance(
+        procedure: RpcProcedure<Q, R, E>, request: Q,
+        timeout: Duration = 10.seconds, retry: RpcRetry = RpcRetry.RecoverOnly(),
+        observation: RpcCallObservation? = null,
+        accept: suspend (RpcResultAcceptance<R, E>) -> Unit,
+    ): RpcCallDetails<R, E> = engine.callWithDetails(procedure, request, timeout, retry, observation, accept)
+
     /** Typed local collection only; does not send a subscription or promise remote receipt/replay. */
     public fun <T> notifications(notification: RpcNotification<T>): Flow<T> = notifications.flow(notification)
 

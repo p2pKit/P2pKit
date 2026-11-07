@@ -29,6 +29,11 @@ The rc11 release adds [read-only local public identity](local-identity.md) on bo
 roles and optional device-name preservation. This is available after creation
 without starting discovery, advertising, enrollment or a connection.
 
+The unpublished rc12 source candidate adds opt-in
+[durable result acceptance before Receipt](durable-result-acceptance.md).
+Use it when the application must validate and durably persist a terminal reply
+before acknowledgement; existing call APIs keep their automatic Receipts.
+
 ## Architecture and reuse
 
 The interactive Android, iOS and Desktop previews are being evolved together; see

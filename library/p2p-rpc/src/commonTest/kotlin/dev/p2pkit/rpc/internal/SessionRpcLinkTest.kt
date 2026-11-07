@@ -418,6 +418,31 @@ class SessionRpcLinkTest {
     }
 
     @Test
+    fun receiptStartGuardIsRecheckedByTheActualWriterAndReleasesItsPayload() = runTest {
+        val session = LinkTestSession()
+        val budget = PayloadBudget(4096)
+        val link = SessionRpcLink(session, backgroundScope, budget, PayloadBudget(1024), RpcClock { 0 })
+        var allowed = true
+        var starts = 0
+        val message = WireMessage(WireKind.Receipt, TEST_REQUEST, TEST_INCARNATION, "echo", 1,
+            body = OwnedBytes.copy(ByteArray(32), budget))
+        try {
+            val ticket = assertNotNull(link.offer(message, 10_000, onStart = { starts++ }, canStart = { allowed }))
+            allowed = false
+            link.start({}, {})
+            runCurrent()
+            assertFalse(ticket.started)
+            assertFalse(ticket.completion.await())
+            assertEquals(0, starts)
+            assertTrue(session.sentKinds.isEmpty())
+        } finally {
+            link.close()
+            message.release()
+        }
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
     fun callbackCancellationClosesTheLinkInsteadOfLeavingADeafConnection() = runTest {
         val session = LinkTestSession()
         val budget = PayloadBudget(4096)

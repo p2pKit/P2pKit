@@ -3,6 +3,20 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc12 — unpublished development release candidate
+
+- Add opt-in `RpcClient.callWithAcceptance` (#543): a suspendable application
+  callback validates and durably persists a decoded terminal reply before its
+  matching Receipt. Expose immutable request, Host and procedure association
+  through `RpcResultAcceptance`; preserve existing automatic-Receipt APIs.
+- Acceptance failures and cancellation before acceptance send no Receipt and
+  cause no automatic acceptance retry or handler reinvocation. Fence queued
+  Receipts against cancellation and connection-generation changes; retain the
+  existing Host authorization, bounded cache, tombstones and retry policy.
+- See the [usage and recovery contract](docs/rpc/durable-result-acceptance.md).
+  This candidate is not published. Release publication requires qualified main
+  ancestry and is blocked while the implementation PR must remain unmerged.
+
 ## 0.8.0-rc11 — development release candidate (2026-11-03)
 
 - Expose immutable `RpcHost.localIdentity` and `RpcClient.localIdentity` from the

@@ -118,6 +118,11 @@ business key, coordinate transactions, or make a non-idempotent handler safe.
 
 ## Default resource bounds
 
+The opt-in [durable result acceptance API](durable-result-acceptance.md) in the
+rc12 source candidate delays Receipt until application validation and persistence
+complete. Existing call APIs retain automatic Receipt after decoding. The opt-in
+does not extend these retention windows or provide a durable recovery queue.
+
 | Resource | Bound |
 | --- | --- |
 | Trusted connections | 128, plus 4 enrollment-only connections |
