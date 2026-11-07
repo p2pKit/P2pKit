@@ -1,10 +1,12 @@
 # RPC durable result acceptance — #543
 
-The rc12 source candidate adds `RpcClient.callWithAcceptance` and immutable
+The rc12 release adds `RpcClient.callWithAcceptance` and immutable
 `RpcResultAcceptance`. See the [API contract and usage example](../rpc/durable-result-acceptance.md).
 The implementation branch starts at main `8dff5c05ab1bf9bbaf4dc10269a528ff158abaa9`.
 This record covers source review and automated regression, not physical-device
-qualification or Maven publication. The PR supplies the final source and CI links.
+qualification. [PR #544](https://github.com/p2pKit/P2pKit/pull/544) merged after
+passing CI and a final review. The [release record](../releases/0.8.0-rc12.md)
+binds the exact main source, original qualification and verified Maven publication.
 
 ## Four additional review passes
 
@@ -66,11 +68,11 @@ confirmed that rc12 was absent during preparation; this is not a publication pas
 - Receipt is best effort after local acceptance. Cancellation/crash after a
   durable commit cannot undo that commit or recall an already-started Receipt.
   Persistence and business idempotency remain the application's responsibility.
-- `VERSION_NAME=0.8.0-rc12` is a prepared candidate;
-  `LATEST_PUBLISHED_VERSION=0.8.0-rc11` remains the verified public version.
-  The owner explicitly requires an unmerged PR. The maintained publisher requires
-  a qualified main merge, so no rc12 tag/upload is authorized by this state and
-  no new Maven availability or consumer-resolution pass is claimed.
+- The owner subsequently authorized merging #544 after successful CI and a final
+  review, then completing the verified release. `VERSION_NAME` and
+  `LATEST_PUBLISHED_VERSION` are `0.8.0-rc12`; original main qualification and
+  protected Maven verification passed. This later release state supersedes the
+  original unmerged-PR restriction; it does not turn premerge CI into main evidence.
 
 The existing installed phone/Mac applications, profiles, saved tests, deferred
 #520 investigation and cancelled full audit are outside this source change.

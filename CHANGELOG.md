@@ -3,7 +3,7 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
-## 0.8.0-rc12 — unpublished development release candidate
+## 0.8.0-rc12 — development release candidate (2026-11-07)
 
 - Add opt-in `RpcClient.callWithAcceptance` (#543): a suspendable application
   callback validates and durably persists a decoded terminal reply before its
@@ -14,8 +14,13 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
   Receipts against cancellation and connection-generation changes; retain the
   existing Host authorization, bounded cache, tombstones and retry policy.
 - See the [usage and recovery contract](docs/rpc/durable-result-acceptance.md).
-  This candidate is not published. Release publication requires qualified main
-  ancestry and is blocked while the implementation PR must remain unmerged.
+
+Published and verified from immutable `v0.8.0-rc12`, source
+`4c25bf28a9c1561c129387b7c6786425b18e0f98`. All fourteen original main components,
+four application producers, the dry run and protected Maven publication passed.
+Remote verification matched 242 files and completed isolated consumer builds;
+see the [release record](docs/releases/0.8.0-rc12.md). Separate sample delivery
+awaits owner evidence review. Installed phone-test apps and saved results remain unchanged.
 
 ## 0.8.0-rc11 — development release candidate (2026-11-03)
 
