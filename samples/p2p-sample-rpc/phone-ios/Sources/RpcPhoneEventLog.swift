@@ -10,7 +10,7 @@ struct RpcPhoneEventLog {
             "NotConnected", "Closed", "PermissionMissing", "Overloaded", "DeadlineExceeded", "Unauthorized",
             "Authentication", "Protocol", "IncompatibleVersion", "UnknownProcedure", "InvalidPayload", "HandlerFailed",
             "ResultUnavailable", "UnknownOutcome", "HostRestarted", "RemoteCancelled", "TrustStorage",
-            "LocalOrProtocolFailure", "Cancelled"
+            "LocalOrProtocolFailure", "Cancelled", "CapacityApprovalsRetained"
         ]
         private static let phases: Set<String> = [
             "Encoding", "Admission", "Negotiation", "Sending", "AwaitingResponse", "Decoding", "Trust"

@@ -3,6 +3,7 @@ package dev.p2pkit.sample.rpc.desktop
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.RpcTrustStore
 import dev.p2pkit.rpc.jvm
+import dev.p2pkit.sample.rpc.RpcDeviceTestPhase
 import dev.p2pkit.sample.rpc.RpcApplicationExample
 import dev.p2pkit.sample.rpc.RpcApplicationInput
 import dev.p2pkit.sample.rpc.RpcApplicationSession
@@ -44,6 +45,7 @@ internal class DesktopRpcRuntime private constructor(
     private var identityDirectoryKey: Any? = null
     private var vault: LabVault? = null
     private var lab: RpcPhoneLab? = null
+    private var savedTests = ""
     private var creationCleanupFailure: Throwable? = null
 
     // The owner receives this runtime BEFORE any file/socket allocation, including partial initialization.
@@ -61,8 +63,17 @@ internal class DesktopRpcRuntime private constructor(
     }
 
     suspend fun start(host: Boolean, settings: RpcPhoneSettings, nearby: Boolean = true) {
+        application.deviceTests.configureDeviceName(when {
+            System.getProperty("os.name").startsWith("Mac") -> "Mac (JVM)"
+            System.getProperty("os.name").startsWith("Windows") -> "Windows (JVM)"
+            else -> "Linux (JVM)"
+        })
         prepareStore()
         val store = checkNotNull(vault)
+        if (application.deviceTests.reports.isEmpty()) {
+            store.read("device-test-results-v1")?.let { application.deviceTests.restoreJson(it.decodeToString()) }
+        }
+        savedTests = application.deviceTests.exportJson()
         val platform = RpcPlatform.jvm(store)
         val trust = LabTrustStore(store)
         try {
@@ -84,6 +95,13 @@ internal class DesktopRpcRuntime private constructor(
     fun status(host: Boolean): DesktopRpcStatus {
         val current = checkNotNull(lab)
         val diagnostics = current.diagnostics
+        val process = java.lang.management.ManagementFactory.getOperatingSystemMXBean()
+            as com.sun.management.OperatingSystemMXBean
+        application.deviceTests.observeResources(process.processCpuTime,
+            java.lang.management.ManagementFactory.getMemoryMXBean().heapMemoryUsage.used.coerceAtLeast(1),
+            "JVM_HEAP_BYTES", java.lang.management.ManagementFactory.getThreadMXBean().threadCount,
+            "JVM_THREADS", null)
+        saveTests()
         return DesktopRpcStatus(
             role = if (host) DesktopRpcRole.Host else DesktopRpcRole.Client,
             state = current.state,
@@ -96,8 +114,28 @@ internal class DesktopRpcRuntime private constructor(
             historyRevision = application.history.revision,
             nearby = current.nearbyHosts(), trusted = current.trustedDevices(),
             connection = current.discoveryConnection, networkActivity = current.networkActivity,
-            metrics = current.requestMetrics,
+            metrics = current.requestMetrics, tests = application.deviceTests.progress,
         )
+    }
+
+    private fun saveTests() {
+        if (vault == null || application.deviceTests.reports.isEmpty()) return
+        val tests = application.deviceTests
+        val archive = DesktopRpcTestArchive(checkNotNull(vault))
+        tests.unarchivedReports.forEach { archive.retain(tests, it) }
+        val text = application.deviceTests.exportJson()
+        if (text != savedTests) {
+            checkNotNull(vault).replace("device-test-results-v1", text.toByteArray())
+            savedTests = text
+        }
+    }
+
+    fun allowTests(enabled: Boolean) { checkNotNull(lab).allowDeviceTestsFromHost(enabled) }
+    fun cancelTest() { lab?.cancelDeviceTest() }
+    suspend fun test(phase: RpcDeviceTestPhase, peer: String?): String? = awaitDesktopRpcCompletion { completed ->
+        val operation = checkNotNull(lab).beginDeviceTest(phase, peer, completed)
+        val cancel: () -> Unit = { operation.cancel() }
+        cancel
     }
 
     suspend fun invitation(): String = checkNotNull(lab).invitation()
@@ -150,6 +188,13 @@ internal class DesktopRpcRuntime private constructor(
         // Physical runtime closure precedes any identity destruction, including failed initialization.
         check(creationCleanupFailure == null) { "Failed factory cleanup requires owner review" }
         lab?.close()
+        directory?.let { root ->
+            check(directoryKey != null && directoryIdentity(root) == directoryKey)
+            identityDirectory?.let { identity ->
+                check(identityDirectoryKey != null && directoryIdentity(identity) == identityDirectoryKey)
+            }
+        }
+        saveTests()
         directory?.let { root ->
             check(directoryKey != null && directoryIdentity(root) == directoryKey)
             identityDirectory?.let { identity ->

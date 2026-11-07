@@ -232,6 +232,8 @@ public class RpcPhoneLab private constructor(
     private val client: RpcClient?,
     private val application: RpcApplicationSession? = null,
 ) {
+    private var deviceTests: DeviceTestRuntime? = null
+    private fun bindDeviceTests() { deviceTests = application?.deviceTests?.bind(scope, host, client) }
     private val callBusy = MutableStateFlow(false)
     private val operationFailures = PhoneOperationFailureState()
     private val controlBusy = MutableStateFlow(false)
@@ -278,6 +280,20 @@ public class RpcPhoneLab private constructor(
     public suspend fun reject(requestId: String) = operationFailures.effect {
         check(mobileRun == null)
         checkNotNull(host).pairing.reject(requestId)
+    }
+
+    public fun cancelDeviceTest() { deviceTests?.cancel() }
+
+    public fun allowDeviceTestsFromHost(enabled: Boolean) { checkNotNull(deviceTests).enableRemote(enabled) }
+
+    @Throws(Exception::class)
+    public fun beginDeviceTest(
+        phase: RpcDeviceTestPhase, selectedPeer: String?, onComplete: (String?) -> Unit,
+    ): RpcPhoneOperation = startPhoneOperation(scope, callBusy, { "Cancelled; partial result saved" },
+        { "Test failed or interrupted; result saved" }, onComplete, operationFailures) {
+        check(mobileRun == null && nearbyMode)
+        checkNotNull(deviceTests).run(phase, selectedPeer)
+        null
     }
 
     public val applicationAvailable: Boolean get() = application != null
@@ -479,9 +495,11 @@ public class RpcPhoneLab private constructor(
             operationFailures.retire {
                 host?.let { application?.history?.observeHost(it.requests.value) }
                 try {
-                    try { discovery?.close() } finally {
-                        host?.close()
-                        client?.close()
+                    try { deviceTests?.close() } finally {
+                        try { discovery?.close() } finally {
+                            host?.close()
+                            client?.close()
+                        }
                     }
                 } finally {
                     scope.coroutineContext[Job]?.cancelAndJoin()
@@ -510,13 +528,14 @@ public class RpcPhoneLab private constructor(
         ): RpcPhoneLab {
             require(RpcPhoneBuildStamp.SOURCE_CLEAN && config.hostSourceSha == compiledSource)
             require(actualPlatform in setOf("Android", "Ios") && config.hostPlatform == actualPlatform)
-            require(trustStore.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients).isEmpty())
+            requireEmptyMobileCapacityApprovals(trustStore)
             try {
                 val lab = createHostInternal(platform, config.settings, trustStore, config.clientPins, null,
                     capacityExercises = config.schema == "2")
                 lab.mobileRun = PhoneMobileRun(config, trustStore)
                 // Return the owned runtime before performing fallible USB publication.
                 // mobileReadyRecord subsequently verifies its actual bound endpoint.
+                lab.bindDeviceTests()
                 return lab
             } catch (failure: Exception) {
                 withContext(NonCancellable) {
@@ -578,17 +597,26 @@ public class RpcPhoneLab private constructor(
                     allowNearbyPairing = nearby
                     application?.register(this, authorize = { it.fingerprint != null })
                     // Engine admission still requires durable trust; enrollment-only peers cannot invoke these.
-                    register(RpcCapacityContract.echo, authorize = { it.fingerprint != null }) { _, value ->
+                    register(RpcCapacityContract.echo, authorize = { it.fingerprint != null }) { context, value ->
+                        val capture = application?.deviceTests?.capture(context,
+                            RpcCapacityContract.echo.name,
+                            (value.length + 2).takeIf { value == RpcCapacityContract.payload })
+                        if (value == RpcCapacityContract.payload) {
+                            application?.deviceTests?.response(capture, value.length + 2)
+                        }
                         if (value == RpcCapacityContract.payload) RpcReply.Success(value)
                         else RpcReply.ApplicationError("unexpected synthetic body")
                     }
-                    register(RpcCapacityContract.largeEcho, authorize = { it.fingerprint != null }) { _, value ->
+                    register(RpcCapacityContract.largeEcho, authorize = { it.fingerprint != null }) { context, value ->
+                        val size = (value.length + 2).takeIf { value.all { character -> character == 'a' } }
+                        val capture = application?.deviceTests?.capture(context, RpcCapacityContract.largeEcho.name, size)
+                        if (size != null) application?.deviceTests?.response(capture, size)
                         RpcReply.Success(value)
                     }
                     if (capacityExercises) registerCapacityExercises(checkNotNull(capacityPins))
                 }.also { owner.resource = it }
                 host.start()
-                return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby }
+                return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby; it.bindDeviceTests() }
             } catch (failure: Exception) {
                 owner.failed(failure)
             } catch (failure: Error) {
@@ -623,6 +651,10 @@ public class RpcPhoneLab private constructor(
                 val client = RpcClient.create(platform, scope) {
                     appId = RpcCapacityContract.appId
                     lan = settings.policy(host = false)
+                    if (application != null) {
+                        notification(DeviceTestContract.start)
+                        notification(DeviceTestContract.cancel)
+                    }
                     transportReconnect = !nearby
                     this.trustStore = trustStore
                 }.also { owner.resource = it }
@@ -632,6 +664,7 @@ public class RpcPhoneLab private constructor(
                         lab.operationFailures)
                     checkNotNull(lab.discovery).start()
                 }
+                lab.bindDeviceTests()
                 return lab
             } catch (failure: Exception) {
                 owner.failed(failure)

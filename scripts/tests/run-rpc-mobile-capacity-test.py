@@ -218,6 +218,7 @@ class Cleanup(unittest.TestCase):
 
     def test_partial_native_inventory_stops_before_jvm_clock_or_usb(self):
         run = fixture()
+        run.values = {}
         run.state = Path('/NOT_EXECUTED/state')
         run.config = dict(runLabel='test-run')
         run.native = Mock(return_value={})
@@ -227,6 +228,43 @@ class Cleanup(unittest.TestCase):
             run.prerequisites()
         self.assertEqual(run.native.call_count, 1)
         run.phone.start.assert_not_called()
+
+    def test_failed_dispatch_marker_never_starts_android_control(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            adb = root / 'adb'
+            adb.write_bytes(b'OFFLINE_TOOL_HASH_FIXTURE_NOT_EXECUTABLE')
+            run = fixture()
+            run.values = dict(adb=str(adb))
+            run.bound = bound()
+            run.control = root
+            run.generator_prerequisites = Mock()
+            run.runner = Mock()
+            run.runner.write_new_json.side_effect = OSError('OFFLINE_MARKER_PUBLICATION_FAILURE')
+            with self.assertRaises(OSError):
+                run.prerequisites()
+            run.phone.start.assert_not_called()
+            run.phone.install_app.assert_not_called()
+
+    def test_device_control_observes_durable_marker_before_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            adb = root / 'adb'
+            adb.write_bytes(b'OFFLINE_TOOL_HASH_FIXTURE_NOT_EXECUTABLE')
+            run = fixture()
+            run.values = dict(adb=str(adb))
+            run.bound, run.control = bound(), root
+            run.args = SimpleNamespace(install_android_apk=None)
+            run.generator_prerequisites = Mock()
+            writer = m.module('marker_test_writer', 'run-audit-command.py')
+            run.runner = SimpleNamespace(write_new_json=writer.write_new_json)
+
+            def start():
+                self.assertEqual(writer.read_json(root / 'device-control-started.json'), run.bound)
+                self.assertTrue(run.result['deviceControlStarted'])
+
+            run.phone.start.side_effect = start
+            run.prerequisites()
 
     def test_receipt_must_match_source_context_ancestry_canonical_copy_and_retirement(self):
         run = fixture()

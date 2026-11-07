@@ -54,8 +54,12 @@ import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
 
 /** Test-app approval storage only; atomic device-only Keychain replacement, no preferences or cloud sync. */
-internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : RpcTrustStore {
-    private val service = "dev.p2pkit.rpc.phone-lab.trust.v1" + fixtureId?.also {
+internal class IosRpcPhoneTrustStore(
+    private val fixtureId: String? = null, mobileCapacity: Boolean = false,
+) : RpcTrustStore {
+    // Capacity import/retirement must never overwrite ordinary application pairing approvals.
+    private val service = (if (mobileCapacity) "dev.p2pkit.rpc.phone-lab.capacity-trust.v1"
+        else "dev.p2pkit.rpc.phone-lab.trust.v1") + fixtureId?.also {
         require(it.matches(Regex("[A-Fa-f0-9-]{36}")))
     }?.let { "-$it" }.orEmpty()
 

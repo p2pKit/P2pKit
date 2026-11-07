@@ -2,6 +2,8 @@
 """Offline Mac clock/route/controller controls. Mock time and pages are not native or capacity evidence."""
 import copy
 import importlib.util
+import json
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -45,6 +47,47 @@ class Clock(unittest.TestCase):
         low['samples'][-1]['snapshot']['availableBytes'] = m.MIN_MEMORY - 1
         low.update(minimumAvailableBytes=m.MIN_MEMORY - 1, healthyForAttempt=False)
         self.assertFalse(m.assess_clock(low)['healthyForAttempt'])
+
+    def test_explicit_1gib_threshold_is_bound_and_cannot_change_default_or_clock_limits(self):
+        required = 1024 ** 3
+        value = clock()
+        for row in value['samples']:
+            row['snapshot']['availableBytes'] = required
+        value.update(schema=2, requiredAvailableBytes=required, minimumAvailableBytes=required)
+        self.assertTrue(m.assess_clock(value, minimum_available_bytes=required)['healthyForAttempt'])
+        with self.assertRaises(ValueError):
+            m.assess_clock(value)  # A record cannot authorize its own lower requirement.
+        with self.assertRaises(ValueError):
+            m.assess_clock(value, minimum_available_bytes=m.MIN_MEMORY)
+        below = copy.deepcopy(value)
+        below['samples'][-1]['snapshot']['availableBytes'] = required - 1
+        below.update(minimumAvailableBytes=required - 1, healthyForAttempt=False)
+        self.assertFalse(m.assess_clock(below, minimum_available_bytes=required)['healthyForAttempt'])
+        gap = value | dict(maximumGapNanos=100_000_000, healthyForAttempt=False)
+        self.assertFalse(m.assess_clock(gap, minimum_available_bytes=required)['healthyForAttempt'])
+        for invalid in (True, 0, required - 1, required * 2, '1'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                m.memory_requirement(invalid)
+        self.assertEqual(m.memory_requirement(), 6 * 1024 ** 3)
+
+    def test_explicit_clock_producer_records_1gib_without_changing_duration_or_observations(self):
+        moment = [0]
+        source = Mock()
+        source.__enter__ = Mock(return_value=source)
+        source.__exit__ = Mock(return_value=False)
+        def read(_):
+            moment[0] += m.PERIOD
+            return 1
+        source.read.side_effect = read
+        observed = snapshot() | dict(availableBytes=1024 ** 3)
+        result = m.clock(None, now=lambda: moment[0], timer=lambda: source, observe=lambda _: observed,
+                         minimum_available_bytes=1024 ** 3)
+        self.assertEqual(result['schema'], 2)
+        self.assertEqual(result['requiredAvailableBytes'], 1024 ** 3)
+        self.assertEqual(result['durationNanos'], m.DURATION)
+        self.assertEqual(len(result['samples']), 126)
+        self.assertTrue(result['healthyForAttempt'])
+        source.__exit__.assert_called_once()
 
     def test_full_actual_memory_and_clock_inventory_is_required(self):
         for change in (dict(hypervisorPresent=True), dict(nativeMacModelObserved=False), dict(availableBytes=True),
@@ -158,6 +201,40 @@ class Coordinator(unittest.TestCase):
         with patch.object(mobile.darwin, 'snapshot') as observe, self.assertRaises(ValueError):
             run.generator_snapshot()
         observe.assert_not_called()
+
+    def test_coordinator_binds_explicit_memory_in_original_native_clock_argv_and_result(self):
+        run = mobile.Run.__new__(mobile.Run)
+        run.values = dict(macGeneratorMinimumAvailableGiB='1')
+        run.config = dict(runLabel='offline-clock', endpointAddress='192.168.14.2', interface='en0',
+                          localAddress='192.168.14.3')
+        run.state = ROOT
+        run.result = {}
+        run.policy = Mock(control_inventory=Mock(return_value=129), unittest_count=Mock(return_value=129))
+        run.generator_snapshot = Mock(return_value=snapshot())
+        run.native = Mock(side_effect=lambda purpose, argv: dict(purpose=purpose))
+        observed = clock() | dict(schema=2, requiredAvailableBytes=1024 ** 3)
+        def output(proof, stream='stdout'):
+            if proof['purpose'] == 'mobile-native-controls':
+                return b'offline complete native inventory'
+            if proof['purpose'] == 'mobile-jdk17':
+                return b'java.specification.version = 17\nos.arch = aarch64\n'
+            return json.dumps(observed).encode()
+        run.output = output
+        route, interface, _ = Route().fixture()
+        run.commands = Mock(run=Mock(side_effect=[(0, route), (0, interface)]))
+        with patch.dict(os.environ, JAVA_HOME=str(ROOT)):
+            run.generator_prerequisites()
+        argv = run.native.call_args_list[-1].args[1]
+        self.assertEqual(argv[-2:], ['--minimum-available-gib', '1'])
+        self.assertEqual(run.result['clockPreflight']['requiredAvailableBytes'], 1024 ** 3)
+        self.assertEqual(run.result['generatorMemoryAdmission'], dict(requiredAvailableBytes=1024 ** 3,
+                         explicitlySelected=True, defaultRequiredAvailableBytes=m.MIN_MEMORY,
+                         capacityEstablishedByThreshold=False))
+        run.native.reset_mock()
+        run.native_host = 'linux-x64'
+        with self.assertRaises(ValueError):
+            run.generator_prerequisites()
+        run.native.assert_not_called()
 
     def test_android_keeps_its_existing_linux_source_and_receipt_contract(self):
         self.assertEqual(mobile.base.Run.native_host, 'linux-x64')

@@ -371,11 +371,20 @@ tasks.register<Sync>("prepareRpcCapacityLab") {
     from(capacityLabJar)
     from(labCompilation.runtimeDependencyFiles.filter { it.extension == "jar" })
     duplicatesStrategy = DuplicatesStrategy.FAIL
+    // The native producer stays read-only. Its lab copy must permit the next source-bound Sync.
+    filePermissions { unix("0600") }
     inputs.property("macosScopedNative", capacityLabMacNative)
     if (capacityLabMacNative) {
         dependsOn(":p2p-transport-lan:stageMacTcp")
         inputs.dir(capacityLabMacDirectory)
         from(capacityLabMacDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
+        inputs.file(rootProject.file("scripts/prepare-rpc-capacity-copy.py"))
+        doFirst {
+            providers.exec {
+                workingDir(rootDir)
+                commandLine("python3", "-I", "-B", "scripts/prepare-rpc-capacity-copy.py", "--root", rootDir)
+            }.result.get().assertNormalExitValue()
+        }
     }
     val sourceCommit = providers.exec {
         workingDir(rootDir)
