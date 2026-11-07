@@ -11,11 +11,14 @@ import dev.p2pkit.rpc.RpcCallStage
 import dev.p2pkit.rpc.RpcExecutionEvidence
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcFailureKind
+import dev.p2pkit.rpc.RpcFailurePhase
 import dev.p2pkit.rpc.RpcLimits
 import dev.p2pkit.rpc.RpcProcedure
 import dev.p2pkit.rpc.RpcReply
+import dev.p2pkit.rpc.RpcRequestId
 import dev.p2pkit.rpc.RpcResultAcceptance
 import dev.p2pkit.rpc.RpcRetry
+import dev.p2pkit.rpc.RpcRetryAdvice
 import dev.p2pkit.rpc.RpcRetrySafety
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -239,6 +242,30 @@ class RpcResultAcceptanceTest {
                 assertEquals(0L, f.client.diagnostics.value.completedCalls)
             } finally { f.close() }
         }
+    }
+
+    @Test
+    fun nestedRpcFailureDuringAcceptanceKeepsItsOwnRequestIdentityAndRetryAdvice() = runTest {
+        val f = fixture()
+        try {
+            val nested = RpcFailure(RpcFailureKind.NotConnected, RpcFailurePhase.Sending,
+                RpcRequestId(TEST_SECOND), RpcExecutionEvidence.RejectedBeforeExecution,
+                RpcRetryAdvice.SafeBeforeExecution)
+            val observation = RpcCallObservation()
+            val result = runCatching {
+                f.client.callWithDetails(procedure, "q", 10.seconds, RpcRetry.RecoverOnly(), observation) {
+                    throw nested
+                }
+            }
+            assertSame(nested, result.exceptionOrNull())
+            assertEquals(TEST_SECOND, nested.requestId?.value)
+            assertEquals(RpcRetryAdvice.SafeBeforeExecution, nested.retryAdvice)
+            assertNotEquals(TEST_SECOND, observation.progress.value.requestId)
+            assertEquals(RpcExecutionEvidence.HandlerFinished, observation.progress.value.executionEvidence)
+            assertEquals(RpcCallStage.Failed, observation.progress.value.stage)
+            assertTrue(f.receipts.isEmpty())
+            assertEquals(WireKind.Success, f.status(f.invokes.single()).kind)
+        } finally { f.close() }
     }
 
     @Test

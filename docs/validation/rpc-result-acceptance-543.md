@@ -15,7 +15,7 @@ they are not claims of four independent human reviewers.
 | --- | --- | --- |
 | 1 — acceptance and association | Terminal decode, callback, failure propagation and exact Receipt fields | Added hostile request-ID, procedure name/version, Host-incarnation and attachment tests, concurrent-result isolation, typed business-error acceptance/rejection, validation/write failures and fatal/cancellation exceptions. No user-accessible Receipt token exists. Acceptance failure never reenters the transport retry loop. |
 | 2 — cancellation and scheduling | Call deadline, callback suspension, queued ticket lifetime and physical-generation changes | Found that a blocking callback could outlast the monotonic deadline before timeout dispatch. Added an explicit post-callback clock check and a writer deadline guard. Added swallowed-cancellation, queued-cancellation, Receipt timeout, generation change after queueing, actual `SessionRpcLink` writer and eight-slot admission tests. Unstarted tickets and payload leases drain. |
-| 3 — security and recovery | Authenticated link/Host association, original request digest, scoped control authorization, idempotency, retention and duplicate delivery | Host authorization and retention code remain unchanged. Verified fresh scoped Receipt denial retains the body, lost-response recovery accepts once with one handler execution, and lost Receipt plus duplicate Invoke does not reexecute. Body expiry and non-reinvocable tombstones retain their existing bounds. No durable resume-by-ID or application transaction guarantee is invented. |
+| 3 — security and recovery | Authenticated link/Host association, original request digest, scoped control authorization, idempotency, retention and duplicate delivery | Host authorization and retention code remain unchanged. Verified fresh scoped Receipt denial retains the body, lost-response recovery accepts once with one handler execution, and lost Receipt plus duplicate Invoke does not reexecute. Found that a nested RPC failure from an acceptance callback could acquire the outer call's ID/evidence; preserve the nested exception and its original retry advice instead. Added a regression. Body expiry and non-reinvocable tombstones retain their existing bounds. No durable resume-by-ID or application transaction guarantee is invented. |
 | 4 — compatibility and integration | Public/default signatures, JVM/Android/Native API baselines, legacy calls, metrics, documentation and release constraints | Existing signatures remain; all four generated ABI views contain only additions. Kept the new decoded snapshot allocation inside the opt-in branch. Legacy calls still automatically Receipt; completion totals remain after the timeout return boundary. Added a real JVM forced-file journal/failed-write check, and documented commit/Receipt/crash races. |
 
 ## Automated verification
@@ -28,19 +28,20 @@ that home's Gradle processes after each run.
 ./gradlew --no-daemon --no-build-cache --no-configuration-cache \
   --dependency-verification strict --console=plain --max-workers=2 \
   :p2p-rpc:jvmTest :p2p-sample-rpc:jvmTest :p2p-rpc:testAndroidHostTest \
-  :p2p-rpc:updateKotlinAbi :p2p-rpc:updateAndroidAbi \
+  :p2p-rpc:checkKotlinAbi :p2p-rpc:checkAndroidAbi \
   :p2p-rpc:dokkaGeneratePublicationHtml
 ```
 
-The local regression report records 159 RPC JVM, 670 sample RPC JVM and 146 RPC
+The final local regression report records 160 RPC JVM, 670 sample RPC JVM and 147 RPC
 Android-host cases, with zero failures/errors/skips. The JVM journal test awaits
 `FileChannel.force(true)` before Receipt and verifies an actual closed-channel
 write failure sends no Receipt. This tests application-owned persistence ordering;
 it is not a calibrated power-loss or database durability qualification.
 
-All six tasks above passed. After reviewing the generated ABI additions,
-`:p2p-rpc:checkKotlinAbi` and `:p2p-rpc:checkAndroidAbi` also passed on those
-baselines. Normal modular PR CI also covers
+All six tasks above passed after the nested-exception correction. The preceding
+`:p2p-rpc:updateKotlinAbi` and `:p2p-rpc:updateAndroidAbi` generation also passed;
+all four resulting baseline diffs were independently reviewed as additions only.
+Normal modular PR CI also covers
 both JVM operating systems, native Apple execution, Android, ABI, strict Dokka,
 isolated consumers, security/dependency policy, SBOM and packaging. CI results
 must be read from the exact PR revision; no release-main qualification is inferred.
@@ -60,6 +61,8 @@ confirmed that rc12 was absent during preparation; this is not a publication pas
   caused one compile failure and was fixed before the successful regression run.
 - Original failed logs/results are retained privately. No deadline, assertion,
   verification checksum, lock, target or platform test was disabled to obtain a pass.
+- The first PR CI run at the earlier source was superseded and cancelled after
+  the nested acceptance-exception review fix. Its jobs do not qualify the final revision.
 - Receipt is best effort after local acceptance. Cancellation/crash after a
   durable commit cannot undo that commit or recall an already-started Receipt.
   Persistence and business idempotency remain the application's responsibility.

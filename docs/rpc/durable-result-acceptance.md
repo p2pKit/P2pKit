@@ -54,7 +54,10 @@ does not satisfy the acceptance contract. Avoid logging the context or its data.
 4. Failed validation, persistence, decoding or cancellation before callback
    completion sends no Receipt. RPC does not retry the callback or reinvoke the
    handler because acceptance failed, even with `RpcRetry.Idempotent`. Ordinary
-   application exceptions propagate; RPC failures retain their execution evidence.
+   application exceptions propagate. An `RpcFailure` thrown inside acceptance
+   keeps its original request ID, execution evidence and retry advice (for example,
+   from a nested RPC); those facts do not describe the outer, already-finished
+   handler. Use the acceptance context for the outer result's identity.
 5. Receipt queueing is best effort, bounded to one second within the original
    timeout. Cancellation removes an unstarted Receipt. The writer checks the
    original connection generation, readiness and cancellation again before start.

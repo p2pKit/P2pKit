@@ -308,6 +308,7 @@ internal class RpcClientEngine(
         var terminalKind: RpcFailureKind? = null
         var terminalPhase: RpcFailurePhase? = null
         var callerCancelled = false
+        var acceptingResult = false
         try {
             val details = withTimeout(timeout.inWholeMilliseconds) {
                 val (owner, initial) = lock.withLock {
@@ -422,9 +423,11 @@ internal class RpcClientEngine(
                                     currentCoroutineContext().ensureActive()
                                     observation?.change(RpcCallStage.AwaitingResponse, clock.now() - started,
                                         active.evidence.value)
+                                    acceptingResult = true
                                     accept(RpcResultAcceptance(decoded,
                                         checkNotNull(selected.identity.fingerprint), initial.incarnation,
                                         procedure.name, procedure.version))
+                                    acceptingResult = false
                                     // Reject cancellation swallowed by the callback, including NonCancellable work.
                                     currentCoroutineContext().ensureActive()
                                     if (clock.now() >= deadline) throw failure(active, RpcFailureKind.DeadlineExceeded)
@@ -489,6 +492,8 @@ internal class RpcClientEngine(
             throw call?.let { failure(it, RpcFailureKind.DeadlineExceeded) }
                 ?: RpcFailure(RpcFailureKind.DeadlineExceeded, RpcFailurePhase.Encoding)
         } catch (caught: RpcFailure) {
+            // Application acceptance can call other RPCs. Their identity/advice do not belong to this call.
+            if (acceptingResult) throw caught
             terminalKind = caught.kind
             terminalPhase = caught.phase
             val active = call
