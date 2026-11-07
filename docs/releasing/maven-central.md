@@ -11,9 +11,9 @@ protected approval and the final pre-upload check revalidate its original
 identity and retention. See the [exact-source release procedure](release-foundation.md)
 for owner challenge comments, post-Maven application delivery and partial-failure
 boundaries. The latest completed publication is
-[`0.8.0-rc11`](../releases/0.8.0-rc11.md), source
-`f4685604b726c0896711d437383accded235cba2`. Protected Maven
-[41599454261/1](https://github.com/p2pKit/P2pKit/actions/runs/41599454261)
+[`0.8.0-rc12`](../releases/0.8.0-rc12.md), source
+`4c25bf28a9c1561c129387b7c6786425b18e0f98`. Protected Maven
+[42364155910/1](https://github.com/p2pKit/P2pKit/actions/runs/42364155910)
 passed with its original PUBLISHED deployment, signed-original validation,
 242-file remote comparison and complete isolated consumer builds. Its
 publication-build SBOM contains 88 components. Frozen sample delivery awaits
@@ -151,7 +151,7 @@ ordinary exact-source complete consumer gate used during publication.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
-record. See [`0.8.0-rc11`](../releases/0.8.0-rc11.md) for the latest completed
+record. See [`0.8.0-rc12`](../releases/0.8.0-rc12.md) for the latest completed
 library publication, and the [rc8](../releases/0.8.0-rc8.md), [rc7](../releases/0.8.0-rc7.md),
 [rc6](../releases/0.8.0-rc6.md) and [0.7 RC3](../releases/0.7.0-rc3.md) records
 for immutable history. The rc6 final evidence-upload failure and successful

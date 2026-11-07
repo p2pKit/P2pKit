@@ -1,7 +1,8 @@
 # Accept an RPC result before Receipt
 
-Available in the **0.8.0-rc12 source candidate** for
-[#543](https://github.com/p2pKit/P2pKit/issues/543). This candidate is not published.
+Available in **0.8.0-rc12**, published and verified on Maven Central for
+[#543](https://github.com/p2pKit/P2pKit/issues/543); see the
+[release record](../releases/0.8.0-rc12.md).
 The existing `call`, `callWithDetails` and `callWithObservation` APIs still attempt
 automatic Receipt after decoding. Use `callWithAcceptance` when Receipt must
 mean that your application has validated and durably stored the terminal result.
