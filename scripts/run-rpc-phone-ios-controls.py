@@ -24,13 +24,14 @@ import xml.etree.ElementTree as ET
 SCOPE = "SUPPLEMENTAL_RPC_PHONE_APP_NOT_PHYSICAL_OR_CAPACITY_QUALIFICATION"
 TARGETS = {
     "p2pkit-rpc-phone-tests": (
-        # Original77 owner/lifecycle methods plus2 sealed-input/used-slot regressions.
-        ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 79),
+        # Original77,2 sealed-input/used-slot,2 foreground/cancellation and1 active-test app-switch regression.
+        ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 82),
         ("Tests/RpcPhoneEnvironmentSamplerTests.swift", "RpcPhoneEnvironmentSamplerTests", 5),
         ("Tests/RpcPhoneUsbDeveloperCommandTests.swift", "RpcPhoneUsbDeveloperCommandTests", 6),
+        ("Tests/RpcTestArchiveFilesTests.swift", "RpcTestArchiveFilesTests", 6),
     ),
     "p2pkit-rpc-phone-uitests": (
-        ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 7),
+        ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 10),
     ),
 }
 LIMIT = 256 * 1024 * 1024
@@ -95,6 +96,16 @@ def project_generation_argv(root, xcodegen, project_parent):
     return [str(xcodegen), "generate", "--no-env", "--spec",
             str(root / "samples/p2p-sample-rpc/phone-ios/project.yml"), "--project-root", str(project_parent),
             "--project", str(project_parent)]
+
+
+def new_controls_project(root):
+    """Keep each supplemental attempt's generated project; never reuse or overwrite another producer."""
+    parent = root / "samples/p2p-sample-rpc/build"
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    need(not parent.is_symlink() and parent.resolve(strict=True) == parent, "Canonical generated project parent required")
+    project = parent / ("phone-controls-" + uuid.uuid4().hex)
+    project.mkdir(mode=0o700)
+    return project
 
 
 def inventory(root):
@@ -290,8 +301,8 @@ def main():
         need(len(selected) == 1, "Required runtime is not installed and available")
         result["runtimeVersion"] = selected[0]["version"]
         result["runtimeBuild"] = selected[0]["buildversion"]
-        project_parent = root / "samples/p2p-sample-rpc/build/phone-ios"
-        project_parent.mkdir(mode=0o700, parents=True)
+        project_parent = new_controls_project(root)
+        result["generatedProjectDirectory"] = str(project_parent)
         run("project-generation", project_generation_argv(root, xcodegen, project_parent))
         project = project_parent / "p2pkit-rpc-phone.xcodeproj"
         run("project-reference-inspection", ["/usr/bin/plutil", "-convert", "json", "-o", "-",
@@ -344,6 +355,7 @@ def main():
             "-scheme", "p2pkit-rpc-phone-controls", "-configuration", "Debug", "-sdk", "iphonesimulator",
             "-destination", "platform=iOS Simulator,id=" + simulator, "-derivedDataPath", str(work / "simulator-derived"),
             "-resultBundlePath", str(bundle), "-parallel-testing-enabled", "NO",
+            "-collect-test-diagnostics", "never",
             "-maximum-concurrent-test-simulator-destinations", "1", "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "test"],
             timeout=7200, required=False)
         if bundle.is_dir():

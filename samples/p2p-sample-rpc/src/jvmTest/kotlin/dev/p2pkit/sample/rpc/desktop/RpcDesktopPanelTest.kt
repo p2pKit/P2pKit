@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.sample.rpc.RpcApplicationSession
+import dev.p2pkit.sample.rpc.RpcDeviceTestPhase
 import java.awt.Component
 import java.awt.Container
 import java.awt.Window
@@ -8,6 +9,7 @@ import java.awt.event.ActionEvent
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import javax.swing.JButton
+import javax.swing.JTextArea
 import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -70,6 +72,33 @@ class RpcDesktopPanelTest {
             assertEquals(0, panel.componentCount)
             panel.requestTerminalClose { assertEquals(DesktopRpcCloseResult.Closed, it) }
         }
+    }
+
+    @Test fun deviceTestsAreASeparatePageAndBackReturnsWithoutStartingAnyRole() {
+        val session = RpcApplicationSession()
+        val closed = CountDownLatch(1)
+        var parentBack = 0
+        lateinit var panel: RpcDesktopPanel
+        SwingUtilities.invokeAndWait {
+            panel = RpcDesktopPanel(session) { parentBack++ }
+            descendants(panel).filterIsInstance<JButton>().single { it.text == "Device tests" }.doClick()
+            val buttons = descendants(panel).filterIsInstance<JButton>().toList()
+            assertEquals(0, buttons.count { it.text == "users.get" })
+            assertEquals(1, buttons.count { it.text == "Host here" })
+            assertEquals(1, descendants(panel).filterIsInstance<JTextArea>().count {
+                it.accessibleContext.accessibleName == "Live test activity: requests, replies and execution outcomes"
+            })
+            RpcDeviceTestPhase.entries.filter { it != RpcDeviceTestPhase.Observation }.forEach { phase ->
+                assertEquals(1, buttons.count { it.text == phase.title })
+                assertTrue(!buttons.single { it.text == phase.title }.isEnabled)
+            }
+            assertTrue(!session.deviceTests.progress.running && session.deviceTests.reports.isEmpty())
+            panel.actionMap.get("rpc.back").actionPerformed(ActionEvent(panel, 0, "rpc.back"))
+            assertEquals(0, parentBack)
+            assertEquals(1, descendants(panel).filterIsInstance<JButton>().count { it.text == "users.get" })
+            panel.requestClose { closed.countDown() }
+        }
+        assertTrue(closed.await(5, TimeUnit.SECONDS))
     }
 
     private fun descendants(component: Component): Sequence<Component> = sequence {

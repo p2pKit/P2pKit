@@ -1,14 +1,24 @@
+import CoreGraphics
 import XCTest
 
 final class RpcPhonePresentationTests: XCTestCase {
     @MainActor
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, up: Bool) {
-        // Navigate to the actual control, never tap an offscreen guess.
-        for _ in 0..<8 {
-            if element.exists && element.isHittable { return }
-            if up { app.swipeUp() } else { app.swipeDown() }
+        // Disabled controls can be inspected when visible, but cannot be tapped.
+        func visible() -> Bool {
+            guard element.exists else { return false }
+            return element.isHittable || (!element.isEnabled && !element.frame.isEmpty &&
+                app.frame.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)))
         }
-        XCTAssertTrue(element.exists && element.isHittable, "Required control was not reachable")
+        for _ in 0..<8 {
+            if visible() { return }
+            let collection = app.collectionViews.firstMatch
+            let table = app.tables.firstMatch
+            let scroll = app.scrollViews.firstMatch
+            let container = collection.exists ? collection : (table.exists ? table : (scroll.exists ? scroll : app))
+            if up { container.swipeUp() } else { container.swipeDown() }
+        }
+        XCTAssertTrue(visible(), "Required control was not reachable")
     }
     @MainActor
     private func expand(_ title: String, in app: XCUIApplication) {
@@ -81,7 +91,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         add(screenshot)
         reveal(app.staticTexts["rpc.activeRole"], in: app, up: false)
         XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
-        reveal(app.buttons["rpc.stop"], in: app, up: false)
+        reveal(app.buttons["rpc.stop"], in: app, up: true)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
     }
 
@@ -176,7 +186,7 @@ final class RpcPhonePresentationTests: XCTestCase {
             XCTAssertTrue(explanation.exists)
             XCTAssertTrue(explanation.label.contains("No role was started"))
             alert.buttons["OK"].tap()
-            reveal(app.buttons["rpc.stop"], in: app, up: false)
+            reveal(app.buttons["rpc.stop"], in: app, up: true)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
             reveal(app.buttons["rpc.host"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
@@ -219,12 +229,78 @@ final class RpcPhonePresentationTests: XCTestCase {
             reveal(nearbyStatus, in: app, up: true)
             XCTAssertTrue(nearbyStatus.label.contains("Invalid setup"))
             // Form virtualizes offscreen rows; reveal each control before asserting its state.
-            reveal(app.buttons["rpc.host"], in: app, up: false)
+            reveal(app.buttons["rpc.host"], in: app, up: true)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
-            reveal(app.buttons["rpc.client"], in: app, up: false)
+            reveal(app.buttons["rpc.client"], in: app, up: true)
             XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
-            reveal(app.buttons["rpc.stop"], in: app, up: false)
+            reveal(app.buttons["rpc.stop"], in: app, up: true)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+        }
+    }
+
+    @MainActor
+    func testMultiDeviceSectionAndDisplayControlsNeverStartAnUnconnectedRole() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--rpc-ui-network-unavailable"]
+        app.launch()
+        defer { app.terminate() }
+        let entry = app.buttons["Multi-device tests"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["Multi-device tests"].waitForExistence(timeout: 5))
+        app.buttons["Two devices"].tap()
+        XCTAssertTrue(app.navigationBars["Device tests"].waitForExistence(timeout: 5))
+        app.buttons["Multiple devices"].tap()
+        XCTAssertTrue(app.navigationBars["Multi-device tests"].waitForExistence(timeout: 5))
+        let smart = app.buttons["Smart · find stable load"]
+        reveal(smart, in: app, up: true)
+        XCTAssertFalse(smart.isEnabled, "No Client or Host connection has been established")
+        let phases = XCTAttachment(screenshot: app.screenshot())
+        phases.name = "Multi-device phases — no role started"
+        phases.lifetime = .keepAlways
+        add(phases)
+        let clear = app.buttons["Clear displayed logs"]
+        reveal(clear, in: app, up: true)
+        clear.tap()
+        let monitor = XCTAttachment(screenshot: app.screenshot())
+        monitor.name = "Test monitor and display controls — no invented resources"
+        monitor.lifetime = .keepAlways
+        add(monitor)
+        reveal(app.buttons["Show saved results"], in: app, up: true)
+        app.buttons["Show saved results"].tap()
+        reveal(app.buttons["rpc.testStop"], in: app, up: false)
+        XCTAssertFalse(app.buttons["rpc.testStop"].isEnabled)
+        app.buttons["Back to RPC"].tap()
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+    }
+
+    @MainActor
+    func testDeviceTestRoleButtonsDispatchOnlyTheTappedRole() {
+        for (control, selected, other) in [
+            ("rpc.testClient", "Client: start requested", "Host: start requested"),
+            ("rpc.testHost", "Host: start requested", "Client: start requested")
+        ] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--rpc-ui-network-unavailable"]
+            app.launch()
+            XCTAssertTrue(app.buttons["rpc.deviceTests"].waitForExistence(timeout: 5))
+            app.buttons["rpc.deviceTests"].tap()
+            let button = app.buttons[control]
+            reveal(button, in: app, up: true)
+            XCTAssertTrue(button.isEnabled)
+            button.tap()
+            let alert = app.alerts["Cannot start RPC"]
+            XCTAssertTrue(alert.waitForExistence(timeout: 5))
+            alert.buttons["OK"].tap()
+            XCTAssertFalse(app.buttons["rpc.testStop"].isEnabled)
+            app.buttons["Back to RPC"].tap()
+            expand("Diagnostics", in: app)
+            expand("Recent events (last 64)", in: app)
+            let log = app.staticTexts["rpc.diagnostics"]
+            reveal(log, in: app, up: true)
+            XCTAssertTrue(log.label.contains(selected), "The tapped role must be the requested role")
+            XCTAssertFalse(log.label.contains(other), "A Form row must not dispatch its other role button")
+            app.terminate()
         }
     }
 
@@ -259,5 +335,67 @@ final class RpcPhonePresentationTests: XCTestCase {
         app.buttons["Close"].tap()
         XCTAssertTrue(app.buttons["Show synthetic approval"].exists)
         XCTAssertFalse(approve.exists)
+    }
+
+    @MainActor
+    func testTestCenterKeepsObservationsSeparateFromRpcAndRetainsArchivedResultsAfterReopen() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--rpc-ui-network-unavailable"]
+        app.launch()
+        defer { app.terminate() }
+        let entry = app.buttons["Test Center · all physical tests"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["Test Center"].waitForExistence(timeout: 5))
+        let controls = app.buttons["Open RPC test controls"]
+        reveal(controls, in: app, up: true)
+        controls.tap()
+        XCTAssertTrue(app.navigationBars["Device tests"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["rpc.testStop"].isEnabled)
+        app.buttons["Back to RPC"].tap()
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+        app.buttons["Test Center · all physical tests"].tap()
+        let picker = app.buttons["rpc.physicalCase"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.tap()
+        XCTAssertTrue(app.navigationBars["Choose a test"].waitForExistence(timeout: 5))
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("core-files")
+        let fileCase = app.buttons["rpc.case.core-files"]
+        XCTAssertTrue(fileCase.waitForExistence(timeout: 5))
+        fileCase.tap()
+        let start = app.buttons["rpc.observationStart"]
+        reveal(start, in: app, up: true)
+        XCTAssertTrue(start.isEnabled)
+        start.tap()
+        reveal(app.buttons["Save for review"], in: app, up: true)
+        app.buttons["Save for review"].tap()
+        let rejected = app.staticTexts["Check steps, duration, evidence reference and storage status. Nothing was marked passed."]
+        reveal(rejected, in: app, up: true)
+        XCTAssertTrue(rejected.exists)
+        let end = app.buttons["rpc.observationEnd"]
+        reveal(end, in: app, up: false)
+        XCTAssertTrue(end.isEnabled)
+        end.tap()
+        let load = app.buttons["Load newest saved results"]
+        reveal(load, in: app, up: true)
+        load.tap()
+        let outcome = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Files, consent and cleanup · Interrupted")).firstMatch
+        reveal(outcome, in: app, up: true)
+        XCTAssertTrue(outcome.waitForExistence(timeout: 5))
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Test Center — synthetic interrupted observation and separate archive"
+        image.lifetime = .keepAlways
+        add(image)
+        app.terminate()
+        app.launch()
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+        app.buttons["Test Center · all physical tests"].tap()
+        reveal(app.buttons["Load newest saved results"], in: app, up: true)
+        app.buttons["Load newest saved results"].tap()
+        reveal(outcome, in: app, up: true)
+        XCTAssertTrue(outcome.waitForExistence(timeout: 5), "Original evidence must survive a full process reopen")
+        XCTAssertFalse(app.buttons["rpc.observationEnd"].exists, "A process reopen cannot resume an observation")
     }
 }

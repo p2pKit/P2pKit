@@ -34,6 +34,15 @@ SETTINGS = (base.SETTINGS - {'androidUsbSerial', 'adb'}) | {'iosDeviceIdentifier
 def settings(values, source, label, lab):
     need(type(values) is dict and values.get('schema') in ('1', '2'))
     fields = SETTINGS | ({'clientCount'} if values['schema'] == '2' else set())
+    if values['schema'] == '2' and 'iosControlTransport' in values:
+        fields |= {'iosControlTransport'}
+        need(values['iosControlTransport'] in ('wired', 'wireless'), 'Explicit wired or wireless iPhone control required')
+    if values['schema'] == '2' and 'iosDiscoverWifi' in values:
+        fields |= {'iosDiscoverWifi'}
+        need(values['iosDiscoverWifi'] == 'true', 'Automatic live Wi-Fi discovery must be explicitly selected')
+    if values['schema'] == '2' and 'macGeneratorMinimumAvailableGiB' in values:
+        fields |= {'macGeneratorMinimumAvailableGiB'}
+        need(values['macGeneratorMinimumAvailableGiB'] in ('1', '6'), 'Explicit1GiB or6GiB Mac policy required')
     need(set(values) == fields and all(type(v) is str for v in values.values()) and
          values['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', values['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
@@ -69,7 +78,11 @@ class Run(base.Run):
         return settings(self.values, source, label, self.lab)
 
     def new_phone(self, label):
-        backend = ios.DevicectlFiles(self.commands, self.control / 'usb', self.values['iosDeviceIdentifier'], label)
+        control_transport = self.values.get('iosControlTransport', 'wired')
+        if control_transport == 'wireless':
+            self.scope = 'IOS_WIRELESS_COREDEVICE_MAC_GENERATOR_REAL_RPC_CANDIDATE_PENDING_PHYSICAL_NETWORK_AND_RESOURCE_REVIEW'
+        backend = ios.DevicectlFiles(self.commands, self.control / 'usb', self.values['iosDeviceIdentifier'], label,
+                                    control_transport=control_transport)
         previous = getattr(self.args, 'previous_ios_run_label', None)
         previous_hash = getattr(self.args, 'previous_ios_inbox_sha256', None)
         need((previous is None) == (previous_hash is None), 'Previous iOS label and exact inbox hash must be supplied together')
@@ -86,7 +99,9 @@ class Run(base.Run):
         return None  # No subprocess, USB or clock observation before the complete native inventory passes.
 
     def prerequisites(self):
+        self.result['iosControlTransport'] = self.values.get('iosControlTransport', 'wired')
         self.generator_prerequisites()
+        self.begin_device_control()
         import time
         app = getattr(self.args, 'install_ios_app', None)
         prepare = getattr(self.args, 'prepare_ios_slot', False)
@@ -95,7 +110,8 @@ class Run(base.Run):
         if app is not None:
             self.result['installationAccepted'] = self.phone.backend.install_app(app, self.bound, time.monotonic() + 120)
         if prepare:
-            self.phone.backend.launch_prepare(self.bound, time.monotonic() + 30)
+            self.phone.backend.launch_prepare(self.bound, time.monotonic() + 30,
+                discover_wifi=self.values.get('iosDiscoverWifi') == 'true')
             self.result['developmentSlotLaunchAccepted'] = True
         self.result['iosCoordinatorSha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.result['devicectlSha256'] = self.phone.backend.tool_sha256
@@ -110,6 +126,25 @@ class Run(base.Run):
         print('Keep the selected signed app foreground/unlocked. Its NEW prepared USB slot must match this run; '
               'the RPC readiness timer has not started.', flush=True)
         self.phone.start()  # Validates the prepared development slot; never grants system trust or starts RPC.
+        if self.values.get('iosDiscoverWifi') == 'true':
+            deadline = time.monotonic() + 25
+            raw = None
+            while raw is None:
+                need(time.monotonic() < deadline, 'No live eligible Wi-Fi before the original setup deadline')
+                raw = self.phone.backend.read('network.txt', deadline)
+                if raw is None:
+                    time.sleep(.1)
+            row = ios.wifi_record(raw, self.bound, self.values['subnets'], self.values['hostInterface'])
+            self.result['automaticWifi'] = dict(recordSha256=hashlib.sha256(raw).hexdigest(),
+                originalAddress=self.config['endpointAddress'], observedAddress=row['hostAddress'],
+                approvedSubnetUnchanged=True, sourceAndSignedAppVerified=True)
+            self.config['endpointAddress'] = row['hostAddress']
+            self.protocol = base.protocol.Protocol(self.bound, row['hostAddress'], int(self.config['port']))
+            self.lab.configuration(self.config, self.bound['hostSourceSha'])
+            _, route = self.commands.run('live-wifi-mac-route', ['/sbin/route', '-n', 'get', '-inet',
+                row['hostAddress']], timeout=10)
+            _, interface = self.commands.run('live-wifi-mac-interface', ['/sbin/ifconfig', self.config['interface']], timeout=10)
+            self.result['routeObservation'] = darwin.direct_route(route, interface, self.config)
 
 
 def main():

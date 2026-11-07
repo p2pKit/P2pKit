@@ -53,8 +53,33 @@ fi
 exec {shlex.quote(native_stat)} {stat_option} "$format" "$3"
 ''',
         'app_process': f'''#!{sys.executable} -S
-import os, stat, sys
-if len(sys.argv) != 4 or sys.argv[1:3] != ['/system/bin', 'dev.p2pkit.sample.android.rpclab.RpcLabFdStat']:
+import os, re, stat, sys
+if sys.argv[1:3] != ['/system/bin', 'dev.p2pkit.sample.android.rpclab.RpcLabFdStat']:
+    raise SystemExit(2)
+if len(sys.argv) == 6 and sys.argv[3] == 'read':
+    label, name = sys.argv[4:]
+    if not re.fullmatch('[a-z0-9-]{{1,64}}', label) or name not in ('ready.txt', 'failed.txt', 'telemetry.txt', 'closed.txt'):
+        raise SystemExit(2)
+    path = 'no_backup/rpc-capacity/' + label + '/' + name
+    marker = 'no_backup/rpc-capacity/' + label + '/.complete-' + name
+    if name != 'telemetry.txt':
+        if not os.path.lexists(marker): raise SystemExit(44)
+        m = os.lstat(marker)
+        if not stat.S_ISREG(m.st_mode) or stat.S_IMODE(m.st_mode) != 0o600 or m.st_uid != os.getuid() or m.st_nlink != 1 or m.st_size != 0:
+            raise SystemExit(1)
+    if name == 'telemetry.txt' and not os.path.lexists(path): raise SystemExit(44)
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o600 or before.st_uid != os.getuid() or before.st_nlink != 1 or not 0 < before.st_size <= 16384:
+        raise SystemExit(1)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if os.fstat(fd) != before: raise SystemExit(45)
+        data = os.read(fd, 16385)
+        if len(data) != before.st_size or os.fstat(fd) != before: raise SystemExit(45)
+    finally: os.close(fd)
+    sys.stdout.buffer.write(data)
+    raise SystemExit(0)
+if len(sys.argv) != 4:
     raise SystemExit(2)
 if sys.argv[3] not in ('identity', 'record'):
     raise SystemExit(2)

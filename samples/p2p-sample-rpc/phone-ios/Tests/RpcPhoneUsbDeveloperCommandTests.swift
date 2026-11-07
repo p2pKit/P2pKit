@@ -36,6 +36,16 @@ final class RpcPhoneUsbDeveloperCommandTests: XCTestCase {
         try request.verify(compiledSource: source, installedArtifact: artifact)
         XCTAssertEqual(request.clientCount, 256)
         XCTAssertEqual(request.runLabel, "synthetic-mobile")
+        XCTAssertFalse(request.discoverWifi)
+        let automatic = try RpcPhoneUsbDeveloperPrepare(arguments: arguments + ["--rpc-usb-discover-wifi"])
+        XCTAssertTrue(automatic.discoverWifi)
+        let network = RpcPhoneWifiNetwork(interfaceName: "en0", localAddress: "192.168.14.7", subnet: "192.168.14.0/24")
+        XCTAssertEqual(automatic.wifiRecord(network: network, runLabel: "synthetic-next", clientCount: 128),
+            "schema=2\nscope=ios-usb-wifi\nrunLabel=synthetic-next\nsourceSha=\(source)\n" +
+                "artifactSha256=\(artifact)\nclientCount=128\nhostAddress=192.168.14.7\n" +
+                "hostInterface=en0\nsubnets=192.168.14.0/24\n")
+        XCTAssertThrowsError(try RpcPhoneUsbDeveloperPrepare(arguments:
+            arguments + ["--rpc-usb-discover-wifi", "--rpc-usb-discover-wifi"]))
         XCTAssertThrowsError(try request.verify(compiledSource: "main", installedArtifact: artifact))
         XCTAssertThrowsError(try request.verify(compiledSource: source, installedArtifact: "assumed"))
         for changed in [Array(arguments.dropLast()), arguments + ["--rpc-usb-client-count", "256"],

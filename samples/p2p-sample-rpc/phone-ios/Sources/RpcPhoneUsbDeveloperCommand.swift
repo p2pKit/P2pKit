@@ -6,6 +6,7 @@ import P2pKitRpcExample
 struct RpcPhoneUsbDeveloperPrepare {
     let runLabel: String
     let clientCount: Int32
+    let discoverWifi: Bool
     private let sourceSha: String
     private let artifactSha256: String
 
@@ -28,12 +29,23 @@ struct RpcPhoneUsbDeveloperPrepare {
         clientCount = Int32(values["--rpc-usb-client-count"]!)!
         sourceSha = values["--rpc-usb-source-sha"]!
         artifactSha256 = values["--rpc-usb-artifact-sha256"]!
+        guard arguments.filter({ $0 == "--rpc-usb-discover-wifi" }).count <= 1 else {
+            throw RpcPhoneCapacityIOError.invalidRecord
+        }
+        discoverWifi = arguments.contains("--rpc-usb-discover-wifi")
     }
 
     func verify(compiledSource: String, installedArtifact: String) throws {
         guard sourceSha == compiledSource, artifactSha256 == installedArtifact else {
             throw RpcPhoneCapacityIOError.invalidRecord
         }
+    }
+
+    /// A private observation only: the coordinator must still check the owner-approved subnet and interface.
+    func wifiRecord(network: RpcPhoneWifiNetwork, runLabel: String, clientCount: Int32) -> String {
+        "schema=2\nscope=ios-usb-wifi\nrunLabel=\(runLabel)\nsourceSha=\(sourceSha)\n" +
+            "artifactSha256=\(artifactSha256)\nclientCount=\(clientCount)\n" +
+            "hostAddress=\(network.localAddress)\nhostInterface=\(network.interfaceName)\nsubnets=\(network.subnet)\n"
     }
 }
 
