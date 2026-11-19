@@ -93,6 +93,40 @@ full identity through the trusted local administrator workflow, and reconnect.
 Do not silently trust a new key at the same IP or discovery name. Manage lost
 keys, application reinstalls, backups and trust-store recovery in the app.
 
+### Refresh Host trust after an external commit
+
+Use `RpcHost.reloadTrustFromStore()` in 0.8.0-rc13 or later when your application
+commits changes to the Host's configured `RpcTrustStore` outside SDK pairing or
+revocation. For example, an administrator can withdraw one device while other
+devices keep their authenticated connections.
+
+```kotlin
+// Application code: commit the complete HostClients set in the configured store.
+deviceAdministrator.withdrawAndCommit(revokedDevice)
+host.reloadTrustFromStore()
+```
+
+`withdrawAndCommit` is application code. It must finish the durable transaction
+before the refresh. The Host calls `load(appId, RpcTrustPurpose.HostClients)` on
+the same store used at creation. It denies removed peers before closing their
+sessions. Unchanged peers keep their connections and application scopes. Newly
+trusted peers can establish an authenticated connection after reconciliation.
+An empty snapshot withdraws all pins.
+
+`load` must return a complete, integrity-checked snapshot from one committed
+transaction, or throw if it cannot establish completeness. Coordinate external
+writers with SDK `replace` operations to avoid lost updates. Refresh after
+each external commit so the runtime observes it. Until the read completes, the
+Host uses its previous snapshot. If another commit takes place after the read,
+refresh again to apply it. An in-progress refresh completes its reconciliation
+even when its caller is cancelled.
+
+If the read, validation or peer cleanup fails, the Host shuts down and latches
+admission closed. Reconcile the application's durable store before creating a
+replacement Host. The application still owns native device approvals, account
+authorization and business transactions. Revoke any application-owned grants
+according to your application policy.
+
 ## Enforced network policy
 
 Every RPC runtime requires `OrganizationLan` with:

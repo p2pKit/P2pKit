@@ -549,6 +549,7 @@ final class dev.p2pkit.rpc/RpcHost { // dev.p2pkit.rpc/RpcHost|null[0]
     final suspend fun <#A1: kotlin/Any?> tryNotifyScopedFrom(dev.p2pkit.rpc/RpcPhysicalSession, dev.p2pkit.rpc/RpcAuthorizationScope, dev.p2pkit.rpc/RpcNotification<#A1>, #A1, kotlin.coroutines/SuspendFunction1<dev.p2pkit.rpc/RpcAuthorizationContext, kotlin/Boolean> = ...): dev.p2pkit.rpc/RpcNotifyResult // dev.p2pkit.rpc/RpcHost.tryNotifyScopedFrom|tryNotifyScopedFrom(dev.p2pkit.rpc.RpcPhysicalSession;dev.p2pkit.rpc.RpcAuthorizationScope;dev.p2pkit.rpc.RpcNotification<0:0>;0:0;kotlin.coroutines.SuspendFunction1<dev.p2pkit.rpc.RpcAuthorizationContext,kotlin.Boolean>){0§<kotlin.Any?>}[0]
     final suspend fun close() // dev.p2pkit.rpc/RpcHost.close|close(){}[0]
     final suspend fun endpoint(): dev.p2pkit.rpc/RpcEndpoint // dev.p2pkit.rpc/RpcHost.endpoint|endpoint(){}[0]
+    final suspend fun reloadTrustFromStore() // dev.p2pkit.rpc/RpcHost.reloadTrustFromStore|reloadTrustFromStore(){}[0]
     final suspend fun revokeApplicationSession(dev.p2pkit.rpc/RpcApplicationSession) // dev.p2pkit.rpc/RpcHost.revokeApplicationSession|revokeApplicationSession(dev.p2pkit.rpc.RpcApplicationSession){}[0]
     final suspend fun start() // dev.p2pkit.rpc/RpcHost.start|start(){}[0]
 

@@ -22,6 +22,7 @@ public enum class RpcTrustPurpose {
  * RPC supplies no business database or transactional application-idempotency storage.
  */
 public interface RpcTrustStore {
+    /** Read one complete committed snapshot. Throw if integrity or completeness cannot be established. */
     @Throws(Exception::class)
     public suspend fun load(appId: AppId, purpose: RpcTrustPurpose): Set<PeerFingerprint>
 
@@ -45,6 +46,33 @@ public class RpcTrust internal constructor(
 
     public fun isTrusted(fingerprint: PeerFingerprint): Boolean = healthy && fingerprint in pins.value
     public fun fingerprints(): List<PeerFingerprint> = pins.value.toList()
+
+    internal suspend fun reloadFromStore() {
+        // The application already committed this update. Cancellation must not leave a partly
+        // reconciled runtime, including while waiting for another SDK trust mutation.
+        withContext(NonCancellable) {
+            val failure = lock.withLock {
+                if (!healthy) throw storageFailure()
+                try {
+                    val next = store.load(appId, purpose).validatedSnapshot()
+                    val current = pins.value
+                    val removed = current - next
+                    if (removed.isNotEmpty()) {
+                        // Deny every removal before awaiting any cleanup. Keep old grants only
+                        // where the store still trusts that peer. Additions wait for cleanup.
+                        pins.value = current - removed
+                        for (fingerprint in removed) onRevoke?.invoke(fingerprint)
+                    }
+                    pins.value = next
+                    null
+                } catch (caught: Throwable) {
+                    sealAdmission()
+                    caught
+                }
+            }
+            failure?.let { failMutation(it) }
+        }
+    }
 
     /** Denies new work immediately, even if the durable revocation subsequently fails. */
     @Throws(Exception::class)
@@ -78,7 +106,7 @@ public class RpcTrust internal constructor(
             lock.withLock {
                 if (!healthy) throw storageFailure()
                 val next = pins.value + fingerprint
-                if (next.size > 4096) throw RpcFailure(RpcFailureKind.Overloaded, RpcFailurePhase.Trust)
+                if (next.size > MAX_PINS) throw RpcFailure(RpcFailureKind.Overloaded, RpcFailurePhase.Trust)
                 try {
                     store.replace(appId, purpose, next.toSet())
                     pins.value = next
@@ -110,10 +138,24 @@ public class RpcTrust internal constructor(
     }
 
     internal companion object {
+        private const val MAX_PINS = 4096
+
+        private fun Set<PeerFingerprint>.validatedSnapshot(): Set<PeerFingerprint> {
+            val expectedSize = size
+            require(expectedSize in 0..MAX_PINS)
+            val snapshot = LinkedHashSet<PeerFingerprint>(expectedSize)
+            // Copy even custom or mutable store results. Check the iterator's actual contents,
+            // because the reported size alone cannot bound an inconsistent implementation.
+            for (pin in this) {
+                require(snapshot.size < expectedSize)
+                require(snapshot.add(PeerFingerprint.parse(pin.value)))
+            }
+            require(snapshot.size == expectedSize)
+            return snapshot
+        }
+
         suspend fun load(appId: AppId, purpose: RpcTrustPurpose, store: RpcTrustStore): RpcTrust = try {
-            val pins = store.load(appId, purpose)
-            require(pins.size <= 4096)
-            RpcTrust(appId, purpose, store, pins)
+            RpcTrust(appId, purpose, store, store.load(appId, purpose).validatedSnapshot())
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

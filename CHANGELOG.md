@@ -3,6 +3,14 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc13 — development release candidate
+
+- Add `RpcHost.reloadTrustFromStore()` for application-owned trust updates
+  ([#560](https://github.com/p2pKit/P2pKit/issues/560)). The running Host reads
+  its configured store, retires removed peers and keeps unchanged Clients on
+  their existing connections. The application still owns business and device
+  approval. See the [trust refresh example](docs/rpc/security-and-deployment.md#refresh-host-trust-after-an-external-commit).
+
 ## 0.8.0-rc12 — development release candidate (2026-11-07)
 
 - Add opt-in `RpcClient.callWithAcceptance` (#543): a suspendable application

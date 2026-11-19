@@ -82,7 +82,14 @@ public class RpcHost private constructor(
 
     init {
         engine.onPairRequest = pairing::onRequest
-        trust.onRevoke = engine::revoke
+        trust.onRevoke = { pin ->
+            engine.revoke(pin)
+            // A core session can already be registered while its incoming RPC link is still
+            // being attached. Retire that exact session too, including its retained close result.
+            for (session in kit.sessions.value) {
+                if (session.peerIdentity.fingerprint == pin) session.close()
+            }
+        }
         trust.onStorageFailure = { close() }
         // Install incoming collectors before start/listen/advertise. HELLO repeats handle remaining hot-flow races.
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -163,6 +170,24 @@ public class RpcHost private constructor(
         val info = kit.networkProvisioning.getManualConnectionInfo()
             ?: throw RpcFailure(RpcFailureKind.NotConnected, RpcFailurePhase.Admission)
         RpcEndpoint(lan.localAddress, info.port)
+    }
+
+    /**
+     * Refresh this running Host from its configured [RpcTrustStore] after an external durable commit.
+     * Reads the complete [RpcTrustPurpose.HostClients] snapshot. Removed peers lose admission and
+     * their sessions are closed. Peers retained in the snapshot keep their connections. New pins
+     * become eligible for authenticated connections after reconciliation succeeds.
+     *
+     * Serialize external writes with SDK store mutations and call again after any later commit.
+     * The application owns device approval and application-session authorization. A failed read,
+     * validation or session cleanup seals admission and shuts down this Host.
+     */
+    @Throws(Exception::class)
+    public suspend fun reloadTrustFromStore() {
+        if (closed.value || hostState.value != RpcHostState.Running) {
+            throw RpcFailure(RpcFailureKind.Closed, RpcFailurePhase.Trust)
+        }
+        trust.reloadFromStore()
     }
 
     /**
