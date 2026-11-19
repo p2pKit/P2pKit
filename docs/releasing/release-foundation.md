@@ -14,15 +14,15 @@ not reported as passing. Routine CI uses GitHub's source/run/job/artifact identi
 there are no owner VPS commands or special approval windows for routine tests.
 Final protected main merge, tag, signing and publication approvals remain required.
 
-The latest verified library publication is **`0.8.0-rc12`**, source
-`4c25bf28a9c1561c129387b7c6786425b18e0f98`, tree
-`74e23d7b0aa07d38b53ee15445eb4c2a002d7412`. Its
-[release record](../releases/0.8.0-rc12.md) binds all fourteen original main
-components, four application producers, the dry run and protected Maven
-[42364155910/1](https://github.com/p2pKit/P2pKit/actions/runs/42364155910).
+The latest verified library publication is **`0.8.0-rc13`**, source
+`a8f846a55f12212fb54d1365ecb445a3665e4f6f`, tree
+`ad1152349bbb40300a08f96ad129ddb1fb755b8c`. Its
+[release record](../releases/0.8.0-rc13.md) binds fourteen required main
+components across two attempts on the same source, four application producers,
+the dry run and protected Maven [44450733359/1](https://github.com/p2pKit/P2pKit/actions/runs/44450733359).
 The original publisher passed signed-original checks, 242-file remote comparison
 and complete isolated consumer builds. Frozen sample delivery awaits its
-separate owner evidence review. Latest-published/source metadata remain rc12;
+separate owner evidence review. Latest-published/source metadata remain rc13;
 no next snapshot is selected. Installed phone tests remain separate.
 
 Historical **`0.8.0-rc10`**, source

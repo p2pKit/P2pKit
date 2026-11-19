@@ -4,7 +4,7 @@ RPC is published under `io.github.apdelrahman1911:p2p-rpc`. Use
 [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) consistently for RPC, core
 and LAN; the [release records](../README.md#test-and-release) bind each immutable
 source, hosted qualification and published application set. The example below
-uses the verified rc12 publication. Later bookkeeping commits do not replace
+uses the verified rc13 publication. Later bookkeeping commits do not replace
 its original source or artifacts.
 
 Windows sample Host/Client and productive profile loading are implemented.
@@ -97,7 +97,7 @@ Use the matching published core/LAN/RPC version from Maven Central:
 
 ```kotlin
 commonMain.dependencies {
-    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc12")
+    implementation("io.github.apdelrahman1911:p2p-rpc:0.8.0-rc13")
 }
 ```
 

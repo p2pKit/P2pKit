@@ -2,11 +2,12 @@
 
 This checklist applies to each future non-snapshot release. It does not authorize
 a tag or Maven Central publication. The latest verified library publication is
-[`0.8.0-rc12`](../releases/0.8.0-rc12.md), source
-`4c25bf28a9c1561c129387b7c6786425b18e0f98`. Original main
-[42360977579/1](https://github.com/p2pKit/P2pKit/actions/runs/42360977579)
-passed all fourteen components and four application producers. Protected Maven
-[42364155910/1](https://github.com/p2pKit/P2pKit/actions/runs/42364155910)
+[`0.8.0-rc13`](../releases/0.8.0-rc13.md), source
+`a8f846a55f12212fb54d1365ecb445a3665e4f6f`. Main qualification
+[44444580051/2](https://github.com/p2pKit/P2pKit/actions/runs/44444580051/attempts/2)
+passed all fourteen components and four application producers across two
+attempts on the same source. Protected Maven
+[44450733359/1](https://github.com/p2pKit/P2pKit/actions/runs/44450733359)
 passed original signed-bundle validation, 242-file remote comparison and complete
 isolated consumer builds. Frozen sample delivery awaits separate owner evidence
 review. Installed phone tests retain their own source and artifacts.
