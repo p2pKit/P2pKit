@@ -293,6 +293,7 @@ public final class dev/p2pkit/rpc/RpcHost {
 	public final fun getRequests ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getTrust ()Ldev/p2pkit/rpc/RpcTrust;
+	public final fun reloadTrustFromStore (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun revokeApplicationSession (Ldev/p2pkit/rpc/RpcApplicationSession;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun start (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun tryNotify-ALQvzA0 (Ljava/lang/String;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
