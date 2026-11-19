@@ -468,7 +468,9 @@ class LabControls(unittest.TestCase):
 
     def test_distribution_is_bound_to_real_bytes_order_and_source(self):
         directory = self.distribution()
-        with patch.object(lab, "ROOT", self.root):
+        # This fixture has only the portable JAR. Darwin's separate native-stage
+        # test supplies its exact native manifest and tests its own refusals.
+        with patch.object(lab, "ROOT", self.root), patch.object(lab.platform, "system", return_value="Linux"):
             self.assertEqual(str(directory / "lab.jar"), lab.classpath(SOURCE))
             with self.assertRaises(RuntimeError):
                 lab.classpath("b" * 40)

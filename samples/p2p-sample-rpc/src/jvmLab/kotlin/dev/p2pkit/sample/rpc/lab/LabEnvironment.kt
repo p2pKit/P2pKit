@@ -9,6 +9,9 @@ import dev.p2pkit.rpc.RpcSelectedHost
 import dev.p2pkit.rpc.RpcTrustPurpose
 import dev.p2pkit.rpc.RpcTrustStore
 import dev.p2pkit.rpc.jvm
+import dev.p2pkit.sample.rpc.CapacityMixedEnvironment
+import dev.p2pkit.sample.rpc.CapacitySocketPause
+import dev.p2pkit.sample.rpc.CapacitySocketPauseEnvironment
 import dev.p2pkit.sample.rpc.RpcCapacityContract
 import dev.p2pkit.sample.rpc.RpcCapacityEnvironment
 import dev.p2pkit.sample.rpc.RpcCapacityHostPlatform
@@ -27,12 +30,14 @@ import java.nio.file.LinkOption
 import java.time.Instant
 
 /** Loaded only by the separate lab compilation, with explicit owner-scoped configuration. */
-public class LabEnvironment : RpcCapacityEnvironment {
+internal class LabEnvironment : RpcCapacityEnvironment, CapacitySocketPauseEnvironment, CapacityMixedEnvironment {
     private val config = LabConfig.load("client")
     override val clientCount: Int get() = config.clientCount
     override val schemaVersion: Int get() = config.values.getValue("schema").toInt()
     private val directory = config.directory
     private val mobile = LabMobile.load(config)
+    override val mixedNonce: String? get() = mobile?.takeIf { it.physicalPin != null }?.values?.getValue("runNonce")
+    private val generators = config.clientCount - if (mixedNonce == null) 0 else 1
     private val identities = mutableListOf<LabVault>()
     private val trusts = mutableListOf<LabTrustStore>()
     override val lan: OrganizationLan = config.lan
@@ -45,7 +50,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
 
     init {
         try {
-            repeat(config.clientCount) { index ->
+            repeat(generators) { index ->
                 val vault = LabVault(LabFiles.newDirectory(directory, "client-$index"))
                 identities += vault
                 trusts += LabTrustStore(vault)
@@ -64,7 +69,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
                     }
                 } finally { scope.cancel() }
             }
-            require(preparedPins.toSet().size == config.clientCount)
+            require(preparedPins.toSet().size == generators)
             LabFiles.write(directory.resolve("client-pins.txt"), preparedPins.joinToString("\n", postfix = "\n") {
                 it.value
             }.toByteArray())
@@ -126,6 +131,21 @@ public class LabEnvironment : RpcCapacityEnvironment {
         val sample = awaitLabTelemetry(directory, config.runLabel, sequence, mobile, config.clientCount)
         sequence = sample.first
         sample.second
+    }
+
+    override fun armSocketPause(): CapacitySocketPause {
+        require(mobile != null && schemaVersion == 2)
+        // The separately packaged lab can request the one-shot internal test control without
+        // adding a public LAN or RPC API. It receives no socket, fd, identity or route authority.
+        val type = Class.forName("dev.p2pkit.transport.lan.JvmLanReadPause")
+        val pause = type.getMethod("pause")
+        val constrainedWindow = type.getMethod("observedConstrainedWindow")
+        val lease = type.getMethod("armNext").invoke(null) as AutoCloseable
+        return object : CapacitySocketPause {
+            override fun pause() { pause.invoke(lease) }
+            override fun observedConstrainedWindow(): Boolean = constrainedWindow.invoke(lease) == true
+            override fun close() = lease.close()
+        }
     }
 
     override suspend fun close() = cleanup.close()

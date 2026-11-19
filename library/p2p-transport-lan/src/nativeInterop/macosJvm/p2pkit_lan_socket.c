@@ -10,9 +10,11 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netinet/tcp_fsm.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -246,12 +248,26 @@ int32_t p2p_lan_socket_bound_interface(uint64_t handle, uint32_t *interface_inde
 }
 
 int32_t p2p_lan_socket_option(uint64_t handle, int32_t option, int32_t enabled) {
-    if ((option != 1 && option != 2) || (enabled != 0 && enabled != 1)) return EINVAL;
+    if (option < 1 || option > 4 || (enabled != 0 && enabled != 1) || (option >= 3 && !enabled)) return EINVAL;
     owned_socket *slot = acquire(handle);
     if (slot == NULL) return EBADF;
-    int value = enabled;
-    int32_t result = setsockopt(slot->fd, option == 1 ? SOL_SOCKET : IPPROTO_TCP,
-        option == 1 ? SO_REUSEADDR : TCP_NODELAY, &value, sizeof(value)) == 0 ? 0 : errno;
+    int32_t result;
+    if (option == 4) {
+        // The lab needs room for less than one negotiated segment on the exact connected fd.
+        // TCP can stop sending full segments with a small nonzero residual window.
+        struct tcp_connection_info info = {0};
+        socklen_t length = sizeof(info);
+        if (getsockopt(slot->fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &length) != 0) result = errno;
+        else if (length < offsetof(struct tcp_connection_info, tcpi_rcv_wnd) + sizeof(info.tcpi_rcv_wnd) ||
+            info.tcpi_state != TCPS_ESTABLISHED || info.tcpi_maxseg == 0) {
+            result = EINVAL;
+        } else result = info.tcpi_rcv_wnd < info.tcpi_maxseg ? 0 : EAGAIN;
+    } else {
+        int value = option == 3 ? 65536 : enabled;
+        int name = option == 3 ? SO_RCVBUF : (option == 1 ? SO_REUSEADDR : TCP_NODELAY);
+        result = setsockopt(slot->fd, option == 2 ? IPPROTO_TCP : SOL_SOCKET,
+            name, &value, sizeof(value)) == 0 ? 0 : errno;
+    }
     release(slot);
     return result;
 }

@@ -8,6 +8,7 @@ SCOPE = 'mobile-usb-capacity'
 AUTHORIZATION = 'usb-provisioned-physical-phone-no-data-tunnel'
 BINDINGS = {'schema', 'scope', 'runLabel', 'runNonce', 'hostPlatform', 'hostSourceSha', 'hostArtifactSha256'}
 BINDINGS_V2 = BINDINGS | {'clientCount'}
+MIXED_FIELDS = {'physicalClientPin', 'physicalClientArtifactSha256'}
 ENVIRONMENT_FIELDS = {'batteryPercentMilli', 'batteryCurrentMicroamps', 'batteryTemperatureMilliC',
                       'batteryState', 'batterySource', 'thermalState', 'thermalSource'}
 NUMBERS = ('sequence', 'uptimeMillis', 'cpuNanos', 'residentBytes', 'nativeThreads', 'connected', 'accepted',
@@ -98,11 +99,24 @@ def environment(row, platform):
     return result
 
 
+def mixed_fields(row):
+    extras = set(row) & MIXED_FIELDS
+    if not extras:
+        return {}
+    need(extras == MIXED_FIELDS and row.get('schema') == '2' and row.get('clientCount') == '256' and
+         all(type(row[key]) is str for key in extras) and
+         re.fullmatch('p2f1-[a-z2-7]{52}', row['physicalClientPin']) and
+         re.fullmatch('[a-f0-9]{64}', row['physicalClientArtifactSha256']),
+         'Exact 256 profile, physical pin and matching client artifact required')
+    return {key: row[key] for key in sorted(extras)}
+
+
 def inbox(raw, bound):
     checked = binding(bound)
     fields = binding_fields(checked)
     row = parse(raw)
-    need(set(row) == fields | {'hostAddress', 'hostPort', 'hostInterface', 'subnets', 'clientPins'} and
+    mixed = mixed_fields(row)
+    need(set(row) == fields | set(mixed) | {'hostAddress', 'hostPort', 'hostInterface', 'subnets', 'clientPins'} and
          {key: row[key] for key in fields} == checked, 'Exact source, artifact, run and capacity binding required')
     need(re.fullmatch('[A-Za-z0-9_.:-]{1,32}', row['hostInterface']) and
          re.fullmatch('[1-9][0-9]{3,4}', row['hostPort']) and 1024 <= int(row['hostPort']) <= 65535)
@@ -117,6 +131,8 @@ def inbox(raw, bound):
     need(len(pins) == len(set(pins)) == client_count(checked) and
          all(re.fullmatch('p2f1-[a-z2-7]{52}', pin) for pin in pins),
          'Exactly the selected profile\'s distinct public synthetic pins are required')
+    if mixed:
+        need(pins[-1] == mixed['physicalClientPin'], 'Physical companion is the final distinct roster member')
     return row
 
 

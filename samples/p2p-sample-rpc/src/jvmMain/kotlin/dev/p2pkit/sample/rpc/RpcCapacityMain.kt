@@ -154,10 +154,10 @@ internal fun <T> instantiateSingleCapacityProvider(providers: Sequence<() -> T>)
 
 /** This acknowledgement is necessary but not sufficient: execution still requires separate owner authorization. */
 public fun main(args: Array<String>) {
-    if (args.size != 2 || args[0] != "--owner-authorized-capacity-run" ||
-        args[1] !in setOf("--steady", "--large", "--correctness", "--churn")) {
+    val modes = setOf("--steady", "--large", "--correctness", "--churn", "--mixed-fault", "--socket-slow", "--mixed")
+    if (args.size != 2 || args[0] != "--owner-authorized-capacity-run" || args[1] !in modes) {
         System.err.println("Require owner authorization: --owner-authorized-capacity-run " +
-            "--steady|--large|--correctness|--churn")
+            "--steady|--large|--correctness|--churn|--mixed-fault|--socket-slow|--mixed")
         exitProcess(2)
     }
     try {
@@ -183,6 +183,7 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, mode: Str
     val clients = mutableListOf<RpcClient>()
     var cleanupSucceeded = true
     var measured = false
+    var socketPause: CapacitySocketPause? = null
     try {
         val manifest = environment.manifest
         capacityProfileLimits(environment.clientCount)
@@ -191,7 +192,13 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, mode: Str
         require(mode in setOf("steady", "large") || environment.schemaVersion == 2)
         println("run=${manifest.runLabel},platform=${manifest.hostPlatform},source=${manifest.hostSourceSha}")
         println("hostArtifact=${manifest.hostArtifactSha256},driverArtifact=${manifest.driverArtifactSha256}")
-        val count = if (mode == "large") 1 else environment.clientCount
+        val mixedNonce = (environment as? CapacityMixedEnvironment)?.mixedNonce
+        require((mode == "mixed") == (mixedNonce != null))
+        val count = when (mode) {
+            "large" -> 1
+            "mixed" -> MixedCapacityWire.GENERATED
+            else -> environment.clientCount
+        }
         repeat(count) { index ->
             val platform = RpcPlatform.jvm(environment.identityStore(index))
             val trust = environment.trustStore(index)
@@ -199,12 +206,18 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, mode: Str
                 appId = RpcCapacityContract.appId
                 lan = environment.lan
                 trustStore = trust
+                if (mode == "mixed" || mode == "socket-slow") transportReconnect = false
             }
         }
         require(clients.map { it.fingerprint }.toSet().size == count) { "Independent identities are required" }
         // The existing two-pre-handshakes-per-source protection is NOT relaxed for synthetic clients.
         // Setup is outside the steady-state clock; established clients release those source leases.
-        for (batch in clients.chunked(2)) {
+        val remaining = if (mode == "socket-slow") {
+            socketPause = (environment as CapacitySocketPauseEnvironment).armSocketPause()
+            clients.first().connect(environment.selectedHost)
+            clients.drop(1)
+        } else clients
+        for (batch in remaining.chunked(2)) {
             batch.map { client -> async { client.connect(environment.selectedHost) } }.awaitAll()
         }
         // The approved target is steady state, not a cold JVM/codec startup burst.
@@ -222,10 +235,29 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, mode: Str
         measured = when (mode) {
             "large" -> runLarge(clients.single(), environment)
             "steady" -> runSteady(clients, environment)
+            "mixed" -> {
+                val outcome = runMixedCapacity(clients, checkNotNull(mixedNonce), { environment.sampleHost().host })
+                println("RPC_CAPACITY_RESULT_JSON:" + outcome)
+                outcome["status"] == JsonPrimitive("PENDING_RESOURCE_AND_NETWORK_REVIEW")
+            }
+            "socket-slow" -> {
+                connectedCapacityHost(environment)
+                val outcome = runCapacitySlowSocket(clients.first(), clients.last(), checkNotNull(socketPause),
+                    environment.clientCount, { environment.sampleHost().host })
+                println("RPC_CAPACITY_RESULT_JSON:" + outcome)
+                outcome["status"] == JsonPrimitive("PENDING_RESOURCE_AND_NETWORK_REVIEW")
+            }
+            "mixed-fault" -> {
+                val peers = clients.map { ActualCapacityControlPeer(it, environment.selectedHost) }
+                val outcome = runCapacityMixedFaults(peers, { environment.sampleHost().host })
+                println("RPC_CAPACITY_RESULT_JSON:" + outcome)
+                outcome["status"] == JsonPrimitive("PENDING_RESOURCE_AND_NETWORK_REVIEW")
+            }
             else -> runCapacityControls(mode, clients, environment)
         }
     } finally {
         withContext(NonCancellable) {
+            try { socketPause?.close() } catch (_: Exception) { cleanupSucceeded = false }
             for (batch in clients.chunked(16)) {
                 val results = batch.map { client -> async { runCatching { client.close() }.isSuccess } }.awaitAll()
                 if (results.any { !it }) cleanupSucceeded = false

@@ -15,15 +15,18 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /** Owner-selected USB run only. No Intent, network provisioning endpoint, shared storage or backup. */
-internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
+internal class AndroidRpcCapacityFiles(context: Context, runLabel: String, requireNew: Boolean = false) {
     private val directory: File
 
     init {
         require(runLabel.matches(Regex("[a-z0-9-]{1,64}")))
         val parent = prepareHome(context)
         directory = File(parent, runLabel)
+        if (requireNew) Os.mkdir(directory.path, 0x1c0)
         privateDirectory(directory) // The USB coordinator must create a NEW mode-0700 run directory first.
     }
+
+    private fun rotating(name: String): Boolean = name == "telemetry.txt" || name == "discharge.txt"
 
     private fun path(name: String): File {
         require(name in NAMES)
@@ -58,7 +61,7 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
         // the data and atomically creates its empty completion marker. Android
         // forbids app hard links; neither a partial file nor its mere existence
         // is a publication. Rotating telemetry still uses an atomic rename.
-        val completion = if (name == "telemetry.txt") null else (completed(name, optional) ?: return null)
+        val completion = if (rotating(name)) null else (completed(name, optional) ?: return null)
         val before = try { Os.lstat(file.path) } catch (missing: ErrnoException) {
             if (optional && completion == null && missing.errno == OsConstants.ENOENT) return null
             throw missing
@@ -101,12 +104,12 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
         return before
     }
 
-    /** Only rotating telemetry may replace a record. All other data AND markers use O_EXCL. */
+    /** Only rotating telemetry and battery checkpoints may replace a record. All other data AND markers use O_EXCL. */
     fun publish(name: String, text: String) {
-        require(name in setOf("ready.txt", "telemetry.txt", "closed.txt", "failed.txt"))
+        require(name in OUTPUTS)
         require(text.length in 1..16_384 && text.all { it == '\n' || it.code in 32..126 })
         val target = path(name)
-        if (name != "telemetry.txt") {
+        if (!rotating(name)) {
             val marker = File(directory, ".complete-$name")
             // An orphan marker must not bless newly written data. lstat also
             // refuses a dangling symlink; File.exists() would miss that case.
@@ -162,7 +165,10 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
     }
 
     companion object {
-        private val NAMES = setOf("inbox.txt", "stop.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt")
+        private val OUTPUTS = setOf(
+            "ready.txt", "telemetry.txt", "closed.txt", "failed.txt", "discharge.txt", "mixed-client.txt",
+        )
+        private val NAMES = OUTPUTS + setOf("inbox.txt", "stop.txt")
 
         fun prepareHome(context: Context): File {
             val directory = File(context.applicationContext.noBackupFilesDir.canonicalFile, "rpc-capacity")

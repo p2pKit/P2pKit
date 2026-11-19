@@ -27,9 +27,10 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import rpc_mobile_capacity as protocol
+import rpc_mobile_extension_evidence as extensions
 
 SCOPE = "MAC_DEVELOPMENT_PREPARATION_NOT_PHYSICAL_OR_RELEASE_QUALIFICATION"
-MODES = ("large", "steady", "correctness", "churn")
+MODES = ("large", "steady", "correctness", "churn", "mixed-fault", "socket-slow", "mixed")
 need = protocol.need
 
 
@@ -145,7 +146,7 @@ def verify_manifest(value, expected_source, expected_state=None):
     return value
 
 
-def settings_template(manifest, phone, clients, adb):
+def settings_template(manifest, phone, clients, adb, physical_client_pin=None):
     need(phone in ("android", "ios") and type(clients) is int and clients in (128, 256), "Explicit phone/profile required")
     key = "android-apk" if phone == "android" else "ios-executable"
     need(key in manifest["artifacts"], "Prepare the selected phone product first")
@@ -157,6 +158,12 @@ def settings_template(manifest, phone, clients, adb):
         values.update(androidUsbSerial="SELECT_PHYSICAL_USB_SERIAL", adb=str(adb))
     else:
         values.update(iosDeviceIdentifier="SELECT_WIRED_COREDEVICE_UUID")
+    if physical_client_pin is not None:
+        companion = "ios-executable" if phone == "android" else "android-apk"
+        need(companion in manifest["artifacts"], "Prepare the opposite phone product first")
+        values.update(physicalClientPin=physical_client_pin,
+                      physicalClientArtifactSha256=manifest["artifacts"][companion]["sha256"])
+        protocol.mixed_fields(values)
     # Deliberately invalid network placeholders cannot accidentally start a run.
     return protocol.encode(values)
 
@@ -433,6 +440,12 @@ class Session:
              values.get("clientCount") == str(args.clients) and values.get("sourceSha") == self.source["commit"] and
              values.get("hostArtifactSha256") == manifest["artifacts"][artifact_name]["sha256"],
              "Use exact prepared source/artifact and explicitly selected schema2 client profile")
+        mixed = protocol.mixed_fields(values)
+        need(bool(mixed) == (args.mode == "mixed"), "Use the approved opposite-phone settings only in mixed mode")
+        if mixed:
+            companion = "ios-executable" if args.platform == "android" else "android-apk"
+            need(companion in manifest["artifacts"] and mixed["physicalClientArtifactSha256"] ==
+                 manifest["artifacts"][companion]["sha256"], "Prepare both source-matched products for mixed mode")
         coordinator = "run-rpc-mobile-capacity.py" if args.platform == "android" else "run-rpc-ios-mobile-capacity.py"
         argv = [sys.executable, "-B", ROOT / "scripts" / coordinator, "--owner-authorized-mobile",
                 "--settings", args.settings, "--run-label", args.run_label, "--mode", args.mode]
@@ -546,14 +559,34 @@ def main():
             command.add_argument("--platform", choices=("android", "ios"), required=True)
             command.add_argument("--clients", type=int, choices=(128, 256), required=True)
             command.add_argument("--output", type=Path, required=True, help="New private settings template; edit real LAN/device values")
+            command.add_argument("--physical-client-pin", help="Verified public identity of the opposite prepared phone for mixed mode")
         if name == "recover":
             command.add_argument("--platform", choices=("android", "ios"), required=True,
                                  help="Inspect/reuse only an exact failed attempt whose original retirement is verified")
     analyze = sub.add_parser("analyze")
     analyze.add_argument("--result", type=Path, required=True)
     analyze.add_argument("--output", type=Path, required=True, help="NEW private summary, never overwrites original evidence")
+    mixed_review = sub.add_parser("review-mixed", help="Compare retained Host and companion records offline")
+    mixed_review.add_argument("--result", type=Path, required=True)
+    mixed_review.add_argument("--companion", type=Path, required=True)
+    mixed_review.add_argument("--output", type=Path, required=True)
+    discharge = sub.add_parser("review-discharge", help="Inspect a copied private phone sensor record offline")
+    discharge.add_argument("--record", type=Path, required=True)
+    discharge.add_argument("--expected-source", required=True)
+    discharge.add_argument("--expected-artifact", required=True)
+    discharge.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
+    if args.action in ("review-mixed", "review-discharge"):
+        files = module("mac_campaign_extension_files", "run-rpc-capacity-lab.py")
+        if args.action == "review-mixed":
+            summary = extensions.review_mixed(private_json(args.result), files.read_private(args.companion))
+        else:
+            summary = extensions.review_discharge(files.read_private(args.record), args.expected_source,
+                                                  args.expected_artifact)
+        new_json(args.output, summary)
+        print("REVIEW_RECORDED; inspect the private summary")
+        return
     if args.action == "analyze":
         private(args.output.parent)
         new_json(args.output, result_summary(private_json(args.result)))
@@ -571,7 +604,8 @@ def main():
         print("PREPARED_PRODUCTS_UNCHANGED; no device qualification implied")
     elif args.action == "settings":
         manifest = verify_manifest(private_json(session.state / "private/preparation.json"), session.source, session.state)
-        raw = settings_template(manifest, args.platform, args.clients, Path(os.environ["ANDROID_HOME"]) / "platform-tools/adb")
+        raw = settings_template(manifest, args.platform, args.clients,
+                                Path(os.environ["ANDROID_HOME"]) / "platform-tools/adb", args.physical_client_pin)
         if args.platform == "android":
             values = protocol.parse(raw) | dict(adbCampaignKeys=str(session.state / "private/adb-keys"))
             raw = protocol.encode(values)

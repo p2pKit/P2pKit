@@ -66,3 +66,11 @@ public interface RpcCapacityEnvironment {
     /** Release provider-owned resources. Never delete/reorganize someone else's evidence or identities. */
     public suspend fun close()
 }
+
+internal interface CapacitySocketPauseEnvironment {
+    fun armSocketPause(): CapacitySocketPause
+}
+
+internal interface CapacityMixedEnvironment {
+    val mixedNonce: String?
+}

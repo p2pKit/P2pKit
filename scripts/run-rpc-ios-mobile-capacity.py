@@ -34,6 +34,7 @@ SETTINGS = (base.SETTINGS - {'androidUsbSerial', 'adb'}) | {'iosDeviceIdentifier
 def settings(values, source, label, lab):
     need(type(values) is dict and values.get('schema') in ('1', '2'))
     fields = SETTINGS | ({'clientCount'} if values['schema'] == '2' else set())
+    fields |= set(base.protocol.mixed_fields(values))
     need(set(values) == fields and all(type(v) is str for v in values.values()) and
          values['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', values['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
@@ -117,7 +118,7 @@ def main():
     parser.add_argument('--owner-authorized-mobile', required=True, action='store_true')
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--run-label', required=True)
-    parser.add_argument('--mode', choices=('steady', 'large', 'correctness', 'churn'), required=True)
+    parser.add_argument('--mode', choices=('steady', 'large', 'correctness', 'churn', 'mixed-fault', 'socket-slow', 'mixed'), required=True)
     parser.add_argument('--previous-ios-run-label')
     parser.add_argument('--previous-ios-inbox-sha256')
     parser.add_argument('--install-ios-app', type=Path,

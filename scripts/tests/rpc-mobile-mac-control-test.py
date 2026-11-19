@@ -346,8 +346,12 @@ class BoundActivation(unittest.TestCase):
                 (run.directory / 'mobile-inbox.txt').touch()
                 run.state, run.client_id, run.client_count = root, 'OFFLINE', 128
                 run.mode, run.config, run.values, run.env = 'steady', {}, {'hostInterface': 'wlan0'}, {}
+                run.mixed = {}
                 run.result, run.lab, run.phone = {}, Mock(), Mock()
-                run.lab.read_private.return_value = b'OFFLINE_INPUT_NOT_PROVISIONING'
+                raw = inbox(count=128) | run.bound
+                if schema == '1':
+                    del raw['clientCount']
+                run.lab.read_private.return_value = protocol.encode(raw)
                 ready = run.bound | dict(address='192.168.14.2', port='48123', fingerprint='p2f1-' + 'a' * 52,
                     compiledSourceMatched='true', artifactKind='android-installed-base-apk')
                 run.phone.read.side_effect = lambda name: None if name == 'failed.txt' else ready
@@ -357,7 +361,8 @@ class BoundActivation(unittest.TestCase):
                     self.assertEqual(run.phone.activate.call_count, 1 if schema == '2' else 0)
                     run.phone.provision.assert_called_once()
                 finally:
-                    run.client_log.close()
+                    if getattr(run, 'client_log', None):
+                        run.client_log.close()
 
     def test_android_development_activation_binds_exact_published_inbox_and_is_once_only(self):
         value = usb.AndroidUsb(Mock(), Path('/NOT_EXECUTED'), Path('/NOT_EXECUTED/adb'),

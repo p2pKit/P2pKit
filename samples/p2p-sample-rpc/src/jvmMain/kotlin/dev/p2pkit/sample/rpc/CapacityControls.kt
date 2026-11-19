@@ -60,7 +60,7 @@ internal interface CapacityControlPeer {
     suspend fun reconnect()
 }
 
-private class ActualCapacityControlPeer(
+internal class ActualCapacityControlPeer(
     private val client: RpcClient, private val selected: RpcSelectedHost,
 ) : CapacityControlPeer {
     override val state: RpcConnectionState get() = client.state.value

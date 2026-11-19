@@ -55,6 +55,7 @@ internal class JvmRawConnection(
     private val pathAllowed: (() -> Boolean)? = null,
     override val outboundRoute: OutboundRoute? = null,
     watchPath: ((() -> Unit) -> SocketPathWatch)? = null,
+    private val readPause: JvmLanReadPause? = null,
 ) : OutboundRouteConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
@@ -232,6 +233,7 @@ internal class JvmRawConnection(
             val input = if (asynchronous == null) socket.getInputStream() else null
             val buffer = ByteArray(BUFFER_SIZE)
             while (currentCoroutineContext().isActive) {
+                readPause?.beforeSocketRead()
                 requireAllowedPath()
                 val n = try {
                     if (asynchronous != null) withContext(SocketIoWorkers.read) { asynchronous.read(buffer) }

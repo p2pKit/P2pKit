@@ -19,6 +19,11 @@ public class RpcMobileCapacityConfig private constructor(internal val fields: Ma
     public val clientPins: String get() = fields.getValue("clientPins").replace(',', '\n')
     internal val pins: Set<PeerFingerprint> get() = RpcPhoneLab.parseCapacityPins(clientPins)
 
+    internal val mixedHost: MixedCapacityHost? get() = fields["physicalClientPin"]?.let { pin ->
+        MixedCapacityHost(pins, PeerFingerprint.parse(pin), pins.first(), fields.getValue("runNonce"),
+            fields.getValue("physicalClientArtifactSha256"))
+    }
+
     internal val limits: RpcLimits = capacityProfileLimits(clientCount)
 
     internal fun binding(): Map<String, String> = fields.filterKeys { it in bindingFields(schema) } +
@@ -45,7 +50,10 @@ public class RpcMobileCapacityConfig private constructor(internal val fields: Ma
         public fun parse(text: String): RpcMobileCapacityConfig {
             val fields = parseMobileRecord(text)
             val schema = requireNotNull(fields["schema"])
-            require(fields.keys == bindingFields(schema) + setOf(
+            val mixed = setOf("physicalClientPin", "physicalClientArtifactSha256")
+            val extras = fields.keys.intersect(mixed)
+            require(extras.isEmpty() || extras == mixed && schema == "2" && fields["clientCount"] == "256")
+            require(fields.keys == bindingFields(schema) + extras + setOf(
                 "schema", "scope", "subnets", "hostInterface", "hostAddress", "hostPort", "clientPins",
             ))
             require(fields.getValue("scope") == "mobile-usb-capacity")
@@ -59,6 +67,11 @@ public class RpcMobileCapacityConfig private constructor(internal val fields: Ma
             return RpcMobileCapacityConfig(fields).also {
                 it.settings.policy(host = true) // The original organization policy, not a test whitelist.
                 require(it.pins.size == it.clientCount)
+                if (extras.isNotEmpty()) {
+                    require(fields.getValue("physicalClientArtifactSha256").matches(Regex("[a-f0-9]{64}")))
+                    require(it.pins.last() == PeerFingerprint.parse(fields.getValue("physicalClientPin")))
+                    checkNotNull(it.mixedHost)
+                }
             }
         }
     }

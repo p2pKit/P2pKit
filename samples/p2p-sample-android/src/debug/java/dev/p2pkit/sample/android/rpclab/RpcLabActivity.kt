@@ -61,6 +61,8 @@ import dev.p2pkit.sample.rpc.RpcApplicationInput
 import dev.p2pkit.sample.rpc.RpcApplicationProcedure
 import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
+import dev.p2pkit.sample.rpc.RpcDischargeRecorder
+import dev.p2pkit.sample.rpc.RpcMixedClientPlan
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import dev.p2pkit.sample.rpc.RpcPhoneOperation
 import dev.p2pkit.sample.rpc.RpcRequestEntry
@@ -74,6 +76,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -121,6 +124,10 @@ internal class RpcLabController(
     private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var foreground by mutableStateOf(false)
     private var action: Job? = null
+    private var dischargeJob: Job? by mutableStateOf(null)
+    private var dischargeStatus by mutableStateOf("")
+    private var mixedPlanText by mutableStateOf("")
+    private var mixedStatus by mutableStateOf("")
     private var operation: RpcPhoneOperation? = null
     private var lab: RpcPhoneLab? by mutableStateOf(null)
     private val runtimeOwner get() = RpcLabProcessRuntime.owner
@@ -233,6 +240,8 @@ internal class RpcLabController(
     override fun onPause(owner: LifecycleOwner) {
         if (detached) return
         liveStatus.stop()
+        dischargeJob?.cancel()
+        mixedPlanText = ""
         val snapshot = runtimeOwner.snapshotFor(ownedToken)
         val eligible = RpcLabAppSwitchWindow.eligible(
             ordinary = mobileConfig == null && capacityPins.isEmpty() && !importApproved,
@@ -320,11 +329,12 @@ internal class RpcLabController(
         }
     }
 
-    private fun start(asHost: Boolean) = doAction {
+    private fun start(asHost: Boolean, mixed: RpcMixedClientPlan? = null) = doAction {
         eventLog.record(if (asHost) RpcLabEventLog.Event.StartHostRequested
             else RpcLabEventLog.Event.StartClientRequested)
         check(lab == null && !runtimeOwner.occupied)
         startProblem = null
+        require(mixed == null || !asHost && mobileConfig == null && capacityPins.isEmpty())
         val nearby = mobileConfig == null && capacityPins.isEmpty() && !networkSetup.state.value.manual
         val settings = try {
             if (nearby) networkSetup.settingsForAutomaticStart() else networkSetup.settingsForStart(port)
@@ -351,6 +361,7 @@ internal class RpcLabController(
         val mobile = mobileConfig
         val files = if (mobile != null) checkNotNull(mobileFiles) else null
         if (mobile != null) {
+            check(dischargeJob == null)
             require(asHost && importApproved && approved == mobile.clientPins &&
                 subnets == mobile.settings.subnets && selectedInterface == mobile.settings.interfaceName &&
                 localAddress == mobile.settings.localAddress && port.toInt() == mobile.settings.port)
@@ -365,9 +376,15 @@ internal class RpcLabController(
         try {
             withContext(Dispatchers.Default) {
                 val platform = RpcPlatform.android(applicationContext)
-                val trust = AndroidRpcLabTrustStore(applicationContext)
+                val trust = AndroidRpcLabTrustStore(applicationContext, mixedClient = mixed != null)
                 // Retain before returning across a cancellation-sensitive dispatcher boundary.
-                val runtime = if (mobile != null)
+                val mixedFiles = mixed?.let {
+                    AndroidRpcCapacityFiles(applicationContext, "mixed-client-" + it.runLabel, requireNew = true)
+                }
+                val runtime = if (mixed != null) {
+                    RpcPhoneLab.createMixedCapacityClient(platform, settings, trust, mixed, "Android",
+                        androidRpcInstalledArtifact(applicationContext))
+                } else if (mobile != null)
                     RpcPhoneLab.createMobileCapacityHost(platform, trust, mobile, "Android")
                     else if (asHost && approved.isNotEmpty()) {
                         RpcPhoneLab.createHost(platform, settings, trust, approved)
@@ -378,7 +395,7 @@ internal class RpcLabController(
                         platform, settings, trust, applicationSession)
                     else if (asHost) RpcPhoneLab.createApplicationHost(platform, settings, trust, applicationSession)
                     else RpcPhoneLab.createApplicationClient(platform, settings, trust, applicationSession)
-                created = RpcLabOwnedRuntime(runtime, files)
+                created = RpcLabOwnedRuntime(runtime, files, mixedFiles)
                 runtimeOwner.retain(creation, checkNotNull(created))
             }
             if (foreground && SampleProcessOwnership.owner.isCurrent(sectionToken)) {
@@ -400,6 +417,21 @@ internal class RpcLabController(
                     runtimeOwner.retire(creation) { it.close() }
                 }
             } finally { runtimeOwner.finishCreation(creation) }
+        }
+        val mixedRuntime = created
+        if (mixed != null && mixedRuntime != null && lab === mixedRuntime.lab) {
+            mixedStatus = "Mixed Client running · ${mixed.runLabel}"
+            try {
+                mixedRuntime.lab.runMixedClient()
+                mixedStatus = "Mixed replies verified · ${mixed.runLabel}"
+            } catch (cancelled: CancellationException) {
+                mixedStatus = "Mixed Client interrupted · ${mixed.runLabel}"
+                throw cancelled
+            } catch (_: Exception) {
+                mixedStatus = "Mixed Client failed · ${mixed.runLabel}"
+            } finally {
+                if (!closing) stop(runtimeOwner.snapshotFor(creation))
+            }
         }
     }
 
@@ -482,6 +514,50 @@ internal class RpcLabController(
             finally { busy = closing }
             if (verified && interactive && !closing) start(asHost = true)
         }
+    }
+
+    private fun recordUnpluggedBattery() {
+        if (!interactive || dischargeJob != null || mobileConfig != null) return
+        val label = "discharge-" + java.util.UUID.randomUUID().toString().replace("-", "")
+        dischargeStatus = "Recording: $label"
+        val task = ui.launch(start = CoroutineStart.LAZY) {
+            var thermalStop = false
+            try {
+                val state = withContext(Dispatchers.IO) {
+                    val files = AndroidRpcCapacityFiles(applicationContext, label, requireNew = true)
+                    val artifact = androidRpcInstalledArtifact(applicationContext)
+                    val recorder = RpcDischargeRecorder(label, "Android", artifact)
+                    val environment = AndroidRpcPhoneEnvironment(applicationContext)
+                    val started = TimeSource.Monotonic.markNow()
+                    try {
+                        var elapsed = 0L
+                        while (recorder.active) {
+                            currentCoroutineContext().ensureActive()
+                            val observed = environment.sample()
+                            thermalStop = observed.requiresThermalStop
+                            recorder.observe(elapsed, observed)?.let { files.publish("discharge.txt", it) }
+                            if (!recorder.active) break
+                            delay(1_000)
+                            elapsed = started.elapsedNow().inWholeMilliseconds
+                        }
+                        recorder.status
+                    } finally {
+                        recorder.interrupt()?.let { files.publish("discharge.txt", it) }
+                    }
+                }
+                dischargeStatus = "$state · $label"
+            } catch (cancelled: CancellationException) {
+                dischargeStatus = "Interrupted · $label"
+                throw cancelled
+            } catch (_: Exception) {
+                dischargeStatus = "Recording failed · $label"
+            } finally {
+                dischargeJob = null
+                if (thermalStop && lab != null) stop(runtimeOwner.snapshotFor(ownedToken))
+            }
+        }
+        dischargeJob = task
+        task.start()
     }
 
     private fun monitorMobile(token: RpcLabRuntimeOwner.Token, owned: RpcLabOwnedRuntime) {
@@ -1152,6 +1228,23 @@ internal class RpcLabController(
                         Text("I explicitly approve importing these synthetic client pins into this test host.")
                     }
                 }
+                RpcLabDisclosure("Mixed capacity Client") {
+                    Field("Private plan from the Mac campaign", mixedPlanText, 2_048, editable) { mixedPlanText = it }
+                    val plan = runCatching { RpcMixedClientPlan.parse(mixedPlanText) }.getOrNull()
+                    if (plan != null) Text("Verify Host fingerprint: ${plan.hostFingerprint}")
+                    Button({ if (plan != null) start(asHost = false, mixed = plan) },
+                        enabled = editable && mobileConfig == null && capacityPins.isEmpty() && plan != null) {
+                        Text("Approve Host and start mixed Client")
+                    }
+                    if (mixedStatus.isNotEmpty()) Text(mixedStatus)
+                }
+                Text("Unplug before recording. Keep this screen foreground for 30 minutes.")
+                Button({ recordUnpluggedBattery() },
+                    enabled = interactive && dischargeJob == null && mobileConfig == null) {
+                    Text("Record unplugged battery")
+                }
+                if (dischargeJob != null) Button({ dischargeJob?.cancel() }) { Text("Stop battery recording") }
+                if (dischargeStatus.isNotEmpty()) Text(dischargeStatus)
                 TextButton({ showUsb = !showUsb }) { Text("USB capacity session") }
                 if (showUsb) {
                     Field("Optional USB capacity run label", usbRunLabel, 64,

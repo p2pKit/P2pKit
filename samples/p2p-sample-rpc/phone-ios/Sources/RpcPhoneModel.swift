@@ -45,6 +45,18 @@ final class RpcPhoneModel: ObservableObject {
     private var operationID: UUID?
     private var foreground = false
     private var mobileFiles: RpcPhoneCapacityFiles?
+    #if DEBUG
+        private var dischargeTask: Task<Void, Never>?
+        @Published private(set) var dischargeStatus = ""
+        @Published var mixedPlanText = ""
+        @Published private(set) var mixedStatus = ""
+        var mixedPlan: RpcMixedClientPlan? {
+            guard mixedPlanText.utf8.count <= 2_048 else { return nil }
+            return try? RpcMixedClientPlan.companion.parse(text: mixedPlanText)
+        }
+        var recordingDischarge: Bool { dischargeTask != nil }
+        var canRecordDischarge: Bool { foreground && dischargeTask == nil && mobileConfig == nil }
+    #endif
     private var mobileMonitor: Task<Void, Never>?
     private var mobileFailed = false
     private var mobileStopRequested = false
@@ -169,6 +181,10 @@ final class RpcPhoneModel: ObservableObject {
             UIApplication.shared.isIdleTimerDisabled = owner.phase == .running
             startLiveObservation()
         } else {
+            #if DEBUG
+                dischargeTask?.cancel()
+                mixedPlanText = ""
+            #endif
             stopLiveObservation()
             UIApplication.shared.isIdleTimerDisabled = false
             revealInvitation = false // Conceal secrets in the app switcher; preserve only the bounded transfer state.
@@ -183,7 +199,12 @@ final class RpcPhoneModel: ObservableObject {
         objectWillChange.send()
     }
 
-    func protectedDataUnavailable() { expireAppSwitch() }
+    func protectedDataUnavailable() {
+        #if DEBUG
+            dischargeTask?.cancel()
+        #endif
+        expireAppSwitch()
+    }
 
     private func expireAppSwitch() {
         #if DEBUG
@@ -287,8 +308,9 @@ final class RpcPhoneModel: ObservableObject {
         return settings
     }
 
-    func start(host: Bool, automatic: Bool = false) {
+    func start(host: Bool, automatic: Bool = false, mixed: RpcMixedClientPlan? = nil) {
         guard canStart else { return }
+        guard mixed == nil || (!host && mobileConfig == nil && capacityPins.isEmpty) else { return }
         startProblem = nil
         eventLog.append(.startRequested(host ? .host : .client))
         let nearby = automatic && !manualNetworkSetup && mobileConfig == nil && capacityPins.isEmpty
@@ -351,8 +373,20 @@ final class RpcPhoneModel: ObservableObject {
             action = Task { @MainActor in
                 defer { self.actionBusy = false }
                 guard self.foreground, self.retirement == nil else { return }
+                var mixedFiles: RpcPhoneCapacityFiles?
                 let outcome = await self.owner.start(create: {
-                    if let mobile { return try await RpcPhoneIos.shared.createCapacityHost(config: mobile) }
+                    if let mixed {
+                        mixedFiles = try RpcPhoneCapacityFiles(runLabel: "mixed-client-" + mixed.runLabel, requireNew: true)
+                        return try await RpcPhoneIos.shared.createMixedClient(
+                            plan: mixed, settings: settings, observedArtifactSha256: RpcPhoneProcessSampler.installedArtifact()
+                        )
+                    }
+                    if let mobile {
+                        #if DEBUG
+                            guard self.dischargeTask == nil else { throw RpcPhoneCapacityIOError.invalidRecord }
+                        #endif
+                        return try await RpcPhoneIos.shared.createCapacityHost(config: mobile)
+                    }
                     if nearby {
                         if host {
                             return try await RpcPhoneIos.shared.createNearbyApplicationHost(
@@ -374,6 +408,12 @@ final class RpcPhoneModel: ObservableObject {
                         settings: settings, application: self.applicationSession)
                 }, close: { lab in
                     try await lab.close()
+                    if let mixedFiles {
+                        let record = try lab.mixedClientClosedRecord()
+                        if let previous = try mixedFiles.read("mixed-client.txt", optional: true) {
+                            guard previous == record else { throw RpcPhoneCapacityIOError.invalidRecord }
+                        } else { try mixedFiles.publish("mixed-client.txt", record) }
+                    }
                     if mobile != nil, let files = self.mobileFiles {
                         let record = try lab.mobileClosedRecord(
                             controlHealthy: !self.mobileFailed && self.mobileStopRequested
@@ -393,6 +433,9 @@ final class RpcPhoneModel: ObservableObject {
                     if mobile != nil, let lab = self.owner.runtime, let files = self.mobileFiles {
                         self.monitorMobile(lab, files: files)
                     }
+                    #if DEBUG
+                        if let mixed, let lab = self.owner.runtime { self.measureMixedClient(lab, plan: mixed) }
+                    #endif
                 case .failed(let error): self.presentStartProblem(self.safeError(error), failure: self.failure(error))
                 case .superseded, .refused: break
                 }
@@ -556,6 +599,79 @@ final class RpcPhoneModel: ObservableObject {
                 try await Task.sleep(nanoseconds: 500_000_000)
             }
             throw CancellationError()
+        }
+    #endif
+
+    #if DEBUG
+        private func measureMixedClient(_ lab: RpcPhoneLab, plan: RpcMixedClientPlan) {
+            mixedStatus = "Mixed Client running · " + plan.runLabel
+            operationBusy = true
+            let id = UUID()
+            operationID = id
+            do {
+                operation = try lab.beginMixedClient { [weak self, lab] error in
+                    Task { @MainActor in
+                        guard let self, self.operationID == id, self.owner.accepts(lab) else { return }
+                        self.operation = nil
+                        self.operationID = nil
+                        self.operationBusy = false
+                        self.mixedStatus = (error == nil ? "Mixed replies verified · " : "Mixed Client failed · ")
+                            + plan.runLabel
+                        self.stop()
+                    }
+                }
+            } catch {
+                mixedStatus = "Mixed Client failed · " + plan.runLabel
+                stop()
+            }
+        }
+
+        func stopBatteryRecording() { dischargeTask?.cancel() }
+
+        func recordUnpluggedBattery() {
+            guard canRecordDischarge else { return }
+            let label = "discharge-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            dischargeStatus = "Recording: " + label
+            dischargeTask = Task { @MainActor in
+                let environment = RpcPhoneEnvironmentSampler()
+                environment.acquire()
+                var thermalStop = false
+                defer {
+                    environment.retire()
+                    if thermalStop, self.owner.hasOwner { self.stop() }
+                    self.dischargeTask = nil
+                    self.objectWillChange.send()
+                }
+                do {
+                    let files = try RpcPhoneCapacityFiles(runLabel: label, requireNew: true)
+                    let recorder = try RpcDischargeRecorder(
+                        runLabel: label, platform: "Ios", artifactSha256: RpcPhoneProcessSampler.installedArtifact()
+                    )
+                    do {
+                        let started = ProcessInfo.processInfo.systemUptime
+                        var elapsed: Int64 = 0
+                        while recorder.active {
+                            try Task.checkCancellation()
+                            let observation = try environment.sample()
+                            thermalStop = observation.requiresThermalStop
+                            if let record = try recorder.observe(elapsedMillis: elapsed, observation: observation) {
+                                try files.publish("discharge.txt", record)
+                            }
+                            if !recorder.active { break }
+                            try await Task.sleep(nanoseconds: 1_000_000_000)
+                            elapsed = Int64((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+                        }
+                    } catch {
+                        if let record = try recorder.interrupt() { try files.publish("discharge.txt", record) }
+                        throw error
+                    }
+                    self.dischargeStatus = recorder.status + " · " + label
+                } catch is CancellationError {
+                    self.dischargeStatus = "Interrupted · " + label
+                } catch {
+                    self.dischargeStatus = "Recording failed · " + label
+                }
+            }
         }
     #endif
 

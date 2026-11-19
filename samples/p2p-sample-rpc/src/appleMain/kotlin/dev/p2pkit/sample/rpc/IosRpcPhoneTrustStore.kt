@@ -54,10 +54,16 @@ import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
 
 /** Test-app approval storage only; atomic device-only Keychain replacement, no preferences or cloud sync. */
-internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : RpcTrustStore {
-    private val service = "dev.p2pkit.rpc.phone-lab.trust.v1" + fixtureId?.also {
+internal class IosRpcPhoneTrustStore(
+    private val fixtureId: String? = null, mixedClient: Boolean = false,
+) : RpcTrustStore {
+    private val suffix = if (mixedClient) {
+        require(fixtureId == null)
+        "-mixed-client"
+    } else fixtureId?.also {
         require(it.matches(Regex("[A-Fa-f0-9-]{36}")))
     }?.let { "-$it" }.orEmpty()
+    private val service = "dev.p2pkit.rpc.phone-lab.trust.v1" + suffix
 
     private fun account(appId: AppId, purpose: RpcTrustPurpose): String {
         require(appId == RpcCapacityContract.appId)

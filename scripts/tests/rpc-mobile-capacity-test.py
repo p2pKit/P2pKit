@@ -16,7 +16,9 @@ from unittest.mock import Mock, patch
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
+import rpc_capacity_evidence as evidence
 import rpc_mobile_capacity as m
+import rpc_mobile_extension_evidence as extensions
 import rpc_mobile_usb as usb
 import rpc_mobile_shell_fixture as shell_fixture
 
@@ -570,6 +572,122 @@ class AndroidUsbControls(unittest.TestCase):
             with patch.object(usb.time, 'monotonic', side_effect=[0, 0, 2]):
                 self.assertEqual(control.read('telemetry.txt'), {'sequence': '2'})
             self.assertEqual([c.kwargs['timeout'] for c in control.adb_command.call_args_list], [4, 2])
+
+
+ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567'
+PINS = ['p2f1-' + ALPHABET[i // 32] + ALPHABET[i % 32] + 'a' * 50 for i in range(256)]
+SHA = '1' * 40
+ARTIFACT = '2' * 64
+COMPANION_ARTIFACT = '3' * 64
+
+
+def mixed_binding():
+    return dict(schema='2', scope=m.SCOPE, clientCount='256', runLabel='mixed-control',
+                runNonce='4' * 64, hostPlatform='Android', hostSourceSha=SHA, hostArtifactSha256=ARTIFACT)
+
+
+def mixed_plan():
+    return {key: value for key, value in mixed_binding().items() if key != 'clientCount'} | dict(
+        schema='1', scope='physical-mixed-rpc-client', hostPin='p2f1-' + 'j' * 51 + 'a',
+        hostAddress='192.168.14.3', hostPort='48123', physicalClientPlatform='Ios',
+        physicalClientPin=PINS[-1], physicalClientArtifactSha256=COMPANION_ARTIFACT)
+
+
+def mixed_measurement():
+    return dict(schema=2, clientCount=256, mode='mixed', scope='MIXED_CONCURRENT_ROSTER_PENDING_PHYSICAL_CLIENT_RECORD',
+                status='PENDING_RESOURCE_AND_NETWORK_REVIEW', capacityQualified=False, cleanup='AWAIT_FINAL_RECORD',
+                failureCase=None, generatorReplies=255, authenticatedPhoneRepliesVerified=20,
+                cohortReleased=True, phoneDisconnected=True)
+
+
+class MobileExtensions(unittest.TestCase):
+    def test_mixed_inbox_requires_exact_roster_and_one_named_physical_final_peer(self):
+        bound = mixed_binding()
+        row = bound | dict(clientPins=','.join(PINS), hostAddress='192.168.14.3', hostPort='48123',
+                           hostInterface='wlan0', subnets='192.168.14.0/24',
+                           physicalClientPin=PINS[-1], physicalClientArtifactSha256=COMPANION_ARTIFACT)
+        self.assertEqual(m.inbox(m.encode(row), bound), row)
+        for invalid in (dict(clientPins=','.join(PINS[:-1])), dict(physicalClientPin=PINS[0]),
+                        dict(physicalClientArtifactSha256='wrong'),
+                        dict(clientPins=','.join(PINS[:-1] + [PINS[0]]))):
+            with self.subTest(invalid=list(invalid)), self.assertRaises(ValueError):
+                m.inbox(m.encode(row | invalid), bound)
+        with self.assertRaises(ValueError):
+            m.inbox(m.encode(row | dict(clientCount='128')), bound | dict(clientCount='128'))
+
+    def test_mixed_summary_requires_source_matched_physical_result_and_both_cleanups(self):
+        plan = mixed_plan()
+        companion = plan | dict(verifiedReplies='20', released='true', runtimeClosed='true', temporaryTrustRemoved='true')
+        before = dict.fromkeys(m.NUMBERS, 0) | dict(residentBytes=1024, nativeThreads=1)
+        after = before | dict(sequence=66, uptimeMillis=65000)
+        result = dict(mode='mixed', clientCount=256, status='MECHANICAL_PASS_PENDING_NETWORK_AND_RESOURCE_REVIEW',
+                      errors=[], sourceUnchanged=True, harnessUnchanged=True, source=dict(commit=SHA),
+                      phoneCleanup=dict(runtimeClosed=True, clientPinsRemoved=True, controlHealthy=True),
+                      mobileBinding=mixed_binding(), measurement=mixed_measurement(), mixedClientPlan=plan,
+                      postRetention=m.retention(before, after))
+        summary = extensions.review_mixed(result, m.encode(companion))
+        self.assertEqual((255, 1), (summary['generatorClients'], summary['physicalClients']))
+        self.assertFalse(summary['physicalQualified'])
+        for invalid in (dict(runNonce='5' * 64), dict(physicalClientArtifactSha256='6' * 64),
+                        dict(temporaryTrustRemoved='false'), dict(verifiedReplies='19')):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                extensions.review_mixed(result, m.encode(companion | invalid))
+        for invalid in (dict(generatorReplies=256), dict(phoneDisconnected=False),
+                        dict(cohortReleased=False), dict(authenticatedPhoneRepliesVerified=0)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                extensions.review_mixed(result | dict(measurement=mixed_measurement() | invalid),
+                                       m.encode(companion))
+
+    def test_read_pause_must_observe_constrained_window_and_correct_peer_recovery(self):
+        m = dict(constrainedWindowHoldMillis=1100, pendingWhilePaused=2, unaffectedEchoes=3, resumedLargeReplies=2,
+                 hostConnectionsBefore=128, hostConnectionsAfter=128, elapsedNanos=2_000_000_000)
+        result = dict(schema=2, clientCount=128, mode='socket-slow',
+                      scope='DARWIN_TCP_CONSTRAINED_RECEIVE_WINDOW_PENDING_PHYSICAL_REVIEW',
+                      status='PENDING_RESOURCE_AND_NETWORK_REVIEW', capacityQualified=False, cleanup='AWAIT_FINAL_RECORD',
+                      failureCase=None, measurements=m)
+        self.assertEqual(result, evidence.socket_slow(result, 128))
+        for invalid in (dict(constrainedWindowHoldMillis=0), dict(unaffectedEchoes=0), dict(resumedLargeReplies=1)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                evidence.socket_slow(result | dict(measurements=m | invalid), 128)
+
+    def test_mixed_faults_cannot_credit_expected_errors_as_success_or_shorten_duration(self):
+        counts = {key: 60 for key in ('roundsCompleted', 'liveEchoes', 'sentDeadlines', 'sentCancellations',
+                 'disconnectUnknownOutcomes', 'authorizationRefusals', 'businessErrors', 'disconnects', 'reconnects')}
+        m = counts | dict(cohortEchoes=60 * 256, retiredHandlers=180, elapsedNanos=1_800_000_000_000)
+        result = dict(schema=2, clientCount=256, mode='mixed-fault', scope='AUTHENTICATED_MIXED_FAULTS_NOT_STEADY',
+                      status='PENDING_RESOURCE_AND_NETWORK_REVIEW', capacityQualified=False, cleanup='AWAIT_FINAL_RECORD',
+                      failureCase=None, measurements=m)
+        self.assertEqual(result, evidence.mixed_fault(result, 256))
+        for invalid in (dict(elapsedNanos=m['elapsedNanos'] - 1), dict(sentDeadlines=59),
+                        dict(cohortEchoes=m['cohortEchoes'] + 1), dict(retiredHandlers=179)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                evidence.mixed_fault(result | dict(measurements=m | invalid), 256)
+
+    def test_unplugged_requires_full_contiguous_interval_and_preserves_sensor_limits(self):
+        record = dict(schema='1', scope='foreground-unplugged-observations', platform='Ios',
+                      runLabel='discharge-' + 'a' * 32, sourceSha=SHA, artifactSha256=ARTIFACT,
+                      requiredMillis='1800000', status='complete')
+        record.update({f'sample{i:03}': f'{i * 10000},{70000 - i},unavailable,unavailable,unplugged,nominal'
+                       for i in range(181)})
+        result = extensions.review_discharge(m.encode(record), SHA, ARTIFACT)
+        self.assertTrue(result['completeUnpluggedInterval'])
+        self.assertEqual(-180, result['observedBatteryChangeMilliPercent'])
+        self.assertFalse(result['calibratedEnergyMeasured'])
+        self.assertEqual('unavailable', result['samples'][-1]['batteryTemperatureMilliC'])
+        for invalid in (dict(sample003='30000,70000,123,unavailable,unplugged,nominal'),
+                        dict(sample003='30000,70000,unavailable,unavailable,charging,nominal'),
+                        dict(sample003='30000,70000,unavailable,unavailable,unplugged,serious'),
+                        dict(sample003='31000,70000,unavailable,unavailable,unplugged,unknown')):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                extensions.review_discharge(m.encode(record | invalid), SHA, ARTIFACT)
+        with self.assertRaises(ValueError):
+            extensions.review_discharge(m.encode(record), SHA, COMPANION_ARTIFACT)
+        short = record.copy()
+        short.pop('sample180')
+        with self.assertRaises(ValueError):
+            extensions.review_discharge(m.encode(short), SHA, ARTIFACT)
+        self.assertFalse(extensions.review_discharge(m.encode(short | dict(status='interrupted')), SHA,
+                                                     ARTIFACT)['completeUnpluggedInterval'])
 
 
 if __name__ == '__main__':

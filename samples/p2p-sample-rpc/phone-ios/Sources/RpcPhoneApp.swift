@@ -302,6 +302,32 @@ struct RpcPhoneView: View {
                           limit: 16_384, id: "rpc.pins")
                     Toggle("I approve replacing this test host's client pins", isOn: $model.approveImport)
                 }.disabled(!model.canStart)
+                #if DEBUG
+                    DisclosureGroup("Mixed capacity Client") {
+                        TextEditor(text: $model.mixedPlanText)
+                            .frame(minHeight: 72)
+                            .accessibilityLabel("Private plan from the Mac campaign")
+                            .onChange(of: model.mixedPlanText) {
+                                if $0.count > 2_048 { model.mixedPlanText = String($0.prefix(2_048)) }
+                            }
+                        if let plan = model.mixedPlan {
+                            Text("Verify Host fingerprint: " + plan.hostFingerprint).font(.footnote.monospaced())
+                            Button("Approve Host and start mixed Client") { model.start(host: false, mixed: plan) }
+                                .buttonStyle(.borderless)
+                                .disabled(!model.canStart || model.mobileConfig != nil || !model.capacityPins.isEmpty)
+                        }
+                        if !model.mixedStatus.isEmpty { Text(model.mixedStatus).font(.caption) }
+                    }
+                    DisclosureGroup("Unplugged battery recording") {
+                        Text("Unplug before recording. Keep this screen foreground for 30 minutes.").font(.footnote)
+                        Button("Record unplugged battery") { model.recordUnpluggedBattery() }
+                            .buttonStyle(.borderless).disabled(!model.canRecordDischarge)
+                        if model.recordingDischarge {
+                            Button("Stop battery recording") { model.stopBatteryRecording() }.buttonStyle(.borderless)
+                        }
+                        if !model.dischargeStatus.isEmpty { Text(model.dischargeStatus).font(.caption) }
+                    }
+                #endif
                 DisclosureGroup("USB capacity session") {
                     field("Prepared USB run label", $model.usbRunLabel, limit: 64, id: "rpc.usbRun")
                     Button("Prepare new USB slot (RPC stays stopped)") { model.prepareMobile() }

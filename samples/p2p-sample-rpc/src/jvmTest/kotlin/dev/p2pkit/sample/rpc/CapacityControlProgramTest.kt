@@ -165,6 +165,36 @@ class CapacityControlProgramTest {
     }
 
     @Test
+    fun thirtyMinuteMixedFaultScheduleAccountsForEveryOriginalPeerAndTypedFault() = runTest {
+        val group = group(256)
+        val result = runCapacityMixedFaults(group.peers, group::sample,
+            nowNanos = { testScheduler.currentTime * 1_000_000 })
+        assertEquals("PENDING_RESOURCE_AND_NETWORK_REVIEW", result.getValue("status").jsonPrimitive.content)
+        val metrics = result.getValue("measurements").jsonObject
+        assertEquals("1800000000000", metrics.getValue("elapsedNanos").jsonPrimitive.content)
+        assertEquals(1_800_001L, testScheduler.currentTime)
+        assertEquals("60", metrics.getValue("roundsCompleted").jsonPrimitive.content)
+        assertEquals("15360", metrics.getValue("cohortEchoes").jsonPrimitive.content)
+        for (key in listOf("sentDeadlines", "sentCancellations", "disconnectUnknownOutcomes",
+            "authorizationRefusals", "businessErrors", "reconnects", "liveEchoes")) {
+            assertEquals("60", metrics.getValue(key).jsonPrimitive.content)
+        }
+        assertEquals("180", metrics.getValue("retiredHandlers").jsonPrimitive.content)
+        assertTrue(group.remote.none { it.isActive })
+        assertTrue(group.peers.all { it.state == RpcConnectionState.Ready })
+    }
+
+    @Test
+    fun mixedFaultEarlyIncorrectResponseCancelsItsWorkersAndKeepsPartialFailure() = runTest {
+        val group = group(128).apply { corruptEcho = true }
+        val result = runCapacityMixedFaults(group.peers, group::sample,
+            nowNanos = { testScheduler.currentTime * 1_000_000 })
+        assertEquals("FAIL", result.getValue("status").jsonPrimitive.content)
+        assertEquals("healthy-traffic-and-refusals", result.getValue("failureCase").jsonPrimitive.content)
+        assertTrue(group.remote.none { it.isActive })
+    }
+
+    @Test
     fun localTimeoutBeforeHandlerEntryCannotBecomeASentDeadlinePass() = runTest {
         val group = group(128).apply { failBeforeRemoteEntry = true }
         val outcome = runCapacityControlProgram("correctness", group.peers, group::sample,

@@ -64,7 +64,7 @@ static void ready(uint64_t h, int write) {
 
 typedef struct { uint64_t listener, outgoing, incoming; uint16_t port; } pair;
 
-static pair connected_pair(void) {
+static pair connected_pair_with_receive_limit(bool limited) {
     pair p = {0};
     uint8_t address[4];
     OK(p2p_lan_socket_open(lo, &p.listener));
@@ -74,6 +74,7 @@ static pair connected_pair(void) {
     assert(p.port != 0 && memcmp(address, loopback, 4) == 0);
     OK(p2p_lan_socket_open(lo, &p.outgoing));
     OK(p2p_lan_socket_bind(p.outgoing, loopback, 0));
+    if (limited) OK(p2p_lan_socket_option(p.outgoing, 3, 1));
     int32_t error = p2p_lan_socket_connect(p.outgoing, loopback, p.port);
     assert(error == 0 || error == EINPROGRESS);
     ready(p.outgoing, 1);
@@ -82,6 +83,8 @@ static pair connected_pair(void) {
     OK(p2p_lan_socket_accept(p.listener, &p.incoming));
     return p;
 }
+
+static pair connected_pair(void) { return connected_pair_with_receive_limit(false); }
 
 static void close_pair(pair p) {
     OK(p2p_lan_socket_close(p.incoming));
@@ -112,6 +115,8 @@ static void inputs(void) {
     assert(p2p_lan_socket_connect(h, loopback, 0) == EINVAL);
     assert(p2p_lan_socket_option(h, 0, 0) == EINVAL);
     assert(p2p_lan_socket_option(h, 1, 2) == EINVAL);
+    assert(p2p_lan_socket_option(h, 3, 0) == EINVAL);
+    assert(p2p_lan_socket_option(h, 4, 1) != 0);
     PASS("wildcard-and-invalid-socket-arguments-rejected");
     uint32_t count = 42;
     assert(p2p_lan_socket_read(h, bytes, 0, &count) == EINVAL && count == 0);
@@ -432,6 +437,44 @@ static void batched_readiness(void) {
     PASS("failed-wake-pair-setup-preserves-both-closeable-owners");
 }
 
+static void observe_real_receive_window(void) {
+    pair p = connected_pair_with_receive_limit(true);
+    assert(p2p_lan_socket_option(p.outgoing, 4, 1) == EAGAIN);
+    uint8_t bytes[16384] = {0};
+    uint32_t sent = 0, count = 0;
+    int64_t deadline = nanos() + INT64_C(2000000000);
+    const struct timespec interval = {.tv_nsec = 1000000};
+    for (;;) {
+        assert(nanos() < deadline && sent < 2 * 1024 * 1024);
+        const int32_t window = p2p_lan_socket_option(p.outgoing, 4, 1);
+        const int32_t result = p2p_lan_socket_write(p.incoming, bytes, sizeof(bytes), &count);
+        assert((result == 0 || result == EAGAIN) && (window == 0 || window == EAGAIN));
+        if (result == 0) sent += count;
+        if (result == EAGAIN && window == 0) break;
+        if (result == EAGAIN) nanosleep(&interval, NULL);
+    }
+    OK(p2p_lan_socket_option(p.outgoing, 4, 1));
+    assert(sent > 0);
+    uint32_t received = 0;
+    deadline = nanos() + INT64_C(2000000000);
+    while (received < sent) {
+        assert(nanos() < deadline);
+        const int32_t result = p2p_lan_socket_read(p.outgoing, bytes, sizeof(bytes), &count);
+        assert(result == 0 || result == EAGAIN);
+        if (result == 0) { assert(count > 0); received += count; }
+        else nanosleep(&interval, NULL);
+    }
+    assert(received == sent);
+    while (p2p_lan_socket_option(p.outgoing, 4, 1) == 0) {
+        assert(nanos() < deadline);
+        nanosleep(&interval, NULL);
+    }
+    assert(p2p_lan_socket_option(p.outgoing, 4, 1) == EAGAIN);
+    close_pair(p);
+    assert(p2p_lan_socket_option(p.outgoing, 4, 1) == EBADF);
+    PASS("real-tcp-sender-backpressure-and-window-reopened-after-drain");
+}
+
 int main(void) {
     /* Python/shell supervisors may inherit SIG_IGN. Establish SIG_DFL in THIS test process before
      * any library operation, so a missing per-socket SO_NOSIGPIPE really terminates the test.
@@ -464,6 +507,7 @@ int main(void) {
     batch_close_lifecycle();
     failures();
     batched_readiness();
+    observe_real_receive_window();
     assert(descriptors() == before);
     PASS("independent-open-descriptor-inventory-restored");
     assert(setrlimit(RLIMIT_NOFILE, &original) == 0);

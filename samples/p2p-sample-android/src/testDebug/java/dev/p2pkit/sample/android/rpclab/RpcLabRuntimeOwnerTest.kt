@@ -495,7 +495,7 @@ class RpcLabRuntimeOwnerTest {
         assertBefore(start, "ownedToken = creation", "withContext(Dispatchers.Default)")
         assertBefore(start, "val files = if (mobile != null) checkNotNull(mobileFiles) else null",
             "withContext(Dispatchers.Default)")
-        assertBefore(start, "created = RpcLabOwnedRuntime(runtime, files)",
+        assertBefore(start, "created = RpcLabOwnedRuntime(runtime, files, mixedFiles)",
             "runtimeOwner.retain(creation, checkNotNull(created))")
         assertBefore(start, "runtimeOwner.retain(creation, checkNotNull(created))",
             "if (foreground && SampleProcessOwnership.owner.isCurrent(sectionToken))")
@@ -530,10 +530,13 @@ class RpcLabRuntimeOwnerTest {
         val source = debugSource("RpcLabOwnedRuntime")
         assertTrue(source.contains("internal object RpcLabProcessRuntime"))
         assertTrue(source.contains("val owner = RpcLabRuntimeOwner<RpcLabOwnedRuntime>()"))
-        assertTrue(source.contains("val lab: RpcPhoneLab, val mobileFiles: AndroidRpcCapacityFiles?"))
+        assertBefore(source, "val lab: RpcPhoneLab,", "val mobileFiles: AndroidRpcCapacityFiles?,")
+        assertTrue(source.contains("private val mixedFiles: AndroidRpcCapacityFiles? = null"))
         val close = source.substringAfter("suspend fun close()")
             .substringBefore("/** Debug-lab-only process gate")
         assertBefore(close, "monitor?.cancelAndJoin()", "lab.close()")
+        assertBefore(close, "lab.close()", "lab.mixedClientClosedRecord()")
+        assertBefore(close, "lab.mixedClientClosedRecord()", "files.publish(\"mixed-client.txt\", record)")
         assertBefore(close, "lab.close()", "val files = mobileFiles ?: return")
         assertBefore(close, "lab.close()", "lab.mobileClosedRecord(!mobileFailed && mobileStopRequested)")
         assertBefore(close, "lab.mobileClosedRecord(", "files.read(\"closed.txt\", optional = true)")
