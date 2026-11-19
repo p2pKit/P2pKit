@@ -34,7 +34,7 @@ final class RpcPhoneModel: ObservableObject {
 
     private enum LiveReadError: Error { case unavailable }
     private let liveObserver = RpcPhoneLiveObservation<RpcPhoneLab, LiveValue>()
-    let applicationSession = RpcApplicationSession()
+    let applicationSession = RpcApplicationSession_()
     @Published private(set) var requestEntries: [RpcRequestEntry] = []
     @Published private(set) var requestMetrics: [RpcMetricCard] = []
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
