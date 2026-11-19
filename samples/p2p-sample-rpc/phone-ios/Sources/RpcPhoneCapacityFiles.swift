@@ -12,7 +12,7 @@ final class RpcPhoneCapacityFiles {
     private let directory: URL
     private var imported: Set<String> = []
     private static let names: Set<String> = ["prepared.txt", "next-ready.txt", "inbox.txt", "stop.txt", "campaign.txt", "next.txt",
-                                             "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"]
+                                             "ready.txt", "telemetry.txt", "closed.txt", "failed.txt", "discharge.txt", "mixed-client.txt"]
     private static let inputs: Set<String> = ["inbox.txt", "stop.txt", "campaign.txt", "next.txt"]
     private static let stagingNames = Set(inputs.flatMap { [".incoming-" + $0, ".sealed-" + $0] })
 
@@ -163,7 +163,7 @@ final class RpcPhoneCapacityFiles {
 
     /// Only the rotating telemetry slot may replace a file. Other evidence is atomically create-only.
     func publish(_ name: String, _ text: String) throws {
-        guard ["prepared.txt", "next-ready.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"].contains(name) else {
+        guard ["prepared.txt", "next-ready.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt", "discharge.txt", "mixed-client.txt"].contains(name) else {
             throw RpcPhoneCapacityIOError.invalidRecord
         }
         try writeAtomic(name, text)
@@ -176,7 +176,8 @@ final class RpcPhoneCapacityFiles {
             throw RpcPhoneCapacityIOError.invalidRecord
         }
         let target = try path(name)
-        if name == "telemetry.txt" { _ = try read(name, optional: true) }
+        let rotating = name == "telemetry.txt" || name == "discharge.txt"
+        if rotating { _ = try read(name, optional: true) }
         let temporary = directory.appendingPathComponent(".capacity-" + UUID().uuidString).path
         var owned: stat?
         let writeResult: Result<Void, Error>
@@ -197,7 +198,7 @@ final class RpcPhoneCapacityFiles {
                 }
                 guard fsync(fd) == 0 else { throw RpcPhoneCapacityIOError.io }
             }
-            let published = name == "telemetry.txt" ? rename(temporary, target) : link(temporary, target)
+            let published = rotating ? rename(temporary, target) : link(temporary, target)
             guard published == 0 else { throw RpcPhoneCapacityIOError.io }
             try Self.withDescriptor(open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)) { fd in
                 guard fsync(fd) == 0 else { throw RpcPhoneCapacityIOError.io }

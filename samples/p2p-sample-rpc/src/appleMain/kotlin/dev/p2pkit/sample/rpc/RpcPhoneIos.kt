@@ -17,6 +17,13 @@ public object RpcPhoneIos {
         RpcPhoneLab.createMobileCapacityHost(RpcPlatform.ios(), trust, config, "Ios")
 
     @Throws(Exception::class)
+    public suspend fun createMixedClient(
+        plan: RpcMixedClientPlan, settings: RpcPhoneSettings, observedArtifactSha256: String,
+    ): RpcPhoneLab = RpcPhoneLab.createMixedCapacityClient(
+        RpcPlatform.ios(), settings, IosRpcPhoneTrustStore(mixedClient = true), plan, "Ios", observedArtifactSha256,
+    )
+
+    @Throws(Exception::class)
     public suspend fun createHost(settings: RpcPhoneSettings, explicitlyApprovedCapacityPins: String): RpcPhoneLab =
         RpcPhoneLab.createHost(RpcPlatform.ios(), settings, trust, explicitlyApprovedCapacityPins)
 

@@ -270,6 +270,80 @@ them. If it cannot, retain original stage/elapsed evidence and make a reviewed
 local adjustment with honest qualification scope; do not repeatedly launch an
 identical doomed thirty-minute attempt.
 
+## Run the additional capacity phases independently
+
+Each phase uses schema2, the exact prepared products, an approved private LAN,
+and a new run label. Retain any failed attempt before retrying it. These modes
+use the same native process supervisor, fresh Host telemetry, 65-second
+retention check and exact Stop as the original phases.
+
+| Mode | Evidence to inspect |
+| --- | --- |
+| `socket-slow` ([#557](https://github.com/p2pKit/P2pKit/issues/557)) | The Mac scopes one authenticated TCP connection to the selected LAN, requests a smaller receive buffer and pauses reads for at most four seconds. While two exact 1 MiB replies are pending, Darwin reports a receive window smaller than one negotiated segment. An unaffected client gets three exact replies under pressure. The paused client then verifies both original replies, and the cohort recovers. This reports the receiver's kernel window. A physical Host writer stall requires its own evidence. |
+| `mixed-fault` ([#558](https://github.com/p2pKit/P2pKit/issues/558)) | Sixty 30-second epochs. Each uses three rotating identities for remote deadline, caller cancellation and disconnect. A separate peer verifies healthy traffic, business rejection and authorization refusal. Each epoch accounts for three retired handlers, one original-identity reconnect and one exact reply per client. Late or missing epochs fail. This phase has its own counters and leaves the required steady measurements separate. |
+
+For [#552](https://github.com/p2pKit/P2pKit/issues/552), use **`mixed`**:
+
+1. Prepare both phones and the Mac driver from the same committed source.
+   On the opposite phone, obtain **Local identity** from its Client role and
+   then stop it. Carry that verified public pin privately.
+2. Generate the Host's schema2 256-client settings with
+   `settings --clients 256 --physical-client-pin "$COMPANION_PIN"`.
+   Fill in the real Host and Mac network/device values as above. The template
+   binds the companion to the other prepared product's hash.
+3. Start `run --mode mixed --clients 256` with those settings. The Mac starts
+   255 independent identities and the USB inbox approves exactly those pins
+   plus the physical pin. Wait for the coordinator's private
+   `mixed-client-plan.txt` path.
+4. On the opposite phone, select the approved Wi-Fi, open **Advanced → Mixed
+   capacity Client**, paste the private plan and compare the displayed Host pin
+   to the Host's local identity. Choose **Approve Host and start mixed Client**.
+   Start it within the driver's 120-second wait after the Mac clients connect.
+5. The Host checks the exact, original 256 authenticated connections. Each
+   Mac client proves one correlated reply while the physical phone confirms
+   20 of its own. Both remain connected through the cohort release. After the
+   companion stops, copy its immutable `mixed-client.txt` from the
+   `rpc-capacity/mixed-client-<run-label>` app-container directory. On Android
+   verify the corresponding empty completion marker before accepting the copy.
+6. Compare the original coordinator `result.json` and the copied receipt with
+   `review-mixed --result "$RESULT" --companion "$COMPANION_RECORD" --output "$SUMMARY"`.
+   Store the files in a private directory with mode0600. The summary requires
+   both sides' cleanup and retains the pending physical-evidence review status.
+
+### Record a separate real unplugged interval
+
+For [#559](https://github.com/p2pKit/P2pKit/issues/559), use a source-matched
+development app on a real phone. Keep any intended ordinary RPC workload
+running in the foreground, note its run ID, then unplug the cable or external
+charger before tapping **Advanced → Record unplugged battery**. This recorder
+runs without a development connection. Keep the app foreground and awake.
+The sealed USB capacity controller has a separate live telemetry requirement.
+
+The recorder polls public battery and thermal status each second and publishes
+a private checkpoint approximately every ten seconds. An observed charge
+transition, a sample gap above three seconds, leaving the app, or pressing
+Stop ends the interval. Serious or critical thermal state also stops the
+app-owned RPC role. A crash can leave a partial checkpoint, which the review
+retains as incomplete.
+
+After the recorded interval ends, reconnect for evidence retrieval. Copy
+`discharge.txt` from the displayed `rpc-capacity/discharge-<id>` directory.
+Android stores it under app-private `no_backup`; iOS stores it under the
+backup-excluded `Library/Application Support` app container. Use the admitted
+developer connection and a private, mode0600 destination. Review the original:
+
+```bash
+python3 -B scripts/run-rpc-mac-campaign.py review-discharge \
+  --record "$RECORD" --expected-source "$SOURCE_SHA" \
+  --expected-artifact "$INSTALLED_ARTIFACT_SHA256" --output "$SUMMARY"
+```
+
+The summary reports sampled unplugged state, battery-level change when both
+levels are available, and the actual OS sensor values. Record the workload,
+charging setup and ambient conditions alongside it. Android battery
+temperature describes the battery. iOS reports thermal categories and battery
+level. Calibrated energy and power require separate instrumentation.
+
 ## Analyze and recover locally
 
 ```bash
@@ -328,20 +402,18 @@ an exhaustive sensor history.
 
 - Physical Mac/device access, signing, wired copy schemas/timing, real LAN and
   full128/256 measurements still need their actual original evidence.
-- The simultaneous **255 Mac clients + one physical-phone client** topology
-  needs an explicit generator/physical-pin roster and phone-client outcome
-  protocol extension. Current schema2 correctly refuses255/257; a separate
-  Android↔iPhone or Mac Host↔two phones smoke is not that256-client test.
+- The mixed 255+1 topology still needs an actual source-matched run and both
+  phones' original evidence. The Host profile remains256; schema2 still rejects
+  255 and 257 as profile sizes.
 - Existing application UI supports that separately labeled functional role
   matrix: start the source-built Mac Desktop Host (`:p2p-sample-desktop-ui:run`),
   use each phone Client, compare/approve exact pins and run `users.get(123)`,
   `items.list(0,20)`, `message.send`, typed error cases, diagnostic echo, reconnect,
   revocation and Stop. Do the reciprocal Android/iPhone Host/Client cases. Use
   actual application outcomes, not generator counters, as smoke evidence.
-- True socket slow-consumer/backpressure, long mixed fault workloads, precise
-  battery energy and any explicitly physical background/Doze/radio/AWDL tests
-  must remain pending until implemented and observed. The delivered slow-handler
-  test is deliberately not described as those capabilities.
+- The socket-pressure, long mixed-fault and unplugged-recorder phases still
+  need actual device observations. Background/Doze/radio/AWDL and calibrated
+  battery energy remain separately evidenced.
 - #520's real-iOS intermittent investigation stays deferred by the owner's
   separate decision. This campaign does not silently close #462/#133 or other
   installed/physical qualification issues.

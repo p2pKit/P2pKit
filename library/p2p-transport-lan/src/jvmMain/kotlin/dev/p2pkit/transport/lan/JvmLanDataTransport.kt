@@ -234,6 +234,7 @@ internal class JvmLanDataTransport(
                     closeSocketRetainingFailure(socket)?.let(failure::addSuppressed)
                 }
             }
+            val readPause = if (policy != null && role == LanRole.DialOnly) JvmLanReadPause.take() else null
             try {
                 var boundTarget: JvmLanBindTarget? = null
                 ensureDialGeneration(dialGeneration)
@@ -244,6 +245,11 @@ internal class JvmLanDataTransport(
                         boundTarget = target
                         socket.bind(InetSocketAddress(target.address, 0))
                         InetSocketAddress(policy.jvmNumeric(endpoint.host), endpoint.port)
+                    }
+                    if (readPause != null) {
+                        val native = socket as MacLanSocket
+                        native.constrainLabReceiveWindow()
+                        readPause.attach(native::labReceiveWindowConstrained)
                     }
                     socket.connect(destination, timeout)
                     socket.tcpNoDelay = true
@@ -268,7 +274,7 @@ internal class JvmLanDataTransport(
                     }
                 }
                 if (!handedOff) throw stoppedDialFailure()
-                return wrapSocket(socket, route)
+                return wrapSocket(socket, route, readPause)
             } catch (cancelled: CancellationException) {
                 closeSocketRetainingFailure(socket)?.let(cancelled::addSuppressed)
                 JvmLanDiag.log("dial", "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
@@ -670,9 +676,12 @@ internal class JvmLanDataTransport(
     private fun allowsSocket(selected: OrganizationLan, socket: Socket): Boolean =
         if (macBinding == null) selected.allowsJvmSocket(socket) else macBinding.allows(socket)
 
-    private fun wrapSocket(socket: Socket, route: OutboundRoute? = null): JvmRawConnection = JvmRawConnection(
+    private fun wrapSocket(
+        socket: Socket, route: OutboundRoute? = null, readPause: JvmLanReadPause? = null,
+    ): JvmRawConnection = JvmRawConnection(
         socket, io = io, pathAllowed = policy?.let { selected -> { allowsSocket(selected, socket) } },
         outboundRoute = route,
+        readPause = readPause,
         watchPath = pathWatchdog?.let { monitor -> { rejected ->
             monitor.register({ snapshot ->
                 if (macBinding == null) checkNotNull(policy).allowsJvmSocket(socket, snapshot)

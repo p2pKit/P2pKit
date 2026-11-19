@@ -263,6 +263,79 @@ def exercise(value, mode, client_count=128):
     return json.loads(json.dumps(value, allow_nan=False))
 
 
+def mixed_roster(value, client_count):
+    fields = {'schema', 'mode', 'scope', 'status', 'capacityQualified', 'failureCase',
+              'generatorReplies', 'authenticatedPhoneRepliesVerified', 'cohortReleased', 'phoneDisconnected',
+              'cleanup'}
+    record_profile(value, fields, client_count)
+    need(client_count == 256 and value['schema'] == 2 and value['mode'] == 'mixed' and
+         value['scope'] == 'MIXED_CONCURRENT_ROSTER_PENDING_PHYSICAL_CLIENT_RECORD' and
+         value['capacityQualified'] is False and value['cleanup'] == 'AWAIT_FINAL_RECORD' and
+         value['status'] in ('FAIL', 'PENDING_RESOURCE_AND_NETWORK_REVIEW'))
+    need(type(value['generatorReplies']) is int and 0 <= value['generatorReplies'] <= 255 and
+         type(value['authenticatedPhoneRepliesVerified']) is int and
+         value['authenticatedPhoneRepliesVerified'] in (0, 20) and
+         type(value['cohortReleased']) is bool and type(value['phoneDisconnected']) is bool and
+         (not value['phoneDisconnected'] or value['cohortReleased']))
+    if value['status'] == 'PENDING_RESOURCE_AND_NETWORK_REVIEW':
+        need(value['generatorReplies'] == 255 and value['authenticatedPhoneRepliesVerified'] == 20 and
+             value['cohortReleased'] and value['phoneDisconnected'] and value['failureCase'] is None)
+    else:
+        need(value['failureCase'] in ('await-phone', 'generator-probes', 'phone-confirmation', 'release-original-cohort'))
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def socket_slow(value, client_count):
+    fields = {'schema', 'mode', 'scope', 'status', 'capacityQualified', 'failureCase',
+              'measurements', 'cleanup'}
+    record_profile(value, fields, client_count)
+    need(value['schema'] == 2 and value['mode'] == 'socket-slow' and
+         value['scope'] == 'DARWIN_TCP_CONSTRAINED_RECEIVE_WINDOW_PENDING_PHYSICAL_REVIEW' and
+         value['capacityQualified'] is False and value['cleanup'] == 'AWAIT_FINAL_RECORD' and
+         value['status'] in ('FAIL', 'PENDING_RESOURCE_AND_NETWORK_REVIEW'))
+    m = numbers(value['measurements'], ('constrainedWindowHoldMillis', 'pendingWhilePaused', 'unaffectedEchoes',
+        'resumedLargeReplies', 'hostConnectionsBefore', 'hostConnectionsAfter', 'elapsedNanos'))
+    need(m['constrainedWindowHoldMillis'] < 4000 and m['pendingWhilePaused'] in (0, 2) and
+         m['unaffectedEchoes'] <= 3 and m['resumedLargeReplies'] <= 2 and
+         m['hostConnectionsBefore'] in (0, client_count) and m['hostConnectionsAfter'] in (0, client_count) and
+         0 < m['elapsedNanos'] < 30_000_000_000)
+    if value['status'] == 'PENDING_RESOURCE_AND_NETWORK_REVIEW':
+        need(m['constrainedWindowHoldMillis'] >= 1000 and m['pendingWhilePaused'] == m['resumedLargeReplies'] == 2 and
+             m['unaffectedEchoes'] == 3 and m['hostConnectionsBefore'] == m['hostConnectionsAfter'] == client_count and
+             value['failureCase'] is None)
+    else:
+        need(value['failureCase'] in ('initial-cohort', 'socket-read-hold', 'unaffected-peer',
+                                      'resumed-echoes', 'cohort-recovery'))
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def mixed_fault(value, client_count):
+    fields = {'schema', 'mode', 'scope', 'status', 'capacityQualified', 'failureCase',
+              'measurements', 'cleanup'}
+    record_profile(value, fields, client_count)
+    need(value['schema'] == 2 and value['mode'] == 'mixed-fault' and
+         value['scope'] == 'AUTHENTICATED_MIXED_FAULTS_NOT_STEADY' and
+         value['capacityQualified'] is False and value['cleanup'] == 'AWAIT_FINAL_RECORD' and
+         value['status'] in ('FAIL', 'PENDING_RESOURCE_AND_NETWORK_REVIEW'))
+    per_epoch = ('liveEchoes', 'sentDeadlines', 'sentCancellations', 'disconnectUnknownOutcomes',
+                 'authorizationRefusals', 'businessErrors', 'disconnects', 'reconnects')
+    m = numbers(value['measurements'], per_epoch + (
+        'roundsCompleted', 'cohortEchoes', 'retiredHandlers', 'elapsedNanos'))
+    rounds = m['roundsCompleted']
+    partial = min(rounds + 1, 60)
+    need(rounds <= 60 and 0 < m['elapsedNanos'] < 1830000000000 and
+         all(rounds <= m[name] <= partial for name in per_epoch) and
+         rounds * client_count <= m['cohortEchoes'] <= partial * client_count and
+         rounds * 3 <= m['retiredHandlers'] <= partial * 3 and
+         m['reconnects'] <= m['disconnects'] and m['disconnectUnknownOutcomes'] <= m['disconnects'])
+    if value['status'] == 'PENDING_RESOURCE_AND_NETWORK_REVIEW':
+        need(rounds == 60 and m['elapsedNanos'] >= 1800000000000 and value['failureCase'] is None)
+    else:
+        need(value['failureCase'] in ('initial-cohort', 'remote-entry', 'healthy-traffic-and-refusals',
+                                      'fault-outcomes', 'original-cohort-recovery', 'epoch-schedule'))
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
 def connected_idle(value, client_count=128):
     """Separate real-host monotonic idle samples; neither initialization nor steady capacity evidence."""
     record_profile(value, {'schema', 'sourceSha', 'runLabel', 'hostPlatform', 'hostArtifactSha256',

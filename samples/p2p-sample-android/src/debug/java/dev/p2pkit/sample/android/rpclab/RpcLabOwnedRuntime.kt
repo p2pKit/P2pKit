@@ -5,7 +5,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 
 /** Bound cleanup data, not an Activity-bound close callback. The active monitor is drained before retirement. */
-internal class RpcLabOwnedRuntime(val lab: RpcPhoneLab, val mobileFiles: AndroidRpcCapacityFiles?) {
+internal class RpcLabOwnedRuntime(
+    val lab: RpcPhoneLab,
+    val mobileFiles: AndroidRpcCapacityFiles?,
+    private val mixedFiles: AndroidRpcCapacityFiles? = null,
+) {
     @Volatile private var monitor: Job? = null
     @Volatile var mobileFailed: Boolean = false
         private set
@@ -24,6 +28,11 @@ internal class RpcLabOwnedRuntime(val lab: RpcPhoneLab, val mobileFiles: Android
             monitor?.cancelAndJoin()
             monitor = null
             lab.close()
+            mixedFiles?.let { files ->
+                val record = lab.mixedClientClosedRecord()
+                val previous = files.read("mixed-client.txt", optional = true)
+                if (previous == null) files.publish("mixed-client.txt", record) else check(previous == record)
+            }
             val files = mobileFiles ?: return
             val receipt = lab.mobileClosedRecord(!mobileFailed && mobileStopRequested)
             // A retry verifies the same receipt, never replaces an earlier result.

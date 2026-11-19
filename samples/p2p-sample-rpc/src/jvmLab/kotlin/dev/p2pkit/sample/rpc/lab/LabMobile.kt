@@ -16,13 +16,20 @@ import java.nio.file.LinkOption
 
 /** Explicit USB control integration. It never supplies or substitutes the RPC data transport. */
 internal class LabMobile(private val config: LabConfig, internal val values: Map<String, String>) {
-    private val binding = values - "hostInterface"
+    private val extras = setOf("physicalClientPin", "physicalClientArtifactSha256")
+    val physicalPin: PeerFingerprint? = values["physicalClientPin"]?.let(PeerFingerprint::parse)
+    private val binding = values - "hostInterface" - extras
     val platform: RpcCapacityHostPlatform = RpcCapacityHostPlatform.valueOf(values.getValue("hostPlatform"))
     val artifactSha256: String = values.getValue("hostArtifactSha256")
 
     init {
         val schema = values.getValue("schema")
-        require(values.keys == RpcMobileCapacityConfig.bindingFields(schema) + setOf("schema", "scope", "hostInterface"))
+        val expected = RpcMobileCapacityConfig.bindingFields(schema) + setOf("schema", "scope", "hostInterface")
+        require(values.keys == if (physicalPin == null) expected else expected + extras)
+        if (physicalPin != null) {
+            require(schema == "2" && config.clientCount == 256)
+            require(values.getValue("physicalClientArtifactSha256").matches(Regex("[a-f0-9]{64}")))
+        }
         require(platform in setOf(RpcCapacityHostPlatform.Android, RpcCapacityHostPlatform.Ios))
         require(values.getValue("runLabel") == config.runLabel && values.getValue("hostSourceSha") == config.sourceSha)
         require(config.sourceSha == RpcPhoneLab.compiledSource)
@@ -33,13 +40,15 @@ internal class LabMobile(private val config: LabConfig, internal val values: Map
     }
 
     fun prepare(pins: List<PeerFingerprint>) {
+        val roster = pins + listOfNotNull(physicalPin)
+        require(roster.toSet().size == config.clientCount)
         val fields = values + mapOf(
             "subnets" to config.values.getValue("subnets"), "hostAddress" to config.endpointAddress,
-            "hostPort" to config.port.toString(), "clientPins" to pins.joinToString(",") { it.value },
+            "hostPort" to config.port.toString(), "clientPins" to roster.joinToString(",") { it.value },
         )
         val text = encodeMobileRecord(fields)
         // Apply the SAME phone parser and original OrganizationLan policy before asking the local UI to approve it.
-        require(RpcMobileCapacityConfig.parse(text).pins == pins.toSet())
+        require(RpcMobileCapacityConfig.parse(text).pins == roster.toSet())
         LabFiles.write(config.directory.resolve("mobile-inbox.txt"), text.toByteArray(Charsets.US_ASCII))
     }
 

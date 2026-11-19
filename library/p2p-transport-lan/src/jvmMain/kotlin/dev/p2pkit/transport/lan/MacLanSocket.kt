@@ -160,6 +160,19 @@ internal class MacLanSocket(
         if (local?.address != address.address || local?.port == 0) throw SocketException("Scoped TCP bind mismatch")
     }
 
+    internal fun constrainLabReceiveWindow() {
+        check(!isConnected && verifyScope())
+        checkResult("lab-receive-buffer", api.option(owned.value(), 3, 1))
+    }
+
+    internal fun labReceiveWindowConstrained(): Boolean {
+        check(isConnected && verifyScope())
+        val result = api.option(owned.value(), 4, 1)
+        if (errors.retry(result)) return false
+        checkResult("lab-receive-window", result)
+        return true
+    }
+
     override fun connect(endpoint: SocketAddress?, timeout: Int) {
         require(timeout > 0) { "Scoped TCP connect requires its existing finite deadline" }
         if (local == null || connected) throw SocketException("Scoped TCP connect requires an unconnected bound socket")

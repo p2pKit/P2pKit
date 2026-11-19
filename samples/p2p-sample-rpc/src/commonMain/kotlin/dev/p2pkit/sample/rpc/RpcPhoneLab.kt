@@ -1,6 +1,8 @@
 package dev.p2pkit.sample.rpc
 
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.FeatureState
+import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.rpc.RpcClient
 import dev.p2pkit.rpc.RpcDiagnostics
@@ -236,6 +238,7 @@ public class RpcPhoneLab private constructor(
     private val operationFailures = PhoneOperationFailureState()
     private val controlBusy = MutableStateFlow(false)
     private var mobileRun: PhoneMobileRun? = null
+    private var mixedRun: MixedCapacityClientRun? = null
     private var discovery: RpcDiscoveryCoordinator? = null
     public val nearbyMode: Boolean get() = discovery != null || nearbyHost
     private var nearbyHost = false
@@ -472,6 +475,21 @@ public class RpcPhoneLab private constructor(
         }
     }
 
+    @Throws(Exception::class)
+    public suspend fun runMixedClient() {
+        operationFailures.effect { checkNotNull(mixedRun).execute(checkNotNull(client)) }
+    }
+
+    @Throws(Exception::class)
+    public fun beginMixedClient(onComplete: (String?) -> Unit): RpcPhoneOperation =
+        controlOperation(onComplete) { runMixedClient() }
+
+    @Throws(Exception::class)
+    public fun mixedClientClosedRecord(): String {
+        operationFailures.requireHealthy()
+        return checkNotNull(mixedRun).record()
+    }
+
     /** Foreground loss cancels owned calls and closes the runtime; it does not undo remote side effects. */
     @Throws(Exception::class)
     public suspend fun close() {
@@ -486,6 +504,12 @@ public class RpcPhoneLab private constructor(
                 } finally {
                     scope.coroutineContext[Job]?.cancelAndJoin()
                     host?.let { application?.history?.retireHost(it.requests.value.hostIncarnation) }
+                }
+                mixedRun?.let { run ->
+                    if (!run.closed) {
+                        run.trust.retire()
+                        run.closed = true
+                    }
                 }
                 mobileRun?.let { run ->
                     if (!run.closed.value) {
@@ -513,7 +537,7 @@ public class RpcPhoneLab private constructor(
             require(trustStore.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients).isEmpty())
             try {
                 val lab = createHostInternal(platform, config.settings, trustStore, config.clientPins, null,
-                    capacityExercises = config.schema == "2")
+                    capacityExercises = config.schema == "2", mixed = config.mixedHost)
                 lab.mobileRun = PhoneMobileRun(config, trustStore)
                 // Return the owned runtime before performing fallible USB publication.
                 // mobileReadyRecord subsequently verifies its actual bound endpoint.
@@ -559,7 +583,7 @@ public class RpcPhoneLab private constructor(
         private suspend fun createHostInternal(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
             explicitlyApprovedCapacityPins: String, application: RpcApplicationSession?, nearby: Boolean = false,
-            capacityExercises: Boolean = false,
+            capacityExercises: Boolean = false, mixed: MixedCapacityHost? = null,
         ): RpcPhoneLab {
             val policy = settings.policy(host = true)
             val capacityPins = explicitlyApprovedCapacityPins.takeIf(String::isNotEmpty)?.let(::parseCapacityPins)
@@ -569,7 +593,8 @@ public class RpcPhoneLab private constructor(
             val owner = PhoneFactoryOwner<RpcHost>(RpcHost::close)
             val scope = owner.scope
             try {
-                val host = RpcHost.create(platform, scope) {
+                lateinit var host: RpcHost
+                host = RpcHost.create(platform, scope) {
                     appId = RpcCapacityContract.appId
                     lan = policy
                     this.trustStore = trustStore
@@ -586,6 +611,11 @@ public class RpcPhoneLab private constructor(
                         RpcReply.Success(value)
                     }
                     if (capacityExercises) registerCapacityExercises(checkNotNull(capacityPins))
+                    mixed?.register(this) {
+                        host.connections.value.filter {
+                            it.admission == PeerAdmission.Trusted && it.state == ConnectionState.Connected
+                        }.associate { checkNotNull(it.peer.fingerprint) to it.generation }
+                    }
                 }.also { owner.resource = it }
                 host.start()
                 return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby }
@@ -613,9 +643,33 @@ public class RpcPhoneLab private constructor(
             application: RpcApplicationSession,
         ): RpcPhoneLab = createClientInternal(platform, settings, trustStore, application, nearby = true)
 
+        /** Explicit one-run approval in the platform's separate protected companion store. */
+        @Throws(Exception::class)
+        public suspend fun createMixedCapacityClient(
+            platform: RpcPlatform, settings: RpcPhoneSettings, isolatedTrustStore: RpcTrustStore,
+            plan: RpcMixedClientPlan, actualPlatform: String, observedArtifactSha256: String,
+        ): RpcPhoneLab {
+            plan.verify(actualPlatform, observedArtifactSha256)
+            require(settings.policy(host = false).allows(plan.selectedHost.endpoint.address))
+            val trust = MixedClientTrust(isolatedTrustStore, plan.selectedHost.fingerprint)
+            val key = RpcCapacityContract.appId
+            val purpose = RpcTrustPurpose.SelectedHosts
+            require(trust.load(key, purpose).isEmpty())
+            try {
+                trust.replace(key, purpose, setOf(plan.selectedHost.fingerprint))
+                val run = MixedCapacityClientRun(plan, trust)
+                return createClientInternal(platform, settings, trust, null, mixed = run)
+            } catch (failure: Throwable) {
+                withContext(NonCancellable) {
+                    try { trust.retire() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                }
+                throw failure
+            }
+        }
+
         private suspend fun createClientInternal(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
-            application: RpcApplicationSession?, nearby: Boolean = false,
+            application: RpcApplicationSession?, nearby: Boolean = false, mixed: MixedCapacityClientRun? = null,
         ): RpcPhoneLab {
             val owner = PhoneFactoryOwner<RpcClient>(RpcClient::close)
             val scope = owner.scope
@@ -623,10 +677,14 @@ public class RpcPhoneLab private constructor(
                 val client = RpcClient.create(platform, scope) {
                     appId = RpcCapacityContract.appId
                     lan = settings.policy(host = false)
-                    transportReconnect = !nearby
+                    transportReconnect = !nearby && mixed == null
                     this.trustStore = trustStore
                 }.also { owner.resource = it }
                 val lab = RpcPhoneLab(scope, null, client, application)
+                if (mixed != null) {
+                    require(client.fingerprint == mixed.plan.physicalPin)
+                    lab.mixedRun = mixed
+                }
                 if (nearby) {
                     lab.discovery = RpcDiscoveryCoordinator(scope, RpcClientDiscoveryAdapter(client), trustStore,
                         lab.operationFailures)

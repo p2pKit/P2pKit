@@ -301,9 +301,11 @@ def classpath(source: str) -> str:
 
 
 def workload_entrypoint(role, mode, schema_version=1):
-    need(role in ("host", "client") and mode in ("steady", "large", "correctness", "churn") and
+    need(role in ("host", "client") and mode in ("steady", "large", "correctness", "churn", "mixed-fault", "socket-slow", "mixed") and
          type(schema_version) is int and schema_version in (1, 2), "Unknown lab workload/role/schema")
     need(mode != "churn" or schema_version == 2, "Churn controls require explicit schema2 configuration")
+    need(mode not in ("mixed-fault", "socket-slow", "mixed") or (role == "client" and schema_version == 2),
+         "Extended controls require the schema2 mobile client driver")
     if mode == "correctness" and schema_version == 1:
         return (("dev.p2pkit.sample.rpc.lab.LabHostKt", ["--owner-authorized-correctness-host"]) if role == "host" else
                 ("dev.p2pkit.sample.rpc.lab.LabRpcChecksKt", ["--owner-authorized-correctness-run"]))
@@ -366,6 +368,12 @@ def completed_client_results(report, values, mode):
                      "Connected-idle source or run mismatch")
                 if idle["status"] != "OBSERVED_CONNECTED_IDLE_NOT_CAPACITY":
                     return False
+    elif mode == "mixed":
+        evidence.mixed_roster(report["measurement"], clients)
+    elif mode == "socket-slow":
+        evidence.socket_slow(report["measurement"], clients)
+    elif mode == "mixed-fault":
+        evidence.mixed_fault(report["measurement"], clients)
     elif schema == 2:
         evidence.exercise(report["measurement"], mode, client_count=clients)
     else:
@@ -374,7 +382,7 @@ def completed_client_results(report, values, mode):
 
 
 def profile_options(directory: Path, mode: str) -> list[str]:
-    need(mode in ("steady", "large", "correctness", "churn"), "Invalid profile workload")
+    need(mode in ("steady", "large", "correctness", "churn", "mixed-fault", "socket-slow", "mixed"), "Invalid profile workload")
     if mode != "steady":
         return []
     # A short CPU/wait sample inside the original full workload, NOT a shorter
@@ -490,7 +498,7 @@ def main():
     parser.add_argument("operation", choices=("prepare", "run", "import-control", "stop"))
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--role", choices=("host", "client"))
-    parser.add_argument("--mode", choices=("steady", "large", "correctness", "churn"), default="steady")
+    parser.add_argument("--mode", choices=("steady", "large", "correctness", "churn", "mixed-fault", "socket-slow", "mixed"), default="steady")
     parser.add_argument("--cpu-placement", choices=cpu.POLICIES, default=cpu.INHERITED,
                         help="Explicit same-host resource experiment; never a production dispatcher override")
     parser.add_argument("--settings", type=Path, help="Private control-format config for prepare; sourceSha must match")

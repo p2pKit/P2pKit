@@ -55,6 +55,7 @@ def settings(value, source, label, lab):
     fields = SETTINGS | ({'clientCount'} if value['schema'] == '2' else set())
     if value['schema'] == '2' and 'adbCampaignKeys' in value:
         fields |= {'adbCampaignKeys'}
+    fields |= set(protocol.mixed_fields(value))
     need(set(value) == fields and all(type(v) is str for v in value.values()))
     need(value['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', value['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
@@ -166,6 +167,10 @@ class Run:
         raw = self.lab.read_private(args.settings)
         self.values = self.lab.parse(raw)
         self.config = self.configuration(source, args.run_label)
+        need(args.mode != 'socket-slow' or self.native_host == 'macos-arm64',
+             'Socket pressure requires the native Darwin lab receiver')
+        self.mixed = protocol.mixed_fields(self.values)
+        need(bool(self.mixed) == (args.mode == 'mixed'), 'Companion settings are required only for mixed mode')
         self.lab.classpath(source)  # Verify every prepared JAR; never accept a caller-supplied classpath.
         self.control = self.lab.private_directory(self.state / 'work') / ('mobile-control-' + args.run_label)
         self.control.mkdir(mode=0o700)
@@ -174,9 +179,9 @@ class Run:
         for name in ('usb', 'commands'):
             (self.control / name).mkdir(mode=0o700)
         self.mode = args.mode
-        need(self.mode in ('steady', 'large', 'correctness', 'churn') and
+        need(self.mode in ('steady', 'large', 'correctness', 'churn', 'mixed-fault', 'socket-slow', 'mixed') and
              (self.values['schema'] == '2' or self.mode in ('steady', 'large')),
-             'Correctness/churn mobile controls require schema2 and an explicit profile')
+             'Mobile exercise modes require schema2 and an explicit profile')
         self.bound = dict(schema=self.values['schema'], scope=protocol.SCOPE, runLabel=args.run_label,
             runNonce=os.urandom(32).hex(), hostPlatform=self.phone_platform, hostSourceSha=source,
             hostArtifactSha256=self.values['hostArtifactSha256'])
@@ -290,7 +295,7 @@ class Run:
     def launch(self):
         self.lab.write_private(self.directory / 'config.txt', self.lab.encode(self.config))
         self.lab.write_private(self.directory / 'mobile.txt', protocol.encode(self.bound | dict(
-            hostInterface=self.values['hostInterface'])))
+            hostInterface=self.values['hostInterface']) | self.mixed))
         self.client_argv = [sys.executable, str(ROOT / 'scripts/run-rpc-capacity-lab.py'), 'run',
             '--directory', str(self.directory), '--role', 'client', '--mode', self.mode]
         argv = [sys.executable, str(ROOT / 'scripts/run-audit-command.py'), '--id', self.client_id,
@@ -306,6 +311,8 @@ class Run:
             time.sleep(.1)
         inbox = self.lab.read_private(self.directory / 'mobile-inbox.txt')
         self.result['inboxSha256'] = hashlib.sha256(inbox).hexdigest()
+        parsed_inbox = protocol.inbox(inbox, self.bound)
+        need(protocol.mixed_fields(parsed_inbox) == self.mixed, 'Generated roster differs from the approved topology')
         self.phone.provision(inbox)
         if self.bound['schema'] == '2':
             self.phone.activate(inbox)
@@ -321,6 +328,16 @@ class Run:
             if row is not None:
                 self.protocol.ready(row)
                 self.lab.write_private(self.directory / 'host-ready.txt', protocol.encode(row))
+                if self.mixed:
+                    plan = dict(schema='1', scope='physical-mixed-rpc-client', runLabel=self.bound['runLabel'],
+                        runNonce=self.bound['runNonce'], hostSourceSha=self.bound['hostSourceSha'],
+                        hostArtifactSha256=self.bound['hostArtifactSha256'], hostPlatform=self.phone_platform,
+                        hostPin=row['fingerprint'], hostAddress=row['address'], hostPort=row['port'],
+                        physicalClientPlatform='Ios' if self.phone_platform == 'Android' else 'Android') | self.mixed
+                    path = self.control / 'mixed-client-plan.txt'
+                    self.lab.write_private(path, protocol.encode(plan))
+                    self.result['mixedClientPlan'] = plan
+                    print('Import the private plan on the opposite prepared phone: ' + str(path), flush=True)
                 return
             time.sleep(.1)
 
@@ -379,6 +396,12 @@ class Run:
             need(value.get('schema', 1) == 1 and 'clientCount' not in value, 'Schema1 is exactly128 clients')
 
     def measurement(self, value):
+        if self.mode == 'mixed':
+            return evidence.mixed_roster(value, self.protocol.client_count)
+        if self.mode == 'socket-slow':
+            return evidence.socket_slow(value, self.protocol.client_count)
+        if self.mode == 'mixed-fault':
+            return evidence.mixed_fault(value, self.protocol.client_count)
         if self.mode in ('correctness', 'churn'):
             need(self.protocol.binding['schema'] == '2', 'Exercise controls require schema2')
             return evidence.exercise(value, self.mode, client_count=self.protocol.client_count)
@@ -542,7 +565,7 @@ def main():
     parser.add_argument('--owner-authorized-mobile', action='store_true', required=True)
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--run-label', required=True)
-    parser.add_argument('--mode', choices=('steady', 'large', 'correctness', 'churn'), required=True)
+    parser.add_argument('--mode', choices=('steady', 'large', 'correctness', 'churn', 'mixed-fault', 'socket-slow', 'mixed'), required=True)
     parser.add_argument('--install-android-apk', type=Path,
                         help='First deployment only: exact checksum-bound development APK through the private USB server')
     parser.add_argument('--source', type=Path, default=HARNESS_ROOT,
