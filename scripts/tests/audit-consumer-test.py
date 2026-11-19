@@ -1630,7 +1630,7 @@ class ConsumerGateTest(unittest.TestCase):
                 # Immutable published rc7 producer, independent of the newer current-source repair.
                 boundary = boundary.replace("3.6.3-p2pkit.410.8", "3.6.3-p2pkit.410.7")
                 boundary = boundary.replace(KOTLIN_VERSION, "2.4.20")
-            elif version in ("0.8.0-rc8", "0.8.0-rc10", "0.8.0-rc11", "0.8.0-rc12"):
+            elif version in ("0.8.0-rc8", "0.8.0-rc10", "0.8.0-rc11", "0.8.0-rc12", "0.8.0-rc13"):
                 # Published producer metadata remains independent of a future consumer catalog.
                 boundary = boundary.replace(KOTLIN_VERSION, "2.4.20")
             path.write_text(boundary)
@@ -1883,6 +1883,9 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertFalse(self.calls("gradle"))
         self.assertFalse(self.calls("xcrun"))
 
+    def test_latest_published_rc13_complete_contract(self):
+        self.assert_complete_latest_published_contract("0.8.0-rc13")
+
     def test_repository_actual_latest_published_has_reviewed_complete_contract(self):
         # Deliberately select the maintained property, not a hard-coded old RC.
         latest = next(line.split("=", 1)[1].strip() for line in
@@ -2040,9 +2043,9 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertFalse(self.calls("xcrun"))
 
     def test_latest_published_unknown_contract_fails_before_remote_or_gradle_boundary(self):
-        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc9", "0.8.0-rc13", "0.8.0-rc20", "0.8.0-rc2-extra",
+        for version in ("0.7.0-rc1", "0.7.0-rc30", "0.8.0-rc9", "0.8.0-rc14", "0.8.0-rc20", "0.8.0-rc2-extra",
                         "0.8.0-rc7-extra", "0.8.0-rc8-extra", "0.8.0-rc10-extra", "0.8.0-rc11-extra",
-                        "0.8.0-rc12-extra", "0.8.0", VERSION):
+                        "0.8.0-rc12-extra", "0.8.0-rc13-extra", "0.8.0", VERSION):
             with self.subTest(version=version):
                 self.select_latest_published_fixture(version)
                 result = self.run_gate({"P2PKIT_CONSUMER_REPOSITORY_URL": "https://repository.example.invalid/maven"},

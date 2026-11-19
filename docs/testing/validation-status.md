@@ -4,15 +4,16 @@
 
 Use [`LATEST_PUBLISHED_VERSION`](../../gradle.properties) and its immutable
 [release record](../README.md#test-and-release) for published evidence. The latest
-verified record is [`0.8.0-rc12`](../releases/0.8.0-rc12.md), source
-`4c25bf28a9c1561c129387b7c6786425b18e0f98`, tree
-`74e23d7b0aa07d38b53ee15445eb4c2a002d7412`.
-Original main [42360977579/1](https://github.com/p2pKit/P2pKit/actions/runs/42360977579)
+verified record is [`0.8.0-rc13`](../releases/0.8.0-rc13.md), source
+`a8f846a55f12212fb54d1365ecb445a3665e4f6f`, tree
+`ad1152349bbb40300a08f96ad129ddb1fb755b8c`.
+Main qualification [44444580051/2](https://github.com/p2pKit/P2pKit/actions/runs/44444580051/attempts/2)
 passed all fourteen mandatory components, 125 declared commands and four
-application producers with closed captures and known cleanup. Its report
+application producers with closed captures and known cleanup. Android and
+Linux JVM passed on the same-source retry. The report
 entries are hash-bound metadata, not unique or decrypted test counts.
 Protected Maven
-[42364155910/1](https://github.com/p2pKit/P2pKit/actions/runs/42364155910)
+[44450733359/1](https://github.com/p2pKit/P2pKit/actions/runs/44450733359)
 passed original signed-bundle validation, 242-file byte comparison and complete
 isolated consumer builds. Read-only archive inspection checked all 726 file
 hashes; original publisher validation covers the 121 signatures across 21
@@ -133,8 +134,8 @@ native ARM64/Intel simulator components retain their own source-bound reports.
 `complete-gate` requires their actual successful aggregation, including on
 ordinary documentation PRs. A focused component pass is not complete qualification.
 
-The recorded rc12 selection has actual same-source results for all fourteen
-components, all from the original main attempt recorded above. They must not be
+The recorded rc13 selection has actual same-source results for all fourteen
+components from the two main attempts recorded above. They must not be
 reused as a pass for changed source. Deterministic callbacks, loopback TCP and
 hosted multicast still do not establish physical-network coverage.
 Release rc8 implements known-route protection for #120, not fair unknown-peer
