@@ -37,7 +37,10 @@ def checked_classpath_entries(directory, entries, native):
 def launcher_source(manifest_digest, source, java, java_digest):
     """The reviewed launch script, not a mutable adjacent manifest, pins launch authority."""
     constants = repr((manifest_digest, source, java, java_digest))
-    return "#!/usr/bin/env python3\nEXPECTED = " + constants + "\n" + r'''import hashlib, json, os, pathlib, subprocess
+    return "#!/usr/bin/env python3\nEXPECTED = " + constants + "\n" + r'''import argparse, hashlib, json, os, pathlib, subprocess, tempfile
+parser = argparse.ArgumentParser(description='Open the source-matched RPC test app.')
+parser.add_argument('--new-test-profile', action='store_true', help='Create a separate private test profile.')
+args = parser.parse_args()
 base = pathlib.Path(__file__).resolve().parent
 manifest = base / 'manifest.json'
 assert not manifest.is_symlink() and manifest.is_file()
@@ -72,7 +75,15 @@ subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(native)], check
 env = dict(os.environ)
 for key in ('JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH'):
     env.pop(key, None)
-os.execve(str(java), [str(java), '-Ddev.p2pkit.lan.macos.nativeDir=' + str(base / 'native'),
+jvm_options = []
+if args.new_test_profile:
+    profile_home = pathlib.Path.home().resolve(strict=True)
+    profile = pathlib.Path(tempfile.mkdtemp(prefix='.p2pkit-rpc-test-', dir=profile_home))
+    assert profile.is_dir() and not profile.is_symlink() and profile.stat().st_uid == os.getuid()
+    assert profile.stat().st_mode & 0o777 == 0o700
+    jvm_options.append('-Ddev.p2pkit.rpc.profileDir=' + str(profile))
+    print('New private test profile. Choose a new passphrase in the RPC app.', flush=True)
+os.execve(str(java), [str(java), *jvm_options, '-Ddev.p2pkit.lan.macos.nativeDir=' + str(base / 'native'),
     '-cp', os.pathsep.join(paths), 'dev.p2pkit.sample.rpc.desktop.RpcDesktopMainKt'], env)
 '''
 

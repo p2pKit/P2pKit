@@ -241,7 +241,7 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([90, 7], [len(methods) for methods in actual.values()])
+        self.assertEqual([99, 10], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
@@ -318,7 +318,7 @@ class PhoneResultControls(unittest.TestCase):
     def test_reviewed_environment_commands_and_two_new_owner_controls_are_all_required(self):
         expected = phone.inventory(ROOT)["p2pkit-rpc-phone-tests"]
         owner = {name for name in expected if name.startswith("RpcPhoneRunOwnerTests/")}
-        self.assertEqual(len(owner), 79)
+        self.assertEqual(len(owner), 82)
         self.assertTrue({"RpcPhoneRunOwnerTests/" + name + "()" for name in (
             "testUsedOrInterruptedRuntimeOutputsAreRefusedBeforeReusingAUsbRun",
             "testDebugCampaignAndNextInputsRequireSealsAndCannotBeReplayedIntoANewFileOwner",
@@ -441,6 +441,21 @@ class PhoneResultControls(unittest.TestCase):
         self.assertEqual(argv[argv.index("--project-root") + 1], str(parent))
         self.assertEqual(argv[argv.index("--spec") + 1], str(ROOT / "samples/p2p-sample-rpc/phone-ios/project.yml"))
         self.assertIn("--no-env", argv)
+
+    def test_repeated_controls_keep_both_generated_projects_and_the_canonical_signed_producer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            signed = root / "samples/p2p-sample-rpc/build/phone-ios"
+            signed.mkdir(parents=True)
+            marker = signed / "retained.txt"
+            marker.write_text("ORIGINAL_SYNTHETIC_PRODUCER")
+            first = phone.new_controls_project(root)
+            second = phone.new_controls_project(root)
+            self.assertNotEqual(first, second)
+            self.assertTrue(first.is_dir() and second.is_dir())
+            self.assertEqual(marker.read_text(), "ORIGINAL_SYNTHETIC_PRODUCER")
+            self.assertEqual(first.parent, signed.parent)
+            self.assertEqual(first.stat().st_mode & 0o777, 0o700)
 
     def run_stubbed_hook(self, python):
         # The stub exits before any Gradle/artifact operation. Its deliberately

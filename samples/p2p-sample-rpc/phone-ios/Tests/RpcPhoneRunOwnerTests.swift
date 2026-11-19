@@ -658,6 +658,18 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     }
 
     @MainActor
+    func testManualTestMayUseTheBoundedShareWindowButOtherBusyWorkCannot() {
+        XCTAssertTrue(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: false))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: true,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: false))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: false, capacitySession: true))
+        XCTAssertFalse(RpcPhoneShareWindow.eligible(running: true, actionBusy: false,
+            operationBusy: true, manualTestRunning: true, cleanupPending: true, capacitySession: false))
+    }
+
+    @MainActor
     func testShareWindowEligibilityRejectsBusyRetiringAndCapacityRoles() {
         for flags in 0..<32 {
             XCTAssertEqual(RpcPhoneShareWindow.eligible(running: flags & 1 != 0,
@@ -1329,10 +1341,12 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         model.setManualNetworkSetup(true)
         model.subnets = "10.0.0.0/24"
         model.refreshWifi()
-        XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
+        XCTAssertTrue(model.canRefreshWifi)
+        XCTAssertFalse(model.canConfirmWifi)
         XCTAssertTrue(model.wifiExplanation.contains("Manual"))
         XCTAssertEqual(model.subnets, "10.0.0.0/24")
-        XCTAssertEqual(wifi.callbacks.count, 1)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertEqual(wifi.callbacks.count, 2)
         model.setManualNetworkSetup(false)
         let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
         wifi.publish(network)
@@ -1344,13 +1358,13 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
         XCTAssertTrue(model.wifiExplanation.contains("starting"))
         model.refreshWifi()
-        XCTAssertEqual(wifi.callbacks.count, 1)
-        XCTAssertEqual(wifi.stops, 0)
+        XCTAssertEqual(wifi.callbacks.count, 2)
+        XCTAssertEqual(wifi.stops, 1)
         model.stop() // Synchronous Stop prevents the scheduled task from entering the real network factory.
         XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
         XCTAssertTrue(model.wifiExplanation.contains("cleanup"))
         model.refreshWifi()
-        XCTAssertEqual(wifi.callbacks.count, 1)
+        XCTAssertEqual(wifi.callbacks.count, 2)
         let stopped = expectation(description: "scheduled start and cleanup retire without a Wi-Fi refresh")
         let statusObservation = model.$status.sink {
             if $0 == "Stopped; owned RPC cleanup completed." { stopped.fulfill() }
@@ -1534,6 +1548,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         model.subnets = "10.1.2.0/24"
         model.interfaceName = "en3"
         model.localAddress = "10.1.2.3"
+        XCTAssertTrue(model.canRefreshWifi)
+        XCTAssertFalse(model.canConfirmWifi)
+        model.refreshWifi()
+        XCTAssertEqual(model.localAddress, "10.1.2.3")
         wifi.publish(nil)
         wifi.publish(network)
         model.confirmWifi()
@@ -1712,6 +1730,83 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
             XCTAssertFalse(model.actionBusy)
             XCTAssertTrue(model.canStart)
         }
+    }
+
+    @MainActor
+    func testPreparedDeveloperWaitStaysAwakeAndForegroundLossRecordsCancellationWithoutReplay() async throws {
+        #if DEBUG
+        let label = "control-" + UUID().uuidString.lowercased()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        model.setForeground(true)
+        let arguments = ["phone", "--rpc-usb-prepare", label, "--rpc-usb-source-sha", model.compiledSource,
+                         "--rpc-usb-artifact-sha256", try RpcPhoneProcessSampler.installedArtifact(),
+                         "--rpc-usb-client-count", "128"]
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertNil(model.startProblem)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+        let files = try RpcPhoneCapacityFiles(runLabel: label)
+        let prepared = try XCTUnwrap(files.read("prepared.txt"))
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        // No task scheduling is required to preserve this immediate lifecycle interruption.
+        model.setForeground(false)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        let failure = try XCTUnwrap(files.read("failed.txt"))
+        XCTAssertEqual(failure, "failed=true\nphase=mobile-start\nreason=ForegroundLostBeforeStart\n")
+        await Task.yield()
+        model.setForeground(true)
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertNil(model.startProblem, "The same launch must not recreate its old slot")
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        XCTAssertEqual(try files.read("prepared.txt"), prepared)
+        XCTAssertEqual(try files.read("failed.txt"), failure)
+        XCTAssertNil(try files.read("closed.txt", optional: true), "Cancellation is never a successful Stop")
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        model.setForeground(false)
+        try retirePreparedDeveloperFixture(label: label)
+        #else
+        XCTFail("Prepared developer lifecycle controls require the Debug build")
+        #endif
+    }
+
+    @MainActor
+    func testExplicitPreStartCampaignCancellationRetiresKeepAwakeAndPreservesFailedSlot() async throws {
+        #if DEBUG
+        let label = "control-" + UUID().uuidString.lowercased()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        model.setForeground(true)
+        let arguments = ["phone", "--rpc-usb-prepare", label, "--rpc-usb-source-sha", model.compiledSource,
+                         "--rpc-usb-artifact-sha256", try RpcPhoneProcessSampler.installedArtifact(),
+                         "--rpc-usb-client-count", "256"]
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+        model.clearMobile()
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        let files = try RpcPhoneCapacityFiles(runLabel: label)
+        XCTAssertEqual(try files.read("failed.txt"),
+                       "failed=true\nphase=mobile-start\nreason=LocalCampaignCancelledBeforeStart\n")
+        XCTAssertNil(try files.read("closed.txt", optional: true))
+        await Task.yield()
+        model.beginUsbDeveloperCampaign(arguments: arguments)
+        XCTAssertNil(model.startProblem)
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        model.setForeground(false)
+        try retirePreparedDeveloperFixture(label: label)
+        #else
+        XCTFail("Prepared developer lifecycle controls require the Debug build")
+        #endif
+    }
+
+    private func retirePreparedDeveloperFixture(label: String) throws {
+        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: false)
+        let directory = base.appendingPathComponent("rpc-capacity/" + label)
+        let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        for entry in entries {
+            guard ["prepared.txt", "failed.txt"].contains(entry.lastPathComponent), unlink(entry.path) == 0 else {
+                throw RpcPhoneCapacityIOError.resourceRetirement
+            }
+        }
+        guard rmdir(directory.path) == 0 else { throw RpcPhoneCapacityIOError.resourceRetirement }
     }
 
     private func withCapacityFiles(_ body: (RpcPhoneCapacityFiles, URL) throws -> Void) throws {

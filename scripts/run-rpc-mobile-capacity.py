@@ -55,6 +55,9 @@ def settings(value, source, label, lab):
     fields = SETTINGS | ({'clientCount'} if value['schema'] == '2' else set())
     if value['schema'] == '2' and 'adbCampaignKeys' in value:
         fields |= {'adbCampaignKeys'}
+    if value['schema'] == '2' and 'macGeneratorMinimumAvailableGiB' in value:
+        fields |= {'macGeneratorMinimumAvailableGiB'}
+        need(value['macGeneratorMinimumAvailableGiB'] in ('1', '6'), 'Explicit1GiB or6GiB Mac policy required')
     need(set(value) == fields and all(type(v) is str for v in value.values()))
     need(value['sourceSha'] == source and re.fullmatch('[a-f0-9]{40}', source) and
          re.fullmatch('[a-f0-9]{64}', value['hostArtifactSha256']) and re.fullmatch('[a-z0-9-]{1,48}', label))
@@ -202,7 +205,8 @@ class Run:
         self.result = dict(schema=int(self.bound['schema']), scope=self.scope, mode=self.mode, source=self.context['source'],
             harnessSource=self.harness_source, harnessSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             settingsSha256=hashlib.sha256(raw).hexdigest(), status='FAIL', foundationStatus='NOT_READY',
-            physicalLanQualified=False, mobileCapacityQualified=False, nativeCommands={}, errors=[],
+            physicalLanQualified=False, mobileCapacityQualified=False, deviceControlStarted=False,
+            nativeCommands={}, errors=[],
             generatorBefore=self.initial_generator_snapshot())
         if self.bound['schema'] == '2':
             self.result['clientCount'] = self.client_count
@@ -242,6 +246,8 @@ class Run:
         return evidence.bounded(self.state / 'evidence' / proof['id'] / ('product.' + stream + '.log'))
 
     def generator_prerequisites(self):
+        selected_gib = self.values.get('macGeneratorMinimumAvailableGiB')
+        need(selected_gib is None or self.native_host == 'macos-arm64', 'Mac memory policy is not a Linux override')
         destination = self.state / 'evidence' / ('mobile-controls-' + self.config['runLabel'])
         proof = self.native('mobile-native-controls', [sys.executable, str(ROOT / 'scripts/tests/run-audit-command-test.py'),
             '--expected-host', self.native_host, '--evidence-dir', str(destination)])
@@ -257,11 +263,19 @@ class Run:
         need(re.findall(rb'(?m)^\s*java\.specification\.version = ([0-9]+)\s*$', properties) == [b'17'] and
              re.findall(rb'(?m)^\s*os\.arch = (\S+)\s*$', properties) in architectures,
              'Actual native JVM17 architecture must match the admitted generator')
-        # Keep the existing 125-second, <100ms-gap, >=6GiB, no-balloon preflight.
+        # Keep125seconds and <100ms gaps; memory uses the explicit owner policy.
         if self.native_host == 'macos-arm64':
-            proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
-                str(self.state / 'work' / ('mobile-clock-' + self.config['runLabel']))])
-            clock = darwin.assess_clock(json.loads(self.output(proof), object_pairs_hook=evidence.unique))
+            clock_argv = [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
+                          str(self.state / 'work' / ('mobile-clock-' + self.config['runLabel']))]
+            selected_bytes = None if selected_gib is None else int(selected_gib) * 1024 ** 3
+            if selected_gib is not None:
+                clock_argv += ['--minimum-available-gib', selected_gib]
+            proof = self.native('mobile-clock', clock_argv)
+            clock = darwin.assess_clock(json.loads(self.output(proof), object_pairs_hook=evidence.unique),
+                                       minimum_available_bytes=selected_bytes)
+            self.result['generatorMemoryAdmission'] = dict(requiredAvailableBytes=darwin.memory_requirement(selected_bytes),
+                explicitlySelected=selected_gib is not None, defaultRequiredAvailableBytes=darwin.MIN_MEMORY,
+                capacityEstablishedByThreshold=False)
         else:
             proof = self.native('mobile-clock', [sys.executable, str(ROOT / 'scripts/run-rpc-capacity-qualification.py'), 'clock'])
             clock = evidence.clock_evidence(json.loads(self.output(proof), object_pairs_hook=evidence.unique))
@@ -280,12 +294,19 @@ class Run:
     def prerequisites(self):
         self.generator_prerequisites()
         self.result['adbSha256'] = hashlib.sha256(evidence.bounded(Path(self.values['adb']), 64 * 1024 * 1024)).hexdigest()
+        self.begin_device_control()
         self.phone.start()
         print('Authorize the new private USB key on the selected test phone; no RPC readiness timer has started.', flush=True)
         self.phone.await_authorization()
         apk = getattr(self.args, 'install_android_apk', None)
         if apk is not None:
             self.result['installationAccepted'] = self.phone.install_app(apk)
+
+    def begin_device_control(self):
+        # Persist before the first device command. A partial/failed publication
+        # blocks no-contact recovery; a result flag alone is never authority.
+        self.runner.write_new_json(self.control / 'device-control-started.json', self.bound)
+        self.result['deviceControlStarted'] = True
 
     def launch(self):
         self.lab.write_private(self.directory / 'config.txt', self.lab.encode(self.config))

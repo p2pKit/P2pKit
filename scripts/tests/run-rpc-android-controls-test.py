@@ -132,7 +132,8 @@ class ControlShellTests(unittest.TestCase):
             root = Path(tmp)
             environment = shell_fixture.install(root)
             command = shlex.split(module.stat_dereference_probe()[-1])
-            self.assertEqual(command[:-1], ['run-as', usb.ANDROID_PACKAGE, 'sh', '-c'])
+            self.assertEqual(module.PACKAGE, 'dev.p2pkit.sample.android')
+            self.assertEqual(command[:-1], ['run-as', module.PACKAGE, 'sh', '-c'])
             script = command[-1]
             absent = subprocess.run(['/bin/sh', '-c', script], env=environment,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)

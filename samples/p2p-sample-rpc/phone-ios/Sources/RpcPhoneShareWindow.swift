@@ -42,8 +42,8 @@ final class RpcPhoneShareWindow {
     }
 
     static func eligible(running: Bool, actionBusy: Bool, operationBusy: Bool,
-                         cleanupPending: Bool, capacitySession: Bool) -> Bool {
-        running && !actionBusy && !operationBusy && !cleanupPending && !capacitySession
+                         manualTestRunning: Bool = false, cleanupPending: Bool, capacitySession: Bool) -> Bool {
+        running && !actionBusy && (!operationBusy || manualTestRunning) && !cleanupPending && !capacitySession
     }
 
     var pending: Bool { token != nil }

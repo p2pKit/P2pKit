@@ -14,7 +14,8 @@ fun main() {
     SwingUtilities.invokeLater { RpcDesktopWindow().isVisible = true }
 }
 
-private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer preview") {
+private class RpcDesktopWindow : JFrame(if (System.getProperty("dev.p2pkit.rpc.profileDir") != null)
+    "P2pKit RPC — separate test profile" else "RPC Desktop sample — developer preview") {
     private val panel = RpcDesktopPanel(onBackRequested = ::closePreview)
 
     init {

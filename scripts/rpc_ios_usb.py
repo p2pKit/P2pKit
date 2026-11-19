@@ -1,14 +1,15 @@
-"""Candidate wired iPhone control plane, never an RPC data tunnel or device qualification.
+"""Candidate iPhone CoreDevice control plane, never an RPC data tunnel or device qualification.
 
 The application, NOT devicectl, performs create-only publication. Two copied
 staging files carry bounded data and its exact seal; only verified complete bytes
 can become the app's canonical inbox/Stop. Unknown CoreDevice schemas fail closed.
-Physical copy behavior, wired transport, 4-second observations, signing and outer
+Physical copy behavior, the explicitly selected transport, 4-second observations, signing and outer
 native finalization still require an actual selected owner-authorized iPhone.
 """
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 DEVICECTL = Path('/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl')
 COREDEVICE_INFO = DEVICECTL.parents[1] / 'Info.plist'
 INPUTS = frozenset(('inbox.txt', 'campaign.txt', 'next.txt', 'stop.txt'))
-OUTPUTS = frozenset(('prepared.txt', 'next-ready.txt', 'ready.txt', 'telemetry.txt', 'closed.txt', 'failed.txt'))
+OUTPUTS = frozenset(('prepared.txt', 'network.txt', 'next-ready.txt', 'ready.txt', 'telemetry.txt', 'closed.txt', 'failed.txt'))
 FILES = INPUTS | OUTPUTS | {prefix + name for prefix in ('.incoming-', '.sealed-') for name in INPUTS}
 ATOMIC_SCRATCH = r'\.capacity-[A-F0-9]{8}(?:-[A-F0-9]{4}){3}-[A-F0-9]{12}'
 INBOX_FIELDS = protocol.BINDINGS | {'hostAddress', 'hostPort', 'hostInterface', 'subnets', 'clientPins'}
@@ -44,10 +45,24 @@ def verify_input(name, raw, seal):
     return raw
 
 
-def selected_details(value, selected):
+def selected_details(value, selected, *, control_transport='wired'):
     need(type(value) is dict and type(value.get('result')) is dict)
     # Query ONE explicit device, never enumerate the owner's other devices.
-    protocol.ios_usb_details(dict(result=dict(devices=[value['result']])), selected)
+    protocol.ios_device_details(dict(result=dict(devices=[value['result']])), selected,
+                                control_transport=control_transport)
+
+
+def file_properties(row):
+    """Read the two observed CoreDevice shapes without converting missing/ambiguous flags."""
+    need(type(row) is dict)
+    if 'metadata' not in row and 'resources' not in row:
+        return row  # Historical flat schema; callers still require exact boolean/integer types.
+    need(type(row.get('metadata')) is dict and type(row.get('resources')) is dict and
+         not {'fileSize', 'isDirectory', 'isSymbolicLink'} & set(row),
+         'Incomplete or ambiguous CoreDevice file metadata; preserve it, do not infer flags')
+    return dict(fileSize=row['metadata'].get('size'),
+                isDirectory=row['resources'].get('isDirectory'),
+                isSymbolicLink=row['resources'].get('isSymbolicLink'))
 
 
 def file_inventory(value):
@@ -56,14 +71,16 @@ def file_inventory(value):
     need(type(rows) is list and len(rows) <= len(FILES) + 1)
     result, seen, scratch = {}, set(), 0
     for row in rows:
+        properties = file_properties(row)
         need(type(row) is dict and type(row.get('name')) is str and
              (row['name'] in FILES or re.fullmatch(ATOMIC_SCRATCH, row['name'])) and
-             row['name'] not in seen and row.get('isDirectory') is False and row.get('isSymbolicLink') is False and
-             type(row.get('fileSize')) is int and 0 <= row['fileSize'] <= protocol.RECORD_LIMIT,
+             row['name'] not in seen and properties.get('isDirectory') is False and
+             properties.get('isSymbolicLink') is False and type(properties.get('fileSize')) is int and
+             0 <= properties['fileSize'] <= protocol.RECORD_LIMIT,
              'Unknown, foreign, linked or unbounded app-container entry; preserve it, do not guess')
         seen.add(row['name'])
         if row['name'] in FILES:
-            result[row['name']] = row['fileSize']
+            result[row['name']] = properties['fileSize']
         else:
             # One serial app-owned atomic publisher can be in flight while
             # telemetry is listed. Never copy, consume or delete its scratch.
@@ -77,6 +94,26 @@ def file_inventory(value):
 def inbox_record(raw, bound):
     row = protocol.inbox(raw, bound)
     need(bound['hostPlatform'] == 'Ios', 'Exact iOS signed-executable binding required')
+    return row
+
+
+def wifi_record(raw, bound, approved_subnets, approved_interface):
+    checked = protocol.binding(bound)
+    need(checked['schema'] == '2' and checked['hostPlatform'] == 'Ios')
+    row = protocol.parse(raw)
+    expected = dict(schema='2', scope='ios-usb-wifi', runLabel=checked['runLabel'],
+                    sourceSha=checked['hostSourceSha'], artifactSha256=checked['hostArtifactSha256'],
+                    clientCount=checked['clientCount'])
+    need(set(row) == set(expected) | {'hostAddress', 'hostInterface', 'subnets'} and
+         all(row[key] == val for key, val in expected.items()), 'Live Wi-Fi observation has a different source/app/run')
+    need(row['hostInterface'] == approved_interface and re.fullmatch('en[0-9]{1,3}', approved_interface) and
+         row['subnets'] in approved_subnets.split(','), 'Live Wi-Fi is outside the owner-approved network/interface')
+    network = ipaddress.IPv4Network(row['subnets'], strict=True)
+    address = ipaddress.IPv4Address(row['hostAddress'])
+    private = [ipaddress.IPv4Network(x) for x in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
+    need(any(network.subnet_of(x) for x in private) and network.prefixlen <= 30 and
+         address in network and address not in (network.network_address, network.broadcast_address),
+         'Live Wi-Fi must be a numeric host address on the approved private LAN')
     return row
 
 
@@ -195,12 +232,14 @@ class DevicectlFiles:
     The Xcode shell launcher is forbidden: it can automatically run first-launch
     installation. Invoke only the already installed, version/hash-bound native tool.
     """
-    def __init__(self, commands, directory, selected, run_label, *, now=time.monotonic):
+    def __init__(self, commands, directory, selected, run_label, *, control_transport='wired', now=time.monotonic):
         need(platform.system() == 'Darwin' and os.getuid() == os.geteuid() != 0 and
              os.environ.get('P2PKIT_AUDIT_OWNERSHIP_CHAIN'), 'Admitted unprivileged native Mac owner required')
         need(re.fullmatch('[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}', selected) and
              re.fullmatch('[a-z0-9-]{1,64}', run_label), 'Explicit CoreDevice identifier and selected run required')
         self.commands, self.directory, self.selected, self.now = commands, directory, selected, now
+        need(control_transport in ('wired', 'wireless'), 'Unknown Apple device control transport')
+        self.control_transport = control_transport
         commands.files.private_directory(directory)
         self.remote = 'Library/Application Support/rpc-capacity/' + run_label
         self.count = 0
@@ -278,7 +317,7 @@ class DevicectlFiles:
 
     def verify(self, deadline):
         value = self.command('selected-details', ['device', 'info', 'details', '--device', self.selected], deadline)
-        selected_details(value, self.selected)
+        selected_details(value, self.selected, control_transport=getattr(self, 'control_transport', 'wired'))
 
     def install_app(self, app, bound, deadline):
         """Install the selected signed development bundle; actual executable readback is still required at ready."""
@@ -319,14 +358,18 @@ class DevicectlFiles:
         self.verify(deadline)
         return dict(installerSucceeded=True, artifactSha256=digest, requiresInstalledReadyHash=True)
 
-    def launch_prepare(self, bound, deadline):
+    def launch_prepare(self, bound, deadline, *, discover_wifi=False):
         """Prepare one development slot in a stopped app; never terminate or relaunch an active runtime."""
         checked = protocol.binding(bound)
         need(checked['hostPlatform'] == 'Ios' and checked['schema'] == '2')
         self.verify(deadline)
-        self.command('launch-bound-prepare', ['device', 'process', 'launch', '--device', self.selected, IOS_PACKAGE, '--',
+        need(type(discover_wifi) is bool)
+        argv = ['device', 'process', 'launch', '--device', self.selected, IOS_PACKAGE, '--',
             '--rpc-usb-prepare', checked['runLabel'], '--rpc-usb-source-sha', checked['hostSourceSha'],
-            '--rpc-usb-artifact-sha256', checked['hostArtifactSha256'], '--rpc-usb-client-count', checked['clientCount']], deadline)
+            '--rpc-usb-artifact-sha256', checked['hostArtifactSha256'], '--rpc-usb-client-count', checked['clientCount']]
+        if discover_wifi:
+            argv += ['--rpc-usb-discover-wifi']
+        self.command('launch-bound-prepare', argv, deadline)
         self.verify(deadline)
 
     def prepare_next(self, bound, previous_label, previous_inbox_sha256, deadline):
@@ -373,6 +416,8 @@ class DevicectlFiles:
     def inventory(self, deadline):
         value = self.command('slot-files', ['device', 'info', 'files', '--device', self.selected,
             '--domain-type', 'appDataContainer', '--domain-identifier', IOS_PACKAGE, '--subdirectory', self.remote], deadline)
+        need(value['result'].get('deviceIdentifier') == self.selected,
+             'File inventory must identify the exact selected physical device')
         return file_inventory(value)
 
     def slot_present(self, deadline):
@@ -388,7 +433,9 @@ class DevicectlFiles:
             matches = [row for row in rows if row['name'] == name]
             if not matches:
                 return False
-            need(len(matches) == 1 and matches[0].get('isDirectory') is True and matches[0].get('isSymbolicLink') is False,
+            need(len(matches) == 1, 'Selected app control directory is ambiguous')
+            properties = file_properties(matches[0])
+            need(properties.get('isDirectory') is True and properties.get('isSymbolicLink') is False,
                  'Selected app control directory is linked, ambiguous or not a directory')
             parent += '/' + name
         return True
@@ -410,9 +457,14 @@ class DevicectlFiles:
 
     def read(self, name, deadline):
         need(name in OUTPUTS)
-        self.verify(deadline)
         rows = self.inventory(deadline)
-        raw = self.download(name, deadline) if name in rows else None
+        if name not in rows:
+            # An exact device-bound absence carries no payload or freshness.
+            # Avoid three wireless commands just to observe no new record.
+            return None
+        self.verify(deadline)
+        raw = self.download(name, deadline)
+        need(len(raw) == rows[name], 'Downloaded output differs from its observed size')
         self.verify(deadline)
         return raw
 

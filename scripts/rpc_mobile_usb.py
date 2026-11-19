@@ -19,7 +19,7 @@ import time
 
 import rpc_mobile_capacity as protocol
 
-ANDROID_PACKAGE = 'dev.p2pkit.sample.android'
+ANDROID_PACKAGE = 'dev.p2pkit.sample.android.rpclab'
 IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 need = protocol.need
 MAX_COMMANDS = 20_000
@@ -30,7 +30,7 @@ ANDROID_SHELL_STAGES = (
     'seal-presence', 'seal-type', 'seal-owner', 'seal-mode', 'seal-links', 'seal-size',
     'seal-metadata', 'seal-open', 'seal-descriptor', 'read-presence', 'read-type', 'read-owner',
     'read-mode', 'read-links', 'read-size', 'read-metadata', 'read-open', 'read-descriptor',
-    'read-data', 'read-after', 'seal-after',
+    'read-data', 'read-after', 'seal-after', 'read-owned-record',
 )
 
 
@@ -137,8 +137,17 @@ private_dir() {
     test "$(stat -c %a "$1")" = 700
 }
 rpc_stage=home
+'''
+    if operation == 'prepare':
+        # A fresh installation has not necessarily called Context.noBackupFilesDir yet.
+        # run-as has already selected the fixed debug app's UID and private data directory.
+        # Create only an absent child; never repair or replace an existing entry.
+        common += '''if test ! -e no_backup && test ! -L no_backup; then mkdir no_backup; fi
+'''
+    common += '''
 test -d no_backup
 test ! -L no_backup
+test "$(stat -c %u no_backup)" = "$uid"
 '''
     if operation == 'prepare':
         common += f'''rpc_stage=base-create
@@ -150,6 +159,13 @@ private_dir {run}
 '''
     else:
         common += f'private_dir {base}\nprivate_dir {run}\n'
+    if operation == 'read' and name in ('ready.txt', 'failed.txt', 'telemetry.txt', 'closed.txt'):
+        # One ART process verifies the complete descriptor/marker lifecycle. Starting
+        # four separate VMs for one present record exceeded the original four-second
+        # observation budget on the physical phone. Keep the deadline and checks.
+        return common + f'''rpc_stage=read-owned-record
+/system/bin/app_process /system/bin dev.p2pkit.sample.android.rpclab.RpcLabFdStat read {run_label} {name}
+'''
     if operation in ('prepare', 'stop'):
         name = 'inbox.txt' if operation == 'prepare' else 'stop.txt'
         target, marker = run + '/' + name, run + '/.complete-' + name

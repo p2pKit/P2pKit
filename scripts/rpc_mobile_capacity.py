@@ -215,6 +215,12 @@ def android_usb_state(raw, selected):
 
 def ios_usb_details(value, selected):
     """Fail closed if Xcode's actual selected-device details do not prove paired wired iOS."""
+    ios_device_details(value, selected, control_transport='wired')
+
+
+def ios_device_details(value, selected, *, control_transport):
+    """Admit only the explicitly selected Apple control transport, without automatic fallback."""
+    need(control_transport in ('wired', 'wireless'), 'Explicit wired or wireless CoreDevice control required')
     need(type(value) is dict and type(value.get('result')) is dict)
     result = value['result']
     # `devicectl list devices --json-output` is the documented inventory shape.
@@ -227,8 +233,14 @@ def ios_usb_details(value, selected):
     need(type(device) is dict and device.get('identifier') == selected and
          type(device.get('connectionProperties')) is dict and type(device.get('hardwareProperties')) is dict)
     connection, hardware = device['connectionProperties'], device['hardwareProperties']
-    need(connection.get('transportType') == 'wired' and connection.get('pairingState') == 'paired' and
-         hardware.get('platform') == 'iOS', 'Selected iPhone must be explicitly paired and wired; unknown schema is not admission')
+    expected = 'wired' if control_transport == 'wired' else 'localNetwork'
+    need(connection.get('transportType') == expected and connection.get('pairingState') == 'paired' and
+         hardware.get('platform') == 'iOS', 'Selected iPhone pairing/control transport differs; unknown schema is not admission')
+    if control_transport == 'wireless':
+        need(connection.get('authenticationType') == 'manualPairing' and connection.get('tunnelState') == 'connected' and
+             type(device.get('deviceProperties')) is dict and
+             device['deviceProperties'].get('developerModeStatus') == 'enabled',
+             'Wireless control requires the existing manual pairing, connected Apple control channel and Developer Mode')
 
 
 def parse_vm_stat(raw, total_bytes):

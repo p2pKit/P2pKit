@@ -24,11 +24,15 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Debug phone app only. Non-exportable Keystore key; atomic, fsynced no-backup trust, never cloud preferences. */
-internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = null) : RpcTrustStore {
-    // Only instrumentation supplies a fresh synthetic namespace; the actual UI always uses the stable default.
+internal class AndroidRpcLabTrustStore(
+    context: Context, fixtureId: String? = null, mobileCapacity: Boolean = false,
+) : RpcTrustStore {
+    // Both domains are stable; instrumentation alone supplies a fresh synthetic suffix.
     private val suffix = fixtureId?.also { require(it.matches(Regex("[a-f0-9]{32}"))) }?.let { "-$it" }.orEmpty()
-    private val alias = "dev.p2pkit.rpc.phone-lab.trust.v1$suffix"
-    private val root = File(context.applicationContext.noBackupFilesDir.canonicalFile, "rpc-phone-lab-trust$suffix")
+    private val alias = (if (mobileCapacity) "dev.p2pkit.rpc.phone-lab.capacity-trust.v1"
+        else "dev.p2pkit.rpc.phone-lab.trust.v1") + suffix
+    private val root = File(context.applicationContext.noBackupFilesDir.canonicalFile,
+        (if (mobileCapacity) "rpc-phone-lab-capacity-trust" else "rpc-phone-lab-trust") + suffix)
 
     init {
         synchronized(mutex) {
