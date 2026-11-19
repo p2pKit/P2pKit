@@ -340,19 +340,19 @@ def validate_control_diagnostics(value):
 
 
 def control_inventory(host):
+    from audit_control_suite import class_names
     tree = ast.parse(bounded(ROOT / "scripts/tests/run-audit-command-test.py").decode())
     classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
     def methods(name):
-        if name not in classes:
+        if name == "unittest.TestCase":
             return set()
+        need(name in classes, "Selected native control class is missing")
         own = {node.name for node in classes[name].body if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
         for base in classes[name].bases:
             if isinstance(base, ast.Name):
                 own |= methods(base.id)
         return own
-    native = {"macos-arm64": "DarwinNativeTests", "macos-x64": "DarwinNativeTests", "linux-x64": "LinuxNativeTests"}[host]
-    return sum(len(methods(name)) for name in ("PurePolicyTests", "DarwinObservationTests", native,
-               *(("LinuxObservationTests",) if host == "linux-x64" else ())))
+    return sum(len(methods(name)) for name in class_names(host))
 
 
 def junit_counts(raw):

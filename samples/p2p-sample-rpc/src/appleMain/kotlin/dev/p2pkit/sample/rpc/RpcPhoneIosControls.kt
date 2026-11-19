@@ -16,6 +16,7 @@ public object RpcPhoneIosControls {
     public suspend fun verifySyntheticTrustStore() {
         val fixture = NSUUID().UUIDString
         val store = IosRpcPhoneTrustStore(fixture)
+        val capacity = IosRpcPhoneTrustStore(fixture, mobileCapacity = true)
         val app = RpcCapacityContract.appId
         val pin = PeerFingerprint.parse("p2f1-" + "a".repeat(52))
         var original: Throwable? = null
@@ -24,6 +25,7 @@ public object RpcPhoneIosControls {
             store.replace(app, RpcTrustPurpose.HostClients, setOf(pin))
             check(IosRpcPhoneTrustStore(fixture).load(app, RpcTrustPurpose.HostClients) == setOf(pin))
             check(store.load(app, RpcTrustPurpose.SelectedHosts).isEmpty())
+            check(capacity.load(app, RpcTrustPurpose.HostClients).isEmpty())
             val wrongNamespace = runCatching {
                 store.load(AppId("wrong.namespace"), RpcTrustPurpose.HostClients)
             }.exceptionOrNull()
@@ -39,6 +41,13 @@ public object RpcPhoneIosControls {
                 store.replace(app, RpcTrustPurpose.HostClients, approved)
                 check(IosRpcPhoneTrustStore(fixture).load(app, RpcTrustPurpose.HostClients) == approved)
                 check(store.load(app, RpcTrustPurpose.SelectedHosts) == setOf(pin))
+                capacity.replace(app, RpcTrustPurpose.HostClients, approved)
+                check(IosRpcPhoneTrustStore(fixture, mobileCapacity = true)
+                    .load(app, RpcTrustPurpose.HostClients) == approved)
+                retireMobileCapacityPins(capacity, approved)
+                check(capacity.load(app, RpcTrustPurpose.HostClients).isEmpty())
+                check(store.load(app, RpcTrustPurpose.HostClients) == approved)
+                check(store.load(app, RpcTrustPurpose.SelectedHosts) == setOf(pin))
             }
             val excessive = runCatching {
                 store.replace(app, RpcTrustPurpose.HostClients, tooMany)
@@ -51,16 +60,18 @@ public object RpcPhoneIosControls {
             original = error
             throw error
         } finally {
-            try {
-                store.deleteSyntheticFixture()
-            } catch (cleanup: Throwable) {
-                // Preserve the original failed operation as well as failed cleanup.
-                val failure = original
-                if (failure == null) throw cleanup
-                failure.addSuppressed(cleanup)
+            var cleanupFailure: Throwable? = null
+            for (fixtureStore in listOf(capacity, store)) {
+                try { fixtureStore.deleteSyntheticFixture() }
+                catch (cleanup: Throwable) {
+                    val failure = original ?: cleanupFailure
+                    if (failure == null) cleanupFailure = cleanup else failure.addSuppressed(cleanup)
+                }
             }
+            if (original == null) cleanupFailure?.let { throw it }
         }
         check(store.load(app, RpcTrustPurpose.HostClients).isEmpty())
         check(store.load(app, RpcTrustPurpose.SelectedHosts).isEmpty())
+        check(capacity.load(app, RpcTrustPurpose.HostClients).isEmpty())
     }
 }

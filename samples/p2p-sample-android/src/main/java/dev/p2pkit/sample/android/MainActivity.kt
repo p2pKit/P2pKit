@@ -76,7 +76,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.p2pkit.core.ConnectionState
@@ -137,6 +139,11 @@ class MainActivity : ComponentActivity() {
             secureLegacyTaskWindow(window)
         }
         if (savedInstanceState == null && sampleRpcAvailable) rpcNavigationRequest.offer(intent?.action)
+        lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onResume(owner: LifecycleOwner) {
+                consumeRpcNavigation()
+            }
+        })
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -156,11 +163,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (sampleRpcAvailable) rpcNavigationRequest.offer(intent.action)
-        consumeRpcNavigation()
-    }
-
-    override fun onPostResume() {
-        super.onPostResume()
         consumeRpcNavigation()
     }
 

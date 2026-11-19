@@ -65,12 +65,19 @@ struct RpcPhoneApp: App {
 struct RpcPhoneView: View {
     @ObservedObject var model: RpcPhoneModel
     @State private var showAdvanced = false
+    @State private var showingDeviceTests = false
     @StateObject private var presentation = RpcPhoneDecisionPresentation()
 
     var body: some View {
         NavigationView {
             Form {
+                if showingDeviceTests {
+                    deviceTests
+                } else {
                 Section {
+                    Button("Device tests") { showingDeviceTests = true; model.refreshDeviceTests() }
+                        .disabled(model.mobileConfig != nil || model.actionBusy)
+                        .accessibilityIdentifier("rpc.deviceTests")
                     VStack(alignment: .leading, spacing: 10) {
                         Label("LOCAL API WORKSPACE", systemImage: "network")
                             .font(.caption.weight(.semibold)).foregroundColor(.secondary)
@@ -140,8 +147,20 @@ struct RpcPhoneView: View {
                 if model.mobileConfig == nil { requestHistory }
                 diagnosticControls
                 advancedControls
+                }
             }
-            .navigationTitle("P2pKit RPC")
+            .navigationTitle(showingDeviceTests ? "Device tests" : "P2pKit RPC")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if showingDeviceTests {
+                        Button("Back to RPC") {
+                            guard !model.deviceTestRunning else { return }
+                            model.setAllowHostTests(false)
+                            showingDeviceTests = false
+                        }.disabled(model.deviceTestRunning)
+                    }
+                }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .tint(Color(red: 0.125, green: 0.369, blue: 0.651))
         }
@@ -164,6 +183,91 @@ struct RpcPhoneView: View {
                     fflush(stdout)
                 }
             #endif
+        }
+    }
+
+    private var deviceTests: some View {
+        Group {
+            Section("Connect devices automatically") {
+                Text(model.status).accessibilityIdentifier("rpc.testStatus")
+                Text("Open Device tests on both phones and the Mac, on the same private Wi-Fi. No IP entry is needed.")
+                HStack {
+                    Button("Host here") { model.startDeviceTestRole(host: true) }
+                        .buttonStyle(.borderedProminent).disabled(!model.canStart)
+                        .accessibilityIdentifier("rpc.testHost")
+                    Button("Client here") { model.startDeviceTestRole(host: false) }
+                        .buttonStyle(.bordered).disabled(!model.canStart)
+                        .accessibilityIdentifier("rpc.testClient")
+                    Button("Stop") { model.stop() }
+                        .buttonStyle(.borderless).disabled(!model.owner.hasOwner)
+                        .accessibilityIdentifier("rpc.testStop")
+                }
+                Text("The first connection requires fingerprint approval on the Host.").font(.footnote)
+            }
+            if model.nearbyMode {
+                Section("Your device identity · compare on the other device") {
+                    Text(model.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                }
+                RpcPhoneNearbyView(model: model, presentation: presentation)
+                Section(model.hostRole ? "Connected client to test" : "Test permission") {
+                    if model.hostRole {
+                        ForEach(model.trustedDevices.filter { $0.presence == "Connected" }, id: \.fingerprint) { device in
+                            Button((model.selectedTestPeer == device.fingerprint ? "✓ " : "") +
+                                device.name + " · " + device.fingerprint.suffix(8)) {
+                                model.selectedTestPeer = device.fingerprint
+                            }.disabled(model.deviceTestRunning)
+                        }
+                    } else {
+                        Toggle("Allow selected Host to start tests while this screen is open", isOn: Binding(
+                            get: { model.allowHostTests }, set: { model.setAllowHostTests($0) }))
+                            .disabled(!model.canAct || model.deviceTestRunning)
+                    }
+                }
+            }
+            Section("Run one test at a time") {
+                Text("These buttons measure one connected Client. 128/256-client qualification is a separate Mac campaign.")
+                    .font(.footnote)
+                ForEach([RpcDeviceTestPhase.large, .correctness, .reconnect, .steady, .deadlines], id: \.name) { phase in
+                    Button(phase.title) { model.runDeviceTest(phase) }
+                        .disabled(!model.canAct || model.deviceTestRunning || !model.nearbyMode ||
+                            (model.hostRole ? !model.trustedDevices.contains {
+                                $0.fingerprint == model.selectedTestPeer && $0.presence == "Connected"
+                            } : model.owner.runtime?.state != "Ready"))
+                }
+                if let progress = model.deviceTestProgress, progress.running {
+                    Text("\(progress.direction) · \(progress.title) · \(progress.stage)")
+                    Text("\(progress.elapsedSeconds)s / \(progress.plannedSeconds)s · \(progress.calls) responses")
+                    Button("Cancel test") { model.cancelOperation() }
+                }
+            }
+            Section("Live test activity") {
+                Text("Sent from here: Client. Received here: Host. Host finalization alone does not prove Client receipt.")
+                    .font(.footnote)
+                if model.deviceTestActivity.isEmpty {
+                    Text("Waiting for test requests. Start a short test on the connected Client.")
+                }
+                ForEach(Array(model.deviceTestActivity.reversed().enumerated()), id: \.offset) { _, activity in
+                    Text(activity.title).font(.footnote)
+                }
+            }
+            Section("Saved results · recent 100 runs") {
+                Text(model.deviceTestStorageIssue ?? "Every completed run is archived privately; older runs are kept.")
+                ForEach(model.deviceTestReports.reversed(), id: \.runId) { report in
+                    VStack(alignment: .leading) {
+                        Text(report.title)
+                        Text("Started by: \(report.initiatedBy) · Run: \(report.runId)").font(.footnote)
+                        if report.startedAtEpochMillis > 0 {
+                            Text(Date(timeIntervalSince1970: Double(report.startedAtEpochMillis) / 1000),
+                                style: .date).font(.footnote)
+                        }
+                        if let sample = report.clientResources { Text("Client: \(sample.title)").font(.footnote) }
+                        if let sample = report.initiatingHostResources { Text("Host: \(sample.title)").font(.footnote) }
+                        Text("p95 \(report.p95Micros / 1000) ms · p99 \(report.p99Micros / 1000) ms · missed \(report.missedSchedules)")
+                            .font(.footnote)
+                        if let error = report.failureCode { Text(error).font(.footnote) }
+                    }
+                }
+            }
         }
     }
 
@@ -255,25 +359,25 @@ struct RpcPhoneView: View {
             } else {
                 Text(model.detectedWifi == nil ? model.wifiExplanation : "Wi-Fi ready · network selected automatically")
                     .accessibilityIdentifier("rpc.wifiStatus")
-                DisclosureGroup("Network details") {
-                    if let network = model.detectedWifi {
-                        Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
-                        Text("Private network: \(network.subnet) · \(network.interfaceName)").font(
-                            .caption.monospaced())
-                    }
-                    Button("Check Wi-Fi again") { model.refreshWifi() }
-                        .buttonStyle(.borderless)
-                        .disabled(!model.canRefreshWifi)
-                        .accessibilityIdentifier("rpc.refreshWifi")
-                        .accessibilityHint("Only re-reads the connection. Does not approve a network or start RPC.")
-                    DisclosureGroup("Wi-Fi check details") {
-                        Text(model.wifiObservation.details).font(.caption)
-                            .accessibilityIdentifier("rpc.wifiDetails")
-                        Text(
-                            "These are this app's observations, not proof of peer connectivity or multicast. "
-                                + "Advanced offers manual setup for independently verified approved networks."
-                        ).font(.footnote)
-                    }
+            }
+            DisclosureGroup("Network details") {
+                if let network = model.detectedWifi {
+                    Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
+                    Text("Private network: \(network.subnet) · \(network.interfaceName)").font(
+                        .caption.monospaced())
+                }
+                Button("Check Wi-Fi again") { model.refreshWifi() }
+                    .buttonStyle(.borderless)
+                    .disabled(!model.canRefreshWifi)
+                    .accessibilityIdentifier("rpc.refreshWifi")
+                    .accessibilityHint("Only re-reads the connection. Does not approve a network or start RPC.")
+                DisclosureGroup("Wi-Fi check details") {
+                    Text(model.wifiObservation.details).font(.caption)
+                        .accessibilityIdentifier("rpc.wifiDetails")
+                    Text(
+                        "These are this app's observations, not proof of peer connectivity or multicast. "
+                            + "Advanced offers manual setup for independently verified approved networks."
+                    ).font(.footnote)
                 }
             }
         }

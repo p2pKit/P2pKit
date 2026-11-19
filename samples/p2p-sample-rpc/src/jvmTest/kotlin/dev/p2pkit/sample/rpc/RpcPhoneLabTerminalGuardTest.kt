@@ -41,6 +41,7 @@ class RpcPhoneLabTerminalGuardTest {
             { lab.beginRequest(RpcApplicationInput.parse(RpcApplicationProcedure.GetUser, "1", "0", "1", "")) {
                 callbacks++
             } },
+            { lab.beginDeviceTest(RpcDeviceTestPhase.Large, null) { callbacks++ } },
             { lab.echo(false) { callbacks++ } },
         )
         for (action in actions) {

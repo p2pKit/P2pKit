@@ -17,9 +17,17 @@ dependencyResolutionManagement {
     repositories {
         google {
             content {
-                // This locked ABI-tool coordinate is published on Central, not Google.
-                // Avoid an unnecessary Google request without broadening artifact trust.
+                // These exact locked Kotlin compiler/ABI inputs are published on Central.
+                // A failed unrelated Google lookup must not disable their resolution.
                 excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-script-runtime", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-common", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-compiler-embeddable", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-compiler-impl-embeddable", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-scripting-jvm", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-serialization-compiler-plugin-embeddable", "2.4.20")
+                excludeVersion("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20")
+                excludeVersion("org.jetbrains", "annotations", "13.0")
             }
         }
         mavenCentral()

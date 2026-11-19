@@ -503,7 +503,8 @@ class RpcLabRuntimeOwnerTest {
         assertTrue(finalizer.contains("withContext(NonCancellable)"))
         assertBefore(finalizer, "runtimeOwner.retire(creation) { it.close() }",
             "runtimeOwner.finishCreation(creation)")
-        val stop = source.substringAfter("private fun stop(").substringBefore("private fun call(")
+        val stop = source.substringAfter("private fun stop(")
+            .substringBefore("/** Both toolbar and system/predictive Back")
         assertBefore(stop, "pendingOwner: RpcLabRuntimeOwner.Snapshot<RpcLabOwnedRuntime>? = runtimeOwner.snapshot()",
             "previousAction?.cancel()")
         assertTrue(stop.contains("pendingOwner?.creator?.takeIf { it !== previousAction }?.cancel()"))
@@ -512,6 +513,7 @@ class RpcLabRuntimeOwnerTest {
         assertBefore(stop, "runtimeOwner.retire(pendingOwner.token)",
             "if (pendingOwner == null || lab === owned?.lab) lab = null")
         assertTrue(stop.contains("runtimeOwner.current(it.token) ?: it.current"))
+        assertBefore(stop, "runtimeOwner.retire(pendingOwner.token)", "persistDeviceTests()")
         assertFalse(stop.contains("val owned = lab"))
         assertFalse(stop.contains("mobileFiles"))
         val buttons = source.substringAfter("private fun Controls()")
