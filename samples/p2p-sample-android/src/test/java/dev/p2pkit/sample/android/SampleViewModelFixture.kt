@@ -59,7 +59,7 @@ internal suspend fun TestScope.withSampleViewModel(block: suspend SampleViewMode
         val host = object : Application() {
             override fun getApplicationContext(): Context = context
         }
-        val vm = P2pKitViewModel(host, fixture, dispatcher, fixture.processOwner)
+        val vm = P2pKitViewModel(host, fixture, dispatcher, fixture.processOwner, fixture.pickerExecution)
         fixture.vm = vm
         fixture.clearViewModel = store::clear
         store.put("sample", vm)
@@ -102,6 +102,18 @@ internal class SampleViewModelFixture(
     lateinit var clearViewModel: () -> Unit
     val room = SampleFakeKit("room")
     val smoke = SampleFakeKit("smoke")
+    var pickerLost: (() -> Unit)? = null
+    var pickerAllowed = true
+    var pickerReleases = 0
+    val pickerExecution = RoomFilePickerExecution { onLost ->
+        if (!pickerAllowed) return@RoomFilePickerExecution null
+        check(pickerLost == null)
+        pickerLost = onLost
+        AutoCloseable {
+            pickerLost = null
+            pickerReleases++
+        }
+    }
     val barriers = mutableListOf<CompletableDeferred<Unit>>()
     var roomCreations = 0
     var smokeCreations = 0
@@ -142,6 +154,7 @@ internal class SampleFakeKit(name: String) : P2pKit {
     var stopAdvertisingCalls = 0
     var stopDiscoveryCalls = 0
     var connectCalls = 0
+    var backgrounds = 0
     var beforeAdvertising: suspend () -> Unit = {}
     var beforeDiscovery: suspend () -> Unit = {}
     var beforeStop: suspend () -> Unit = {}
@@ -175,7 +188,7 @@ internal class SampleFakeKit(name: String) : P2pKit {
     }
     override suspend fun connect(peer: Peer, expectedFingerprint: PeerFingerprint): P2pSession = connect(peer)
     override fun lastSeen(peerId: PeerId): Long? = null
-    override fun notifyAppBackgrounded() = Unit
+    override fun notifyAppBackgrounded() { backgrounds++ }
     override fun notifyAppForegrounded() = Unit
     override suspend fun stop() {
         stopCalls++

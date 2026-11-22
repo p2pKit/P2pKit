@@ -126,6 +126,9 @@ class MainActivity : ComponentActivity() {
         // The callback Boolean is not a live grant and never authorizes replay of a previous action.
         sampleViewModel.onLanPermissionRequestResult()
     }
+    private val roomFilePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        sampleViewModel.onFilePickerResult(uri)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -140,9 +143,15 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    P2pKitSampleApp(sampleViewModel) {
-                        sampleViewModel.requestLanAccess { permission -> lanPermissionLauncher.launch(permission) }
-                    }
+                    P2pKitSampleApp(
+                        sampleViewModel,
+                        onGrantLanAccess = {
+                            sampleViewModel.requestLanAccess { permission -> lanPermissionLauncher.launch(permission) }
+                        },
+                        onPickFile = { session ->
+                            sampleViewModel.openFilePicker(session) { roomFilePicker.launch(arrayOf("*/*")) }
+                        }
+                    )
                 }
             }
         }
@@ -178,7 +187,11 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun P2pKitSampleApp(vm: P2pKitViewModel, onGrantLanAccess: () -> Unit) {
+private fun P2pKitSampleApp(
+    vm: P2pKitViewModel,
+    onGrantLanAccess: () -> Unit,
+    onPickFile: (P2pSession) -> Unit,
+) {
     val isRunning by vm.isRunning.collectAsState()
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
     val rpcEntry by vm.rpcSection.collectAsState()
@@ -243,7 +256,8 @@ private fun P2pKitSampleApp(vm: P2pKitViewModel, onGrantLanAccess: () -> Unit) {
         } else {
             RoomScreen(
                 paddingValues = padding,
-                vm = vm
+                vm = vm,
+                onPickFile = onPickFile
             )
         }
     }
@@ -485,7 +499,8 @@ private fun ReconnectChoicePicker(vm: P2pKitViewModel) {
 @Composable
 private fun RoomScreen(
     paddingValues: PaddingValues,
-    vm: P2pKitViewModel
+    vm: P2pKitViewModel,
+    onPickFile: (P2pSession) -> Unit,
 ) {
     val peers by vm.peers.collectAsState()
     val kitState by vm.kitState.collectAsState()
@@ -561,24 +576,6 @@ private fun RoomScreen(
         val connected = vm.connectedSessions
         Spacer(Modifier.height(Dimens.SectionGap))
 
-        // File picker shared across all per-chip "Send file…" menu items.
-        // AUDIT-2026-06: A-G8-samples-android-15 — rememberSaveable so the
-        // target peer survives Activity recreation while the picker is open.
-        var pendingSendPeerId by rememberSaveable { mutableStateOf<String?>(null) }
-        val pickerLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.OpenDocument()
-        ) { uri ->
-            val peerId = pendingSendPeerId
-            pendingSendPeerId = null
-            when {
-                uri != null && peerId != null -> vm.sendFile(peerId, uri)
-                uri == null && peerId != null -> vm.notifyFilePickerCancelled(peerId)
-                // AUDIT-2026-06: A-G8-samples-android-15 — surface the dropped
-                // result instead of silently discarding the picked file.
-                uri != null -> vm.notifySendTargetLost()
-            }
-        }
-
         if (connected.isNotEmpty()) {
             Text(
                 text = "Room (${connected.size} connected)",
@@ -592,10 +589,7 @@ private fun RoomScreen(
                         isTargeted = vm.targetedPeerIds.contains(session.peer.id.value),
                         onToggleTarget = { vm.togglePeerTarget(session.peer.id.value) },
                         onCloseSession = { vm.closeSession(session.peer.id.value) },
-                        onSendFile = {
-                            pendingSendPeerId = session.peer.id.value
-                            pickerLauncher.launch(arrayOf("*/*"))
-                        }
+                        onSendFile = { onPickFile(session) }
                     )
                 }
                 item {

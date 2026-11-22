@@ -3,6 +3,7 @@ package dev.p2pkit.sample.android
 import android.app.Application
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.os.storage.StorageManager
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -85,6 +86,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /**
@@ -111,6 +113,7 @@ class P2pKitViewModel internal constructor(
     private val kitFactories: SampleKitFactories?,
     cleanupDispatcher: CoroutineDispatcher,
     private val processOwner: SampleProcessOwner = SampleProcessOwnership.owner,
+    private val filePickerExecution: RoomFilePickerExecution = RoomFilePickerService.execution(application),
 ) : AndroidViewModel(application) {
     constructor(application: Application) : this(application, null, Dispatchers.Default)
 
@@ -310,6 +313,15 @@ class P2pKitViewModel internal constructor(
     private var appForeground = false
     private var foregroundEpisode = 0L
     private var viewModelCleared = false
+    // The Activity Result belongs to this ViewModel across recreation. Keep its slot
+    // reserved until delivery even if the original session has already been retired.
+    private var filePickerResultOutstanding = false
+    private var filePicker: FilePickerRequest? = null
+
+    private class FilePickerRequest(val session: P2pSession, val deadline: Long) {
+        var execution: AutoCloseable? = null
+        var watchdog: Job? = null
+    }
 
     @Volatile
     private var foregroundRestoreJob: Job? = null
@@ -1240,23 +1252,79 @@ class P2pKitViewModel internal constructor(
 
     // --- file transfer (v0.2.2) -------------------------------------------
 
-    /**
-     * Send a file picked from the system file picker (`OpenDocument`) to one
-     * connected peer. The Android extension reads name / size / mime from the
-     * [Uri]'s `ContentResolver` metadata.
-     */
-    fun sendFile(peerId: String, uri: Uri) {
-        val scope = runScope ?: return
-        val session = connectedSessions.firstOrNull { it.peer.id.value == peerId }
-        if (session == null) {
-            appendSystemMessage("send file failed: peer not in session list")
+    internal fun openFilePicker(session: P2pSession, launch: () -> Unit) {
+        if (!appForeground || viewModelCleared) return
+        if (filePickerResultOutstanding) {
+            appendSystemMessage("Finish or cancel the open file picker first.")
             return
         }
-        val state = session.state.value
-        if (state != ConnectionState.Connected) {
-            appendSystemMessage("send file to ${session.peer.name} failed: session not Connected (state=$state)")
+        val scope = runScope
+        if (scope == null || !canSendTo(session)) {
+            reportFileSessionLost()
             return
         }
+        val request = FilePickerRequest(session, SystemClock.elapsedRealtime() + FILE_PICKER_WINDOW_MS)
+        val execution = filePickerExecution.start { interruptFilePicker(request, "execution-lost") }
+        if (execution == null) {
+            appendSystemMessage("Could not keep the connection active for file selection. Try Send file… again.")
+            return
+        }
+        request.execution = execution
+        filePicker = request
+        filePickerResultOutstanding = true
+        Log.i(LOG_TAG, "file-picker opened")
+        request.watchdog = scope.launch {
+            val changed = withTimeoutOrNull(FILE_PICKER_WINDOW_MS) {
+                session.state.first { it != ConnectionState.Connected }
+            }
+            interruptFilePicker(request, if (changed == null) "selection-expired" else "session-lost")
+        }
+        try {
+            launch()
+        } catch (_: RuntimeException) {
+            filePickerResultOutstanding = false
+            retireFilePicker(request, "launch-failed")
+            appendSystemMessage("Could not open the file picker. Try Send file… again.")
+        }
+    }
+
+    internal fun onFilePickerResult(uri: Uri?) {
+        if (!filePickerResultOutstanding && uri == null) return
+        filePickerResultOutstanding = false
+        val request = filePicker
+        val valid = request != null && SystemClock.elapsedRealtime() < request.deadline && canSendTo(request.session)
+        if (request != null) retireFilePicker(request, if (uri != null && valid) "selected" else "picker-returned")
+        when {
+            uri == null -> appendSystemMessage("File selection cancelled. No file was sent.")
+            !valid -> reportFileSessionLost()
+            else -> sendFile(request.session, uri)
+        }
+    }
+
+    private fun retireFilePicker(request: FilePickerRequest, reason: String): Boolean {
+        if (filePicker !== request) return false
+        filePicker = null
+        request.watchdog?.cancel()
+        request.execution?.close()
+        Log.i(LOG_TAG, "file-picker ended: $reason")
+        return true
+    }
+
+    private fun interruptFilePicker(request: FilePickerRequest, reason: String) {
+        if (retireFilePicker(request, reason) && !appForeground) applyRoomBackgroundPolicy()
+    }
+
+    private fun canSendTo(session: P2pSession): Boolean =
+        session.state.value == ConnectionState.Connected && connectedSessions.any { it === session }
+
+    private fun reportFileSessionLost() {
+        appendSystemMessage("File not sent. Reconnect to the peer if needed, then choose Send file… again.")
+    }
+
+    /** The Android extension reads name, size and MIME type from the selected [Uri]. */
+    private fun sendFile(session: P2pSession, uri: Uri) {
+        val scope = runScope ?: return reportFileSessionLost()
+        val peerId = session.peer.id.value
         val ctx = getApplication<Application>().applicationContext
         scope.launch {
             val preparedHash = TestFileDigests.readSourceHash { ctx.contentResolver.openInputStream(uri) }.getOrElse {
@@ -1285,10 +1353,12 @@ class P2pKitViewModel internal constructor(
                 // ContentResolver getType/query/openInputStream with no internal
                 // IO hop; run it off the main thread (cloud DocumentsProviders
                 // can block for seconds → ANR risk).
+                if (!canSendTo(session)) return@launch reportFileSessionLost()
                 withContext(Dispatchers.IO) { session.sendFile(ctx, uri) }
             }.getOrElse {
                 Log.w(LOG_TAG, "sendFile failed; errorType=${SampleConsole.failure(it)}")
-                appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
+                if (canSendTo(session)) appendSystemMessage("send file failed: ${it.message ?: it::class.simpleName}")
+                else reportFileSessionLost()
                 return@launch
             }
             val transferCorrelation = diagnostics.registerTransfer(transfer.id, peerId, session.id)
@@ -1321,28 +1391,6 @@ class P2pKitViewModel internal constructor(
             }
             registerOutgoingTransfer(transfer, session.id, session.peer.name, scope)
         }
-    }
-
-    /**
-     * Called by the UI when the SAF file picker is dismissed without a
-     * selection. Surfaces a system-message line so the user knows the
-     * "Send file…" path silently terminated.
-     */
-    fun notifyFilePickerCancelled(peerId: String?) {
-        val peerName = connectedSessions.firstOrNull { it.peer.id.value == peerId }?.peer?.name
-            ?: peerId?.take(8)
-            ?: "peer"
-        appendSystemMessage("file send to $peerName cancelled (no file chosen)")
-    }
-
-    /**
-     * AUDIT-2026-06: A-G8-samples-android-15 — called by the UI when the SAF
-     * picker returned a file but the pending target peer was lost (e.g. the
-     * Activity was recreated while the picker was open). Previously the
-     * result was dropped with no message at all.
-     */
-    fun notifySendTargetLost() {
-        appendSystemMessage("file picked, but the send target was lost — use Send file… on the peer again")
     }
 
     /**
@@ -1998,6 +2046,7 @@ class P2pKitViewModel internal constructor(
             )
         )
         _isStopping.value = true
+        filePicker?.let { retireFilePicker(it, "room-stopped") }
         _cleanupPending.value = true
         _isRunning.value = false
         _advertising.value = false
@@ -2056,6 +2105,7 @@ class P2pKitViewModel internal constructor(
         appForeground = false
         foregroundEpisode += 1
         provisioningUi.detach()
+        filePicker?.let { retireFilePicker(it, "room-cleared") }
         // Retire only the UI lease. Existing RpcLabProcessRuntime still blocks ordinary acquisition until close.
         val rpcEntry = activeRpcSection.value
         if (rpcEntry != null && activeRpcSection.compareAndSet(rpcEntry, null)) processOwner.release(rpcEntry)
@@ -2151,8 +2201,15 @@ class P2pKitViewModel internal constructor(
                 currentState = "background"
             )
         )
-        kit?.notifyAppBackgrounded()
+        if (filePicker == null) applyRoomBackgroundPolicy()
+        else Log.i(LOG_TAG, "file-picker retained session on Activity stop")
         smokeKit.value?.notifyAppBackgrounded()
+    }
+
+    private fun applyRoomBackgroundPolicy() {
+        val room = kit ?: return
+        Log.i(LOG_TAG, "room background policy: close active sessions")
+        room.notifyAppBackgrounded()
     }
 
     private fun retireForegroundRestore() {
@@ -2448,6 +2505,7 @@ class P2pKitViewModel internal constructor(
     }
 
     private companion object {
+        const val FILE_PICKER_WINDOW_MS = 120_000L
         const val APP_ID = "p2pkit-desktop-sample"
         const val LOG_TAG = "p2pkit"
         const val LOG_TAIL_CAPACITY = 30
