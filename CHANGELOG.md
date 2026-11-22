@@ -3,6 +3,19 @@
 This file records release-facing behavior. Historical internal milestone tags,
 audits, trackers, and implementation evidence remain under `docs/archive/`.
 
+## 0.8.0-rc14 — development release candidate
+
+- Keep the Android sample's authenticated room session active during a native
+  file-picker request. If the session disconnects or selection expires, the
+  sample requires a fresh selection after reconnecting. The hosted Android
+  and iOS test verified byte-exact transfers, including delayed selections.
+  [PR #564](https://github.com/p2pKit/P2pKit/pull/564)
+- Add development workloads for mixed phone and Mac client capacity, TCP
+  slow consumers, and sustained mixed faults. Add an unplugged battery
+  recorder to the Android and iPhone development apps. Physical qualification
+  remains tracked in [#525](https://github.com/p2pKit/P2pKit/issues/525).
+  [PR #563](https://github.com/p2pKit/P2pKit/pull/563)
+
 ## 0.8.0-rc13 — development release candidate (2026-11-19)
 
 - Add `RpcHost.reloadTrustFromStore()` for application-owned trust updates
